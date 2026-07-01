@@ -1,0 +1,92 @@
+trigger:
+  branches:
+    include:
+      - master
+      - dev
+  paths:
+    include:
+      - src/*
+      - test/*
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - "*"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+- group: simplic-deployment
+- group: simplic-deployment-dev02
+- name: buildConfiguration
+  value: "Release"
+- name: dotNetVersion
+  value: '10.0.x'
+
+resources:
+  repositories:
+    - repository: infrastructure
+      type: github
+      name: simplic/build-infrastructure
+      endpoint: simplic-bot
+      
+steps:
+  - task: UseDotNet@2
+    inputs:
+      version: $(dotNetVersion)
+      includePreviewVersions: true
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Restore solution'
+    inputs:
+      command: 'restore'
+      projects: '**/*.slnx'
+      feedsToUse: 'select'
+      vstsFeed: 'f7087ef5-bf6f-48b2-8b8b-5e513f4a7a9e'
+
+  - ${{ if not(eq(variables['Build.Reason'], 'PullRequest')) }}:
+      - template: version-number-update-token-template.yml@infrastructure
+        parameters:
+          connection_string: $(connection_string)
+          git_user: $(git_user)
+          git_token: $(git_token)
+          branch_name: ${{ replace(variables['Build.SourceBranch'], 'refs/heads/', '') }}
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Build solution'
+    inputs:
+      command: 'build'
+      projects: '**/*.slnx'
+      arguments: '--configuration $(buildConfiguration)'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Execute and publish tests'
+    inputs:
+      command: 'test'
+      projects: '**/*.slnx'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Create nuget packages'
+    inputs:
+      command: 'pack'
+      packagesToPack: '**/*.slnx'
+      configuration: '$(buildConfiguration)'
+      nobuild: true
+      versioningScheme: 'off'
+      packDirectory: '$(Build.ArtifactStagingDirectory)'
+
+  - script: |
+          dotnet nuget add source https://pkgs.dev.azure.com/simplic-cloud/_packaging/simplic-cloud/nuget/v3/index.json --name simplic-cloud --username az --password $(System.AccessToken) --store-password-in-clear-text  
+    displayName: 'Authenticate Azure Artifacts feed (custom dotnet)'
+
+  - script: |
+          for pkg in $(Build.ArtifactStagingDirectory)/**/*.nupkg; do
+            if [[ "$pkg" != *".symbols.nupkg" ]]; then
+              echo "Pushing $pkg..."
+              dotnet nuget push "$pkg" --source simplic-cloud --api-key AzureDevOps --skip-duplicate
+            fi
+          done
+    displayName: 'Push NuGet packages manually with --skip-duplicate'
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))

@@ -1,0 +1,135 @@
+using MongoDB.Bson;
+using OxQL.AspNetCore;
+using OxQL.Core;
+using OxQL.Core.Interfaces;
+using OxQL.Core.Models;
+using OxQL.Mongo;
+using OxQL.Sample.Models;
+using OxQL.Studio;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── OxQL Core ──────────────────────────────────────────────────────────
+// Reads AllowedLookupSources etc. from configuration section "OxQL".
+var oxqlSection = builder.Configuration.GetSection("OxQL");
+
+builder.Services.AddOxQLCore(options =>
+{
+    options.MaxPageSize = oxqlSection.GetValue("MaxPageSize", 500);
+    options.DefaultPageSize = oxqlSection.GetValue("DefaultPageSize", 50);
+
+    var allowedSources = oxqlSection.GetSection("AllowedLookupSources").Get<string[]>() ?? [];
+    foreach (var source in allowedSources)
+        options.AllowedLookupSources.Add(source);
+});
+
+// ── OxQL MongoDB adapter ────────────────────────────────────────────────
+// Change the connection string in appsettings.json (or via environment variable
+// ConnectionStrings__MongoDB) before running against a real database.
+builder.Services.AddOxQLMongo(options =>
+{
+    options.ConnectionString = "";
+    options.DatabaseName = "simplic_oxs_staging_vehicle";
+    options.CollectionName = "vehicle";           // default fallback collection
+    options.ScanAssemblies(typeof(VehicleBase).Assembly);
+});
+
+// ── OxQL ASP.NET Core controller ────────────────────────────────────────
+// BsonDocument is the MongoDB document type; swap for your own type if needed.
+builder.Services.AddOxQLAspNetCore<BsonDocument>(options =>
+{
+    options.RoutePrefix = "api/oxql";
+    options.IncludeErrorDetails = builder.Environment.IsDevelopment();
+});
+
+// Register the BsonDocument STJ converter so both the MVC controller path and
+// the minimal-API path serialize BsonDocument correctly without InvalidCastException.
+var bsonConverter = new OxQL.Mongo.BsonDocumentJsonConverter();
+
+// MVC controller JSON options (used by OxQLController)
+builder.Services.Configure<Microsoft.AspNetCore.Mvc.JsonOptions>(opts =>
+    opts.JsonSerializerOptions.Converters.Add(bsonConverter));
+
+// Minimal-API JSON options (used by app.MapGet / Results.Ok)
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(opts =>
+    opts.SerializerOptions.Converters.Add(bsonConverter));
+
+// ── OxQL Studio (dark-mode Monaco query builder at /oxql) ───────────────
+builder.Services.AddOxQLStudio(options =>
+{
+    options.RoutePath = "/oxql";
+    options.ApiBasePath = "/OxQL";   // matches the OxQLController route
+    options.Title = "OxQL Studio";
+});
+
+// ── Standard ASP.NET Core services ─────────────────────────────────────
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(opts =>
+{
+    opts.SwaggerDoc("v1", new()
+    {
+        Title = "OxQL Sample API",
+        Version = "v1",
+        Description = "Sample application demonstrating the OxQL flexible document query engine."
+    });
+});
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.MapControllers();
+
+// ── OxQL Studio UI ──────────────────────────────────────────────────────
+// Dark-mode Monaco query builder available at /oxql
+app.MapOxQLStudio();
+
+// ── Example minimal-API endpoints ──────────────────────────────────────
+// These show what a real application might expose alongside OxQL.
+
+// Convenience GET that builds an OxQL query for a single entity type
+app.MapGet("/api/{entityType}", async (
+    string entityType,
+    int limit,
+    string? cursor,
+    IQueryExecutor<BsonDocument> executor,
+    CancellationToken ct) =>
+{
+    limit = Math.Clamp(limit == 0 ? 50 : limit, 1, 500);
+
+    var request = new QueryRequest
+    {
+        EntityType = entityType,
+        Pipeline =
+        [
+            new PipelineStage
+            {
+                Sort = [new SortField { Path = "createdAt", Direction = "desc" }]
+            },
+            new PipelineStage
+            {
+                Page = new PageStage { Limit = limit, Cursor = string.IsNullOrEmpty(cursor) ? null : cursor }
+            }
+        ]
+    };
+
+    try
+    {
+        var response = await executor.ExecuteAsync(request, ct);
+        return Results.Ok(response);
+    }
+    catch (QueryValidationException ex)
+    {
+        return Results.BadRequest(new { errors = ex.Errors });
+    }
+})
+.WithName("ListEntities")
+.WithSummary("List documents of a given entity type with cursor paging")
+.WithTags("Documents");
+
+app.Run();

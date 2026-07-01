@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>__OXQL_TITLE__</title>
+    <link rel="stylesheet" href="__OXQL_ASSET_BASE__/styles.css" />
+    <script id="oxql-config" type="application/json">__OXQL_CONFIG__</script>
+</head>
+<body>
+    <div class="app">
+        <!-- Top bar -->
+        <header class="topbar">
+            <div class="brand">
+                <span class="logo"></span>
+                <span>__OXQL_TITLE__</span>
+            </div>
+            <div class="spacer"></div>
+            <div class="token-field">
+                <span class="dot" id="token-dot" title="Bearer token status"></span>
+                <label for="token-input">Bearer</label>
+                <input id="token-input" type="password" placeholder="paste token…" autocomplete="off" spellcheck="false" />
+                <button class="icon" id="token-toggle" title="Show / hide token">👁</button>
+                <button class="icon" id="token-clear" title="Clear token">✕</button>
+            </div>
+        </header>
+
+        <!-- Body -->
+        <div class="body">
+            <!-- Type explorer -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <span>Type Explorer</span>
+                    <button class="icon" id="types-refresh" title="Reload types">⟳</button>
+                </div>
+                <div class="sidebar-content" id="types-list">
+                    <div class="empty">Loading types…</div>
+                </div>
+            </aside>
+
+            <!-- Main -->
+            <main class="main">
+                <!-- Tabs -->
+                <div class="tabbar" id="tabbar">
+                    <button class="tab-add" id="tab-add" title="New query tab">＋</button>
+                </div>
+
+                <!-- Toolbar -->
+                <div class="toolbar">
+                    <button class="primary" id="run-btn" title="Execute (Ctrl+Enter)">▶ Run</button>
+                    <button id="wizard-btn" title="Build a new query step by step">🪄 Wizard</button>
+                    <button id="format-btn" title="Format JSON (Shift+Alt+F)">Format</button>
+                    <input class="entity-input" id="entity-input" placeholder="entityType" spellcheck="false" />
+                    <span class="hint">Ctrl+Enter to run · Ctrl+Space for suggestions · saved in your browser</span>
+                    <span class="spacer"></span>
+                    <button id="help-btn" title="Query help &amp; cheat sheet (F1)">? Help</button>
+                </div>
+
+                <!-- Editor + results -->
+                <div class="split">
+                    <div class="editor-pane">
+                        <div id="editor"></div>
+                    </div>
+                    <div class="results-pane">
+                        <div class="results-header">
+                            <span class="status" id="status">Ready</span>
+                            <span class="spacer"></span>
+                            <button class="icon" id="copy-result" title="Copy result">Copy</button>
+                        </div>
+                        <pre class="results-body" id="results"><span class="empty">Run a query to see results.</span></pre>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Help / cheat-sheet drawer -->
+    <div class="help-overlay" id="help-overlay" hidden></div>
+    <aside class="help-drawer" id="help-drawer" hidden aria-label="Query help">
+        <div class="help-header">
+            <span>Query Help &amp; Cheat Sheet</span>
+            <button class="icon" id="help-close" title="Close (Esc)">✕</button>
+        </div>
+        <div class="help-search">
+            <input id="help-search-input" placeholder="Filter help…" spellcheck="false" />
+        </div>
+        <div class="help-body" id="help-body"></div>
+        <div class="help-footer">
+            <span class="hint">Click any item to insert it at the cursor. Ctrl+Space in the editor for inline suggestions.</span>
+        </div>
+    </aside>
+
+    <!-- Query wizard -->
+    <div class="wizard-overlay" id="wizard-overlay" hidden></div>
+    <div class="wizard" id="wizard" hidden role="dialog" aria-modal="true" aria-label="New query wizard">
+        <div class="wizard-header">
+            <span class="wizard-title">Build a Query</span>
+            <div class="wizard-steps" id="wizard-steps"></div>
+            <button class="icon" id="wizard-close" title="Cancel (Esc)">✕</button>
+        </div>
+        <div class="wizard-body" id="wizard-body"></div>
+        <div class="wizard-footer">
+            <span class="hint" id="wizard-hint"></span>
+            <span class="spacer"></span>
+            <button id="wizard-back">← Back</button>
+            <button class="primary" id="wizard-next">Next →</button>
+        </div>
+    </div>
+
+    <script src="__OXQL_ASSET_BASE__/oxql-lang.js"></script>
+    <script src="__OXQL_ASSET_BASE__/app.js"></script>
+</body>
+</html>

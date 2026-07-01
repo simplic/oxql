@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>FlexibleQuery.Core</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <Version>1.0.26.702</Version>
   </PropertyGroup>
 
   <ItemGroup>

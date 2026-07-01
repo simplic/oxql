@@ -33,6 +33,10 @@ resources:
       endpoint: simplic-bot
       
 steps:
+  - checkout: self
+    persistCredentials: true
+    fetchDepth: 1000
+
   - task: UseDotNet@2
     inputs:
       version: $(dotNetVersion)

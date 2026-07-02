@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json.Serialization;
 using OxQL.Core.Interfaces;
 using OxQL.Core.Models;
 using OxQL.Core.Registration;
@@ -76,6 +77,10 @@ public static class ServiceCollectionExtensions
     {
         var mongoOptions = new MongoOxQLOptions();
         configure(mongoOptions);
+
+        // Register the STJ converter so ASP.NET Core's JSON option wiring in
+        // AddOxQLAspNetCore / AddOxQLEndpoint can pick it up automatically.
+        services.AddSingleton<JsonConverter>(new BsonDocumentJsonConverter());
 
         if (string.IsNullOrEmpty(mongoOptions.ConnectionString))
             return services;

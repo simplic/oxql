@@ -28,7 +28,7 @@ public static class EndpointRouteBuilderExtensions
         var group = endpoints.MapGroup(options.RoutePrefix)
             .WithTags("OxQL");
 
-        group.MapPost("/query", async (
+        var queryEndpoint = group.MapPost("/query", async (
             QueryRequest request,
             IOxQLQueryService queryService,
             ILogger<OxQLQueryService<object>> logger,
@@ -91,6 +91,16 @@ public static class EndpointRouteBuilderExtensions
         .Produces<OxQLQueryResult>(StatusCodes.Status200OK)
         .Produces<OxQLErrorResponse>(StatusCodes.Status400BadRequest)
         .Produces<OxQLErrorResponse>(StatusCodes.Status500InternalServerError);
+
+        // Optionally protect the query endpoint. Configurable via OxQLEndpointOptions;
+        // the /health probe below is intentionally left anonymous.
+        if (options.RequireAuthorization)
+        {
+            if (string.IsNullOrWhiteSpace(options.AuthorizationPolicy))
+                queryEndpoint.RequireAuthorization();
+            else
+                queryEndpoint.RequireAuthorization(options.AuthorizationPolicy);
+        }
 
         group.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "oxql" }))
             .WithName("OxQLHealth")

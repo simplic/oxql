@@ -28,6 +28,12 @@ public sealed record MatchStage
     /// A single filter condition (when no logical wrapper is used).
     /// </summary>
     public FilterCondition? Condition { get; init; }
+
+    /// <summary>
+    /// Returns <c>true</c> when this stage carries no filter conditions (match everything).
+    /// </summary>
+    [JsonIgnore]
+    public bool IsMatchAll => And is null && Or is null && Not is null && Condition is null;
 }
 
 /// <summary>
@@ -202,6 +208,10 @@ internal sealed class MatchStageConverter : JsonConverter<MatchStage>
         {
             return new MatchStage { Not = FilterConditionConverter.ReadFromElement(notEl, options) };
         }
+
+        // Empty object {} means "match everything" — all properties remain null.
+        if (!root.EnumerateObject().Any())
+            return new MatchStage();
 
         // Single field condition
         return new MatchStage { Condition = FilterConditionConverter.ReadFromElement(root, options) };

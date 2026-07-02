@@ -1,4 +1,5 @@
 using System.Collections;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -128,8 +129,11 @@ public class OxQLController : ControllerBase
 
     /// <summary>
     /// Health-check endpoint that confirms the OxQL query service is available.
+    /// Always reachable, even when the endpoint is protected with authorization,
+    /// so infrastructure probes do not require credentials.
     /// </summary>
     [HttpGet("health")]
+    [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public IActionResult Health()
     {

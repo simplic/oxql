@@ -1,4 +1,9 @@
 <Solution>
+  <Folder Name="/ENV/">
+    <File Path="../.gitignore" />
+    <File Path="../oxql-query-syntax.md" />
+    <File Path="../README.md" />
+  </Folder>
   <Project Path="OxQL.AspNetCore/OxQL.AspNetCore.csproj" />
   <Project Path="OxQL.Core/OxQL.Core.csproj" />
   <Project Path="OxQL.Mongo/OxQL.Mongo.csproj" />

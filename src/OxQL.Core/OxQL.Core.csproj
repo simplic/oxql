@@ -7,7 +7,7 @@
     <RootNamespace>FlexibleQuery.Core</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>1.0.126.701</Version>
+    <Version>1.0.226.703</Version>
   </PropertyGroup>
 
   <ItemGroup>

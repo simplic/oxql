@@ -30,8 +30,7 @@ builder.Services.AddOxQLCore(options =>
 builder.Services.AddOxQLMongo(options =>
 {
     options.ConnectionString = "";
-    options.DatabaseName = "simplic_oxs_staging_vehicle";
-    options.CollectionName = "vehicle";           // default fallback collection
+    options.DatabaseName = "";
     options.ScanAssemblies(typeof(VehicleBase).Assembly);
 });
 

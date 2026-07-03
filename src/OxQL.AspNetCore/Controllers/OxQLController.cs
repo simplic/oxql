@@ -109,6 +109,7 @@ public class OxQLController : ControllerBase
     /// Returns all registered OxQL entity types and their public property structure.
     /// </summary>
     [HttpGet("types")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(IReadOnlyList<OxQLTypeDescriptor>), StatusCodes.Status200OK)]
     public IActionResult Types()
     {

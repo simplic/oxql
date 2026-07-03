@@ -53,7 +53,7 @@ public static class OxQLStudioEndpointExtensions
         });
 
         // Static assets: GET {routePath}/{asset}
-        endpoints.MapGet($"{basePath}/{{asset}}", (string asset) =>
+        endpoints.MapGet($"oxql/{{asset}}", (string asset) =>
         {
             var (bytes, contentType) = LoadAsset(asset);
             return bytes is null

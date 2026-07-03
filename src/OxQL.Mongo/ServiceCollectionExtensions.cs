@@ -25,12 +25,6 @@ public sealed class MongoOxQLOptions
     public string? DatabaseName { get; set; }
 
     /// <summary>
-    /// The default collection name, used when the query's <c>entityType</c> is not found
-    /// in the type registry.
-    /// </summary>
-    public string? CollectionName { get; set; }
-
-    /// <summary>
     /// Assemblies to scan for <see cref="OxQL.Core.Attributes.OxQLTypeAttribute"/>.
     /// Call <see cref="ScanAssemblies"/> to add assemblies fluently.
     /// </summary>
@@ -88,12 +82,6 @@ public static class ServiceCollectionExtensions
         var client   = new MongoClient(mongoOptions.ConnectionString);
         var database = client.GetDatabase(mongoOptions.DatabaseName);
 
-        // Default collection — used when entityType has no registered mapping
-        var defaultCollection = database.GetCollection<BsonDocument>(
-            mongoOptions.CollectionName ?? "documents");
-
-        services.AddSingleton(defaultCollection);
-
         // Populate the type registry from scanned assemblies
         services.AddSingleton<MongoCollectionResolver>(sp =>
         {
@@ -126,7 +114,10 @@ public static class ServiceCollectionExtensions
                 }
                 else
                 {
-                    col = defaultCollection;
+                    throw new InvalidOperationException(
+                        $"No OxQL type registration found for entity type '{entityType}'. " +
+                        $"Decorate the corresponding class with [OxQLType] and include its " +
+                        $"assembly in ScanAssemblies, or call OxQLTypeRegistry.Register manually.");
                 }
 
                 collectionCache[entityType] = col;
@@ -140,7 +131,7 @@ public static class ServiceCollectionExtensions
         {
             var resolver         = sp.GetRequiredService<MongoCollectionResolver>();
             var cursorSerializer = sp.GetRequiredService<OxQL.Core.Interfaces.ICursorSerializer>();
-            return new MongoQueryAdapter(defaultCollection, cursorSerializer, resolver.Resolve);
+            return new MongoQueryAdapter(resolver.Resolve, cursorSerializer);
         });
 
         services.AddSingleton<IQueryExecutor<BsonDocument>, MongoQueryExecutor>(sp =>

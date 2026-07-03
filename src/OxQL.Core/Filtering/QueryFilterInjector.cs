@@ -39,6 +39,12 @@ public static class QueryFilterInjector
         if (filters is null || filters.Count == 0)
             return request;
 
+        // Ensure every filter has a unique variable name before building conditions or
+        // merging variables. Two providers can independently return a filter for the same
+        // field path; without this step both would derive the same name and MergeVariables
+        // would silently overwrite the first provider's value with the second's.
+        filters = DeduplicateVariableNames(filters);
+
         // Build the FilterConditions that will be AND-ed onto the query.
         var injectedConditions = filters.Select(ToCondition).ToList();
 
@@ -142,5 +148,47 @@ public static class QueryFilterInjector
             values[filter.VariableName] = filter.Value;
 
         return new QueryVariables { Values = values };
+    }
+
+    /// <summary>
+    /// Returns a new list where every <see cref="InjectedFilter.VariableName"/> is unique.
+    /// The first filter that uses a given name keeps it; subsequent filters with the same
+    /// name are renamed by appending <c>_2</c>, <c>_3</c>, … (skipping any suffix that
+    /// would collide with a name already present in the list).
+    /// </summary>
+    private static IReadOnlyList<InjectedFilter> DeduplicateVariableNames(IReadOnlyList<InjectedFilter> filters)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Seed with every name already declared so suffix generation never picks a name
+        // that belongs to a different filter further down the list.
+        foreach (var f in filters)
+            seen.Add(f.VariableName);
+
+        // Walk the list; when we find a duplicate, remove the original reservation and
+        // allocate a fresh unique name for it.
+        var result = new List<InjectedFilter>(filters.Count);
+        var allocated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var filter in filters)
+        {
+            if (allocated.Add(filter.VariableName))
+            {
+                // First occurrence — name is still free.
+                result.Add(filter);
+            }
+            else
+            {
+                // Collision: generate the lowest available suffix.
+                var suffix = 2;
+                string candidate;
+                do { candidate = filter.VariableName + "_" + suffix++; }
+                while (!seen.Add(candidate) || !allocated.Add(candidate));
+
+                result.Add(filter with { VariableName = candidate });
+            }
+        }
+
+        return result;
     }
 }

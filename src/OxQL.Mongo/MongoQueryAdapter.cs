@@ -12,18 +12,15 @@ namespace OxQL.Mongo;
 /// </summary>
 public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
 {
-    private readonly IMongoCollection<BsonDocument> _collection;
     private readonly ICursorSerializer _cursorSerializer;
-    private readonly Func<string, IMongoCollection<BsonDocument>>? _collectionResolver;
+    private readonly Func<string, IMongoCollection<BsonDocument>> _collectionResolver;
 
     public MongoQueryAdapter(
-        IMongoCollection<BsonDocument> collection,
-        ICursorSerializer cursorSerializer,
-        Func<string, IMongoCollection<BsonDocument>>? collectionResolver = null)
+        Func<string, IMongoCollection<BsonDocument>> collectionResolver,
+        ICursorSerializer cursorSerializer)
     {
-        _collection = collection ?? throw new ArgumentNullException(nameof(collection));
+        _collectionResolver = collectionResolver ?? throw new ArgumentNullException(nameof(collectionResolver));
         _cursorSerializer = cursorSerializer ?? throw new ArgumentNullException(nameof(cursorSerializer));
-        _collectionResolver = collectionResolver;
     }
 
     public async Task<QueryResponse<BsonDocument>> ExecuteAsync(
@@ -44,11 +41,14 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
         // Build main pipeline
         var pipeline = pipelineBuilder.Build(plan, cursorPayload);
 
+        // Resolve the collection for this entity type
+        var collection = _collectionResolver(plan.EntityType);
+
         // Execute aggregation
         var pipelineDef = pipeline.Select(doc => (PipelineStageDefinition<BsonDocument, BsonDocument>)doc).ToList();
         var aggPipeline = PipelineDefinition<BsonDocument, BsonDocument>.Create(pipelineDef);
 
-        var results = await _collection
+        var results = await collection
             .Aggregate(aggPipeline, cancellationToken: cancellationToken)
             .ToListAsync(cancellationToken);
 
@@ -78,7 +78,7 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             var countPipelineDef = countPipeline.Select(doc => (PipelineStageDefinition<BsonDocument, BsonDocument>)doc).ToList();
             var countAgg = PipelineDefinition<BsonDocument, BsonDocument>.Create(countPipelineDef);
 
-            var countResult = await _collection
+            var countResult = await collection
                 .Aggregate(countAgg, cancellationToken: cancellationToken)
                 .FirstOrDefaultAsync(cancellationToken);
 

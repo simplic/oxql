@@ -29,7 +29,7 @@ public static class OxQLStudioEndpointExtensions
         var basePath = options.RoutePath;
 
         // Shell: GET {routePath}  → index.html with injected runtime config
-        endpoints.MapGet(basePath, (HttpContext ctx) =>
+        endpoints.MapGet("/oxql", (HttpContext ctx) =>
         {
             var html = LoadTextResource("index.html");
             if (html is null)

@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OxQL.AspNetCore.Authorization;
 using OxQL.AspNetCore.Controllers;
 using OxQL.AspNetCore.Filtering;
+using OxQL.AspNetCore.TypeEnrichment;
 using OxQL.Core.Filtering;
 
 namespace OxQL.AspNetCore;
@@ -182,6 +183,63 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IOxQLQueryFilterProvider>(_ =>
             new DelegateOxQLQueryFilterProvider(filterFactory));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IOxQLTypeEnricher"/> that appends extra properties to extendable
+    /// type descriptors when the <c>/types</c> endpoint is called.
+    /// </summary>
+    /// <typeparam name="TEnricher">The enricher implementation type.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddOxQLTypeEnricher<TEnricher>(this IServiceCollection services)
+        where TEnricher : class, IOxQLTypeEnricher
+    {
+        services.AddScoped<IOxQLTypeEnricher, TEnricher>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an inline synchronous <see cref="IOxQLTypeEnricher"/> from a delegate.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="enricherFactory">
+    /// A callback that returns the extra properties for the supplied
+    /// <see cref="OxQLTypeEnrichmentContext"/>. Return an empty list to contribute nothing.
+    /// </param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddOxQLTypeEnricher(
+        this IServiceCollection services,
+        Func<OxQLTypeEnrichmentContext, IReadOnlyList<OxQL.AspNetCore.Models.OxQLPropertyDescriptor>> enricherFactory)
+    {
+        ArgumentNullException.ThrowIfNull(enricherFactory);
+
+        services.AddScoped<IOxQLTypeEnricher>(_ =>
+            new DelegateOxQLTypeEnricher((ctx, _) =>
+                ValueTask.FromResult(enricherFactory(ctx))));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an inline asynchronous <see cref="IOxQLTypeEnricher"/> from a delegate.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="enricherFactory">
+    /// An asynchronous callback that returns the extra properties for the supplied
+    /// <see cref="OxQLTypeEnrichmentContext"/>.
+    /// </param>
+    /// <returns>The service collection for chaining.</returns>
+    public static IServiceCollection AddOxQLTypeEnricher(
+        this IServiceCollection services,
+        Func<OxQLTypeEnrichmentContext, CancellationToken, ValueTask<IReadOnlyList<OxQL.AspNetCore.Models.OxQLPropertyDescriptor>>> enricherFactory)
+    {
+        ArgumentNullException.ThrowIfNull(enricherFactory);
+
+        services.AddScoped<IOxQLTypeEnricher>(_ =>
+            new DelegateOxQLTypeEnricher(enricherFactory));
 
         return services;
     }

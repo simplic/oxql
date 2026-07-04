@@ -110,6 +110,8 @@ public sealed class QueryValidator : IQueryValidator
 
     private void ValidateMatch(MatchStage match, List<QueryValidationError> errors)
     {
+        if (match.IsMatchAll)
+            return;
         if (match.And is not null)
         {
             foreach (var condition in match.And)

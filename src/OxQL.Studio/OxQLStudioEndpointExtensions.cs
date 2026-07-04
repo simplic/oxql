@@ -29,7 +29,7 @@ public static class OxQLStudioEndpointExtensions
         var basePath = options.RoutePath;
 
         // Shell: GET {routePath}  → index.html with injected runtime config
-        endpoints.MapGet(basePath, (HttpContext ctx) =>
+        endpoints.MapGet("/oxql", (HttpContext ctx) =>
         {
             var html = LoadTextResource("index.html");
             if (html is null)
@@ -53,7 +53,7 @@ public static class OxQLStudioEndpointExtensions
         });
 
         // Static assets: GET {routePath}/{asset}
-        endpoints.MapGet($"{basePath}/{{asset}}", (string asset) =>
+        endpoints.MapGet($"oxql/{{asset}}", (string asset) =>
         {
             var (bytes, contentType) = LoadAsset(asset);
             return bytes is null

@@ -1,9 +1,11 @@
 using System.Collections;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OxQL.AspNetCore.Models;
+using OxQL.AspNetCore.TypeEnrichment;
 using OxQL.Core.Models;
 using OxQL.Core.Registration;
 
@@ -20,17 +22,20 @@ public class OxQLController : ControllerBase
     private readonly OxQLEndpointOptions _options;
     private readonly ILogger<OxQLController> _logger;
     private readonly OxQLTypeRegistry _typeRegistry;
+    private readonly IEnumerable<IOxQLTypeEnricher> _typeEnrichers;
 
     public OxQLController(
         IOxQLQueryService queryService,
         IOptions<OxQLEndpointOptions> options,
         ILogger<OxQLController> logger,
-        OxQLTypeRegistry typeRegistry)
+        OxQLTypeRegistry typeRegistry,
+        IEnumerable<IOxQLTypeEnricher> typeEnrichers)
     {
-        _queryService  = queryService  ?? throw new ArgumentNullException(nameof(queryService));
-        _options       = options?.Value ?? new OxQLEndpointOptions();
-        _logger        = logger        ?? throw new ArgumentNullException(nameof(logger));
-        _typeRegistry  = typeRegistry  ?? throw new ArgumentNullException(nameof(typeRegistry));
+        _queryService   = queryService   ?? throw new ArgumentNullException(nameof(queryService));
+        _options        = options?.Value  ?? new OxQLEndpointOptions();
+        _logger         = logger          ?? throw new ArgumentNullException(nameof(logger));
+        _typeRegistry   = typeRegistry    ?? throw new ArgumentNullException(nameof(typeRegistry));
+        _typeEnrichers  = typeEnrichers   ?? throw new ArgumentNullException(nameof(typeEnrichers));
     }
 
     /// <summary>
@@ -108,28 +113,56 @@ public class OxQLController : ControllerBase
     /// Returns all registered OxQL entity types and their public property structure.
     /// </summary>
     [HttpGet("types")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(IReadOnlyList<OxQLTypeDescriptor>), StatusCodes.Status200OK)]
-    public IActionResult Types()
+    public async Task<IActionResult> Types(CancellationToken cancellationToken)
     {
-        var descriptors = _typeRegistry.Registrations
-            .OrderBy(r => r.TypeName)
-            .Select(r => new OxQLTypeDescriptor
+        var descriptors = new List<OxQLTypeDescriptor>();
+
+        foreach (var r in _typeRegistry.Registrations.OrderBy(r => r.TypeName))
+        {
+            var properties = BuildProperties(r.ClrType).ToList();
+
+            if (r.Extendable && _typeEnrichers.Any())
+            {
+                var ctx = new OxQLTypeEnrichmentContext(HttpContext, r);
+                foreach (var enricher in _typeEnrichers)
+                {
+                    try
+                    {
+                        var extra = await enricher.GetPropertiesAsync(ctx, cancellationToken);
+                        if (extra is not null)
+                            properties.AddRange(extra);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Type enricher {EnricherType} failed for entity type '{TypeName}' and was skipped.",
+                            enricher.GetType().Name, r.TypeName);
+                    }
+                }
+            }
+
+            descriptors.Add(new OxQLTypeDescriptor
             {
                 TypeName       = r.TypeName,
                 CollectionName = r.CollectionName,
                 DatabaseName   = r.DatabaseName,
                 ClrType        = r.ClrType?.FullName,
-                Properties     = BuildProperties(r.ClrType)
-            })
-            .ToList();
+                Properties     = properties
+            });
+        }
 
         return Ok(descriptors);
     }
 
     /// <summary>
     /// Health-check endpoint that confirms the OxQL query service is available.
+    /// Always reachable, even when the endpoint is protected with authorization,
+    /// so infrastructure probes do not require credentials.
     /// </summary>
     [HttpGet("health")]
+    [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public IActionResult Health()
     {

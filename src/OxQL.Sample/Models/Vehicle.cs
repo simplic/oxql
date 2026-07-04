@@ -7,7 +7,7 @@ namespace OxQL.Sample.Models;
 /// The [OxQLType] attribute registers this type with OxQL at startup and maps it
 /// to the "vehicle" collection inside the "vehicle.vehicle" namespace.
 /// </summary>
-[OxQLType("vehicle.vehicle")]
+[OxQLType("vehicle.vehicle", "vehicle", "vehicle")]
 public class VehicleBase
 {
 }

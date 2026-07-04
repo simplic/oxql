@@ -1,6 +1,7 @@
 using MongoDB.Bson;
 using OxQL.AspNetCore;
 using OxQL.Core;
+using OxQL.Core.Filtering;
 using OxQL.Core.Interfaces;
 using OxQL.Core.Models;
 using OxQL.Mongo;
@@ -29,8 +30,7 @@ builder.Services.AddOxQLCore(options =>
 builder.Services.AddOxQLMongo(options =>
 {
     options.ConnectionString = "";
-    options.DatabaseName = "simplic_oxs_staging_vehicle";
-    options.CollectionName = "vehicle";           // default fallback collection
+    options.DatabaseName = "database";
     options.ScanAssemblies(typeof(VehicleBase).Assembly);
 });
 
@@ -40,19 +40,26 @@ builder.Services.AddOxQLAspNetCore<BsonDocument>(options =>
 {
     options.RoutePrefix = "api/oxql";
     options.IncludeErrorDetails = builder.Environment.IsDevelopment();
+
+    // ── Optional endpoint protection ────────────────────────────────────
+    // Set RequireAuthorization = true to force authentication on the query/types
+    // endpoints (the /health probe always stays anonymous). Optionally set a named
+    // policy via AuthorizationPolicy. Authentication/authorization middleware must be
+    // configured separately (AddAuthentication/AddAuthorization + UseAuthentication/UseAuthorization).
+    // options.RequireAuthorization = true;
+    // options.AuthorizationPolicy = "OxQLReader";
 });
 
-// Register the BsonDocument STJ converter so both the MVC controller path and
-// the minimal-API path serialize BsonDocument correctly without InvalidCastException.
-var bsonConverter = new OxQL.Mongo.BsonDocumentJsonConverter();
+// ── Multi-tenant query injection (example) ──────────────────────────────
+// Forces an OrganizationId filter onto every OxQL query using a root-level AND.
+// The value is passed as a query variable ($var) so cached query plans stay
+// tenant-safe. Here we read the tenant from a request header for demonstration;
+// a real app would resolve it from the authenticated user's claims, e.g.
+//   ctx.User?.FindFirst("organizationId")?.Value
+builder.Services.AddOxQLQueryFilter(_ =>
+    [InjectedFilter.Create("OrganizationId", "7feec12f-870f-4087-a676-27e411d570a8")]);
 
-// MVC controller JSON options (used by OxQLController)
-builder.Services.Configure<Microsoft.AspNetCore.Mvc.JsonOptions>(opts =>
-    opts.JsonSerializerOptions.Converters.Add(bsonConverter));
 
-// Minimal-API JSON options (used by app.MapGet / Results.Ok)
-builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(opts =>
-    opts.SerializerOptions.Converters.Add(bsonConverter));
 
 // ── OxQL Studio (dark-mode Monaco query builder at /oxql) ───────────────
 builder.Services.AddOxQLStudio(options =>
@@ -75,6 +82,8 @@ builder.Services.AddSwaggerGen(opts =>
 });
 
 var app = builder.Build();
+
+app.UsePathBase("/vehicle-api/v2");
 
 if (app.Environment.IsDevelopment())
 {

@@ -22,4 +22,11 @@ public sealed class OxQLEndpointOptions
     /// Authentication middleware must be configured separately.
     /// </summary>
     public bool RequireAuthorization { get; set; }
+
+    /// <summary>
+    /// The name of the authorization policy to enforce when <see cref="RequireAuthorization"/>
+    /// is <c>true</c>. When <c>null</c> or empty the default authorization policy is used
+    /// (any authenticated user). Ignored when <see cref="RequireAuthorization"/> is <c>false</c>.
+    /// </summary>
+    public string? AuthorizationPolicy { get; set; }
 }

@@ -29,8 +29,8 @@ builder.Services.AddOxQLCore(options =>
 // ConnectionStrings__MongoDB) before running against a real database.
 builder.Services.AddOxQLMongo(options =>
 {
-    options.ConnectionString = "mongodb+srv://local-usr-staging:1UeLDOOnCyJNYcgj@simplic-oxs-mongodb-sta.2iwcv.mongodb.net/admin?retryWrites=false&loadBalanced=false&replicaSet=atlas-l7f4bg-shard-0&readPreference=primary&connectTimeoutMS=10000&authSource=admin&authMechanism=SCRAM-SHA-1&3t.uriVersion=3&3t.connection.name=atlas-staging&3t.databases=admin,simplic_oxs_staging&3t.alwaysShowAuthDB=true&3t.alwaysShowDBFromUserRole=true&3t.sslTlsVersion=TLS";
-    options.DatabaseName = "simplic_oxs_staging_vehicle";
+    options.ConnectionString = "";
+    options.DatabaseName = "database";
     options.ScanAssemblies(typeof(VehicleBase).Assembly);
 });
 

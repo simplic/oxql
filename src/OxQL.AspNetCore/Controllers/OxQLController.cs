@@ -128,8 +128,18 @@ public class OxQLController : ControllerBase
                 var ctx = new OxQLTypeEnrichmentContext(HttpContext, r);
                 foreach (var enricher in _typeEnrichers)
                 {
-                    var extra = await enricher.GetPropertiesAsync(ctx, cancellationToken);
-                    properties.AddRange(extra);
+                    try
+                    {
+                        var extra = await enricher.GetPropertiesAsync(ctx, cancellationToken);
+                        if (extra is not null)
+                            properties.AddRange(extra);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Type enricher {EnricherType} failed for entity type '{TypeName}' and was skipped.",
+                            enricher.GetType().Name, r.TypeName);
+                    }
                 }
             }
 

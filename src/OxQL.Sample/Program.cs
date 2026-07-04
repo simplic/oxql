@@ -30,7 +30,7 @@ builder.Services.AddOxQLCore(options =>
 builder.Services.AddOxQLMongo(options =>
 {
     options.ConnectionString = "";
-    options.DatabaseName = "";
+    options.DatabaseName = "database";
     options.ScanAssemblies(typeof(VehicleBase).Assembly);
 });
 
@@ -82,6 +82,8 @@ builder.Services.AddSwaggerGen(opts =>
 });
 
 var app = builder.Build();
+
+app.UsePathBase("/vehicle-api/v2");
 
 if (app.Environment.IsDevelopment())
 {

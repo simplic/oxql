@@ -45,7 +45,8 @@ public sealed class OxQLTypeRegistry
                 ClrType:        representativeType,
                 TypeName:       attr.TypeName,
                 CollectionName: attr.CollectionName,
-                DatabaseName:   attr.DatabaseName);
+                DatabaseName:   attr.DatabaseName,
+                Extendable:     attr.Extendable);
         }
 
         return this;
@@ -109,6 +110,13 @@ public sealed class OxQLTypeRegistry
     /// </summary>
     public string? GetDatabaseName(string entityType) =>
         TryGet(entityType, out var reg) ? reg.DatabaseName : null;
+
+    /// <summary>
+    /// Returns whether the given <c>entityType</c> is extendable, or <c>false</c>
+    /// if no registration exists.
+    /// </summary>
+    public bool IsExtendable(string entityType) =>
+        TryGet(entityType, out var reg) && reg.Extendable;
 }
 
 /// <summary>
@@ -118,8 +126,10 @@ public sealed class OxQLTypeRegistry
 /// <param name="TypeName">The OxQL entity type name used in query requests.</param>
 /// <param name="CollectionName">The backing MongoDB collection name.</param>
 /// <param name="DatabaseName">Optional database override; <c>null</c> means use the adapter default.</param>
+/// <param name="Extendable">When <c>true</c>, the entity type can be extended with additional fields at runtime.</param>
 public sealed record OxQLTypeRegistration(
     Type?   ClrType,
     string  TypeName,
     string  CollectionName,
-    string? DatabaseName);
+    string? DatabaseName,
+    bool    Extendable = false);

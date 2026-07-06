@@ -7,7 +7,7 @@
     <RootNamespace>OxQL.Studio</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>1.0.926.704</Version>
+    <Version>1.0.1026.706</Version>
   </PropertyGroup>
 
   <ItemGroup>

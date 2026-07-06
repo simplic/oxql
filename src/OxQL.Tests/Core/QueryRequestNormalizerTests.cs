@@ -1,3 +1,4 @@
+using System.Text.Json;
 using OxQL.Core.Models;
 using OxQL.Core.Normalization;
 using FluentAssertions;
@@ -211,6 +212,111 @@ public class QueryRequestNormalizerTests
                     Match = new MatchStage
                     {
                         Condition = new FilterCondition { Path = "amount", Op = "lte" }
+                    }
+                }
+            ]
+        };
+
+        var key1 = normalizer.GenerateCacheKey(request1);
+        var key2 = normalizer.GenerateCacheKey(request2);
+
+        key1.Should().NotBe(key2);
+    }
+
+    [Fact]
+    public void GenerateCacheKey_DifferentLiteralValues_ProducesDifferentKey()
+    {
+        var normalizer = CreateNormalizer();
+
+        var request1 = new QueryRequest
+        {
+            EntityType = "vehicle",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Match = new MatchStage
+                    {
+                        Condition = new FilterCondition
+                        {
+                            Path = "RegistrationPlate.RegistrationIdentifier",
+                            Op = "contains",
+                            Value = JsonDocument.Parse("\"asda\"").RootElement,
+                            Options = new FilterConditionOptions { IgnoreCase = true }
+                        }
+                    }
+                }
+            ]
+        };
+
+        var request2 = new QueryRequest
+        {
+            EntityType = "vehicle",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Match = new MatchStage
+                    {
+                        Condition = new FilterCondition
+                        {
+                            Path = "RegistrationPlate.RegistrationIdentifier",
+                            Op = "contains",
+                            Value = JsonDocument.Parse("\"xyz\"").RootElement,
+                            Options = new FilterConditionOptions { IgnoreCase = true }
+                        }
+                    }
+                }
+            ]
+        };
+
+        var key1 = normalizer.GenerateCacheKey(request1);
+        var key2 = normalizer.GenerateCacheKey(request2);
+
+        key1.Should().NotBe(key2);
+    }
+
+    [Fact]
+    public void GenerateCacheKey_IgnoreCaseOption_ProducesDifferentKeyThanWithoutIt()
+    {
+        var normalizer = CreateNormalizer();
+
+        var request1 = new QueryRequest
+        {
+            EntityType = "vehicle",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Match = new MatchStage
+                    {
+                        Condition = new FilterCondition
+                        {
+                            Path = "name",
+                            Op = "contains",
+                            Value = JsonDocument.Parse("\"test\"").RootElement,
+                            Options = new FilterConditionOptions { IgnoreCase = true }
+                        }
+                    }
+                }
+            ]
+        };
+
+        var request2 = new QueryRequest
+        {
+            EntityType = "vehicle",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Match = new MatchStage
+                    {
+                        Condition = new FilterCondition
+                        {
+                            Path = "name",
+                            Op = "contains",
+                            Value = JsonDocument.Parse("\"test\"").RootElement
+                        }
                     }
                 }
             ]

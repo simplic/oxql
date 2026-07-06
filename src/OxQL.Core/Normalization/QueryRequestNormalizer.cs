@@ -255,7 +255,10 @@ public sealed class QueryRequestNormalizer : IQueryRequestNormalizer
         sb.Append(':');
         sb.Append(condition.Op);
 
-        // For cache key, include whether value is a $var reference (shape) but not the actual value
+        // For $var references include only the variable name so queries with the same structure
+        // but different variable names get distinct cache keys.
+        // For literal values include the raw JSON so that two queries differing only in their
+        // filter value (e.g. contains "a" vs contains "b") never share a cached plan.
         if (condition.Value.HasValue)
         {
             var val = condition.Value.Value;
@@ -267,9 +270,14 @@ public sealed class QueryRequestNormalizer : IQueryRequestNormalizer
             }
             else
             {
-                sb.Append(":literal");
+                sb.Append(':');
+                sb.Append(val.GetRawText());
             }
         }
+
+        if (condition.Options?.IgnoreCase == true)
+            sb.Append(":ic");
+
         sb.Append(',');
     }
 }

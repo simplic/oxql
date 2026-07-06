@@ -138,19 +138,37 @@ Logical grouping with `and`, `or`, and `not`:
 
 | Operator | Description | Example value |
 |---|---|---|
-| `eq` | Equal | `"active"` |
-| `neq` | Not equal | `"deleted"` |
+| `eq` | Equal ¹ | `"active"` |
+| `neq` | Not equal ¹ | `"deleted"` |
 | `gt` | Greater than | `100` |
 | `gte` | Greater than or equal | `100` |
 | `lt` | Less than | `100` |
 | `lte` | Less than or equal | `100` |
 | `in` | Value in array | `["a", "b"]` |
 | `nin` | Value not in array | `["x", "y"]` |
-| `contains` | String contains substring | `"abc"` |
+| `contains` | String contains substring ¹ | `"abc"` |
 | `startsWith` | String starts with | `"pre"` |
 | `endsWith` | String ends with | `"fix"` |
 | `exists` | Field exists | `true` / `false` |
 | `regex` | Regular expression match | `"^ABC.*"` |
+
+¹ Supports [filter condition options](#filter-condition-options) (`ignoreCase`).
+
+### Filter condition options
+
+The operators `eq`, `neq`, and `contains` accept an optional `"options"` key alongside the operator value to modify comparison behaviour.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `ignoreCase` | `boolean` | `false` | Makes string comparisons case-insensitive. |
+
+```json
+{ "Status.Name": { "eq": "Active", "options": { "ignoreCase": true } } }
+{ "Status.Name": { "neq": "deleted", "options": { "ignoreCase": true } } }
+{ "attributes.description": { "contains": "urgent", "options": { "ignoreCase": true } } }
+```
+
+> **Note:** When `ignoreCase` is `true`, `eq` and `neq` use a case-insensitive regex anchored at both ends (`^value$` with the `i` flag). `contains` uses an unanchored regex with the `i` flag.
 
 ### Variables
 

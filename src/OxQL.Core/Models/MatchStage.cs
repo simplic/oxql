@@ -37,6 +37,19 @@ public sealed record MatchStage
 }
 
 /// <summary>
+/// Options that modify filter condition behaviour.
+/// Wire format: <c>{ "My.Field": { "eq": "value", "options": { "ignoreCase": true } } }</c>
+/// </summary>
+public sealed record FilterConditionOptions
+{
+    /// <summary>
+    /// When <c>true</c>, string comparisons are case-insensitive.
+    /// Applies to <c>eq</c>, <c>neq</c>, and <c>contains</c>.
+    /// </summary>
+    public bool IgnoreCase { get; init; }
+}
+
+/// <summary>
 /// Represents a single filter condition or a nested logical group.
 /// <para>
 /// Wire format for a field condition:
@@ -53,6 +66,7 @@ public sealed record FilterCondition
     public string? Path { get; init; }
     public string? Op { get; init; }
     public JsonElement? Value { get; init; }
+    public FilterConditionOptions? Options { get; init; }
 
     public IReadOnlyList<FilterCondition>? And { get; init; }
     public IReadOnlyList<FilterCondition>? Or { get; init; }
@@ -114,16 +128,38 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
             var path = prop.Name;
             var opObject = prop.Value;
 
-            // The value of the property is a one-key object: { "op": value }
+            // The value of the property is an object: { "op": value } or { "op": value, "options": { ... } }
             if (opObject.ValueKind == JsonValueKind.Object)
             {
+                string? opName = null;
+                JsonElement? opValue = null;
+                FilterConditionOptions? condOptions = null;
+
                 foreach (var opProp in opObject.EnumerateObject())
+                {
+                    if (opProp.Name.Equals("options", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (opProp.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            var ignoreCase = opProp.Value.TryGetProperty("ignoreCase", out var icEl) && icEl.GetBoolean();
+                            condOptions = new FilterConditionOptions { IgnoreCase = ignoreCase };
+                        }
+                    }
+                    else if (opName is null)
+                    {
+                        opName = opProp.Name;
+                        opValue = opProp.Value.Clone();
+                    }
+                }
+
+                if (opName is not null)
                 {
                     return new FilterCondition
                     {
                         Path = path,
-                        Op = opProp.Name,
-                        Value = opProp.Value.Clone()
+                        Op = opName,
+                        Value = opValue,
+                        Options = condOptions
                     };
                 }
             }
@@ -174,6 +210,13 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
                 value.Value.Value.WriteTo(writer);
             else
                 writer.WriteNullValue();
+            if (value.Options?.IgnoreCase == true)
+            {
+                writer.WritePropertyName("options");
+                writer.WriteStartObject();
+                writer.WriteBoolean("ignoreCase", true);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
 

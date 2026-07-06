@@ -56,15 +56,15 @@ public sealed class MongoFilterBuilder
 
         return condition.Op?.ToLowerInvariant() switch
         {
-            "eq"  => BuildEqualityFilter(path, value, negate: false),
-            "neq" => BuildEqualityFilter(path, value, negate: true),
+            "eq"  => BuildEqualityFilter(path, value, negate: false, condition.Options),
+            "neq" => BuildEqualityFilter(path, value, negate: true, condition.Options),
             "gt" => new BsonDocument(path, new BsonDocument("$gt", value)),
             "gte" => new BsonDocument(path, new BsonDocument("$gte", value)),
             "lt" => new BsonDocument(path, new BsonDocument("$lt", value)),
             "lte" => new BsonDocument(path, new BsonDocument("$lte", value)),
             "in" => new BsonDocument(path, new BsonDocument("$in", value.AsBsonArray)),
             "nin" => new BsonDocument(path, new BsonDocument("$nin", value.AsBsonArray)),
-            "contains" => new BsonDocument(path, new BsonDocument("$regex", new BsonRegularExpression(EscapeRegex(value.AsString)))),
+            "contains" => BuildContainsFilter(path, value, condition.Options),
             "startswith" => new BsonDocument(path, new BsonDocument("$regex", new BsonRegularExpression($"^{EscapeRegex(value.AsString)}"))),
             "endswith" => new BsonDocument(path, new BsonDocument("$regex", new BsonRegularExpression($"{EscapeRegex(value.AsString)}$"))),
             "exists" => new BsonDocument(path, new BsonDocument("$exists", value.AsBoolean)),
@@ -77,8 +77,21 @@ public sealed class MongoFilterBuilder
     /// Builds an equality (or inequality) filter that handles GUID strings by also
     /// matching the binary UUID representations MongoDB may store them as (subtype 3 and 4).
     /// </summary>
-    private static BsonDocument BuildEqualityFilter(string path, BsonValue value, bool negate)
+    private static BsonDocument BuildEqualityFilter(string path, BsonValue value, bool negate, FilterConditionOptions? options = null)
     {
+        var ignoreCase = options?.IgnoreCase == true;
+
+        // Case-insensitive string equality: use a regex anchored at both ends
+        if (ignoreCase && value is BsonString strVal)
+        {
+            var pattern = $"^{EscapeRegex(strVal.Value)}$";
+            var regex = new BsonRegularExpression(pattern, "i");
+            var regexDoc = new BsonDocument(path, new BsonDocument("$regex", regex));
+            return negate
+                ? new BsonDocument("$nor", new BsonArray { regexDoc })
+                : regexDoc;
+        }
+
         if (value is BsonString stringValue && Guid.TryParse(stringValue.Value, out var guid))
         {
             // MongoDB can store the same logical GUID as:
@@ -207,6 +220,12 @@ public sealed class MongoFilterBuilder
         if (value is DateTimeOffset dto) return new BsonDateTime(dto.UtcDateTime);
 
         return new BsonString(value.ToString()!);
+    }
+
+    private static BsonDocument BuildContainsFilter(string path, BsonValue value, FilterConditionOptions? options = null)
+    {
+        var flags = options?.IgnoreCase == true ? "i" : "";
+        return new BsonDocument(path, new BsonDocument("$regex", new BsonRegularExpression(EscapeRegex(value.AsString), flags)));
     }
 
     private static string TranslatePath(string path)

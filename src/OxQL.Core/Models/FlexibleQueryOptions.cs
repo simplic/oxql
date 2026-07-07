@@ -36,9 +36,9 @@ public sealed class OxQLOptions
     public int MaxGroupFields { get; set; } = 20;
 
     /// <summary>
-    /// Maximum number of projection fields allowed. Default: 50.
+    /// Maximum number of projection fields allowed. Default: 500.
     /// </summary>
-    public int MaxProjectionFields { get; set; } = 50;
+    public int MaxProjectionFields { get; set; } = 500;
 
     /// <summary>
     /// Allowed collections/sources for lookup stages.

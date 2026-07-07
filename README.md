@@ -316,7 +316,7 @@ All limits are configurable via `OxQLOptions`:
 | `MaxLookupStages` | 5 | Maximum lookup/join stages |
 | `MaxUnwindStages` | 5 | Maximum unwind stages |
 | `MaxGroupFields` | 20 | Maximum group aggregation fields |
-| `MaxProjectionFields` | 50 | Maximum projection fields |
+| `MaxProjectionFields` | 500 | Maximum projection fields |
 | `RegexMaxLength` | 200 | Maximum regex pattern length |
 | `QueryPlanCacheTtl` | 30 min | Cache entry lifetime |
 | `QueryPlanCacheMaxEntries` | 1000 | Maximum cached plans |

@@ -80,15 +80,39 @@ public sealed class MongoCursorPagingBuilder
 
     private static BsonValue JsonElementToBson(System.Text.Json.JsonElement element)
     {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            var raw = element.GetString()!;
+            if (HasExplicitOffset(raw) && element.TryGetDateTimeOffset(out var dto))
+                return new BsonDateTime(dto.UtcDateTime);
+            return new BsonString(raw);
+        }
+
         return element.ValueKind switch
         {
-            System.Text.Json.JsonValueKind.String => new BsonString(element.GetString()!),
             System.Text.Json.JsonValueKind.Number => element.TryGetInt64(out var l) ? new BsonInt64(l) : new BsonDouble(element.GetDouble()),
             System.Text.Json.JsonValueKind.True => BsonBoolean.True,
             System.Text.Json.JsonValueKind.False => BsonBoolean.False,
             System.Text.Json.JsonValueKind.Null => BsonNull.Value,
             _ => new BsonString(element.GetRawText())
         };
+    }
+
+    private static bool HasExplicitOffset(string value)
+    {
+        if (value.EndsWith("Z", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (value.Length < 6)
+            return false;
+
+        var offset = value[^6..];
+        return (offset[0] == '+' || offset[0] == '-')
+            && char.IsDigit(offset[1])
+            && char.IsDigit(offset[2])
+            && offset[3] == ':'
+            && char.IsDigit(offset[4])
+            && char.IsDigit(offset[5]);
     }
 
     private static string TranslatePath(string path)

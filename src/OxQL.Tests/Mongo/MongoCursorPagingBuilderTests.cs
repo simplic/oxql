@@ -2,6 +2,7 @@ using OxQL.Core.Models;
 using OxQL.Mongo.Builders;
 using FluentAssertions;
 using MongoDB.Bson;
+using System.Text.Json;
 using Xunit;
 
 namespace OxQL.Tests.Mongo;
@@ -130,5 +131,76 @@ public class MongoCursorPagingBuilderTests
 
         result.Contains("_id").Should().BeTrue();
         result.Contains("id").Should().BeFalse();
+    }
+
+    [Fact]
+    public void BuildCursorFilter_DateTimeJsonElementWithOffset_ProducesBsonDateTime()
+    {
+        var isoDate = "2024-06-01T12:00:00Z";
+        var jsonElement = JsonDocument.Parse($"\"{isoDate}\"").RootElement;
+
+        var cursor = new CursorPayload
+        {
+            Fields =
+            [
+                new CursorField { Path = "createdAt", Direction = "desc", Value = jsonElement }
+            ]
+        };
+
+        var result = _builder.BuildCursorFilter(cursor);
+
+        var inner = result["createdAt"].AsBsonDocument;
+        inner.Contains("$lt").Should().BeTrue();
+        inner["$lt"].BsonType.Should().Be(BsonType.DateTime);
+        inner["$lt"].AsBsonDateTime.ToUniversalTime().Should().Be(DateTime.Parse(isoDate).ToUniversalTime());
+    }
+
+    [Fact]
+    public void BuildCursorFilter_DateTimeJsonElementWithoutOffset_PreservesBsonString()
+    {
+        var offsetFreeDate = "2024-06-01T12:00:00";
+        var jsonElement = JsonDocument.Parse($"\"{offsetFreeDate}\"").RootElement;
+
+        var cursor = new CursorPayload
+        {
+            Fields =
+            [
+                new CursorField { Path = "createdAt", Direction = "desc", Value = jsonElement }
+            ]
+        };
+
+        var result = _builder.BuildCursorFilter(cursor);
+
+        var inner = result["createdAt"].AsBsonDocument;
+        inner.Contains("$lt").Should().BeTrue();
+        inner["$lt"].BsonType.Should().Be(BsonType.String);
+        inner["$lt"].AsString.Should().Be(offsetFreeDate);
+    }
+
+    [Fact]
+    public void BuildCursorFilter_MultiField_DateTimeJsonElementWithOffset_ProducesBsonDateTime()
+    {
+        var isoDate = "2024-06-01T12:00:00+02:00";
+        var jsonDate = JsonDocument.Parse($"\"{isoDate}\"").RootElement;
+        var jsonId = JsonDocument.Parse("\"abc123\"").RootElement;
+
+        var cursor = new CursorPayload
+        {
+            Fields =
+            [
+                new CursorField { Path = "createdAt", Direction = "desc", Value = jsonDate },
+                new CursorField { Path = "id", Direction = "asc", Value = jsonId }
+            ]
+        };
+
+        var result = _builder.BuildCursorFilter(cursor);
+
+        var orArray = result["$or"].AsBsonArray;
+
+        var first = orArray[0].AsBsonDocument;
+        first["createdAt"].AsBsonDocument["$lt"].BsonType.Should().Be(BsonType.DateTime);
+
+        var second = orArray[1].AsBsonDocument;
+        second["createdAt"].BsonType.Should().Be(BsonType.DateTime);
     }
 }

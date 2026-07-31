@@ -129,9 +129,10 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IQueryAdapter<BsonDocument>, MongoQueryAdapter>(sp =>
         {
-            var resolver         = sp.GetRequiredService<MongoCollectionResolver>();
-            var cursorSerializer = sp.GetRequiredService<OxQL.Core.Interfaces.ICursorSerializer>();
-            return new MongoQueryAdapter(resolver.Resolve, cursorSerializer);
+            var resolver          = sp.GetRequiredService<MongoCollectionResolver>();
+            var cursorSerializer  = sp.GetRequiredService<OxQL.Core.Interfaces.ICursorSerializer>();
+            var externalResolvers = sp.GetServices<IExternalResolver>();
+            return new MongoQueryAdapter(resolver.Resolve, cursorSerializer, externalResolvers);
         });
 
         services.AddSingleton<IQueryExecutor<BsonDocument>, MongoQueryExecutor>(sp =>

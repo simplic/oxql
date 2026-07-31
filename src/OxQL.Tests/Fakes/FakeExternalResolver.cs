@@ -8,8 +8,11 @@ namespace OxQL.Tests.Fakes;
 public sealed class FakeExternalResolver : IExternalResolver
 {
     private readonly Dictionary<string, object?> _data = new();
+    private readonly List<IReadOnlyList<string>> _requestedKeyBatches = [];
 
     public string Source { get; }
+    public int CallCount { get; private set; }
+    public IReadOnlyList<IReadOnlyList<string>> RequestedKeyBatches => _requestedKeyBatches;
 
     public FakeExternalResolver(string source)
     {
@@ -29,6 +32,9 @@ public sealed class FakeExternalResolver : IExternalResolver
         IReadOnlyList<string> keys,
         CancellationToken cancellationToken = default)
     {
+        CallCount++;
+        _requestedKeyBatches.Add(keys.ToArray());
+
         var results = new Dictionary<string, object?>();
         foreach (var key in keys)
         {

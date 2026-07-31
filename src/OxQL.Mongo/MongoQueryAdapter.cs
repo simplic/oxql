@@ -1,3 +1,4 @@
+using System.Globalization;
 using OxQL.Core.Cursor;
 using OxQL.Core.Interfaces;
 using OxQL.Core.Models;
@@ -14,13 +15,20 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
 {
     private readonly ICursorSerializer _cursorSerializer;
     private readonly Func<string, IMongoCollection<BsonDocument>> _collectionResolver;
+    private readonly IReadOnlyDictionary<string, IExternalResolver> _externalResolvers;
+    private readonly Func<QueryPlan, QueryVariables?, CancellationToken, Task<List<BsonDocument>>> _executor;
 
     public MongoQueryAdapter(
         Func<string, IMongoCollection<BsonDocument>> collectionResolver,
-        ICursorSerializer cursorSerializer)
+        ICursorSerializer cursorSerializer,
+        IEnumerable<IExternalResolver>? externalResolvers = null,
+        Func<QueryPlan, QueryVariables?, CancellationToken, Task<List<BsonDocument>>>? executor = null)
     {
         _collectionResolver = collectionResolver ?? throw new ArgumentNullException(nameof(collectionResolver));
         _cursorSerializer = cursorSerializer ?? throw new ArgumentNullException(nameof(cursorSerializer));
+        _externalResolvers = (externalResolvers ?? [])
+            .ToDictionary(resolver => resolver.Source, StringComparer.OrdinalIgnoreCase);
+        _executor = executor ?? ExecuteAggregationAsync;
     }
 
     public async Task<QueryResponse<BsonDocument>> ExecuteAsync(
@@ -38,19 +46,7 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             cursorPayload = _cursorSerializer.Deserialize(pageStage.Cursor, plan.Sort);
         }
 
-        // Build main pipeline
-        var pipeline = pipelineBuilder.Build(plan, cursorPayload);
-
-        // Resolve the collection for this entity type
-        var collection = _collectionResolver(plan.EntityType);
-
-        // Execute aggregation
-        var pipelineDef = pipeline.Select(doc => (PipelineStageDefinition<BsonDocument, BsonDocument>)doc).ToList();
-        var aggPipeline = PipelineDefinition<BsonDocument, BsonDocument>.Create(pipelineDef);
-
-        var results = await collection
-            .Aggregate(aggPipeline, cancellationToken: cancellationToken)
-            .ToListAsync(cancellationToken);
+        var results = await _executor(plan, variables, cancellationToken);
 
         // Determine if there's a next page (we fetched limit+1)
         var hasNextPage = results.Count > pageStage.Limit;
@@ -77,6 +73,7 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             var countPipeline = pipelineBuilder.BuildCountPipeline(plan);
             var countPipelineDef = countPipeline.Select(doc => (PipelineStageDefinition<BsonDocument, BsonDocument>)doc).ToList();
             var countAgg = PipelineDefinition<BsonDocument, BsonDocument>.Create(countPipelineDef);
+            var collection = _collectionResolver(plan.EntityType);
 
             var countResult = await collection
                 .Aggregate(countAgg, cancellationToken: cancellationToken)
@@ -92,6 +89,8 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             }
         }
 
+        results = await ApplyResolveStagesAsync(results, plan.Pipeline, cancellationToken);
+
         return new QueryResponse<BsonDocument>
         {
             Items = results,
@@ -102,6 +101,151 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
                 TotalCount = totalCount
             }
         };
+    }
+
+    private async Task<List<BsonDocument>> ExecuteAggregationAsync(
+        QueryPlan plan,
+        QueryVariables? variables,
+        CancellationToken cancellationToken)
+    {
+        var pipelineBuilder = new MongoPipelineBuilder(variables);
+
+        CursorPayload? cursorPayload = null;
+        var pageStage = plan.Page;
+        if (!string.IsNullOrEmpty(pageStage.Cursor))
+        {
+            cursorPayload = _cursorSerializer.Deserialize(pageStage.Cursor, plan.Sort);
+        }
+
+        var pipeline = pipelineBuilder.Build(plan, cursorPayload);
+        var collection = _collectionResolver(plan.EntityType);
+        var pipelineDef = pipeline.Select(doc => (PipelineStageDefinition<BsonDocument, BsonDocument>)doc).ToList();
+        var aggPipeline = PipelineDefinition<BsonDocument, BsonDocument>.Create(pipelineDef);
+
+        return await collection
+            .Aggregate(aggPipeline, cancellationToken: cancellationToken)
+            .ToListAsync(cancellationToken);
+    }
+
+    private async Task<List<BsonDocument>> ApplyResolveStagesAsync(
+        List<BsonDocument> documents,
+        IReadOnlyList<PipelineStage> pipeline,
+        CancellationToken cancellationToken)
+    {
+        var resolveStages = pipeline
+            .Where(stage => stage.Resolve is not null)
+            .Select(stage => stage.Resolve!)
+            .ToList();
+
+        if (documents.Count == 0 || resolveStages.Count == 0)
+            return documents;
+
+        var cache = new Dictionary<string, Dictionary<string, ExternalResolutionCacheEntry>>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var resolveStage in resolveStages)
+        {
+            await ApplyResolveStageAsync(documents, resolveStage, cache, cancellationToken);
+        }
+
+        return documents;
+    }
+
+    private async Task ApplyResolveStageAsync(
+        List<BsonDocument> documents,
+        ResolveStage resolveStage,
+        Dictionary<string, Dictionary<string, ExternalResolutionCacheEntry>> cache,
+        CancellationToken cancellationToken)
+    {
+        if (!_externalResolvers.TryGetValue(resolveStage.Source, out var resolver))
+        {
+            throw new QueryValidationException(
+                $"No external resolver is registered for source '{resolveStage.Source}'.");
+        }
+
+        if (!cache.TryGetValue(resolveStage.Source, out var sourceCache))
+        {
+            sourceCache = new Dictionary<string, ExternalResolutionCacheEntry>(StringComparer.Ordinal);
+            cache[resolveStage.Source] = sourceCache;
+        }
+
+        var keys = documents
+            .Select(document => GetResolverKey(document, resolveStage.LocalPath))
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Distinct(StringComparer.Ordinal)
+            .ToList()!;
+
+        var missingKeys = keys
+            .Where(key => !sourceCache.ContainsKey(key))
+            .ToList();
+
+        if (missingKeys.Count > 0)
+        {
+            var resolvedValues = await resolver.ResolveAsync(missingKeys, cancellationToken);
+
+            foreach (var key in missingKeys)
+            {
+                sourceCache[key] = resolvedValues.TryGetValue(key, out var value)
+                    ? new ExternalResolutionCacheEntry(true, value)
+                    : new ExternalResolutionCacheEntry(false, null);
+            }
+        }
+
+        foreach (var document in documents)
+        {
+            var key = GetResolverKey(document, resolveStage.LocalPath);
+            var value = key is not null && sourceCache.TryGetValue(key, out var entry) && entry.Found
+                ? entry.Value
+                : null;
+
+            SetFieldValue(document, resolveStage.As, value);
+        }
+    }
+
+    private static string? GetResolverKey(BsonDocument doc, string path)
+    {
+        var value = GetFieldValue(doc, path);
+        return value switch
+        {
+            null => null,
+            string s when string.IsNullOrWhiteSpace(s) => null,
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+            _ => value.ToString()
+        };
+    }
+
+    private static void SetFieldValue(BsonDocument doc, string path, object? value)
+    {
+        var segments = path.Split('.');
+        var current = doc;
+
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            var segment = segments[i];
+            if (!current.TryGetValue(segment, out var existing) || existing is not BsonDocument nested)
+            {
+                nested = new BsonDocument();
+                current[segment] = nested;
+            }
+
+            current = nested;
+        }
+
+        current[segments[^1]] = ToBsonValue(value);
+    }
+
+    private static BsonValue ToBsonValue(object? value)
+    {
+        if (value is null)
+            return BsonNull.Value;
+
+        if (value is BsonValue bsonValue)
+            return bsonValue;
+
+        if (BsonTypeMapper.TryMapToBsonValue(value, out var mapped))
+            return mapped;
+
+        return value.ToBsonDocument();
     }
 
     private static object? GetFieldValue(BsonDocument doc, string path)
@@ -135,4 +279,6 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             _ => current.ToString()
         };
     }
+
+    private readonly record struct ExternalResolutionCacheEntry(bool Found, object? Value);
 }

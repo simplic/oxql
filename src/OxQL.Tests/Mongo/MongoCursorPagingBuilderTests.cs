@@ -134,10 +134,8 @@ public class MongoCursorPagingBuilderTests
     }
 
     [Fact]
-    public void BuildCursorFilter_DateTimeJsonElement_ProducesBsonDateTime()
+    public void BuildCursorFilter_DateTimeJsonElementWithOffset_ProducesBsonDateTime()
     {
-        // Simulate what happens after cursor round-trip through JSON:
-        // DateTime values are deserialized as JsonElement with ValueKind.String.
         var isoDate = "2024-06-01T12:00:00Z";
         var jsonElement = JsonDocument.Parse($"\"{isoDate}\"").RootElement;
 
@@ -153,16 +151,36 @@ public class MongoCursorPagingBuilderTests
 
         var inner = result["createdAt"].AsBsonDocument;
         inner.Contains("$lt").Should().BeTrue();
-        // Must be BsonDateTime, not BsonString — otherwise the MongoDB comparison fails and
-        // the cursor always points to the beginning of the collection.
         inner["$lt"].BsonType.Should().Be(BsonType.DateTime);
         inner["$lt"].AsBsonDateTime.ToUniversalTime().Should().Be(DateTime.Parse(isoDate).ToUniversalTime());
     }
 
     [Fact]
-    public void BuildCursorFilter_MultiField_DateTimeJsonElement_ProducesBsonDateTime()
+    public void BuildCursorFilter_DateTimeJsonElementWithoutOffset_PreservesBsonString()
     {
-        var isoDate = "2024-06-01T12:00:00Z";
+        var offsetFreeDate = "2024-06-01T12:00:00";
+        var jsonElement = JsonDocument.Parse($"\"{offsetFreeDate}\"").RootElement;
+
+        var cursor = new CursorPayload
+        {
+            Fields =
+            [
+                new CursorField { Path = "createdAt", Direction = "desc", Value = jsonElement }
+            ]
+        };
+
+        var result = _builder.BuildCursorFilter(cursor);
+
+        var inner = result["createdAt"].AsBsonDocument;
+        inner.Contains("$lt").Should().BeTrue();
+        inner["$lt"].BsonType.Should().Be(BsonType.String);
+        inner["$lt"].AsString.Should().Be(offsetFreeDate);
+    }
+
+    [Fact]
+    public void BuildCursorFilter_MultiField_DateTimeJsonElementWithOffset_ProducesBsonDateTime()
+    {
+        var isoDate = "2024-06-01T12:00:00+02:00";
         var jsonDate = JsonDocument.Parse($"\"{isoDate}\"").RootElement;
         var jsonId = JsonDocument.Parse("\"abc123\"").RootElement;
 
@@ -179,11 +197,9 @@ public class MongoCursorPagingBuilderTests
 
         var orArray = result["$or"].AsBsonArray;
 
-        // First condition: createdAt < lastCreatedAt (must be BsonDateTime)
         var first = orArray[0].AsBsonDocument;
         first["createdAt"].AsBsonDocument["$lt"].BsonType.Should().Be(BsonType.DateTime);
 
-        // Second condition equality part: createdAt == lastCreatedAt (must be BsonDateTime)
         var second = orArray[1].AsBsonDocument;
         second["createdAt"].BsonType.Should().Be(BsonType.DateTime);
     }

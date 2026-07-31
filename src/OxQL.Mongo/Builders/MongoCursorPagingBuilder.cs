@@ -83,10 +83,8 @@ public sealed class MongoCursorPagingBuilder
         if (element.ValueKind == System.Text.Json.JsonValueKind.String)
         {
             var raw = element.GetString()!;
-            if (element.TryGetDateTimeOffset(out var dto))
+            if (HasExplicitOffset(raw) && element.TryGetDateTimeOffset(out var dto))
                 return new BsonDateTime(dto.UtcDateTime);
-            if (element.TryGetDateTime(out var dt))
-                return new BsonDateTime(dt);
             return new BsonString(raw);
         }
 
@@ -98,6 +96,23 @@ public sealed class MongoCursorPagingBuilder
             System.Text.Json.JsonValueKind.Null => BsonNull.Value,
             _ => new BsonString(element.GetRawText())
         };
+    }
+
+    private static bool HasExplicitOffset(string value)
+    {
+        if (value.EndsWith("Z", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (value.Length < 6)
+            return false;
+
+        var offset = value[^6..];
+        return (offset[0] == '+' || offset[0] == '-')
+            && char.IsDigit(offset[1])
+            && char.IsDigit(offset[2])
+            && offset[3] == ':'
+            && char.IsDigit(offset[4])
+            && char.IsDigit(offset[5]);
     }
 
     private static string TranslatePath(string path)

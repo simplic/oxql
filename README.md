@@ -414,6 +414,53 @@ Example: complete OxQL query with one cross-service resolve stage against `conta
 
 When this query is executed with `services=contact-api/v1=https://contact-api.internal/`, and the invoice contains `attributes.contactId = "contact-42"`, the resolver calls `contact-api/v1` to load `contact-42` by id and adds the returned contact object to the result as `contact`.
 
+Example: resolve with a parameterized subquery sent to `contact-api/v1`:
+
+```json
+{
+  "entityType": "invoice",
+  "pipeline": [
+    {
+      "match": {
+        "id": { "eq": "invoice-1001" }
+      }
+    },
+    {
+      "resolve": {
+        "source": "contact-api/v1",
+        "localPath": "attributes.contactId",
+        "parameters": {
+          "contactId": "attributes.contactId"
+        },
+        "subquery": {
+          "entityType": "contact",
+          "pipeline": [
+            {
+              "match": {
+                "id": { "eq": { "$var": "contactId" } }
+              }
+            },
+            {
+              "page": {
+                "limit": 1
+              }
+            }
+          ]
+        },
+        "as": "contact"
+      }
+    },
+    {
+      "page": {
+        "limit": 1
+      }
+    }
+  ]
+}
+```
+
+The resolver uses `parameters` to map local document values into subquery variables, then forwards the `subquery` to the remote OxQL endpoint.
+
 ### IQueryAdapter<T>
 Implement for non-MongoDB backends:
 

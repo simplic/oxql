@@ -50,6 +50,18 @@ public sealed record ResolveStage
     public required string LocalPath { get; init; }
 
     /// <summary>
+    /// Optional parameter mappings for subquery mode (variable name -> local path).
+    /// </summary>
+    [JsonPropertyName("parameters")]
+    public IReadOnlyDictionary<string, string>? Parameters { get; init; }
+
+    /// <summary>
+    /// Optional subquery sent to the external source.
+    /// </summary>
+    [JsonPropertyName("subquery")]
+    public QueryRequest? Subquery { get; init; }
+
+    /// <summary>
     /// The alias for the resolved result.
     /// </summary>
     [JsonPropertyName("as")]

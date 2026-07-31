@@ -255,6 +255,45 @@ public sealed class QueryValidator : IQueryValidator
 
         ValidatePath(resolve.LocalPath, "resolve.localPath", errors);
 
+        if (resolve.Parameters is not null)
+        {
+            foreach (var (name, path) in resolve.Parameters)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = "INVALID_RESOLVE_PARAMETER_NAME",
+                        Message = "Resolve parameter name cannot be empty."
+                    });
+                    continue;
+                }
+
+                ValidatePath(path, $"resolve.parameters.{name}", errors);
+            }
+        }
+
+        if (resolve.Subquery is not null)
+        {
+            if (string.IsNullOrWhiteSpace(resolve.Subquery.EntityType))
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = "INVALID_RESOLVE_SUBQUERY_ENTITY",
+                    Message = "Resolve subquery entityType is required."
+                });
+            }
+
+            if (resolve.Subquery.Pipeline is null || resolve.Subquery.Pipeline.Count == 0)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = "INVALID_RESOLVE_SUBQUERY_PIPELINE",
+                    Message = "Resolve subquery pipeline must contain at least one stage."
+                });
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(resolve.As))
         {
             errors.Add(new QueryValidationError

@@ -169,6 +169,22 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             cache[resolveStage.Source] = sourceCache;
         }
 
+        if (resolveStage.Subquery is null)
+        {
+            await ResolveByKeysAsync(documents, resolveStage, resolver, sourceCache, cancellationToken);
+            return;
+        }
+
+        await ResolveBySubqueryAsync(documents, resolveStage, resolver, sourceCache, cancellationToken);
+    }
+
+    private static async Task ResolveByKeysAsync(
+        List<BsonDocument> documents,
+        ResolveStage resolveStage,
+        IExternalResolver resolver,
+        Dictionary<string, ExternalResolutionCacheEntry> sourceCache,
+        CancellationToken cancellationToken)
+    {
         var keys = documents
             .Select(document => GetResolverKey(document, resolveStage.LocalPath))
             .Where(key => !string.IsNullOrWhiteSpace(key))
@@ -200,6 +216,105 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
 
             SetFieldValue(document, resolveStage.As, value);
         }
+    }
+
+    private static async Task ResolveBySubqueryAsync(
+        List<BsonDocument> documents,
+        ResolveStage resolveStage,
+        IExternalResolver resolver,
+        Dictionary<string, ExternalResolutionCacheEntry> sourceCache,
+        CancellationToken cancellationToken)
+    {
+        foreach (var document in documents)
+        {
+            var request = BuildSubqueryRequest(document, resolveStage);
+            var cacheKey = BuildSubqueryCacheKey(request);
+
+            if (!sourceCache.TryGetValue(cacheKey, out var entry))
+            {
+                var value = await resolver.ResolveOneAsync(request, cancellationToken);
+                entry = value is null
+                    ? new ExternalResolutionCacheEntry(false, null)
+                    : new ExternalResolutionCacheEntry(true, value);
+                sourceCache[cacheKey] = entry;
+            }
+
+            SetFieldValue(document, resolveStage.As, entry.Found ? entry.Value : null);
+        }
+    }
+
+    private static ExternalResolveRequest BuildSubqueryRequest(BsonDocument document, ResolveStage resolveStage)
+    {
+        var baseSubquery = resolveStage.Subquery
+            ?? throw new QueryValidationException("Resolve subquery configuration is missing.");
+
+        var variableValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        if (resolveStage.Parameters is not null)
+        {
+            foreach (var (name, path) in resolveStage.Parameters)
+            {
+                variableValues[name] = GetFieldValue(document, path);
+            }
+        }
+
+        var subquery = new QueryRequest
+        {
+            EntityType = baseSubquery.EntityType,
+            Pipeline = baseSubquery.Pipeline,
+            Variables = variableValues.Count == 0
+                ? baseSubquery.Variables
+                : MergeVariables(baseSubquery.Variables, variableValues)
+        };
+
+        return new ExternalResolveRequest
+        {
+            Query = subquery,
+            Keys = null
+        };
+    }
+
+    private static QueryVariables MergeVariables(QueryVariables? baseVariables, Dictionary<string, object?> overrides)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        if (baseVariables is not null)
+        {
+            foreach (var (name, value) in baseVariables.Values)
+            {
+                values[name] = value;
+            }
+        }
+
+        foreach (var (name, value) in overrides)
+        {
+            values[name] = value;
+        }
+
+        return new QueryVariables { Values = values };
+    }
+
+    private static string BuildSubqueryCacheKey(ExternalResolveRequest request)
+    {
+        var query = request.Query
+            ?? throw new QueryValidationException("Resolve subquery request is missing query payload.");
+
+        var serializedVariables = query.Variables is null
+            ? string.Empty
+            : string.Join("|", query.Variables.Values
+                .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => $"{kv.Key}:{SerializeCacheValue(kv.Value)}"));
+
+        return $"subquery:{query.EntityType}:{serializedVariables}";
+    }
+
+    private static string SerializeCacheValue(object? value)
+    {
+        return value switch
+        {
+            null => "null",
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? string.Empty
+        };
     }
 
     private static string? GetResolverKey(BsonDocument doc, string path)

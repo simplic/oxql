@@ -80,9 +80,18 @@ public sealed class MongoCursorPagingBuilder
 
     private static BsonValue JsonElementToBson(System.Text.Json.JsonElement element)
     {
+        if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            var raw = element.GetString()!;
+            if (element.TryGetDateTimeOffset(out var dto))
+                return new BsonDateTime(dto.UtcDateTime);
+            if (element.TryGetDateTime(out var dt))
+                return new BsonDateTime(dt);
+            return new BsonString(raw);
+        }
+
         return element.ValueKind switch
         {
-            System.Text.Json.JsonValueKind.String => new BsonString(element.GetString()!),
             System.Text.Json.JsonValueKind.Number => element.TryGetInt64(out var l) ? new BsonInt64(l) : new BsonDouble(element.GetDouble()),
             System.Text.Json.JsonValueKind.True => BsonBoolean.True,
             System.Text.Json.JsonValueKind.False => BsonBoolean.False,

@@ -214,6 +214,61 @@ public class QueryValidatorTests
     }
 
     [Fact]
+    public void Validate_LookupWithValidConvert_Succeeds()
+    {
+        var request = new QueryRequest
+        {
+            EntityType = "invoice",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Lookup = new LookupStage
+                    {
+                        From = "customers",
+                        LocalPath = "attributes.customerId",
+                        ForeignPath = "id",
+                        As = "customer",
+                        Convert = "stringToUuid"
+                    }
+                }
+            ]
+        };
+
+        var result = CreateValidator().Validate(request);
+
+        result.IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_LookupWithInvalidConvert_Fails()
+    {
+        var request = new QueryRequest
+        {
+            EntityType = "invoice",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Lookup = new LookupStage
+                    {
+                        From = "customers",
+                        LocalPath = "attributes.customerId",
+                        ForeignPath = "id",
+                        As = "customer",
+                        Convert = "somethingElse"
+                    }
+                }
+            ]
+        };
+
+        var result = CreateValidator().Validate(request);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Code == "INVALID_LOOKUP_CONVERT");
+    }
+
+    [Fact]
     public void Validate_ExceedMaxPipelineStages_Fails()
     {
         var stages = Enumerable.Range(0, 25)

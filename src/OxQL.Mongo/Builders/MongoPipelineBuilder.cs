@@ -95,11 +95,51 @@ public sealed class MongoPipelineBuilder
 
     private static BsonDocument BuildLookup(LookupStage lookup)
     {
+        var localField = TranslatePath(lookup.LocalPath);
+        var foreignField = TranslatePath(lookup.ForeignPath);
+
+        // Simple $lookup when no key-type conversion is requested.
+        if (string.IsNullOrWhiteSpace(lookup.Convert))
+        {
+            return new BsonDocument("$lookup", new BsonDocument
+            {
+                ["from"] = lookup.From,
+                ["localField"] = localField,
+                ["foreignField"] = foreignField,
+                ["as"] = lookup.As
+            });
+        }
+
+        // Pipelined $lookup that coerces the string-form key into a binary UUID before comparing,
+        // allowing joins across string/UUID representations of a GUID. Uses $function (server-side
+        // JS) so it works on MongoDB 7.0+ (native $convert UUID support requires 8.0+).
+        var direction = MongoConversionExpressionBuilder.ParseDirection(lookup.Convert);
+
+        // Always coerce the string side to a UUID and compare against the binary side.
+        BsonValue left;
+        BsonValue right;
+        if (direction == GuidConversionDirection.StringToUuid)
+        {
+            // Local key is the string; foreign key is the binary UUID.
+            left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
+            right = $"${foreignField}";
+        }
+        else
+        {
+            // Local key is the binary UUID; foreign key is the string.
+            left = "$$localValue";
+            right = MongoConversionExpressionBuilder.CoerceToUuid($"${foreignField}");
+        }
+
         return new BsonDocument("$lookup", new BsonDocument
         {
             ["from"] = lookup.From,
-            ["localField"] = TranslatePath(lookup.LocalPath),
-            ["foreignField"] = TranslatePath(lookup.ForeignPath),
+            ["let"] = new BsonDocument("localValue", $"${localField}"),
+            ["pipeline"] = new BsonArray
+            {
+                new BsonDocument("$match", new BsonDocument("$expr",
+                    new BsonDocument("$eq", new BsonArray { left, right })))
+            },
             ["as"] = lookup.As
         });
     }

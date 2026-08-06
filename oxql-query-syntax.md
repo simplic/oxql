@@ -203,6 +203,37 @@ Joins a related collection (left join). The joined documents are embedded as an 
 | `localPath` | ✅ | Field in the current document containing the foreign key. |
 | `foreignPath` | ✅ | Field in the target collection to match against (usually `"id"`). |
 | `as` | ✅ | Alias under which the joined result is embedded. |
+| `convert` | | Key-type conversion applied when the local and foreign keys use different GUID representations (string vs. binary UUID). Allowed values: `"stringToUuid"` (local string ↔ foreign binary UUID) and `"uuidToString"` (local binary UUID ↔ foreign string). |
+
+### Converting the join key (`convert`)
+
+When one side stores a GUID as a **string** and the other as a **binary UUID** (BSON subtype 4),
+a plain field-to-field join produces no matches. Set `convert` so the **string** side is coerced to
+a binary UUID before comparing:
+
+```json
+{
+  "lookup": {
+    "from": "customers",
+    "localPath": "attributes.customerId",
+    "foreignPath": "id",
+    "as": "customer",
+    "convert": "stringToUuid"
+  }
+}
+```
+
+- `"stringToUuid"` — the local key is a string, the foreign key is a binary UUID.
+- `"uuidToString"` — the local key is a binary UUID, the foreign key is a string.
+
+The conversion is **non-throwing**: values that are not valid GUID strings are left unchanged (they
+simply won't match). Internally this emits a pipelined `$lookup` that coerces the string side to a
+UUID via the `$function` operator.
+
+> **Compatibility:** This uses server-side JavaScript (`$function`) so it works on **MongoDB 7.0+**.
+> Server-side scripting must be enabled (`security.javascriptEnabled`, on by default but disabled on
+> some hosted tiers), the per-document JavaScript call is slower than a native operator, and only the
+> standard UUID representation (BSON subtype 4) is matched.
 
 ---
 
@@ -488,6 +519,7 @@ Validation errors return HTTP 400 with the following shape:
 | `INVALID_LOOKUP_SOURCE` | `lookup.from` is missing |
 | `DISALLOWED_LOOKUP_SOURCE` | `lookup.from` not in the server allowlist |
 | `INVALID_LOOKUP_ALIAS` | `lookup.as` is missing |
+| `INVALID_LOOKUP_CONVERT` | `lookup.convert` is not `"stringToUuid"` or `"uuidToString"` |
 | `INVALID_RESOLVE_SOURCE` | `resolve.source` is missing or disallowed |
 | `INVALID_RESOLVE_ALIAS` | `resolve.as` is missing |
 | `MAX_GROUP_FIELDS_EXCEEDED` | Too many fields in `group.fields` |

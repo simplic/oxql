@@ -37,6 +37,71 @@ public class MongoPipelineBuilderTests
     }
 
     [Fact]
+    public void Build_LookupStage_WithStringToUuidConvert_BuildsPipelinedLookup()
+    {
+        var plan = CreatePlan(new PipelineStage
+        {
+            Lookup = new LookupStage
+            {
+                From = "customers",
+                LocalPath = "attributes.customerId",
+                ForeignPath = "id",
+                As = "customer",
+                Convert = "stringToUuid"
+            }
+        });
+
+        var pipeline = CreateBuilder().Build(plan);
+
+        var lookupDoc = pipeline[0]["$lookup"].AsBsonDocument;
+        lookupDoc["from"].AsString.Should().Be("customers");
+        lookupDoc["as"].AsString.Should().Be("customer");
+
+        // Simple localField/foreignField should NOT be present for the pipelined form.
+        lookupDoc.Contains("localField").Should().BeFalse();
+        lookupDoc.Contains("foreignField").Should().BeFalse();
+
+        lookupDoc["let"].AsBsonDocument["localValue"].AsString.Should().Be("$attributes.customerId");
+
+        var subPipeline = lookupDoc["pipeline"].AsBsonArray;
+        subPipeline.Should().HaveCount(1);
+        var eq = subPipeline[0].AsBsonDocument["$match"].AsBsonDocument["$expr"].AsBsonDocument["$eq"].AsBsonArray;
+
+        // Local string is coerced to a UUID; foreign binary field is compared directly.
+        var coerce = eq[0].AsBsonDocument["$function"].AsBsonDocument;
+        coerce["lang"].AsString.Should().Be("js");
+        coerce["args"].AsBsonArray[0].AsString.Should().Be("$$localValue");
+        eq[1].AsString.Should().Be("$_id"); // foreignField "id" translated to "_id"
+    }
+
+    [Fact]
+    public void Build_LookupStage_WithUuidToStringConvert_CoercesLocalUuidToUuid()
+    {
+        var plan = CreatePlan(new PipelineStage
+        {
+            Lookup = new LookupStage
+            {
+                From = "customers",
+                LocalPath = "attributes.customerId",
+                ForeignPath = "externalId",
+                As = "customer",
+                Convert = "uuidToString"
+            }
+        });
+
+        var pipeline = CreateBuilder().Build(plan);
+
+        var lookupDoc = pipeline[0]["$lookup"].AsBsonDocument;
+        var eq = lookupDoc["pipeline"].AsBsonArray[0].AsBsonDocument["$match"].AsBsonDocument["$expr"]
+            .AsBsonDocument["$eq"].AsBsonArray;
+
+        // Local binary UUID is coerced to a UUID; foreign string field is compared directly (preserving index path).
+        var coerce = eq[0].AsBsonDocument["$function"].AsBsonDocument;
+        coerce["args"].AsBsonArray[0].AsString.Should().Be("$$localValue");
+        eq[1].AsString.Should().Be("$externalId");
+    }
+
+    [Fact]
     public void Build_UnwindStage_TranslatesToUnwind()
     {
         var plan = CreatePlan(new PipelineStage

@@ -30,6 +30,16 @@ public sealed record LookupStage
     /// </summary>
     [JsonPropertyName("as")]
     public required string As { get; init; }
+
+    /// <summary>
+    /// Optional key-type conversion applied before matching the local and foreign keys.
+    /// Use when the local and foreign keys are stored using different representations of a GUID.
+    /// Allowed values: <c>"stringToUuid"</c> (local string → binary UUID) and
+    /// <c>"uuidToString"</c> (local binary UUID → string). The conversion is non-throwing:
+    /// values that cannot be converted are left unchanged.
+    /// </summary>
+    [JsonPropertyName("convert")]
+    public string? Convert { get; init; }
 }
 
 /// <summary>

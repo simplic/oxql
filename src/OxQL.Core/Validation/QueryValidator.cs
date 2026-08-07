@@ -231,6 +231,18 @@ public sealed class QueryValidator : IQueryValidator
                 Message = "Lookup 'as' alias is required."
             });
         }
+
+        if (!string.IsNullOrWhiteSpace(lookup.Convert)
+            && !string.Equals(lookup.Convert, "stringToUuid", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(lookup.Convert, "uuidToString", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(new QueryValidationError
+            {
+                Code = "INVALID_LOOKUP_CONVERT",
+                Message = "Lookup 'convert' must be 'stringToUuid' or 'uuidToString'.",
+                Path = lookup.Convert
+            });
+        }
     }
 
     private void ValidateResolve(ResolveStage resolve, List<QueryValidationError> errors)

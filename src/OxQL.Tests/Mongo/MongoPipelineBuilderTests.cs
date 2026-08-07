@@ -75,7 +75,7 @@ public class MongoPipelineBuilderTests
     }
 
     [Fact]
-    public void Build_LookupStage_WithUuidToStringConvert_CoercesForeignStringToUuid()
+    public void Build_LookupStage_WithUuidToStringConvert_CoercesLocalUuidToUuid()
     {
         var plan = CreatePlan(new PipelineStage
         {
@@ -95,10 +95,10 @@ public class MongoPipelineBuilderTests
         var eq = lookupDoc["pipeline"].AsBsonArray[0].AsBsonDocument["$match"].AsBsonDocument["$expr"]
             .AsBsonDocument["$eq"].AsBsonArray;
 
-        // Local binary key compared directly; foreign string is coerced to a UUID.
-        eq[0].AsString.Should().Be("$$localValue");
-        var coerce = eq[1].AsBsonDocument["$function"].AsBsonDocument;
-        coerce["args"].AsBsonArray[0].AsString.Should().Be("$externalId");
+        // Local binary UUID is coerced to a UUID; foreign string field is compared directly (preserving index path).
+        var coerce = eq[0].AsBsonDocument["$function"].AsBsonDocument;
+        coerce["args"].AsBsonArray[0].AsString.Should().Be("$$localValue");
+        eq[1].AsString.Should().Be("$externalId");
     }
 
     [Fact]

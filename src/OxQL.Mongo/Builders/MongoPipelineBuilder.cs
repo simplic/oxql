@@ -127,8 +127,8 @@ public sealed class MongoPipelineBuilder
         else
         {
             // Local key is the binary UUID; foreign key is the string.
-            left = "$$localValue";
-            right = MongoConversionExpressionBuilder.CoerceToUuid($"${foreignField}");
+            left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
+            right = $"${foreignField}";
         }
 
         return new BsonDocument("$lookup", new BsonDocument

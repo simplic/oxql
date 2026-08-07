@@ -32,7 +32,7 @@ public sealed record LookupStage
     public required string As { get; init; }
 
     /// <summary>
-    /// Optional key-type conversion applied to the local key before matching the foreign field.
+    /// Optional key-type conversion applied before matching the local and foreign keys.
     /// Use when the local and foreign keys are stored using different representations of a GUID.
     /// Allowed values: <c>"stringToUuid"</c> (local string → binary UUID) and
     /// <c>"uuidToString"</c> (local binary UUID → string). The conversion is non-throwing:

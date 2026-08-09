@@ -61,15 +61,43 @@ public sealed class MongoQueryExecutor : IQueryExecutor<BsonDocument>
         // Normalize
         var normalized = _normalizer.Normalize(request);
 
-        // Check cache
+        // Check cache. The key describes the query *shape* only — the page cursor is
+        // deliberately not part of it (see GenerateCacheKey), because every page of a
+        // result set shares one plan. A cached plan must therefore never carry a cursor,
+        // and the cursor of the current request is applied to it after the lookup.
         var cacheKey = _normalizer.GenerateCacheKey(normalized);
         if (!_cache.TryGet(cacheKey, out var plan))
         {
             plan = _planner.CreatePlan(request);
-            _cache.Set(cacheKey, plan!);
+            _cache.Set(cacheKey, WithCursor(plan!, null));
         }
 
         // Execute
-        return await _adapter.ExecuteAsync(plan!, request.Variables, cancellationToken);
+        var planForRequest = WithCursor(plan!, GetCursor(normalized));
+        return await _adapter.ExecuteAsync(planForRequest, request.Variables, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets the cursor of the request's page stage, or null when it is the first page.
+    /// </summary>
+    private static string? GetCursor(QueryRequest request)
+        => request.Pipeline.FirstOrDefault(stage => stage.Page is not null)?.Page?.Cursor;
+
+    /// <summary>
+    /// Returns the plan with <paramref name="cursor"/> applied to its page stage. The page
+    /// stage inside the pipeline is kept in sync as well so no stale cursor can be read
+    /// from there either, even though the Mongo pipeline builder only uses its limit.
+    /// </summary>
+    private static QueryPlan WithCursor(QueryPlan plan, string? cursor)
+    {
+        if (plan.Page.Cursor == cursor) return plan;
+
+        return plan with
+        {
+            Page = plan.Page with { Cursor = cursor },
+            Pipeline = plan.Pipeline
+                .Select(stage => stage.Page is null ? stage : stage with { Page = stage.Page with { Cursor = cursor } })
+                .ToList()
+        };
     }
 }

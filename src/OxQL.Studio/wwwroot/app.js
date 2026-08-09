@@ -6,9 +6,12 @@
     const API = cfg.apiBasePath.replace(/\/$/, "");
     const MONACO_BASE = cfg.monacoCdnBase.replace(/\/$/, "");
 
-    const LS_TABS = "oxql.studio.tabs.v1";
-    const LS_ACTIVE = "oxql.studio.activeTab.v1";
-    const LS_TOKEN = "oxql.studio.bearer.v1";
+    // Namespace localStorage keys per API endpoint so that multiple microservices
+    // (e.g. logistics-api, erp-api) each maintain their own isolated cache.
+    const LS_NS = "oxql.studio." + API.replace(/[^a-z0-9]/gi, "_").toLowerCase();
+    const LS_TABS = LS_NS + ".tabs.v1";
+    const LS_ACTIVE = LS_NS + ".activeTab.v1";
+    const LS_TOKEN = LS_NS + ".bearer.v1";
 
     const DEFAULT_QUERY = {
         entityType: "vehicle.vehicle",

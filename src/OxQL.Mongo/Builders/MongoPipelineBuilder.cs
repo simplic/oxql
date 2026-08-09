@@ -93,13 +93,13 @@ public sealed class MongoPipelineBuilder
         return new BsonDocument("$match", _filterBuilder.Build(match));
     }
 
-    private static BsonDocument BuildLookup(LookupStage lookup)
+    private BsonDocument BuildLookup(LookupStage lookup)
     {
         var localField = TranslatePath(lookup.LocalPath);
         var foreignField = TranslatePath(lookup.ForeignPath);
 
-        // Simple $lookup when no key-type conversion is requested.
-        if (string.IsNullOrWhiteSpace(lookup.Convert))
+        // Simple $lookup when no key-type conversion and no filter is requested.
+        if (string.IsNullOrWhiteSpace(lookup.Convert) && lookup.Filter is null)
         {
             return new BsonDocument("$lookup", new BsonDocument
             {
@@ -110,36 +110,48 @@ public sealed class MongoPipelineBuilder
             });
         }
 
-        // Pipelined $lookup that coerces the string-form key into a binary UUID before comparing,
-        // allowing joins across string/UUID representations of a GUID. Uses $function (server-side
-        // JS) so it works on MongoDB 7.0+ (native $convert UUID support requires 8.0+).
-        var direction = MongoConversionExpressionBuilder.ParseDirection(lookup.Convert);
-
-        // Always coerce the string side to a UUID and compare against the binary side.
+        // Pipelined $lookup — used when a key-type conversion and/or a filter is present.
+        // Builds the $expr equality match (with optional UUID coercion) as the first pipeline
+        // stage, then appends the filter as a second $match stage when present.
         BsonValue left;
         BsonValue right;
-        if (direction == GuidConversionDirection.StringToUuid)
+
+        if (!string.IsNullOrWhiteSpace(lookup.Convert))
         {
-            // Local key is the string; foreign key is the binary UUID.
-            left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
-            right = $"${foreignField}";
+            var direction = MongoConversionExpressionBuilder.ParseDirection(lookup.Convert);
+
+            if (direction == GuidConversionDirection.StringToUuid)
+            {
+                left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
+                right = $"${foreignField}";
+            }
+            else
+            {
+                left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
+                right = $"${foreignField}";
+            }
         }
         else
         {
-            // Local key is the binary UUID; foreign key is the string.
-            left = MongoConversionExpressionBuilder.CoerceToUuid("$$localValue");
+            // No conversion — simple equality expressed through $expr so we can use $let.
+            left = "$$localValue";
             right = $"${foreignField}";
         }
+
+        var subPipeline = new BsonArray
+        {
+            new BsonDocument("$match", new BsonDocument("$expr",
+                new BsonDocument("$eq", new BsonArray { left, right })))
+        };
+
+        if (lookup.Filter is not null)
+            subPipeline.Add(new BsonDocument("$match", _filterBuilder.Build(lookup.Filter)));
 
         return new BsonDocument("$lookup", new BsonDocument
         {
             ["from"] = lookup.From,
             ["let"] = new BsonDocument("localValue", $"${localField}"),
-            ["pipeline"] = new BsonArray
-            {
-                new BsonDocument("$match", new BsonDocument("$expr",
-                    new BsonDocument("$eq", new BsonArray { left, right })))
-            },
+            ["pipeline"] = subPipeline,
             ["as"] = lookup.As
         });
     }

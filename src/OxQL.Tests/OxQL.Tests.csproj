@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\OxQL.Core\OxQL.Core.csproj" />
     <ProjectReference Include="..\OxQL.Mongo\OxQL.Mongo.csproj" />
+    <ProjectReference Include="..\OxQL.AspNetCore\OxQL.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>

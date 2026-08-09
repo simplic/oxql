@@ -294,6 +294,78 @@ public class MongoPipelineBuilderTests
         pipeline[2].Contains("$limit").Should().BeTrue();
     }
 
+    [Fact]
+    public void Build_LookupStage_WithFilter_SwitchesToPipelinedFormAndAppendsMatch()
+    {
+        var plan = CreatePlan(new PipelineStage
+        {
+            Lookup = new LookupStage
+            {
+                From = "customers",
+                LocalPath = "customerId",
+                ForeignPath = "id",
+                As = "customer",
+                Filter = new MatchStage
+                {
+                    Condition = new FilterCondition { Path = "OrganizationId", Op = "eq", Value = System.Text.Json.JsonSerializer.SerializeToElement("org-1") }
+                }
+            }
+        });
+
+        var pipeline = CreateBuilder().Build(plan);
+
+        var lookupDoc = pipeline[0]["$lookup"].AsBsonDocument;
+        lookupDoc["from"].AsString.Should().Be("customers");
+        lookupDoc["as"].AsString.Should().Be("customer");
+
+        // Must use pipelined form — no simple localField/foreignField.
+        lookupDoc.Contains("localField").Should().BeFalse();
+        lookupDoc.Contains("foreignField").Should().BeFalse();
+        lookupDoc["let"].AsBsonDocument["localValue"].AsString.Should().Be("$customerId");
+
+        var subPipeline = lookupDoc["pipeline"].AsBsonArray;
+        // Stage 0: $expr equality join; stage 1: injected filter $match.
+        subPipeline.Should().HaveCount(2);
+        subPipeline[0].AsBsonDocument.Contains("$match").Should().BeTrue();
+        subPipeline[0].AsBsonDocument["$match"].AsBsonDocument.Contains("$expr").Should().BeTrue();
+        subPipeline[1].AsBsonDocument.Contains("$match").Should().BeTrue();
+        subPipeline[1].AsBsonDocument["$match"].AsBsonDocument.Contains("OrganizationId").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Build_LookupStage_WithConvertAndFilter_PreservesExprAndAppendsFilterMatch()
+    {
+        var plan = CreatePlan(new PipelineStage
+        {
+            Lookup = new LookupStage
+            {
+                From = "customers",
+                LocalPath = "customerId",
+                ForeignPath = "id",
+                As = "customer",
+                Convert = "stringToUuid",
+                Filter = new MatchStage
+                {
+                    Condition = new FilterCondition { Path = "OrganizationId", Op = "eq", Value = System.Text.Json.JsonSerializer.SerializeToElement("org-1") }
+                }
+            }
+        });
+
+        var pipeline = CreateBuilder().Build(plan);
+
+        var lookupDoc = pipeline[0]["$lookup"].AsBsonDocument;
+        var subPipeline = lookupDoc["pipeline"].AsBsonArray;
+
+        // Stage 0 must be the $expr/$eq join (with UUID coercion); stage 1 the filter.
+        subPipeline.Should().HaveCount(2);
+        var exprMatch = subPipeline[0].AsBsonDocument["$match"].AsBsonDocument;
+        exprMatch.Contains("$expr").Should().BeTrue();
+        exprMatch["$expr"].AsBsonDocument.Contains("$eq").Should().BeTrue();
+
+        var filterMatch = subPipeline[1].AsBsonDocument["$match"].AsBsonDocument;
+        filterMatch.Contains("OrganizationId").Should().BeTrue();
+    }
+
     private static QueryPlan CreatePlan(params PipelineStage[] stages) => new()
     {
         EntityType = "invoice",

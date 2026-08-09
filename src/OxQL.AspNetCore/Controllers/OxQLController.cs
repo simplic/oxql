@@ -190,7 +190,7 @@ public class OxQLController : ControllerBase
                 System.Reflection.BindingFlags.Public |
                 System.Reflection.BindingFlags.Instance)
             .Where(p => p.CanRead)
-            .Select(p => DescribeProperty(p.Name, p.PropertyType, new HashSet<Type>(visited)))
+            .Select(p => DescribeProperty(p.Name, p.PropertyType, visited))
             .ToList();
     }
 
@@ -215,7 +215,7 @@ public class OxQLController : ControllerBase
         // ── Dictionary<K,V> ────────────────────────────────────────────────
         if (TryDictionaryTypes(type, out var keyType, out var valType))
         {
-            var valueDesc = DescribeProperty("value", valType!, new HashSet<Type>(visited));
+            var valueDesc = DescribeProperty("value", valType!, visited);
             return new OxQLPropertyDescriptor
             {
                 Name     = name,
@@ -229,7 +229,7 @@ public class OxQLController : ControllerBase
         // ── Array / collection ─────────────────────────────────────────────
         if (TryCollectionElement(type, out var elemType))
         {
-            var itemDesc = DescribeProperty("item", elemType!, new HashSet<Type>(visited));
+            var itemDesc = DescribeProperty("item", elemType!, visited);
             return new OxQLPropertyDescriptor
             {
                 Name     = name,
@@ -252,7 +252,7 @@ public class OxQLController : ControllerBase
         }
 
         // ── Complex object — recurse ───────────────────────────────────────
-        var childProps = BuildProperties(type, new HashSet<Type>(visited));
+        var childProps = BuildProperties(type, visited);
         return new OxQLPropertyDescriptor
         {
             Name       = name,

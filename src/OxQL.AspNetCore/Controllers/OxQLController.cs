@@ -189,16 +189,13 @@ public class OxQLController : ControllerBase
         visited ??= [];
         if (!visited.Add(clrType)) return [];   // cycle guard
 
-        var result = clrType
+        return clrType
             .GetProperties(
                 System.Reflection.BindingFlags.Public |
                 System.Reflection.BindingFlags.Instance)
             .Where(p => p.CanRead)
             .Select(p => DescribeProperty(p.Name, p.PropertyType, visited, depth + 1))
             .ToList();
-
-        visited.Remove(clrType);  // allow the same type on sibling branches
-        return result;
     }
 
     private static OxQLPropertyDescriptor DescribeProperty(

@@ -40,6 +40,14 @@ public sealed record LookupStage
     /// </summary>
     [JsonPropertyName("convert")]
     public string? Convert { get; init; }
+
+    /// <summary>
+    /// Optional additional filter conditions applied to the foreign collection before joining.
+    /// Injected query filters (e.g. multi-tenant constraints) are automatically merged here
+    /// so that lookup results are always scoped to the same tenant as the primary query.
+    /// </summary>
+    [JsonPropertyName("filter")]
+    public MatchStage? Filter { get; init; }
 }
 
 /// <summary>

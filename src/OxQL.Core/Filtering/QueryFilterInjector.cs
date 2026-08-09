@@ -53,15 +53,24 @@ public static class QueryFilterInjector
 
         foreach (var stage in request.Pipeline)
         {
-            if (!injected && stage.Match is not null)
+            var current = stage;
+
+            if (!injected && current.Match is not null)
             {
-                pipeline.Add(stage with { Match = MergeMatch(stage.Match, injectedConditions) });
+                current = current with { Match = MergeMatch(current.Match, injectedConditions) };
                 injected = true;
             }
-            else
+
+            if (current.Lookup is not null)
             {
-                pipeline.Add(stage);
+                var mergedFilter = current.Lookup.Filter is not null
+                    ? MergeMatch(current.Lookup.Filter, injectedConditions)
+                    : new MatchStage { And = injectedConditions };
+
+                current = current with { Lookup = current.Lookup with { Filter = mergedFilter } };
             }
+
+            pipeline.Add(current);
         }
 
         // No match stage existed – prepend one that only contains the injected conditions.

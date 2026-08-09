@@ -122,6 +122,8 @@ public sealed class QueryRequestNormalizer : IQueryRequestNormalizer
             sb.Append(stage.Lookup.ForeignPath);
             sb.Append(',');
             sb.Append(stage.Lookup.As);
+            sb.Append(',');
+            sb.Append(stage.Lookup.Convert ?? string.Empty);
             sb.Append(';');
         }
 

@@ -346,6 +346,121 @@ public class CrmCustomerResolver : IExternalResolver
 }
 ```
 
+Example: resolve an address from an external source by its id:
+
+```json
+{
+  "entityType": "customer",
+  "pipeline": [
+    {
+      "project": {
+        "id": 1,
+        "name": 1,
+        "attributes.addressId": 1
+      }
+    },
+    {
+      "resolve": {
+        "source": "crm.address",
+        "localPath": "attributes.addressId",
+        "as": "address"
+      }
+    },
+    {
+      "page": {
+        "limit": 25
+      }
+    }
+  ]
+}
+```
+
+If a customer document contains `attributes.addressId = "addr-42"`, the resolver registered for `crm.address` receives `"addr-42"` and the resolved address object is added to the result as `address`.
+
+Example: complete OxQL query with one cross-service resolve stage against `contact-api/v1`:
+
+```json
+{
+  "entityType": "invoice",
+  "pipeline": [
+    {
+      "match": {
+        "id": { "eq": "invoice-1001" }
+      }
+    },
+    {
+      "project": {
+        "id": 1,
+        "entityType": 1,
+        "attributes.contactId": 1,
+        "attributes.totalAmount": 1
+      }
+    },
+    {
+      "resolve": {
+        "source": "contact-api/v1",
+        "localPath": "attributes.contactId",
+        "as": "contact"
+      }
+    },
+    {
+      "page": {
+        "limit": 1
+      }
+    }
+  ]
+}
+```
+
+When this query is executed with `services=contact-api/v1=https://contact-api.internal/`, and the invoice contains `attributes.contactId = "contact-42"`, the resolver calls `contact-api/v1` to load `contact-42` by id and adds the returned contact object to the result as `contact`.
+
+Example: resolve with a parameterized subquery sent to `contact-api/v1`:
+
+```json
+{
+  "entityType": "invoice",
+  "pipeline": [
+    {
+      "match": {
+        "id": { "eq": "invoice-1001" }
+      }
+    },
+    {
+      "resolve": {
+        "source": "contact-api/v1",
+        "localPath": "attributes.contactId",
+        "parameters": {
+          "contactId": "attributes.contactId"
+        },
+        "subquery": {
+          "entityType": "contact",
+          "pipeline": [
+            {
+              "match": {
+                "id": { "eq": { "$var": "contactId" } }
+              }
+            },
+            {
+              "page": {
+                "limit": 1
+              }
+            }
+          ]
+        },
+        "as": "contact"
+      }
+    },
+    {
+      "page": {
+        "limit": 1
+      }
+    }
+  ]
+}
+```
+
+The resolver uses `parameters` to map local document values into subquery variables, then forwards the `subquery` to the remote OxQL endpoint.
+
 ### IQueryAdapter<T>
 Implement for non-MongoDB backends:
 

@@ -103,6 +103,54 @@ public class QueryRequestDeserializationTests
     }
 
     [Fact]
+    public void Deserialize_ResolveStageWithSubquery_Succeeds()
+    {
+        var json = """
+        {
+          "entityType": "invoice",
+          "pipeline": [
+            {
+              "resolve": {
+                "source": "contact-api/v1",
+                "localPath": "attributes.contactId",
+                "parameters": {
+                  "contactId": "attributes.contactId"
+                },
+                "subquery": {
+                  "entityType": "contact",
+                  "pipeline": [
+                    {
+                      "match": {
+                        "id": { "eq": { "$var": "contactId" } }
+                      }
+                    },
+                    {
+                      "page": {
+                        "limit": 1
+                      }
+                    }
+                  ]
+                },
+                "as": "contact"
+              }
+            }
+          ]
+        }
+        """;
+
+        var request = JsonSerializer.Deserialize<QueryRequest>(json, JsonOptions);
+
+        request.Should().NotBeNull();
+        request!.Pipeline[0].Resolve.Should().NotBeNull();
+        request.Pipeline[0].Resolve!.Source.Should().Be("contact-api/v1");
+        request.Pipeline[0].Resolve.Parameters.Should().ContainKey("contactId");
+        request.Pipeline[0].Resolve.Parameters!["contactId"].Should().Be("attributes.contactId");
+        request.Pipeline[0].Resolve.Subquery.Should().NotBeNull();
+        request.Pipeline[0].Resolve.Subquery!.EntityType.Should().Be("contact");
+        request.Pipeline[0].Resolve.Subquery.Pipeline.Should().HaveCount(2);
+    }
+
+    [Fact]
     public void Deserialize_UnwindStage_Succeeds()
     {
         var json = """

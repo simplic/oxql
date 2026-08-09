@@ -255,7 +255,39 @@ Fetches a related document from a configured external source (e.g. a CRM, extern
 |---|---|---|
 | `source` | ✅ | External source identifier. Must be in the server's allowed list. |
 | `localPath` | ✅ | Local field containing the lookup key. |
+| `parameters` | ❌ | Variable mapping (`name -> localPath`) used for subquery resolve mode. |
+| `subquery` | ❌ | Query sent to the external resolver endpoint. Supports `$var` references from `parameters`. |
 | `as` | ✅ | Alias for the resolved result. |
+
+Subquery resolve example:
+
+```json
+{
+  "resolve": {
+    "source": "contact-api/v1",
+    "localPath": "attributes.contactId",
+    "parameters": {
+      "contactId": "attributes.contactId"
+    },
+    "subquery": {
+      "entityType": "contact",
+      "pipeline": [
+        {
+          "match": {
+            "id": { "eq": { "$var": "contactId" } }
+          }
+        },
+        {
+          "page": {
+            "limit": 1
+          }
+        }
+      ]
+    },
+    "as": "contact"
+  }
+}
+```
 
 ---
 

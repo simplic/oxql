@@ -362,6 +362,41 @@ public class QueryValidatorTests
     }
 
     [Fact]
+    public void Validate_ResolveSubqueryWithoutEntityType_Fails()
+    {
+        var request = new QueryRequest
+        {
+            EntityType = "invoice",
+            Pipeline =
+            [
+                new PipelineStage
+                {
+                    Resolve = new ResolveStage
+                    {
+                        Source = "crm.customer",
+                        LocalPath = "attributes.customerId",
+                        Parameters = new Dictionary<string, string>
+                        {
+                            ["customerId"] = "attributes.customerId"
+                        },
+                        Subquery = new QueryRequest
+                        {
+                            EntityType = "",
+                            Pipeline = [new PipelineStage { Page = new PageStage { Limit = 1 } }]
+                        },
+                        As = "customer"
+                    }
+                }
+            ]
+        };
+
+        var result = CreateValidator().Validate(request);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Code == "INVALID_RESOLVE_SUBQUERY_ENTITY");
+    }
+
+    [Fact]
     public void Validate_ExceedMaxProjectionFields_Fails()
     {
         var options = new OxQLOptions { MaxProjectionFields = 3 };

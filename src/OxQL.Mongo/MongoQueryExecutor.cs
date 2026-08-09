@@ -20,7 +20,8 @@ public sealed class MongoQueryExecutor : IQueryExecutor<BsonDocument>
         IMongoCollection<BsonDocument> collection,
         OxQLOptions options,
         ICursorSerializer? cursorSerializer = null,
-        IQueryPlanCache? cache = null)
+        IQueryPlanCache? cache = null,
+        IEnumerable<IExternalResolver>? externalResolvers = null)
     {
         ArgumentNullException.ThrowIfNull(collection);
         ArgumentNullException.ThrowIfNull(options);
@@ -30,7 +31,7 @@ public sealed class MongoQueryExecutor : IQueryExecutor<BsonDocument>
         _normalizer = new Core.Normalization.QueryRequestNormalizer(options);
         _planner = new Core.Planning.QueryPlanner(_normalizer);
         _cache = cache ?? new Core.Caching.QueryPlanCache(options);
-        _adapter = new MongoQueryAdapter(_ => collection, cursor);
+        _adapter = new MongoQueryAdapter(_ => collection, cursor, externalResolvers);
     }
 
     public MongoQueryExecutor(

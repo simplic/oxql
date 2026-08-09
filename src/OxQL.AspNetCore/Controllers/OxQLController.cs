@@ -171,33 +171,41 @@ public class OxQLController : ControllerBase
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
+    private const int MaxPropertyDepth = 8;
+
     /// <summary>
     /// Builds a list of <see cref="OxQLPropertyDescriptor"/> entries for all
     /// public readable instance properties of <paramref name="clrType"/>.
-    /// Recursion is guarded by <paramref name="visited"/> to break reference cycles.
+    /// Recursion is guarded by <paramref name="visited"/> to break reference cycles
+    /// and by <paramref name="depth"/> to prevent excessively deep output.
     /// </summary>
     private static IReadOnlyList<OxQLPropertyDescriptor> BuildProperties(
         Type? clrType,
-        HashSet<Type>? visited = null)
+        HashSet<Type>? visited = null,
+        int depth = 0)
     {
-        if (clrType is null) return [];
+        if (clrType is null || depth >= MaxPropertyDepth) return [];
 
         visited ??= [];
         if (!visited.Add(clrType)) return [];   // cycle guard
 
-        return clrType
+        var result = clrType
             .GetProperties(
                 System.Reflection.BindingFlags.Public |
                 System.Reflection.BindingFlags.Instance)
             .Where(p => p.CanRead)
-            .Select(p => DescribeProperty(p.Name, p.PropertyType, visited))
+            .Select(p => DescribeProperty(p.Name, p.PropertyType, visited, depth + 1))
             .ToList();
+
+        visited.Remove(clrType);  // allow the same type on sibling branches
+        return result;
     }
 
     private static OxQLPropertyDescriptor DescribeProperty(
         string name,
         Type type,
-        HashSet<Type> visited)
+        HashSet<Type> visited,
+        int depth)
     {
         // Strip Nullable<T>
         bool outerNullable = false;
@@ -215,7 +223,7 @@ public class OxQLController : ControllerBase
         // ── Dictionary<K,V> ────────────────────────────────────────────────
         if (TryDictionaryTypes(type, out var keyType, out var valType))
         {
-            var valueDesc = DescribeProperty("value", valType!, visited);
+            var valueDesc = DescribeProperty("value", valType!, visited, depth);
             return new OxQLPropertyDescriptor
             {
                 Name     = name,
@@ -229,7 +237,7 @@ public class OxQLController : ControllerBase
         // ── Array / collection ─────────────────────────────────────────────
         if (TryCollectionElement(type, out var elemType))
         {
-            var itemDesc = DescribeProperty("item", elemType!, visited);
+            var itemDesc = DescribeProperty("item", elemType!, visited, depth);
             return new OxQLPropertyDescriptor
             {
                 Name     = name,
@@ -252,7 +260,7 @@ public class OxQLController : ControllerBase
         }
 
         // ── Complex object — recurse ───────────────────────────────────────
-        var childProps = BuildProperties(type, visited);
+        var childProps = BuildProperties(type, visited, depth);
         return new OxQLPropertyDescriptor
         {
             Name       = name,

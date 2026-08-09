@@ -55,6 +55,24 @@ public class OxQLController : ControllerBase
         [FromBody] QueryRequest request,
         CancellationToken cancellationToken)
     {
+        if (!_typeRegistry.TryGet(request.EntityType, out _))
+        {
+            return BadRequest(new OxQLErrorResponse
+            {
+                Type = "validation_error",
+                Title = "Query validation failed.",
+                Status = StatusCodes.Status400BadRequest,
+                Errors =
+                [
+                    new OxQLFieldError
+                    {
+                        Code = "UNKNOWN_TYPE",
+                        Message = $"No OxQL type registration found for entity type '{request.EntityType}'."
+                    }
+                ]
+            });
+        }
+
         try
         {
             var result = await _queryService.ExecuteAsync(request, cancellationToken);

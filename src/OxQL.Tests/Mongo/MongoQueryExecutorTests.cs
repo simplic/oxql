@@ -39,6 +39,8 @@ public class MongoQueryExecutorTests
                 PageInfo = new PageInfo { HasNextPage = false }
             });
         }
+
+        public IReadOnlyList<object> Explain(QueryPlan plan, QueryVariables? variables) => [];
     }
 
     private (MongoQueryExecutor Executor, RecordingAdapter Adapter) CreateExecutor()

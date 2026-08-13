@@ -40,7 +40,8 @@ public static class OxQLStudioEndpointExtensions
                 apiBasePath   = ResolveApiBasePath(ctx, options.ApiBasePath),
                 assetBasePath = basePath,
                 title         = options.Title,
-                monacoCdnBase = options.MonacoCdnBase
+                monacoCdnBase = options.MonacoCdnBase,
+                enableExplain = options.EnableExplain
             };
 
             var json = JsonSerializer.Serialize(config);

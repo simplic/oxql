@@ -187,6 +187,38 @@ public class OxQLController : ControllerBase
         return Ok(new { status = "healthy", service = "oxql" });
     }
 
+    /// <summary>
+    /// Returns the generated backend pipeline for a query without executing it.
+    /// Only available when <see cref="OxQLEndpointOptions.EnableExplain"/> is <c>true</c>.
+    /// </summary>
+    [HttpPost("explain")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Explain(
+        [FromBody] QueryRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.EnableExplain)
+            return NotFound();
+
+        try
+        {
+            var stages = await _queryService.ExplainAsync(request, cancellationToken);
+            return Ok(new { pipeline = stages });
+        }
+        catch (QueryValidationException ex)
+        {
+            return BadRequest(new OxQLErrorResponse
+            {
+                Type = "validation_error",
+                Title = "Query validation failed.",
+                Status = StatusCodes.Status400BadRequest,
+                Errors = ex.Errors.Select(OxQLFieldError.FromValidationError).ToList()
+            });
+        }
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────────
 
     private const int MaxPropertyDepth = 8;

@@ -107,7 +107,14 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
     public IReadOnlyList<object> Explain(QueryPlan plan, QueryVariables? variables)
     {
         var pipelineBuilder = new MongoPipelineBuilder(variables);
-        return pipelineBuilder.Build(plan).Cast<object>().ToList();
+
+        CursorPayload? cursorPayload = null;
+        if (!string.IsNullOrEmpty(plan.Page.Cursor))
+        {
+            cursorPayload = _cursorSerializer.Deserialize(plan.Page.Cursor, plan.Sort);
+        }
+
+        return pipelineBuilder.Build(plan, cursorPayload).Cast<object>().ToList();
     }
 
     private static object? GetFieldValue(BsonDocument doc, string path)

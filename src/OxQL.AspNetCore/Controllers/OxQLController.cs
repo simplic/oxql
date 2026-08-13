@@ -194,6 +194,7 @@ public class OxQLController : ControllerBase
     [HttpPost("explain")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status500InternalServerError)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Explain(
         [FromBody] QueryRequest request,
@@ -216,6 +217,39 @@ public class OxQLController : ControllerBase
                 Status = StatusCodes.Status400BadRequest,
                 Errors = ex.Errors.Select(OxQLFieldError.FromValidationError).ToList()
             });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error explaining OxQL query for entity type '{EntityType}'",
+                request.EntityType);
+
+            var response = new OxQLErrorResponse
+            {
+                Type = "internal_error",
+                Title = "An unexpected error occurred while explaining the query.",
+                Status = StatusCodes.Status500InternalServerError
+            };
+
+            if (_options.IncludeErrorDetails)
+            {
+                response = response with
+                {
+                    Errors =
+                    [
+                        new OxQLFieldError
+                        {
+                            Code = "INTERNAL_ERROR",
+                            Message = ex.Message
+                        }
+                    ]
+                };
+            }
+
+            return StatusCode(StatusCodes.Status500InternalServerError, response);
         }
     }
 

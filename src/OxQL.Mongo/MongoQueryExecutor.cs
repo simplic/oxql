@@ -77,6 +77,20 @@ public sealed class MongoQueryExecutor : IQueryExecutor<BsonDocument>
         return await _adapter.ExecuteAsync(planForRequest, request.Variables, cancellationToken);
     }
 
+    public Task<IReadOnlyList<object>> ExplainAsync(
+        QueryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var validation = _validator.Validate(request);
+        if (!validation.IsValid)
+            throw new QueryValidationException(validation.Errors);
+
+        var normalized = _normalizer.Normalize(request);
+        var plan = _planner.CreatePlan(normalized);
+        var stages = _adapter.Explain(plan, request.Variables);
+        return Task.FromResult(stages);
+    }
+
     /// <summary>
     /// Gets the cursor of the request's page stage, or null when it is the first page.
     /// </summary>

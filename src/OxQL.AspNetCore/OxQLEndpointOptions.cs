@@ -29,4 +29,11 @@ public sealed class OxQLEndpointOptions
     /// (any authenticated user). Ignored when <see cref="RequireAuthorization"/> is <c>false</c>.
     /// </summary>
     public string? AuthorizationPolicy { get; set; }
+
+    /// <summary>
+    /// Enables the <c>POST /explain</c> endpoint, which returns the generated MongoDB
+    /// aggregation pipeline without executing it. Useful for debugging query issues.
+    /// Should be <c>false</c> in production. Default: <c>false</c>.
+    /// </summary>
+    public bool EnableExplain { get; set; }
 }

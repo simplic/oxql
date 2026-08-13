@@ -40,6 +40,7 @@ builder.Services.AddOxQLAspNetCore<BsonDocument>(options =>
 {
     options.RoutePrefix = "api/oxql";
     options.IncludeErrorDetails = builder.Environment.IsDevelopment();
+    options.EnableExplain = builder.Environment.IsDevelopment();
 
     // ── Optional endpoint protection ────────────────────────────────────
     // Set RequireAuthorization = true to force authentication on the query/types
@@ -67,6 +68,7 @@ builder.Services.AddOxQLStudio(options =>
     options.RoutePath = "/oxql";
     options.ApiBasePath = "/OxQL";   // matches the OxQLController route
     options.Title = "OxQL Studio";
+    options.EnableExplain = builder.Environment.IsDevelopment();
 });
 
 // ── Standard ASP.NET Core services ─────────────────────────────────────

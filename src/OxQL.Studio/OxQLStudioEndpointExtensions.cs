@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace OxQL.Studio;
 
@@ -26,6 +28,42 @@ public static class OxQLStudioEndpointExtensions
         var options = endpoints.ServiceProvider.GetService<OxQLStudioOptions>() ?? new OxQLStudioOptions();
         options.Normalize();
 
+        // Warn when OxQLStudioOptions.EnableExplain and OxQLEndpointOptions.EnableExplain disagree,
+        // as the Studio button will be shown/hidden independently of whether the endpoint is active.
+        var loggerFactory = endpoints.ServiceProvider.GetService<ILoggerFactory>();
+        if (loggerFactory is not null)
+        {
+            var endpointOptionsType = Type.GetType(
+                "OxQL.AspNetCore.OxQLEndpointOptions, OxQL.AspNetCore",
+                throwOnError: false);
+
+            if (endpointOptionsType is not null)
+            {
+                var optionsWrapperType = typeof(IOptions<>).MakeGenericType(endpointOptionsType);
+                var endpointOptionsWrapper = endpoints.ServiceProvider.GetService(optionsWrapperType);
+                var endpointOptions = endpointOptionsWrapper is null
+                    ? null
+                    : optionsWrapperType.GetProperty("Value")?.GetValue(endpointOptionsWrapper);
+
+                if (endpointOptions is not null)
+                {
+                    var endpointEnableExplain = (bool?)endpointOptionsType
+                        .GetProperty("EnableExplain")
+                        ?.GetValue(endpointOptions);
+
+                    if (endpointEnableExplain.HasValue && endpointEnableExplain.Value != options.EnableExplain)
+                    {
+                        var logger = loggerFactory.CreateLogger(nameof(OxQLStudioEndpointExtensions));
+                        logger.LogWarning(
+                            "OxQLStudioOptions.EnableExplain ({StudioValue}) and OxQLEndpointOptions.EnableExplain ({EndpointValue}) are configured with different values. " +
+                            "The Studio UI button visibility and the API endpoint availability will not match.",
+                            options.EnableExplain,
+                            endpointEnableExplain.Value);
+                    }
+                }
+            }
+        }
+
         var basePath = options.RoutePath;
 
         // Shell: GET {routePath}  → index.html with injected runtime config
@@ -40,7 +78,8 @@ public static class OxQLStudioEndpointExtensions
                 apiBasePath   = ResolveApiBasePath(ctx, options.ApiBasePath),
                 assetBasePath = basePath,
                 title         = options.Title,
-                monacoCdnBase = options.MonacoCdnBase
+                monacoCdnBase = options.MonacoCdnBase,
+                enableExplain = options.EnableExplain
             };
 
             var json = JsonSerializer.Serialize(config);

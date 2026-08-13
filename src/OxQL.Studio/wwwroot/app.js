@@ -248,6 +248,11 @@
                     // Ctrl+Enter runs the query
                     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runQuery);
 
+                    // Ctrl+Shift+E explains the query (only when enabled)
+                    if (cfg.enableExplain) {
+                        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE, explainQuery);
+                    }
+
                     // F1 opens the query help / cheat sheet
                     editor.addCommand(monaco.KeyCode.F1, openHelp);
 
@@ -516,6 +521,117 @@
             setStatus("Request failed: " + e.message, "err");
             renderResult({ error: "Request failed", detail: e.message });
         }
+    }
+
+    // ── Explain query ────────────────────────────────────────────────────
+    async function explainQuery() {
+        syncActiveFromEditor();
+        const tab = tabs.find(t => t.id === activeId);
+        if (!tab) return;
+
+        let body;
+        try {
+            body = JSON.parse(tab.content);
+        } catch (e) {
+            setStatus("Invalid JSON: " + e.message, "err");
+            renderResult({ error: "Invalid JSON", detail: e.message });
+            return;
+        }
+
+        if (entityInput.value.trim()) {
+            body.entityType = entityInput.value.trim();
+        } else if (body.entityType) {
+            entityInput.value = body.entityType;
+        }
+
+        setStatus("Explaining…", "");
+        const started = performance.now();
+
+        try {
+            const headers = { "Content-Type": "application/json" };
+            const token = tokenInput.value.trim();
+            if (token) headers["Authorization"] = "Bearer " + token;
+
+            const res = await fetch(API + "/explain", {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body)
+            });
+
+            const elapsed = Math.round(performance.now() - started);
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); } catch { json = text; }
+
+            if (res.ok) {
+                const stages = json?.pipeline;
+                const count = Array.isArray(stages) ? stages.length : null;
+                setStatus(`Explain · ${elapsed} ms` + (count !== null ? ` · ${count} stage(s)` : ""), "explain");
+                renderExplain(stages ?? json);
+            } else {
+                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms`, "err");
+                renderResult(json);
+            }
+        } catch (e) {
+            setStatus("Request failed: " + e.message, "err");
+            renderResult({ error: "Request failed", detail: e.message });
+        }
+    }
+
+    function renderExplain(stages) {
+        const container = resultsEl;
+        if (!Array.isArray(stages)) {
+            renderResult(stages);
+            return;
+        }
+
+        container.innerHTML = "";
+
+        const header = document.createElement("div");
+        header.className = "explain-header";
+        header.textContent = `Pipeline · ${stages.length} stage${stages.length !== 1 ? "s" : ""}`;
+        container.appendChild(header);
+
+        stages.forEach((stage, i) => {
+            const wrap = document.createElement("div");
+            wrap.className = "explain-stage";
+
+            // Detect the operator key (first key, e.g. "$match", "$lookup")
+            const opKey = (typeof stage === "object" && stage !== null)
+                ? Object.keys(stage)[0]
+                : null;
+
+            const stageHeader = document.createElement("div");
+            stageHeader.className = "explain-stage-header";
+
+            const num = document.createElement("span");
+            num.className = "explain-stage-num";
+            num.textContent = String(i + 1);
+
+            const op = document.createElement("span");
+            op.className = "explain-stage-op";
+            op.textContent = opKey || "stage";
+
+            const toggle = document.createElement("span");
+            toggle.className = "explain-stage-toggle";
+            toggle.textContent = "▾";
+
+            stageHeader.append(num, op, toggle);
+            wrap.appendChild(stageHeader);
+
+            const body = document.createElement("pre");
+            body.className = "explain-stage-body";
+            body.innerHTML = highlightJson(JSON.stringify(stage, null, 2));
+            wrap.appendChild(body);
+
+            // Collapse/expand on header click
+            stageHeader.addEventListener("click", () => {
+                const collapsed = wrap.classList.toggle("collapsed");
+                toggle.textContent = collapsed ? "▸" : "▾";
+            });
+
+            container.appendChild(wrap);
+        });
     }
 
     function setStatus(text, cls) {
@@ -1223,6 +1339,13 @@
         $("#run-btn").addEventListener("click", runQuery);
         $("#format-btn").addEventListener("click", formatDocument);
 
+        // Explain button — only shown when the server has EnableExplain = true
+        const explainBtn = $("#explain-btn");
+        if (cfg.enableExplain) {
+            explainBtn.hidden = false;
+            explainBtn.addEventListener("click", explainQuery);
+        }
+
         entityInput.addEventListener("change", () => {
             const tab = tabs.find(t => t.id === activeId);
             if (tab) { tab.entityType = entityInput.value.trim(); saveTabs(); }
@@ -1272,6 +1395,12 @@
         const active = tabs.find(t => t.id === activeId);
         entityInput.value = active?.entityType || "";
         bindEvents();
+
+        // Update hint text to include Explain shortcut when available
+        if (cfg.enableExplain) {
+            const hint = $(".toolbar .hint");
+            if (hint) hint.textContent = "Ctrl+Enter to run · Ctrl+Shift+E to explain · Ctrl+Space for suggestions · saved in your browser";
+        }
 
         await initMonaco();
         setStatus("Ready", "");

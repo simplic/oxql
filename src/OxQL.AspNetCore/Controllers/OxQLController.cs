@@ -187,6 +187,72 @@ public class OxQLController : ControllerBase
         return Ok(new { status = "healthy", service = "oxql" });
     }
 
+    /// <summary>
+    /// Returns the generated backend pipeline for a query without executing it.
+    /// Only available when <see cref="OxQLEndpointOptions.EnableExplain"/> is <c>true</c>.
+    /// </summary>
+    [HttpPost("explain")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status500InternalServerError)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Explain(
+        [FromBody] QueryRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.EnableExplain)
+            return NotFound();
+
+        try
+        {
+            var stages = await _queryService.ExplainAsync(request, cancellationToken);
+            return Ok(new { pipeline = stages });
+        }
+        catch (QueryValidationException ex)
+        {
+            return BadRequest(new OxQLErrorResponse
+            {
+                Type = "validation_error",
+                Title = "Query validation failed.",
+                Status = StatusCodes.Status400BadRequest,
+                Errors = ex.Errors.Select(OxQLFieldError.FromValidationError).ToList()
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error explaining OxQL query for entity type '{EntityType}'",
+                request.EntityType);
+
+            var response = new OxQLErrorResponse
+            {
+                Type = "internal_error",
+                Title = "An unexpected error occurred while explaining the query.",
+                Status = StatusCodes.Status500InternalServerError
+            };
+
+            if (_options.IncludeErrorDetails)
+            {
+                response = response with
+                {
+                    Errors =
+                    [
+                        new OxQLFieldError
+                        {
+                            Code = "INTERNAL_ERROR",
+                            Message = ex.Message
+                        }
+                    ]
+                };
+            }
+
+            return StatusCode(StatusCodes.Status500InternalServerError, response);
+        }
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────────
 
     private const int MaxPropertyDepth = 8;

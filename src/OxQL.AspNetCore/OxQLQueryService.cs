@@ -46,6 +46,12 @@ public sealed class OxQLQueryService<T> : IOxQLQueryService
         };
     }
 
+    public async Task<IReadOnlyList<object>> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default)
+    {
+        request = await ApplyInjectedFiltersAsync(request, cancellationToken);
+        return await _executor.ExplainAsync(request, cancellationToken);
+    }
+
     /// <summary>
     /// Collects filters from every registered provider and merges them into a single
     /// root-level <c>AND</c> using <see cref="QueryFilterInjector"/>. Returns the original

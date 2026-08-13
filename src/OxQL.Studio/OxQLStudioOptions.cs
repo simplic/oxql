@@ -31,6 +31,14 @@ public sealed class OxQLStudioOptions
     public string MonacoCdnBase { get; set; } = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min";
 
     /// <summary>
+    /// Shows the <c>Explain</c> button in the Studio UI, which calls the
+    /// <c>POST /explain</c> endpoint and visualises the generated pipeline.
+    /// Should match <c>OxQLEndpointOptions.EnableExplain</c>.
+    /// Default: <c>false</c>.
+    /// </summary>
+    public bool EnableExplain { get; set; }
+
+    /// <summary>
     /// Normalizes <see cref="RoutePath"/> and <see cref="ApiBasePath"/> to a
     /// leading-slash, no-trailing-slash form.
     /// </summary>

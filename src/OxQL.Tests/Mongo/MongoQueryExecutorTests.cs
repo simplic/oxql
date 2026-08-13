@@ -25,6 +25,7 @@ public class MongoQueryExecutorTests
     private sealed class RecordingAdapter : IQueryAdapter<BsonDocument>
     {
         public List<QueryPlan> Plans { get; } = [];
+        public List<(QueryPlan Plan, QueryVariables? Variables)> ExplainCalls { get; } = [];
 
         public Task<QueryResponse<BsonDocument>> ExecuteAsync(
             QueryPlan plan,
@@ -38,6 +39,12 @@ public class MongoQueryExecutorTests
                 Items = [],
                 PageInfo = new PageInfo { HasNextPage = false }
             });
+        }
+
+        public IReadOnlyList<object> Explain(QueryPlan plan, QueryVariables? variables)
+        {
+            ExplainCalls.Add((plan, variables));
+            return [new { stage = "$match" }];
         }
     }
 
@@ -119,5 +126,52 @@ public class MongoQueryExecutorTests
         // Same cache key and sort: the cursor must not fragment the plan cache.
         adapter.Plans[1].CacheKey.Should().Be(adapter.Plans[0].CacheKey);
         adapter.Plans[1].Sort.Should().BeEquivalentTo(adapter.Plans[0].Sort);
+    }
+
+    [Fact]
+    public async Task ExplainAsync_ForwardsVariablesToAdapter()
+    {
+        var (executor, adapter) = CreateExecutor();
+        var variables = new QueryVariables { Values = new Dictionary<string, object?> { ["x"] = "1" } };
+        var request = CreateRequest(cursor: null) with { Variables = variables };
+
+        await executor.ExplainAsync(request);
+
+        adapter.ExplainCalls.Should().HaveCount(1);
+        adapter.ExplainCalls[0].Variables.Should().BeSameAs(variables);
+    }
+
+    [Fact]
+    public async Task ExplainAsync_ReturnsPlanStagesFromAdapter()
+    {
+        var (executor, adapter) = CreateExecutor();
+
+        var stages = await executor.ExplainAsync(CreateRequest(cursor: null));
+
+        stages.Should().HaveCount(1);
+        adapter.ExplainCalls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ExplainAsync_InvalidRequest_ThrowsQueryValidationException()
+    {
+        var (executor, _) = CreateExecutor();
+        var invalid = new QueryRequest { EntityType = "", Pipeline = [] };
+
+        var act = () => executor.ExplainAsync(invalid);
+
+        await act.Should().ThrowAsync<QueryValidationException>();
+    }
+
+    [Fact]
+    public async Task ExplainAsync_ForwardsPlanToAdapter()
+    {
+        var (executor, adapter) = CreateExecutor();
+        var request = CreateRequest(cursor: null);
+
+        await executor.ExplainAsync(request);
+
+        adapter.ExplainCalls.Should().HaveCount(1);
+        adapter.ExplainCalls[0].Plan.EntityType.Should().Be(request.EntityType);
     }
 }

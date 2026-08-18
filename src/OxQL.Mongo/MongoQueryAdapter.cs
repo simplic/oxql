@@ -144,7 +144,14 @@ public sealed class MongoQueryAdapter : IQueryAdapter<BsonDocument>
             BsonDateTime dt => dt.ToUniversalTime(),
             BsonBoolean b => b.Value,
             BsonNull => null,
-            BsonObjectId oid => oid.Value.ToString(),
+            // Preserve the BSON type of identifier-like fields through the cursor using
+            // the same type-hint convention as MongoFilterBuilder, so keyset comparisons
+            // (e.g. the "_id" tie-breaker) do not degrade into cross-type string compares.
+            BsonObjectId oid => new Dictionary<string, object?> { ["$oid"] = oid.Value.ToString() },
+            BsonBinaryData bin when bin.SubType is BsonBinarySubType.UuidStandard =>
+                new Dictionary<string, object?> { ["$uuid"] = bin.ToGuid(GuidRepresentation.Standard).ToString() },
+            BsonBinaryData bin when bin.SubType is BsonBinarySubType.UuidLegacy =>
+                new Dictionary<string, object?> { ["$uuid3"] = bin.ToGuid(GuidRepresentation.CSharpLegacy).ToString() },
             _ => current.ToString()
         };
     }

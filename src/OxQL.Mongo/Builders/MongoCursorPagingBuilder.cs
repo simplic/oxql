@@ -80,6 +80,44 @@ public sealed class MongoCursorPagingBuilder
 
     private static BsonValue JsonElementToBson(System.Text.Json.JsonElement element)
     {
+        // Type-hint object: mirrors MongoFilterBuilder so identifier-like tie-breaker
+        // values (UUID / ObjectId) preserve their BSON type across the cursor round-trip.
+        if (element.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("$uuid", out var uuidEl)
+                && Guid.TryParse(uuidEl.GetString(), out var uuidStd))
+                return new BsonBinaryData(uuidStd, GuidRepresentation.Standard);
+
+            if (element.TryGetProperty("$uuid3", out var uuid3El)
+                && Guid.TryParse(uuid3El.GetString(), out var uuidLeg))
+                return new BsonBinaryData(uuidLeg, GuidRepresentation.CSharpLegacy);
+
+            if (element.TryGetProperty("$oid", out var oidEl)
+                && ObjectId.TryParse(oidEl.GetString(), out var oid))
+                return new BsonObjectId(oid);
+
+            if (element.TryGetProperty("$date", out var dateEl))
+            {
+                var rawDate = dateEl.GetString();
+                if (rawDate is not null
+                    && DateTimeOffset.TryParse(rawDate,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AssumeUniversal |
+                        System.Globalization.DateTimeStyles.AdjustToUniversal,
+                        out var dto))
+                    return new BsonDateTime(dto.UtcDateTime);
+            }
+
+            if (element.TryGetProperty("$long", out var longEl))
+            {
+                var rawLong = longEl.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? longEl.GetString()
+                    : longEl.GetRawText();
+                if (long.TryParse(rawLong, out var lng))
+                    return new BsonInt64(lng);
+            }
+        }
+
         if (element.ValueKind == System.Text.Json.JsonValueKind.String)
         {
             var raw = element.GetString()!;

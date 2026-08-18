@@ -7,7 +7,7 @@
     <RootNamespace>OxQL.Mongo</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>1.1.526.813</Version>
+    <Version>1.1.626.818</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,0 +1,1535 @@
+{
+  "schemaVersion": "1.0",
+  "service": "vehicle",
+  "api": {
+    "name": "vehicle-api",
+    "version": "v2"
+  },
+  "revision": "sha256:ed7f9004906e1a1586c0108ef32464b4a159cdb0497641bb78f12ab161148d90",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200
+  },
+  "types": {
+    "t_additionalTechnicalData": {
+      "properties": [
+        {
+          "name": "emptyWeight",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "totalWeight",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "tireAmount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "tireSizeSteeringAxle",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "tireSizeLiftAxle",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "tireSizeDriveAxle",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "payload",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "fuelAmount",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "rimSizeAxle1",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "rimSizeAxle2",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "rimSizeAxle3",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "frameColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "vehicleExecution",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "hasFixedSuperstructure",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "superstructureParkingSpaces",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "superstructureVolume",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureInsideLength",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureInsideWidth",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureInsideHeight",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureLoadingHeightBack",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureLoadingHeightFront",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureTireAmount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "superstructureTireSizeNormalAxis",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "superstructureTireSizeLiftAxle",
+          "kind": "decimal",
+          "nullable": true
+        }
+      ]
+    },
+    "t_address": {
+      "properties": [
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional01",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional02",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": false
+        }
+      ]
+    },
+    "t_appointmentType": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "interval",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "intervalType",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_carrierContact": {
+      "properties": [
+        {
+          "name": "contactId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        }
+      ]
+    },
+    "t_equipmentSubSet": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_loadingSlot": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_registrationCertificate": {
+      "properties": [
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "registratorId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "remarks",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "firstRegistrationDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "manufacturer",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "commercialDesignation",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleIdentificationNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "permissableTotalWeight",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableTotalWeightInRegistrationState",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "emptyWeight",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "registrationValidityPeriod",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "registrationDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "vehicleClass",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "egTypeApprovalNumber",
+          "storageName": "EGTypeApprovalNumber",
+          "kind": "string",
+          "nullable": true,
+          "displayName": "EG Type Approval Number"
+        },
+        {
+          "name": "axleAmount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableBrakedTrailerLoad",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableUnbrakedTrailerLoad",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "displacement",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "ratedPower",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "ratedRPM",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "fuelType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "powerToWeightRatio",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "vehicleColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "seatsIncludingDriverSeat",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "standingPlaces",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "topSpeed",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "standingNoise",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "standingNoiseRPM",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "drivingNoise",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "emissions",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "egTypeEmissionClass",
+          "storageName": "EGTypeEmissionClass",
+          "kind": "string",
+          "nullable": true,
+          "displayName": "EG Type Emission Class"
+        },
+        {
+          "name": "manufacturerShortName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "manufacturerCode",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "typeCodeWithCheckDigit",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleIdentificationCheckDigit",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "superStructureType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleClassDesignation",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "egTypeApprovalDate",
+          "storageName": "EGTypeApprovalDate",
+          "kind": "dateTime",
+          "nullable": true,
+          "displayName": "EG Type Approval Date"
+        },
+        {
+          "name": "permissableMaximumLoadAxle1",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableMaximumLoadAxle2",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableMaximumLoadAxle3",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableMaximumLoadAxle1InRegistrationState",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableMaximumLoadAxle2InRegistrationState",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "permissableMaximumLoadAxle3InRegistrationState",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "driveAxleAmount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "fuelTypeCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "colorCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tankerTankCapacity",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "trailerNoseWeight",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "nationalEmissionClass",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "emissionClassCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tiresAxle1",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tiresAxle2",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tiresAxle3",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "registrationCertificateNumberPart2",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "operatingPermitFeature",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "length",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "width",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "height",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "otherNotes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "remarksAndExeptions",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zlbiIatId",
+          "storageName": "ZLBIIatId",
+          "kind": "guid",
+          "nullable": true,
+          "displayName": "ZLBI Iat Id"
+        }
+      ]
+    },
+    "t_registrationPlate": {
+      "properties": [
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSeasonal",
+          "kind": "bool",
+          "nullable": true
+        },
+        {
+          "name": "registrationIdentifier",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_toll": {
+      "properties": [
+        {
+          "name": "tollRegistrationDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "axleCount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "emissionClassId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "permissableTotalWeight",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "tollEmissionClassId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "orderNumber",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleAppointment": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "appointmentType",
+          "kind": "object",
+          "type": "#/types/t_appointmentType",
+          "nullable": false
+        },
+        {
+          "name": "lastDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "nextDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "supplierGuid",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "lastValue",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "nextValue",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "checkType",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleDepartment": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "color",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_vehicleEmissionClass": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isTollEmissionClass",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleFinancialSupportState": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleFuelType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleInsuranceType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleSubSet": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "registrationPlate",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleTrafficType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleTransmissionType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "code",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleTypeSubType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "subType",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "subTypeId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "vehicle.department": {
+      "displayName": "Department",
+      "entity": true,
+      "aliases": [
+        "department",
+        "$DepartmentResponse"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Department"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/Department/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Department/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/Department/{id}"
+        }
+      },
+      "items": [],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "color",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "vehicle.equipment": {
+      "displayName": "Equipment",
+      "entity": true,
+      "aliases": [
+        "equipment",
+        "$EquipmentResponse"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "name",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Equipment"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/Equipment/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Equipment/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/Equipment/{id}"
+        }
+      },
+      "items": [],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "equipmentType",
+          "kind": "object",
+          "type": "#/types/t_equipmentSubSet",
+          "nullable": false
+        },
+        {
+          "name": "vehicle",
+          "kind": "object",
+          "type": "#/types/t_vehicleSubSet",
+          "nullable": true
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "vehicle.status": {
+      "displayName": "Vehicle Status",
+      "entity": true,
+      "aliases": [
+        "$VehicleStatusResponse"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/VehicleStatus"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/VehicleStatus/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/VehicleStatus/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/VehicleStatus/{id}"
+        }
+      },
+      "items": [],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "vehicle.vehicle": {
+      "displayName": "Vehicle",
+      "entity": true,
+      "aliases": [
+        "$VehicleResponse"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "matchCode",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Vehicle"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/Vehicle/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Vehicle/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/Vehicle/{id}"
+        }
+      },
+      "items": [
+        {
+          "path": "appointments",
+          "aliases": [
+            "$VehicleResponse.$VehicleAppointmentResponse"
+          ]
+        },
+        {
+          "path": "loadingSlots",
+          "aliases": [
+            "$VehicleResponse.$LoadingSlotModel"
+          ]
+        }
+      ],
+      "properties": [
+        {
+          "name": "location",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/vehicle.status",
+          "nullable": true,
+          "snapshotOf": "vehicle.status"
+        },
+        {
+          "name": "mileage",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "mileageDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "operatingHours",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "fuelTankCapacity",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "dispositionSortingKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "yearOfManufacturing",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "registrationDocument",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleRegistration",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additionalTechnicalData",
+          "kind": "object",
+          "type": "#/types/t_additionalTechnicalData",
+          "nullable": false
+        },
+        {
+          "name": "registrationCertificate",
+          "kind": "object",
+          "type": "#/types/t_registrationCertificate",
+          "nullable": true
+        },
+        {
+          "name": "registrationPlate",
+          "kind": "object",
+          "type": "#/types/t_registrationPlate",
+          "nullable": true
+        },
+        {
+          "name": "isSystemVehicle",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "carrier",
+          "kind": "object",
+          "type": "#/types/t_carrierContact",
+          "nullable": true
+        },
+        {
+          "name": "phoneNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "eMailAddress",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "kind": "object",
+          "type": "#/types/t_vehicleDepartment",
+          "nullable": true
+        },
+        {
+          "name": "financialSupportState",
+          "kind": "object",
+          "type": "#/types/t_vehicleFinancialSupportState",
+          "nullable": true
+        },
+        {
+          "name": "trafficType",
+          "kind": "object",
+          "type": "#/types/t_vehicleTrafficType",
+          "nullable": true
+        },
+        {
+          "name": "fuelType",
+          "kind": "object",
+          "type": "#/types/t_vehicleFuelType",
+          "nullable": true
+        },
+        {
+          "name": "transmissionType",
+          "kind": "object",
+          "type": "#/types/t_vehicleTransmissionType",
+          "nullable": true
+        },
+        {
+          "name": "emissionClass",
+          "kind": "object",
+          "type": "#/types/t_vehicleEmissionClass",
+          "nullable": true
+        },
+        {
+          "name": "insuranceType",
+          "kind": "object",
+          "type": "#/types/t_vehicleInsuranceType",
+          "nullable": true
+        },
+        {
+          "name": "vehicleTypeSubType",
+          "kind": "object",
+          "type": "#/types/t_vehicleTypeSubType",
+          "nullable": true
+        },
+        {
+          "name": "registrationDocumentLocation",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "toll",
+          "kind": "object",
+          "type": "#/types/t_toll",
+          "nullable": true
+        },
+        {
+          "name": "appointments",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_vehicleAppointment"
+          },
+          "nullable": true
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "loadingSlots",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_loadingSlot"
+          },
+          "nullable": false
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "qrCode",
+          "storageName": "QRCode",
+          "kind": "string",
+          "nullable": true,
+          "displayName": "QR Code"
+        },
+        {
+          "name": "externalReference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,728 @@
+{
+  "schemaVersion": "1.0",
+  "service": "probe",
+  "api": {
+    "name": "probe-api",
+    "version": "v1"
+  },
+  "revision": "sha256:fixture",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200
+  },
+  "types": {
+    "probe.base_only": {
+      "displayName": "More Derived",
+      "entity": true,
+      "aliases": [],
+      "key": [
+        "id"
+      ],
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "deepest",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "extra",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "common",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "probe.customer": {
+      "displayName": "Customer",
+      "entity": true,
+      "aliases": [],
+      "key": [
+        "id"
+      ],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        }
+      ]
+    },
+    "probe.keyless": {
+      "displayName": "Keyless",
+      "entity": true,
+      "aliases": [],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "probe.order": {
+      "displayName": "Order",
+      "entity": true,
+      "aliases": [
+        "orders",
+        "probe.orders_old",
+        "$OrderModel"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "number",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "count",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "big",
+          "kind": "long",
+          "nullable": false
+        },
+        {
+          "name": "ratio",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "amount",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "flag",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "day",
+          "kind": "date",
+          "nullable": false
+        },
+        {
+          "name": "when",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "stamp",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "span",
+          "kind": "timeSpan",
+          "nullable": false
+        },
+        {
+          "name": "tod",
+          "kind": "unknown",
+          "nullable": false
+        },
+        {
+          "name": "blob",
+          "kind": "binary",
+          "nullable": false
+        },
+        {
+          "name": "initial",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "link",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "anything",
+          "kind": "unknown",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "kind": "enum",
+          "type": "#/types/t_orderState",
+          "nullable": false
+        },
+        {
+          "name": "maybeState",
+          "kind": "enum",
+          "type": "#/types/t_orderState",
+          "nullable": true
+        },
+        {
+          "name": "options",
+          "kind": "enum",
+          "type": "#/types/t_orderOptions",
+          "nullable": false
+        },
+        {
+          "name": "wide",
+          "kind": "enum",
+          "type": "#/types/t_wideState",
+          "nullable": false
+        },
+        {
+          "name": "maybeCount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "note",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "small",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "unsigned",
+          "kind": "long",
+          "nullable": false
+        },
+        {
+          "name": "single",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "shipTo",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_orderItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "relatedIds",
+          "kind": "array",
+          "of": {
+            "kind": "guid"
+          },
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": false
+        },
+        {
+          "name": "prices",
+          "kind": "dictionary",
+          "value": {
+            "kind": "object",
+            "type": "#/types/t_money"
+          },
+          "nullable": false
+        },
+        {
+          "name": "priceList",
+          "kind": "dictionary",
+          "value": {
+            "kind": "object",
+            "type": "#/types/t_money"
+          },
+          "nullable": false
+        },
+        {
+          "name": "byNumber",
+          "kind": "dictionary",
+          "value": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hidden",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "renamed",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "moneyText",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "guidText",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "stateName",
+          "kind": "enum",
+          "type": "#/types/t_orderState",
+          "nullable": false
+        },
+        {
+          "name": "computed",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "customerId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "probe.customer",
+            "field": "id",
+            "joinable": false,
+            "inferred": false
+          }
+        },
+        {
+          "name": "contactNumber",
+          "kind": "string",
+          "nullable": true,
+          "references": {
+            "entity": "crm.contact",
+            "field": "number",
+            "joinable": false,
+            "inferred": false
+          }
+        },
+        {
+          "name": "missingId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "probe.customer",
+            "field": "id",
+            "joinable": false,
+            "inferred": true
+          }
+        },
+        {
+          "name": "supplier",
+          "kind": "object",
+          "type": "#/types/probe.supplier",
+          "snapshotOf": "probe.supplier",
+          "nullable": true
+        },
+        {
+          "name": "supplierId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "probe.supplier",
+            "field": "id",
+            "joinable": false,
+            "inferred": false
+          }
+        },
+        {
+          "name": "broken",
+          "kind": "object",
+          "type": "#/types/probe.supplier",
+          "snapshotOf": "probe.supplier",
+          "nullable": true
+        },
+        {
+          "name": "notAnEntity",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "location",
+          "kind": "object",
+          "type": "#/types/t_geoPoint",
+          "nullable": true
+        },
+        {
+          "name": "tree",
+          "kind": "object",
+          "type": "#/types/t_node",
+          "nullable": true
+        },
+        {
+          "name": "figure",
+          "kind": "object",
+          "type": "#/types/t_figure",
+          "nullable": true
+        },
+        {
+          "name": "customer",
+          "kind": "object",
+          "type": "#/types/probe.customer",
+          "snapshotOf": "probe.customer",
+          "nullable": true
+        },
+        {
+          "name": "qrCode",
+          "storageName": "QRCode",
+          "kind": "string",
+          "nullable": false,
+          "displayName": "QR Code"
+        },
+        {
+          "name": "matrix",
+          "kind": "array",
+          "of": {
+            "kind": "array",
+            "of": {
+              "kind": "int"
+            }
+          },
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        }
+      ],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Order"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Order/{id}"
+        }
+      },
+      "items": [
+        {
+          "path": "items",
+          "aliases": [
+            "$OrderModel.$OrderItemModel"
+          ]
+        }
+      ]
+    },
+    "probe.shared_base": {
+      "displayName": "Shared Derived",
+      "entity": true,
+      "aliases": [],
+      "key": [
+        "id"
+      ],
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "more",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "probe.supplier": {
+      "displayName": "Supplier",
+      "entity": true,
+      "aliases": [],
+      "key": [
+        "id"
+      ],
+      "display": "matchCode",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        }
+      ]
+    },
+    "t_address": {
+      "properties": [
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": true
+        }
+      ]
+    },
+    "t_figure": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "label",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "figureKind",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_geoPoint": {
+      "properties": [
+        {
+          "name": "lat",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "lng",
+          "kind": "double",
+          "nullable": false
+        }
+      ]
+    },
+    "t_money": {
+      "properties": [
+        {
+          "name": "net",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "currency",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_node": {
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "next",
+          "kind": "object",
+          "type": "#/types/t_node",
+          "nullable": true
+        },
+        {
+          "name": "children",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_node"
+          },
+          "nullable": false
+        }
+      ]
+    },
+    "t_orderItem": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "price",
+          "kind": "object",
+          "type": "#/types/t_money",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "stops",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_address"
+          },
+          "nullable": false
+        }
+      ]
+    },
+    "t_orderOptions": {
+      "kind": "enum",
+      "flags": true,
+      "values": [
+        {
+          "name": "None",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Express",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Insured",
+          "value": 2,
+          "active": true
+        }
+      ]
+    },
+    "t_orderState": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Open",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Shipped",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Legacy",
+          "value": 2,
+          "active": false
+        }
+      ]
+    },
+    "t_wideState": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Small",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Huge",
+          "value": 5000000000,
+          "active": true
+        }
+      ]
+    }
+  }
+}

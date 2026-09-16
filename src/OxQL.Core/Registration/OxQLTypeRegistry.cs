@@ -1,18 +1,50 @@
 using System.Reflection;
 using OxQL.Core.Attributes;
+using OxQL.Model;
+using OxQL.Model.Build;
 
 namespace OxQL.Core.Registration;
 
 /// <summary>
-/// Holds all entity registrations discovered from <see cref="OxQLTypeAttribute"/> attributes.
+/// The v1 face of the entity set: a thin adapter over the model's entity discovery, kept for
+/// the callers that still resolve entities by name until they move onto <see cref="EntityModel"/>.
 /// </summary>
+/// <remarks>
+/// Discovery goes through <see cref="EntityScanner"/>, so the registry and the model describe
+/// exactly the same entities under the same rules: a declaration on a base class resolves to
+/// the most derived subclass, and an id two declarations claim is dropped for both. The scan
+/// touches no serializer, so it is safe during service registration; only the model's walk
+/// must wait for the host's registrations.
+/// </remarks>
 public sealed class OxQLTypeRegistry
 {
     private readonly Dictionary<string, OxQLTypeRegistration> _registrations =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Creates an empty registry.</summary>
+    public OxQLTypeRegistry()
+    {
+    }
+
+    /// <summary>Creates a registry describing every entity of a model.</summary>
+    public OxQLTypeRegistry(EntityModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+
+        foreach (var entity in model.Entities.Values)
+            _registrations[entity.DeclaredId] = new OxQLTypeRegistration(
+                ClrType:        entity.ClrType,
+                TypeName:       entity.DeclaredId,
+                CollectionName: entity.Collection,
+                DatabaseName:   entity.Database,
+                Extendable:     entity.Extendable);
+    }
+
     /// <summary>All registered entity types.</summary>
     public IReadOnlyCollection<OxQLTypeRegistration> Registrations => _registrations.Values;
+
+    /// <summary>What the last scan could not describe: a duplicate id, a shared type, a failed scan.</summary>
+    public IReadOnlyList<BuildFinding> Findings { get; private set; } = [];
 
     /// <summary>
     /// Scans the given assemblies for classes decorated with <see cref="OxQLTypeAttribute"/>
@@ -22,52 +54,19 @@ public sealed class OxQLTypeRegistry
     /// </summary>
     public OxQLTypeRegistry ScanAssemblies(params Assembly[] assemblies)
     {
-        var allTypes = assemblies.SelectMany(a => a.GetTypes()).ToList();
+        var findings = new List<BuildFinding>();
 
-        // Build a lookup: base-type → all concrete subclasses in the scanned set
-        var subclassMap = allTypes
-            .Where(t => t is { IsClass: true, IsAbstract: false })
-            .SelectMany(t => GetInheritanceChain(t).Skip(1).Select(b => (Base: b, Derived: t)))
-            .GroupBy(x => x.Base, x => x.Derived)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        foreach (var declaration in EntityScanner.Scan(assemblies, findings))
+            _registrations[declaration.DeclaredId] = new OxQLTypeRegistration(
+                ClrType:        declaration.ClrType,
+                TypeName:       declaration.DeclaredId,
+                CollectionName: declaration.Collection,
+                DatabaseName:   declaration.Database,
+                Extendable:     declaration.Extendable);
 
-        foreach (var type in allTypes)
-        {
-            var attr = type.GetCustomAttribute<OxQLTypeAttribute>();
-            if (attr is null) continue;
-
-            // Prefer the most-derived concrete subclass, falling back to the attributed type
-            var representativeType = subclassMap.TryGetValue(type, out var subs) && subs.Count > 0
-                ? subs.OrderByDescending(t => InheritanceDepth(t)).First()
-                : type;
-
-            _registrations[attr.TypeName] = new OxQLTypeRegistration(
-                ClrType:        representativeType,
-                TypeName:       attr.TypeName,
-                CollectionName: attr.CollectionName,
-                DatabaseName:   attr.DatabaseName,
-                Extendable:     attr.Extendable);
-        }
+        Findings = findings;
 
         return this;
-    }
-
-    private static IEnumerable<Type> GetInheritanceChain(Type t)
-    {
-        var current = t;
-        while (current is not null)
-        {
-            yield return current;
-            current = current.BaseType;
-        }
-    }
-
-    private static int InheritanceDepth(Type t)
-    {
-        int depth = 0;
-        var current = t.BaseType;
-        while (current is not null) { depth++; current = current.BaseType; }
-        return depth;
     }
 
     /// <summary>

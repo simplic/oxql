@@ -21,9 +21,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\OxQL.Model\OxQL.Model.csproj" />
     <ProjectReference Include="..\OxQL.Core\OxQL.Core.csproj" />
     <ProjectReference Include="..\OxQL.Mongo\OxQL.Mongo.csproj" />
     <ProjectReference Include="..\OxQL.AspNetCore\OxQL.AspNetCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

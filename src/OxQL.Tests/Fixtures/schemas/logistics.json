@@ -1,0 +1,2538 @@
+{
+  "schemaVersion": "1.0",
+  "service": "logistics",
+  "api": {
+    "name": "logistics-api",
+    "version": "v2"
+  },
+  "revision": "sha256:994793b35a7edf7d52b8e72e950c74dbefb13f25d3317c4a58d211fe54778cbb",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200
+  },
+  "types": {
+    "logistics.shipment": {
+      "displayName": "Shipment",
+      "entity": true,
+      "aliases": [
+        "$ShipmentModel"
+      ],
+      "key": [
+        "id"
+      ],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Shipment"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/Shipment/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Shipment/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/Shipment/{id}"
+        }
+      },
+      "items": [
+        {
+          "path": "items",
+          "aliases": [
+            "$ShipmentModel.$ShipmentItemModel"
+          ]
+        },
+        {
+          "path": "billingLines",
+          "aliases": [
+            "$ShipmentModel.$BillingLineModel"
+          ]
+        },
+        {
+          "path": "billingLines.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.references",
+          "aliases": [
+            "$ShipmentModel.$BillingLineReferenceModel"
+          ]
+        },
+        {
+          "path": "tags",
+          "aliases": [
+            "$ShipmentModel.$ShipmentTagModel"
+          ]
+        },
+        {
+          "path": "tours.resource.attachedResource",
+          "aliases": [
+            "$ShipmentModel.$ResourceModel"
+          ]
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "loadAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "deliveryAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "carrier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "freightPayer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "customer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "recipientAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "invoiceRecipient",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "senderAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "supplier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "loadStart",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "loadEnd",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "plannedLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "loadingTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "deliveryStart",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "deliveryEnd",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "plannedDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualStartDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryStartDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "orderDate",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "shipmentNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryNoteNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "actualWeight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "isTemplate",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "templateName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_shipmentStatus",
+          "nullable": false
+        },
+        {
+          "name": "transportOrder",
+          "kind": "object",
+          "type": "#/types/t_shipmentTransportOrder",
+          "nullable": true
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "billingLines",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLine"
+          },
+          "nullable": false
+        },
+        {
+          "name": "documents",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentDocument"
+          },
+          "nullable": true
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTag"
+          },
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "externalNotes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "loadWorkflow",
+          "kind": "object",
+          "type": "#/types/t_shipmentTelematicWorkflow",
+          "nullable": true
+        },
+        {
+          "name": "deliveryWorkflow",
+          "kind": "object",
+          "type": "#/types/t_shipmentTelematicWorkflow",
+          "nullable": true
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "tours",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTour"
+          },
+          "nullable": false
+        },
+        {
+          "name": "constructionSite",
+          "kind": "object",
+          "type": "#/types/t_constructionSite",
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "kind": "object",
+          "type": "#/types/t_shipmentDepartment",
+          "nullable": true
+        },
+        {
+          "name": "incoterm",
+          "kind": "object",
+          "type": "#/types/t_shipmentIncoterm",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "tariff",
+          "kind": "object",
+          "type": "#/types/t_tariff",
+          "nullable": true
+        },
+        {
+          "name": "carrierTariff",
+          "kind": "object",
+          "type": "#/types/t_tariff",
+          "nullable": true
+        }
+      ]
+    },
+    "logistics.shipment_template": {
+      "displayName": "Shipment Template",
+      "entity": true,
+      "aliases": [],
+      "key": [
+        "id"
+      ],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "items",
+          "aliases": []
+        },
+        {
+          "path": "tags",
+          "aliases": []
+        },
+        {
+          "path": "billingLines",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.references",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "loadAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "deliveryAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "carrier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "freightPayer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "customer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "recipientAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "invoiceRecipient",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "senderAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "supplier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "loadingTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "deliveryTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "loadStart",
+          "kind": "object",
+          "type": "#/types/t_templateTime",
+          "nullable": true
+        },
+        {
+          "name": "loadEnd",
+          "kind": "object",
+          "type": "#/types/t_templateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryStart",
+          "kind": "object",
+          "type": "#/types/t_templateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryEnd",
+          "kind": "object",
+          "type": "#/types/t_templateTime",
+          "nullable": true
+        },
+        {
+          "name": "timeMode",
+          "kind": "enum",
+          "type": "#/types/t_templateTimeMode",
+          "nullable": false
+        },
+        {
+          "name": "orderDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "shipmentNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "templateName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isShipmentConversionDisabled",
+          "kind": "bool",
+          "nullable": true
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "documents",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentDocument"
+          },
+          "nullable": true
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTag"
+          },
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "externalNotes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadWorkflow",
+          "kind": "object",
+          "type": "#/types/t_shipmentTelematicWorkflow",
+          "nullable": true
+        },
+        {
+          "name": "deliveryWorkflow",
+          "kind": "object",
+          "type": "#/types/t_shipmentTelematicWorkflow",
+          "nullable": true
+        },
+        {
+          "name": "constructionSite",
+          "kind": "object",
+          "type": "#/types/t_constructionSite",
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "kind": "object",
+          "type": "#/types/t_shipmentDepartment",
+          "nullable": true
+        },
+        {
+          "name": "incoterm",
+          "kind": "object",
+          "type": "#/types/t_shipmentIncoterm",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "tariff",
+          "kind": "object",
+          "type": "#/types/t_tariff",
+          "nullable": true
+        },
+        {
+          "name": "carrierTariff",
+          "kind": "object",
+          "type": "#/types/t_tariff",
+          "nullable": true
+        },
+        {
+          "name": "billingLines",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLine"
+          },
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_address": {
+      "properties": [
+        {
+          "name": "contactId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional01",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional02",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billableContact": {
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": false
+        },
+        {
+          "name": "accountNumber",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "personalAccountId",
+          "kind": "guid",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLine": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "financialPartner",
+          "kind": "object",
+          "type": "#/types/t_billingLineContact",
+          "nullable": true
+        },
+        {
+          "name": "date",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "enum",
+          "type": "#/types/t_billingLineType",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_billingLineStatus",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "singlePrice",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "totalPrice",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "isGross",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineCostCenterAssignment"
+          },
+          "nullable": true
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineCostCenterAssignment"
+          },
+          "nullable": true
+        },
+        {
+          "name": "generalLedgerAccountGroup",
+          "kind": "object",
+          "type": "#/types/t_billingLineGeneralLedgerAccountGroup",
+          "nullable": true
+        },
+        {
+          "name": "taxRate",
+          "kind": "object",
+          "type": "#/types/t_billingLineTaxRate",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "references",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineReference"
+          },
+          "nullable": true
+        },
+        {
+          "name": "isManualBillingLine",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "assignedTransactionId",
+          "kind": "guid",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLineAddress": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLineContact": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "accountNumber",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_billingLineAddress",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLineCostCenter": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "validFrom",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "validTo",
+          "kind": "dateTime",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLineCostCenterAssignment": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "costCenter",
+          "kind": "object",
+          "type": "#/types/t_billingLineCostCenter",
+          "nullable": false
+        },
+        {
+          "name": "percentage",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billingLineGeneralLedgerAccountGroup": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billingLineReference": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "dataType",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "referenceId",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billingLineStatus": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billingLineTaxRate": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_billingLineType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Customer",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Carrier",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Supplier",
+          "value": 2,
+          "active": true
+        }
+      ]
+    },
+    "t_constructionSite": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "startDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "contactPerson",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "constructionSiteType",
+          "kind": "object",
+          "type": "#/types/t_constructionSiteType",
+          "nullable": true
+        },
+        {
+          "name": "additionalInformation",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "constructionTime",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_constructionSiteType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_geoJson2DGeographicCoordinates": {
+      "properties": [
+        {
+          "name": "values",
+          "kind": "array",
+          "of": {
+            "kind": "double"
+          },
+          "nullable": true
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": false
+        }
+      ]
+    },
+    "t_geoJsonBoundingBox": {
+      "properties": [
+        {
+          "name": "max",
+          "kind": "object",
+          "type": "#/types/t_geoJson2DGeographicCoordinates",
+          "nullable": true
+        },
+        {
+          "name": "min",
+          "kind": "object",
+          "type": "#/types/t_geoJson2DGeographicCoordinates",
+          "nullable": true
+        }
+      ]
+    },
+    "t_geoJsonCoordinateReferenceSystem": {
+      "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_geoJsonObjectType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Feature",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "FeatureCollection",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "GeometryCollection",
+          "value": 2,
+          "active": true
+        },
+        {
+          "name": "LineString",
+          "value": 3,
+          "active": true
+        },
+        {
+          "name": "MultiLineString",
+          "value": 4,
+          "active": true
+        },
+        {
+          "name": "MultiPoint",
+          "value": 5,
+          "active": true
+        },
+        {
+          "name": "MultiPolygon",
+          "value": 6,
+          "active": true
+        },
+        {
+          "name": "Point",
+          "value": 7,
+          "active": true
+        },
+        {
+          "name": "Polygon",
+          "value": 8,
+          "active": true
+        }
+      ]
+    },
+    "t_geoJsonPoint": {
+      "properties": [
+        {
+          "name": "coordinates",
+          "kind": "object",
+          "type": "#/types/t_geoJson2DGeographicCoordinates",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "enum",
+          "type": "#/types/t_geoJsonObjectType",
+          "nullable": false
+        },
+        {
+          "name": "boundingBox",
+          "kind": "object",
+          "type": "#/types/t_geoJsonBoundingBox",
+          "nullable": true
+        },
+        {
+          "name": "coordinateReferenceSystem",
+          "kind": "object",
+          "type": "#/types/t_geoJsonCoordinateReferenceSystem",
+          "nullable": true
+        },
+        {
+          "name": "extraMembers",
+          "kind": "unknown",
+          "nullable": true
+        }
+      ]
+    },
+    "t_loadingDateTimeType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "None",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Fixed",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "FixedWithBooking",
+          "value": 2,
+          "active": true
+        }
+      ]
+    },
+    "t_quantity": {
+      "properties": [
+        {
+          "name": "value",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "quantityUnit",
+          "kind": "object",
+          "type": "#/types/t_quantityUnit",
+          "nullable": true
+        }
+      ]
+    },
+    "t_quantityUnit": {
+      "properties": [
+        {
+          "name": "guid",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shortName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "digits",
+          "kind": "int",
+          "nullable": true
+        }
+      ]
+    },
+    "t_resource": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "location",
+          "kind": "object",
+          "type": "#/types/t_resourceLocation",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_resourceLocation": {
+      "properties": [
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "locationSetAt",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "location",
+          "kind": "object",
+          "type": "#/types/t_geoJsonPoint",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentArticle": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentDepartment": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentDocument": {
+      "properties": [
+        {
+          "name": "documentId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "shipmentId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "logistics.shipment",
+            "field": "id",
+            "joinable": false,
+            "inferred": true
+          }
+        },
+        {
+          "name": "shipmentItemId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "weightNoteId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "invoiceOrderNr",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "isInvoiceAttachment",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentIncoterm": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "abbreviation",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentItem": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_shipmentItemStatus",
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "article",
+          "kind": "object",
+          "type": "#/types/t_shipmentArticle",
+          "nullable": true
+        },
+        {
+          "name": "weightNotes",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_weightNote"
+          },
+          "nullable": false
+        },
+        {
+          "name": "loadingMeters",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "loadingAidType",
+          "kind": "object",
+          "type": "#/types/t_shipmentLoadingAidType",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "shippingUnit",
+          "kind": "object",
+          "type": "#/types/t_shippingUnitSubset",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "orderNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentItemStatus": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentLoadingAidType": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "shortText",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "width",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "length",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "storagePosition",
+          "kind": "double",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentStatus": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "orderNr",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "resolver",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentTag": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "groupName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentTelematicWorkflow": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentTour": {
+      "properties": [
+        {
+          "name": "tourId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isMirrored",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/t_resource",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "startDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "startAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "endAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": true
+        },
+        {
+          "name": "isUnloadingTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shipmentTransportOrder": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "customerAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": false
+        },
+        {
+          "name": "overrideCustomerAddress",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "carrierAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": false
+        },
+        {
+          "name": "overrideCarrierAddress",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "freightPayerAddress",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": false
+        },
+        {
+          "name": "overrideFreightPayerAddress",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "internalNumber",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "orderDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "beginDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "customCustomerPrice",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "calculatedCustomerPrice",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_transportOrderStatus",
+          "nullable": false
+        }
+      ]
+    },
+    "t_shippingUnitSubset": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "sscc",
+          "storageName": "SSCC",
+          "kind": "string",
+          "nullable": false,
+          "displayName": "SSCC"
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_tariff": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "parameters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_tariffParameter"
+          },
+          "nullable": false
+        }
+      ]
+    },
+    "t_tariffParameter": {
+      "properties": [
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "value",
+          "kind": "unknown",
+          "nullable": true
+        }
+      ]
+    },
+    "t_templateTime": {
+      "properties": [
+        {
+          "name": "absoluteTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "relativeTime",
+          "kind": "timeSpan",
+          "nullable": true
+        }
+      ]
+    },
+    "t_templateTimeMode": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Absolute",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "RelativeFromStart",
+          "value": 1,
+          "active": true
+        }
+      ]
+    },
+    "t_transportOrderStatus": {
+      "key": [
+        "id"
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "orderNr",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "resolver",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        }
+      ]
+    },
+    "t_weightNote": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "documentId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "enum",
+          "type": "#/types/t_weightNoteType",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "firstWeight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": false
+        },
+        {
+          "name": "secondWeight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": false
+        },
+        {
+          "name": "firstDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "secondDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_weightNoteType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Load",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Unload",
+          "value": 1,
+          "active": true
+        }
+      ]
+    }
+  }
+}

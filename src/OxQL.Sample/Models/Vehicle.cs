@@ -4,10 +4,11 @@ namespace OxQL.Sample.Models;
 
 /// <summary>
 /// Base class for all vehicle documents.
-/// The [OxQLType] attribute registers this type with OxQL at startup and maps it
-/// to the "vehicle" collection inside the "vehicle.vehicle" namespace.
+/// The [OxQLType] attribute registers this type with OxQL at startup and maps it to the
+/// "vehicle" collection of the host's configured database (OxQL:DatabaseName) under the
+/// entity id "vehicle.vehicle".
 /// </summary>
-[OxQLType("vehicle.vehicle", "vehicle", "vehicle")]
+[OxQLType("vehicle.vehicle", "vehicle")]
 public class VehicleBase
 {
 }
@@ -19,14 +20,15 @@ public class VehicleBase
 /// </summary>
 public class Vehicle : VehicleBase
 {
+    public Guid    Id                 { get; set; }
     public string? MatchCode          { get; set; }
     public string? RegistrationPlate  { get; set; }
     public Guid    OrganizationId     { get; set; }
 
-    public IList<VehicleAppointment> Appointments { get; set; }
+    public IList<VehicleAppointment> Appointments { get; set; } = [];
 }
 
-public class VehicleAppointment 
+public class VehicleAppointment
 {
-public DateTime NextDate { get; set; }
+    public DateTime NextDate { get; set; }
 }

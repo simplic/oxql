@@ -29,9 +29,6 @@ public sealed class OxQLOptions
     /// <summary>Cursor signing.</summary>
     public CursorOptions Cursor { get; set; } = new();
 
-    /// <summary>Target entity namespace to the service key a remote resolve is sent to; a namespace without an entry is its own key.</summary>
-    public Dictionary<string, string> RemoteServices { get; set; } = new(StringComparer.Ordinal);
-
     /// <inheritdoc cref="LimitOptions.MaxPageSize"/>
     public int MaxPageSize { get => Limits.MaxPageSize; set => Limits.MaxPageSize = value; }
 

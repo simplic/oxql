@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using OxQL.AspNetCore.Batch;
 using OxQL.AspNetCore.Models;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -14,6 +15,7 @@ namespace OxQL.AspNetCore.Controllers;
 /// <summary>The query surface: <c>POST query</c>, <c>POST batch</c>, <c>GET health</c>, <c>POST explain</c>.</summary>
 [ApiController]
 [Route("[controller]")]
+[TypeFilter(typeof(RequestSizeFilter))]
 public class OxQLController : ControllerBase
 {
     private readonly IOxQLQueryService queryService;
@@ -32,13 +34,11 @@ public class OxQLController : ControllerBase
     [ProducesResponseType(typeof(QueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status413PayloadTooLarge)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status422UnprocessableEntity)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status504GatewayTimeout)]
     public async Task<IActionResult> Query([FromBody] QueryRequest request, CancellationToken cancellationToken)
     {
-        if (TooLarge() is { } tooLarge)
-            return tooLarge.ToActionResult();
-
         var outcome = await queryService.ExecuteAsync(request, cancellationToken);
 
         return outcome switch
@@ -49,21 +49,22 @@ public class OxQLController : ControllerBase
         };
     }
 
-    /// <summary>Executes several queries in order; always 200, each entry carries its own outcome.</summary>
+    /// <summary>
+    /// Executes several queries in order under one time ceiling; always 200, each entry carries
+    /// its own outcome. More queries than <c>Limits:MaxBatchQueries</c> is <c>BATCH_TOO_LARGE</c>.
+    /// </summary>
     [HttpPost("batch")]
     [ProducesResponseType(typeof(BatchResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status413PayloadTooLarge)]
     public async Task<IActionResult> Batch([FromBody] BatchRequest batch, CancellationToken cancellationToken)
     {
-        if (TooLarge() is { } tooLarge)
-            return tooLarge.ToActionResult();
-
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)
-            return Refusal.Validation([new QueryValidationError
+            return Log(Refusal.Validation([new QueryValidationError
             {
                 Code = Codes.BatchTooLarge,
                 Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
-            }]).ToActionResult();
+            }])).ToActionResult();
 
         var results = new List<JsonNode?>(batch.Queries.Count);
 
@@ -103,7 +104,7 @@ public class OxQLController : ControllerBase
         });
     }
 
-    /// <summary>The bound pipeline and the emitted stages, without executing; 404 unless enabled.</summary>
+    /// <summary>The bound pipeline, the emitted stages, the count stages and the index advisory, without executing; 404 unless <c>Explain:Enabled</c>.</summary>
     [HttpPost("explain")]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -117,18 +118,9 @@ public class OxQLController : ControllerBase
         return outcome switch
         {
             ExplainOutcome.Success success => Ok(success.Result),
-            ExplainOutcome.Refused refused => refused.Refusal.ToActionResult(),
+            ExplainOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
-    }
-
-    private Refusal? TooLarge()
-    {
-        var length = Request.ContentLength;
-
-        return length is { } bytes && bytes > options.Limits.MaxRequestBytes
-            ? Refusal.RequestTooLarge((int)Math.Min(bytes, int.MaxValue), options.Limits.MaxRequestBytes)
-            : null;
     }
 
     private Refusal Log(Refusal refusal)

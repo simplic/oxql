@@ -60,24 +60,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>Adds the minimal-API query service without the controller.</summary>
-    public static IServiceCollection AddOxQLEndpoint<T>(this IServiceCollection services, Action<OxQLEndpointOptions>? configure = null)
-    {
-        services.Configure<OxQLEndpointOptions>(opts => configure?.Invoke(opts));
-        services.AddHttpContextAccessor();
-        services.AddScoped<IOxQLQueryService, OxQLQueryService>();
-        services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
-
-        services.AddOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>()
-            .Configure<IEnumerable<JsonConverter>>((opts, converters) =>
-            {
-                foreach (var converter in converters)
-                    opts.SerializerOptions.Converters.Add(converter);
-            });
-
-        return services;
-    }
-
     /// <summary>Registers the scope provider: the one place the engine learns the caller's organisation.</summary>
     public static IServiceCollection AddOxQLScope<TProvider>(this IServiceCollection services)
         where TProvider : class, IOxQLScopeProvider

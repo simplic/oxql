@@ -25,12 +25,9 @@ builder.Services.AddOxQLMongo(options =>
 });
 
 // ── OxQL ASP.NET Core controller ────────────────────────────────────────
-builder.Services.AddOxQLAspNetCore<BsonDocument>(options =>
-{
-    options.RoutePrefix = "api/oxql";
-    options.IncludeErrorDetails = builder.Environment.IsDevelopment();
-    options.EnableExplain = builder.Environment.IsDevelopment();
-});
+// Routes: POST /OxQL/query, POST /OxQL/batch, GET /OxQL/health, POST /OxQL/explain (the last
+// one answers only while OxQL:Explain:Enabled is true in the configuration section above).
+builder.Services.AddOxQLAspNetCore<BsonDocument>();
 
 // ── The organisation scope (mandatory) ──────────────────────────────────
 // The engine applies `organizationId eq <this>` at every entry into an entity and refuses to
@@ -47,7 +44,7 @@ builder.Services.AddOxQLStudio(options =>
     options.RoutePath = "/oxql";
     options.ApiBasePath = "/OxQL";   // matches the OxQLController route
     options.Title = "OxQL Studio";
-    options.EnableExplain = builder.Environment.IsDevelopment();
+    options.EnableExplain = builder.Configuration.GetValue<bool>("OxQL:Explain:Enabled");
 });
 
 // ── Standard ASP.NET Core services ─────────────────────────────────────
@@ -110,3 +107,6 @@ app.MapGet("/api/{entityType}", async (
 .WithTags("Documents");
 
 app.Run();
+
+/// <summary>Exposes the entry point to the host tests (<c>WebApplicationFactory&lt;Program&gt;</c>).</summary>
+public partial class Program;

@@ -15,6 +15,7 @@
                 <span class="logo"></span>
                 <span>__OXQL_TITLE__</span>
             </div>
+            <span class="engine-badge" id="engine-badge" title="GET /health">engine …</span>
             <div class="spacer"></div>
             <div class="token-field">
                 <span class="dot" id="token-dot" title="Bearer token status"></span>
@@ -27,14 +28,14 @@
 
         <!-- Body -->
         <div class="body">
-            <!-- Type explorer -->
+            <!-- Entity explorer -->
             <aside class="sidebar">
                 <div class="sidebar-header">
-                    <span>Type Explorer</span>
-                    <button class="icon" id="types-refresh" title="Reload types">⟳</button>
+                    <span>Entities</span>
+                    <button class="icon" id="types-refresh" title="Reload the schema">⟳</button>
                 </div>
                 <div class="sidebar-content" id="types-list">
-                    <div class="empty">Loading types…</div>
+                    <div class="empty">Loading entities…</div>
                 </div>
             </aside>
 
@@ -48,10 +49,18 @@
                 <!-- Toolbar -->
                 <div class="toolbar">
                     <button class="primary" id="run-btn" title="Execute (Ctrl+Enter)">▶ Run</button>
-                    <button id="explain-btn" title="Show generated pipeline (Ctrl+Shift+E)" hidden>⚙ Explain</button>
+                    <button id="batch-btn" title="Send every tab's query in one POST /batch">⧉ Batch tabs</button>
+                    <button id="explain-btn" title="Show the bound pipeline, the emitted stages and the index advisory (Ctrl+Shift+E)" hidden>⚙ Explain</button>
                     <button id="wizard-btn" title="Build a new query step by step">🪄 Wizard</button>
                     <button id="format-btn" title="Format JSON (Shift+Alt+F)">Format</button>
                     <input class="entity-input" id="entity-input" placeholder="entityType" spellcheck="false" />
+                    <label class="contract-field" title="The X-OxQL-Contract header sent with every request">
+                        <span>contract</span>
+                        <select id="contract-select">
+                            <option value="2">2</option>
+                            <option value="1">1 (compat)</option>
+                        </select>
+                    </label>
                     <span class="hint">Ctrl+Enter to run · Ctrl+Space for suggestions · saved in your browser</span>
                     <span class="spacer"></span>
                     <button id="help-btn" title="Query help &amp; cheat sheet (F1)">? Help</button>

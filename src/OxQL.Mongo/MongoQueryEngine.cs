@@ -8,6 +8,9 @@ using OxQL.Core.Binding;
 using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
+using OxQL.Model;
+using OxQL.Mongo.Compat;
+using OxQL.Mongo.Explain;
 using OxQL.Mongo.Resolve;
 
 namespace OxQL.Mongo;
@@ -23,6 +26,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly CursorCodec cursors;
     private readonly OxQLOptions options;
     private readonly IRemoteQueryClient? remote;
+    private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
 
@@ -33,13 +37,15 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         OxQLOptions options,
         IRemoteQueryClient? remote = null,
         ILogger<MongoQueryEngine>? logger = null,
-        bool includeErrorDetails = false)
+        bool includeErrorDetails = false,
+        IIndexSource? indexes = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.remote = remote;
+        this.indexes = indexes;
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
     }
@@ -109,8 +115,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1])) : null;
         var items = new List<JsonNode?>(page.Count);
 
+        // Contract 1 rows come back as the driver returned them, through the v1 converter.
         foreach (var row in page)
-            items.Add(WireEncoder.Encode(row, bound));
+            items.Add(context.Contract == 1 ? CompatRows.Encode(row) : WireEncoder.Encode(row, bound));
 
         var result = new QueryResult
         {
@@ -138,11 +145,28 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return new ExplainOutcome.Success(new ExplainResult
         {
             Bound = JsonNode.Parse(bound.Canonical)!,
-            Stages = compiled.PageStages.Select(stage => JsonNode.Parse(stage.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }))!).ToList(),
-            Count = compiled.CountStages?.Select(stage => JsonNode.Parse(stage.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }))!).ToList(),
+            Stages = compiled.PageStages.Select(Relaxed).ToList(),
+            Count = compiled.CountStages?.Select(Relaxed).ToList(),
+            Advisory = await AdviseAsync(bound.Entity, compiled, cancellationToken).ConfigureAwait(false),
             Diagnostics = bound.Diagnostics.Count > 0 ? bound.Diagnostics : null,
         });
     }
+
+    /// <summary>The index advisory: listIndexes matched against the leading match and the sort, the server's explain for every lookup.</summary>
+    private async Task<IReadOnlyList<JsonNode>?> AdviseAsync(EntityDef entity, CompiledQuery compiled, CancellationToken cancellationToken)
+    {
+        if (indexes is null)
+            return null;
+
+        var listed = await indexes.IndexesAsync(entity, cancellationToken).ConfigureAwait(false);
+        var hasLookup = compiled.PageStages.Any(stage => stage.Contains("$lookup"));
+        var explain = hasLookup ? await indexes.ExplainAsync(entity, compiled.PageStages, cancellationToken).ConfigureAwait(false) : null;
+
+        return IndexAdvisor.Advise(compiled.PageStages, listed, explain);
+    }
+
+    private static JsonNode Relaxed(BsonDocument stage) =>
+        JsonNode.Parse(stage.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }))!;
 
     private CompileOptions CompileOptionsFor(RequestContext context)
     {

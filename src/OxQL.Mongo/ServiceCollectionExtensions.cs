@@ -9,6 +9,7 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model.Build;
 using OxQL.Mongo.Compat;
+using OxQL.Mongo.Explain;
 using OxQL.Mongo.Resolve;
 
 namespace OxQL.Mongo;
@@ -45,8 +46,9 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Adds the engine over MongoDB. Needs <c>AddOxQLCore</c>. The host may register
     /// <see cref="IEntityModelProvider"/> (the base package does, from its schema build),
-    /// <see cref="IMongoClient"/> and <see cref="IRemoteQueryClient"/> itself; each has a
-    /// default here except the remote client, without which remote resolves are refused.
+    /// <see cref="IMongoClient"/>, <see cref="IIndexSource"/> (the explain advisory) and
+    /// <see cref="IRemoteQueryClient"/> itself; each has a default here except the remote
+    /// client, without which remote resolves are refused.
     /// </summary>
     public static IServiceCollection AddOxQLMongo(this IServiceCollection services, Action<MongoOxQLOptions> configure)
     {
@@ -63,6 +65,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<IEntityModelProvider>(_ => new LazyEntityModelProvider(() => ClrModelBuilder.Build(mongoOptions.AssembliesToScan)));
         services.TryAddSingleton<IAggregateRunner>(provider => new MongoAggregateRunner(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
+        services.TryAddSingleton<IIndexSource>(provider => new MongoIndexSource(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
 
         services.AddSingleton<IQueryEngine>(provider => new MongoQueryEngine(
             provider.GetRequiredService<IEntityModelProvider>(),
@@ -71,7 +74,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<OxQLOptions>(),
             provider.GetService<IRemoteQueryClient>(),
             provider.GetService<ILogger<MongoQueryEngine>>(),
-            mongoOptions.IncludeErrorDetails));
+            mongoOptions.IncludeErrorDetails,
+            provider.GetService<IIndexSource>()));
 
         return services;
     }

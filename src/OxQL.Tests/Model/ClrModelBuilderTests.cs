@@ -313,7 +313,7 @@ public class ClrModelBuilderTests
     public void Members_are_published_most_derived_first_in_declaration_order()
     {
         Order.Root.Members.Select(member => member.WireName).Take(3).Should().Equal("number", "count", "big");
-        Order.Root.Members.Select(member => member.WireName).TakeLast(2).Should().Equal("id", "createDateTime");
+        Order.Root.Members.Select(member => member.WireName).TakeLast(3).Should().Equal("id", "createDateTime", "organizationId");
         Model.Entities["probe.base_only"].Root.Members.Select(member => member.WireName).Should().Equal("deepest", "extra", "id", "common");
     }
 

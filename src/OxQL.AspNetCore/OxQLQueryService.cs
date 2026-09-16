@@ -1,82 +1,76 @@
 using Microsoft.AspNetCore.Http;
-using OxQL.AspNetCore.Filtering;
-using OxQL.Core.Filtering;
-using OxQL.Core.Interfaces;
+using OxQL.AspNetCore.Scope;
+using OxQL.Core.Binding;
+using OxQL.Core.Engine;
 using OxQL.Core.Models;
+using OxQL.Model.Addon;
 
 namespace OxQL.AspNetCore;
 
 /// <summary>
-/// Generic adapter that wraps an <see cref="IQueryExecutor{T}"/> and exposes
-/// it through the non-generic <see cref="IOxQLQueryService"/> interface.
-/// <para>
-/// Before execution it collects forced conditions from any registered
-/// <see cref="IOxQLQueryFilterProvider"/> (for example a multi-tenant
-/// <c>OrganizationId</c> constraint) and merges them into the request via
-/// <see cref="QueryFilterInjector"/> so every query is filtered at the root level.
-/// </para>
+/// The host's face of the engine: builds the request context from the scope provider and the
+/// contract header, runs the engine, and hands the outcome to the controller.
 /// </summary>
-/// <typeparam name="T">The document type used by the underlying executor.</typeparam>
-public sealed class OxQLQueryService<T> : IOxQLQueryService
+public sealed class OxQLQueryService : IOxQLQueryService
 {
-    private readonly IQueryExecutor<T> _executor;
-    private readonly IReadOnlyList<IOxQLQueryFilterProvider> _filterProviders;
-    private readonly IHttpContextAccessor? _httpContextAccessor;
+    /// <summary>The contract header.</summary>
+    public const string ContractHeader = "X-OxQL-Contract";
+
+    private readonly IQueryEngine engine;
+    private readonly IOxQLScopeProvider scope;
+    private readonly OxQLOptions options;
+    private readonly IAddonDefinitionSource addons;
+    private readonly IHttpContextAccessor? httpContextAccessor;
 
     public OxQLQueryService(
-        IQueryExecutor<T> executor,
-        IEnumerable<IOxQLQueryFilterProvider>? filterProviders = null,
+        IQueryEngine engine,
+        IOxQLScopeProvider scope,
+        OxQLOptions options,
+        IAddonDefinitionSource? addons = null,
         IHttpContextAccessor? httpContextAccessor = null)
     {
-        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _filterProviders = filterProviders?.ToList() ?? [];
-        _httpContextAccessor = httpContextAccessor;
+        this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.addons = addons ?? EmptyAddonDefinitionSource.Instance;
+        this.httpContextAccessor = httpContextAccessor;
     }
 
-    public async Task<OxQLQueryResult> ExecuteAsync(QueryRequest request, CancellationToken cancellationToken = default)
+    /// <inheritdoc/>
+    public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
+        await engine.ExecuteAsync(request, await ContextAsync(null, cancellationToken), cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
+        await engine.ExplainAsync(request, await ContextAsync(null, cancellationToken), cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken = default) =>
+        await engine.ExecuteAsync(request, await ContextAsync(maxTimeMs, cancellationToken), cancellationToken);
+
+    /// <summary>The context of the current request.</summary>
+    public async ValueTask<RequestContext> ContextAsync(int? maxTimeMs, CancellationToken cancellationToken)
     {
-        request = await ApplyInjectedFiltersAsync(request, cancellationToken);
+        var httpContext = httpContextAccessor?.HttpContext;
 
-        var response = await _executor.ExecuteAsync(request, cancellationToken);
-
-        return new OxQLQueryResult
+        return new RequestContext
         {
-            Items = response.Items.Cast<object>().ToList(),
-            PageInfo = response.PageInfo
+            Organisation = await scope.OrganisationAsync(httpContext, cancellationToken),
+            Contract = ContractOf(httpContext),
+            AddonSource = addons,
+            Options = options,
+            UserId = scope.UserId(httpContext),
+            CorrelationId = scope.CorrelationId(httpContext),
+            MaxTimeMs = maxTimeMs,
         };
     }
 
-    public async Task<IReadOnlyList<object>> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default)
+    /// <summary>The contract a request was written for: the header, or the compat default without one.</summary>
+    public int ContractOf(HttpContext? httpContext)
     {
-        request = await ApplyInjectedFiltersAsync(request, cancellationToken);
-        return await _executor.ExplainAsync(request, cancellationToken);
-    }
+        if (httpContext is not null && httpContext.Request.Headers.TryGetValue(ContractHeader, out var values) && int.TryParse(values.FirstOrDefault(), out var contract))
+            return contract == 1 ? 1 : 2;
 
-    /// <summary>
-    /// Collects filters from every registered provider and merges them into a single
-    /// root-level <c>AND</c> using <see cref="QueryFilterInjector"/>. Returns the original
-    /// request unchanged when no provider contributes a filter.
-    /// </summary>
-    private async Task<QueryRequest> ApplyInjectedFiltersAsync(
-        QueryRequest request,
-        CancellationToken cancellationToken)
-    {
-        if (_filterProviders.Count == 0)
-            return request;
-
-        var context = new OxQLFilterInjectionContext(_httpContextAccessor?.HttpContext, request);
-
-        List<InjectedFilter>? filters = null;
-        foreach (var provider in _filterProviders)
-        {
-            var contributed = await provider.GetFiltersAsync(context, cancellationToken);
-            if (contributed is null || contributed.Count == 0)
-                continue;
-
-            filters ??= [];
-            filters.AddRange(contributed);
-        }
-
-        return filters is null ? request : QueryFilterInjector.Inject(request, filters);
+        return options.Compat.Enabled ? 1 : 2;
     }
 }

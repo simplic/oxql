@@ -27,6 +27,7 @@ public abstract class Keyed
 {
     public Guid Id { get; set; }
     public DateTime CreateDateTime { get; set; }
+    public Guid OrganizationId { get; set; }
 }
 
 public enum OrderState

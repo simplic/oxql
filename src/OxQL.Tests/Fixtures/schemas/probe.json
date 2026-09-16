@@ -88,6 +88,11 @@
           "name": "createDateTime",
           "kind": "dateTime",
           "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
         }
       ]
     },
@@ -461,6 +466,11 @@
           "name": "createDateTime",
           "kind": "dateTime",
           "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
         }
       ],
       "operations": {
@@ -532,6 +542,11 @@
         {
           "name": "createDateTime",
           "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
           "nullable": false
         }
       ]

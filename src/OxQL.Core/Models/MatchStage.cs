@@ -4,89 +4,96 @@ using System.Text.Json.Serialization;
 namespace OxQL.Core.Models;
 
 /// <summary>
-/// Represents a match/filter stage in the pipeline.
+/// A match stage: one condition, which may be a logical group. The wire form
+/// <c>{ "a": { "eq": 1 }, "b": { "gt": 2, "lt": 5 } }</c> is an <c>and</c> of every path
+/// and every operator; <c>and</c>, <c>or</c>, <c>not</c> nest freely; <c>{}</c> matches everything.
 /// </summary>
 [JsonConverter(typeof(MatchStageConverter))]
 public sealed record MatchStage
 {
-    /// <summary>
-    /// Logical AND conditions.
-    /// </summary>
-    public IReadOnlyList<FilterCondition>? And { get; init; }
-
-    /// <summary>
-    /// Logical OR conditions.
-    /// </summary>
-    public IReadOnlyList<FilterCondition>? Or { get; init; }
-
-    /// <summary>
-    /// Logical NOT condition.
-    /// </summary>
-    public FilterCondition? Not { get; init; }
-
-    /// <summary>
-    /// A single filter condition (when no logical wrapper is used).
-    /// </summary>
+    /// <summary>The condition, or null for match-all.</summary>
     public FilterCondition? Condition { get; init; }
 
-    /// <summary>
-    /// Returns <c>true</c> when this stage carries no filter conditions (match everything).
-    /// </summary>
+    /// <summary>Logical AND conditions (the condition when it is an <c>and</c> group).</summary>
     [JsonIgnore]
-    public bool IsMatchAll => And is null && Or is null && Not is null && Condition is null;
+    public IReadOnlyList<FilterCondition>? And => Condition?.And;
+
+    /// <summary>Logical OR conditions (the condition when it is an <c>or</c> group).</summary>
+    [JsonIgnore]
+    public IReadOnlyList<FilterCondition>? Or => Condition?.Or;
+
+    /// <summary>Logical NOT (the condition when it is a <c>not</c> group).</summary>
+    [JsonIgnore]
+    public FilterCondition? Not => Condition?.Not;
+
+    /// <summary>Returns <c>true</c> when this stage carries no condition (match everything).</summary>
+    [JsonIgnore]
+    public bool IsMatchAll => Condition is null;
 }
 
-/// <summary>
-/// Options that modify filter condition behaviour.
-/// Wire format: <c>{ "My.Field": { "eq": "value", "options": { "ignoreCase": true } } }</c>
-/// </summary>
+/// <summary>Options that modify a condition.</summary>
 public sealed record FilterConditionOptions
 {
-    /// <summary>
-    /// When <c>true</c>, string comparisons are case-insensitive.
-    /// Applies to <c>eq</c>, <c>neq</c>, and <c>contains</c>.
-    /// </summary>
+    /// <summary>Case-insensitive comparison on string members, for <c>eq neq in nin contains startsWith endsWith</c>.</summary>
     public bool IgnoreCase { get; init; }
+
+    /// <summary>The option names the caller wrote that the engine does not know.</summary>
+    public IReadOnlyList<string>? Unknown { get; init; }
 }
 
 /// <summary>
-/// Represents a single filter condition or a nested logical group.
-/// <para>
-/// Wire format for a field condition:
-/// <c>{ "My.Field": { "eq": "value" } }</c>
-/// </para>
-/// <para>
-/// Wire format for logical groups:
-/// <c>{ "and": [ ... ] }</c>, <c>{ "or": [ ... ] }</c>, <c>{ "not": { ... } }</c>
-/// </para>
+/// One condition: a field condition (<c>Path</c>, <c>Op</c>, <c>Value</c>), an <c>any</c>
+/// correlation (<c>Path</c>, <c>Any</c>), or a logical group (<c>And</c>, <c>Or</c>, <c>Not</c>).
 /// </summary>
 [JsonConverter(typeof(FilterConditionConverter))]
 public sealed record FilterCondition
 {
+    /// <summary>The wire path of a field condition or an <c>any</c> condition.</summary>
     public string? Path { get; init; }
+
+    /// <summary>The operator, as written; matched case-sensitively by the binder.</summary>
     public string? Op { get; init; }
+
+    /// <summary>The operand, as written.</summary>
     public JsonElement? Value { get; init; }
+
+    /// <summary>The options, when any.</summary>
     public FilterConditionOptions? Options { get; init; }
 
+    /// <summary>The inner condition of an <c>any</c>: evaluated against one element of the collection at <see cref="Path"/>.</summary>
+    public FilterCondition? Any { get; init; }
+
+    /// <summary>The operands of an <c>and</c> group.</summary>
     public IReadOnlyList<FilterCondition>? And { get; init; }
+
+    /// <summary>The operands of an <c>or</c> group.</summary>
     public IReadOnlyList<FilterCondition>? Or { get; init; }
+
+    /// <summary>The operand of a <c>not</c> group.</summary>
     public FilterCondition? Not { get; init; }
 
-    /// <summary>
-    /// Returns true if this is a logical group rather than a field condition.
-    /// </summary>
+    /// <summary>True for a logical group.</summary>
     [JsonIgnore]
     public bool IsLogical => And is not null || Or is not null || Not is not null;
+
+    /// <summary>True for an <c>any</c> condition.</summary>
+    [JsonIgnore]
+    public bool IsAny => Any is not null;
 }
 
 /// <summary>
-/// Converts <see cref="FilterCondition"/> between the compact wire format
-/// <c>{ "Field.Path": { "op": value } }</c> and the internal model.
+/// Reads the compact wire form. Every non-logical property is a path; inside it every key is
+/// an operator (or <c>options</c>, or <c>any</c>); several become one <c>and</c>. A bare value
+/// under a path is an implicit <c>eq</c>. Nothing is validated here: unknown operators and
+/// options are carried through for the binder to refuse with a code.
 /// </summary>
 internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
 {
-    private static readonly HashSet<string> LogicalKeys =
-        new(StringComparer.OrdinalIgnoreCase) { "and", "or", "not" };
+    private const string AndKey = "and";
+    private const string OrKey = "or";
+    private const string NotKey = "not";
+    private const string OptionsKey = "options";
+    private const string AnyKey = "any";
 
     public override FilterCondition? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -94,133 +101,195 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
         return ReadFromElement(doc.RootElement, options);
     }
 
-    internal static FilterCondition ReadFromElement(JsonElement root, JsonSerializerOptions options)
+    /// <summary>Reads a condition object; null for an empty object.</summary>
+    internal static FilterCondition? ReadFromElement(JsonElement root, JsonSerializerOptions options)
     {
-        // Logical group: { "and": [...] } / { "or": [...] } / { "not": {...} }
-        if (root.TryGetProperty("and", out var andEl))
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new JsonException("A condition is a JSON object.");
+
+        var parts = new List<FilterCondition>();
+
+        foreach (var property in root.EnumerateObject())
         {
-            var conditions = andEl.EnumerateArray()
-                .Select(e => ReadFromElement(e, options))
-                .ToList();
-            return new FilterCondition { And = conditions };
-        }
-
-        if (root.TryGetProperty("or", out var orEl))
-        {
-            var conditions = orEl.EnumerateArray()
-                .Select(e => ReadFromElement(e, options))
-                .ToList();
-            return new FilterCondition { Or = conditions };
-        }
-
-        if (root.TryGetProperty("not", out var notEl))
-        {
-            return new FilterCondition { Not = ReadFromElement(notEl, options) };
-        }
-
-        // Field condition: { "My.Field": { "op": value } }
-        // Find the first property that is not a logical key — that is the field path.
-        foreach (var prop in root.EnumerateObject())
-        {
-            if (LogicalKeys.Contains(prop.Name))
-                continue;
-
-            var path = prop.Name;
-            var opObject = prop.Value;
-
-            // The value of the property is an object: { "op": value } or { "op": value, "options": { ... } }
-            if (opObject.ValueKind == JsonValueKind.Object)
+            switch (property.Name)
             {
-                string? opName = null;
-                JsonElement? opValue = null;
-                FilterConditionOptions? condOptions = null;
+                case AndKey:
+                    parts.Add(new FilterCondition { And = ReadGroup(property.Value, options) });
+                    break;
 
-                foreach (var opProp in opObject.EnumerateObject())
-                {
-                    if (opProp.Name.Equals("options", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (opProp.Value.ValueKind == JsonValueKind.Object)
-                        {
-                            var ignoreCase = opProp.Value.TryGetProperty("ignoreCase", out var icEl) && icEl.GetBoolean();
-                            condOptions = new FilterConditionOptions { IgnoreCase = ignoreCase };
-                        }
-                    }
-                    else if (opName is null)
-                    {
-                        opName = opProp.Name;
-                        opValue = opProp.Value.Clone();
-                    }
-                }
+                case OrKey:
+                    parts.Add(new FilterCondition { Or = ReadGroup(property.Value, options) });
+                    break;
 
-                if (opName is not null)
-                {
-                    return new FilterCondition
+                case NotKey:
+                    parts.Add(new FilterCondition
                     {
-                        Path = path,
-                        Op = opName,
-                        Value = opValue,
-                        Options = condOptions
-                    };
-                }
+                        Not = property.Value.ValueKind == JsonValueKind.Object
+                            ? ReadFromElement(property.Value, options) ?? new FilterCondition { And = [] }
+                            : throw new JsonException("'not' takes a condition object."),
+                    });
+                    break;
+
+                default:
+                    parts.AddRange(ReadFieldConditions(property.Name, property.Value, options));
+                    break;
+            }
+        }
+
+        return parts.Count switch
+        {
+            0 => null,
+            1 => parts[0],
+            _ => new FilterCondition { And = parts },
+        };
+    }
+
+    private static List<FilterCondition> ReadGroup(JsonElement element, JsonSerializerOptions options)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+            throw new JsonException("'and' and 'or' take an array of conditions.");
+
+        var group = new List<FilterCondition>();
+
+        foreach (var item in element.EnumerateArray())
+        {
+            var condition = ReadFromElement(item, options);
+
+            // An empty object inside a group is kept as an empty group so the binder can refuse it.
+            group.Add(condition ?? new FilterCondition { And = [] });
+        }
+
+        return group;
+    }
+
+    /// <summary>The conditions one path carries: one per operator key, plus an <c>any</c> when present.</summary>
+    private static IEnumerable<FilterCondition> ReadFieldConditions(string path, JsonElement operand, JsonSerializerOptions options)
+    {
+        if (operand.ValueKind != JsonValueKind.Object)
+        {
+            yield return new FilterCondition { Path = path, Op = "eq", Value = operand.Clone() };
+            yield break;
+        }
+
+        FilterConditionOptions? conditionOptions = null;
+        var operators = new List<(string Op, JsonElement Value)>();
+        FilterCondition? any = null;
+
+        foreach (var property in operand.EnumerateObject())
+        {
+            if (property.Name == OptionsKey)
+            {
+                conditionOptions = ReadOptions(property.Value);
+                continue;
             }
 
-            // Fallback: bare value with implicit "eq"
-            return new FilterCondition
+            if (property.Name == AnyKey && property.Value.ValueKind == JsonValueKind.Object)
             {
-                Path = path,
-                Op = "eq",
-                Value = opObject.Clone()
-            };
+                any = ReadFromElement(property.Value, options) ?? new FilterCondition { And = [] };
+                continue;
+            }
+
+            operators.Add((property.Name, property.Value.Clone()));
         }
 
-        return new FilterCondition();
+        // A bare operand object with no operator key is an implicit eq on the object; the
+        // binder refuses it as an invalid operand unless it is a variable wrapper.
+        if (operators.Count == 0 && any is null)
+        {
+            yield return new FilterCondition { Path = path, Op = "eq", Value = operand.Clone(), Options = conditionOptions };
+            yield break;
+        }
+
+        foreach (var (op, value) in operators)
+            yield return new FilterCondition { Path = path, Op = op, Value = value, Options = conditionOptions };
+
+        if (any is not null)
+            yield return new FilterCondition { Path = path, Any = any, Options = conditionOptions };
+    }
+
+    private static FilterConditionOptions ReadOptions(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return new FilterConditionOptions { Unknown = ["options"] };
+
+        var ignoreCase = false;
+        List<string>? unknown = null;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Name == "ignoreCase" && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                ignoreCase = property.Value.ValueKind == JsonValueKind.True;
+            else
+                (unknown ??= []).Add(property.Name);
+        }
+
+        return new FilterConditionOptions { IgnoreCase = ignoreCase, Unknown = unknown };
     }
 
     public override void Write(Utf8JsonWriter writer, FilterCondition value, JsonSerializerOptions options)
     {
         writer.WriteStartObject();
+        WriteBody(writer, value, options);
+        writer.WriteEndObject();
+    }
 
+    internal static void WriteBody(Utf8JsonWriter writer, FilterCondition value, JsonSerializerOptions options)
+    {
         if (value.And is not null)
         {
-            writer.WritePropertyName("and");
-            writer.WriteStartArray();
-            foreach (var c in value.And)
-                JsonSerializer.Serialize(writer, c, options);
-            writer.WriteEndArray();
+            writer.WritePropertyName(AndKey);
+            WriteGroup(writer, value.And, options);
         }
         else if (value.Or is not null)
         {
-            writer.WritePropertyName("or");
-            writer.WriteStartArray();
-            foreach (var c in value.Or)
-                JsonSerializer.Serialize(writer, c, options);
-            writer.WriteEndArray();
+            writer.WritePropertyName(OrKey);
+            WriteGroup(writer, value.Or, options);
         }
         else if (value.Not is not null)
         {
-            writer.WritePropertyName("not");
+            writer.WritePropertyName(NotKey);
             JsonSerializer.Serialize(writer, value.Not, options);
         }
-        else if (value.Path is not null && value.Op is not null)
+        else if (value.Path is not null)
         {
             writer.WritePropertyName(value.Path);
             writer.WriteStartObject();
-            writer.WritePropertyName(value.Op);
-            if (value.Value.HasValue)
-                value.Value.Value.WriteTo(writer);
-            else
-                writer.WriteNullValue();
+
+            if (value.Any is not null)
+            {
+                writer.WritePropertyName(AnyKey);
+                JsonSerializer.Serialize(writer, value.Any, options);
+            }
+            else if (value.Op is not null)
+            {
+                writer.WritePropertyName(value.Op);
+
+                if (value.Value.HasValue)
+                    value.Value.Value.WriteTo(writer);
+                else
+                    writer.WriteNullValue();
+            }
+
             if (value.Options?.IgnoreCase == true)
             {
-                writer.WritePropertyName("options");
+                writer.WritePropertyName(OptionsKey);
                 writer.WriteStartObject();
                 writer.WriteBoolean("ignoreCase", true);
                 writer.WriteEndObject();
             }
+
             writer.WriteEndObject();
         }
+    }
 
-        writer.WriteEndObject();
+    private static void WriteGroup(Utf8JsonWriter writer, IReadOnlyList<FilterCondition> group, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+
+        foreach (var condition in group)
+            JsonSerializer.Serialize(writer, condition, options);
+
+        writer.WriteEndArray();
     }
 }
 
@@ -229,67 +298,16 @@ internal sealed class MatchStageConverter : JsonConverter<MatchStage>
     public override MatchStage? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var doc = JsonDocument.ParseValue(ref reader);
-        var root = doc.RootElement;
 
-        if (root.TryGetProperty("and", out var andEl))
-        {
-            var conditions = andEl.EnumerateArray()
-                .Select(e => FilterConditionConverter.ReadFromElement(e, options))
-                .ToList();
-            return new MatchStage { And = conditions };
-        }
-
-        if (root.TryGetProperty("or", out var orEl))
-        {
-            var conditions = orEl.EnumerateArray()
-                .Select(e => FilterConditionConverter.ReadFromElement(e, options))
-                .ToList();
-            return new MatchStage { Or = conditions };
-        }
-
-        if (root.TryGetProperty("not", out var notEl))
-        {
-            return new MatchStage { Not = FilterConditionConverter.ReadFromElement(notEl, options) };
-        }
-
-        // Empty object {} means "match everything" — all properties remain null.
-        if (!root.EnumerateObject().Any())
-            return new MatchStage();
-
-        // Single field condition
-        return new MatchStage { Condition = FilterConditionConverter.ReadFromElement(root, options) };
+        return new MatchStage { Condition = FilterConditionConverter.ReadFromElement(doc.RootElement, options) };
     }
 
     public override void Write(Utf8JsonWriter writer, MatchStage value, JsonSerializerOptions options)
     {
         writer.WriteStartObject();
 
-        if (value.And is not null)
-        {
-            writer.WritePropertyName("and");
-            writer.WriteStartArray();
-            foreach (var c in value.And)
-                JsonSerializer.Serialize(writer, c, options);
-            writer.WriteEndArray();
-        }
-        else if (value.Or is not null)
-        {
-            writer.WritePropertyName("or");
-            writer.WriteStartArray();
-            foreach (var c in value.Or)
-                JsonSerializer.Serialize(writer, c, options);
-            writer.WriteEndArray();
-        }
-        else if (value.Not is not null)
-        {
-            writer.WritePropertyName("not");
-            JsonSerializer.Serialize(writer, value.Not, options);
-        }
-        else if (value.Condition is not null)
-        {
-            // Inline the single condition's fields directly into this object
-            JsonSerializer.Serialize(writer, value.Condition, options);
-        }
+        if (value.Condition is not null)
+            FilterConditionConverter.WriteBody(writer, value.Condition, options);
 
         writer.WriteEndObject();
     }

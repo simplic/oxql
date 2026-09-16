@@ -1,0 +1,188 @@
+namespace OxQL.Core.Models;
+
+/// <summary>
+/// The engine's configuration, bound from the host's <c>OxQL</c> section. Every limit has a
+/// default and is published in the schema's <c>limits</c>; every execution value has a
+/// ceiling the engine clamps to. The flat limit members mirror <see cref="Limits"/> for the
+/// callers that read them before the section was nested.
+/// </summary>
+public sealed class OxQLOptions
+{
+    /// <summary>Contract 1 compatibility: a request without the contract header is contract 1 while on.</summary>
+    public CompatOptions Compat { get; set; } = new();
+
+    /// <summary>The explain endpoint.</summary>
+    public ExplainOptions Explain { get; set; } = new();
+
+    /// <summary>Every cap a request is checked against.</summary>
+    public LimitOptions Limits { get; set; } = new();
+
+    /// <summary>Time and memory bounds on the aggregate.</summary>
+    public ExecutionOptions Execution { get; set; } = new();
+
+    /// <summary>How operands are encoded for members whose storage is not uniform.</summary>
+    public RepresentationOptions Representation { get; set; } = new();
+
+    /// <summary>In-process caches.</summary>
+    public CacheOptions Cache { get; set; } = new();
+
+    /// <summary>Cursor signing.</summary>
+    public CursorOptions Cursor { get; set; } = new();
+
+    /// <summary>Target entity namespace to the service key a remote resolve is sent to; a namespace without an entry is its own key.</summary>
+    public Dictionary<string, string> RemoteServices { get; set; } = new(StringComparer.Ordinal);
+
+    /// <inheritdoc cref="LimitOptions.MaxPageSize"/>
+    public int MaxPageSize { get => Limits.MaxPageSize; set => Limits.MaxPageSize = value; }
+
+    /// <inheritdoc cref="LimitOptions.DefaultPageSize"/>
+    public int DefaultPageSize { get => Limits.DefaultPageSize; set => Limits.DefaultPageSize = value; }
+
+    /// <inheritdoc cref="LimitOptions.MaxPipelineStages"/>
+    public int MaxPipelineStages { get => Limits.MaxPipelineStages; set => Limits.MaxPipelineStages = value; }
+
+    /// <inheritdoc cref="LimitOptions.MaxLookupStages"/>
+    public int MaxLookupStages { get => Limits.MaxLookupStages; set => Limits.MaxLookupStages = value; }
+
+    /// <inheritdoc cref="LimitOptions.MaxUnwindStages"/>
+    public int MaxUnwindStages { get => Limits.MaxUnwindStages; set => Limits.MaxUnwindStages = value; }
+
+    /// <inheritdoc cref="LimitOptions.MaxGroupFields"/>
+    public int MaxGroupFields { get => Limits.MaxGroupFields; set => Limits.MaxGroupFields = value; }
+
+    /// <inheritdoc cref="LimitOptions.MaxProjectionFields"/>
+    public int MaxProjectionFields { get => Limits.MaxProjectionFields; set => Limits.MaxProjectionFields = value; }
+
+    /// <inheritdoc cref="LimitOptions.RegexMaxLength"/>
+    public int RegexMaxLength { get => Limits.RegexMaxLength; set => Limits.RegexMaxLength = value; }
+}
+
+/// <summary>Contract 1 compatibility.</summary>
+public sealed class CompatOptions
+{
+    /// <summary>Whether a request without the contract header is treated as contract 1. On for the compat release.</summary>
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>The explain endpoint.</summary>
+public sealed class ExplainOptions
+{
+    /// <summary>Whether <c>POST /oxql/explain</c> answers; 404 otherwise.</summary>
+    public bool Enabled { get; set; }
+}
+
+/// <summary>Every cap a request is checked against; each is published in the schema's <c>limits</c>.</summary>
+public sealed class LimitOptions
+{
+    /// <summary>The largest page a request may ask for.</summary>
+    public int MaxPageSize { get; set; } = 500;
+
+    /// <summary>The page size a request that names none gets, with or without a page stage.</summary>
+    public int DefaultPageSize { get; set; } = 100;
+
+    /// <summary>The longest pipeline, counting every caller stage; the engine's scope stage does not count.</summary>
+    public int MaxPipelineStages { get; set; } = 20;
+
+    /// <summary>How many lookup stages one pipeline may carry.</summary>
+    public int MaxLookupStages { get; set; } = 5;
+
+    /// <summary>How many unwind stages one pipeline may carry.</summary>
+    public int MaxUnwindStages { get; set; } = 5;
+
+    /// <summary>How many resolve stages one pipeline may carry.</summary>
+    public int MaxResolveStages { get; set; } = 2;
+
+    /// <summary>How many keys and aggregates one group stage may carry.</summary>
+    public int MaxGroupFields { get; set; } = 20;
+
+    /// <summary>How many fields one projection may name.</summary>
+    public int MaxProjectionFields { get; set; } = 500;
+
+    /// <summary>How many leaf conditions one request may carry, lookup and resolve filters included.</summary>
+    public int MaxConditions { get; set; } = 200;
+
+    /// <summary>How many variables one request may bind.</summary>
+    public int MaxVariables { get; set; } = 64;
+
+    /// <summary>The largest <c>offset</c> a page may skip to; beyond it a cursor is needed.</summary>
+    public int MaxOffset { get; set; } = 5_000;
+
+    /// <summary>The count above which <c>totalCount</c> is reported as the cap with <c>totalCountCapped</c>.</summary>
+    public int CountCap { get; set; } = 100_000;
+
+    /// <summary>The most ids a semi-join may substitute; a larger set is refused, never truncated.</summary>
+    public int MaxSemiJoinIds { get; set; } = 10_000;
+
+    /// <summary>How many keys one remote resolve call carries.</summary>
+    public int ResolveKeyChunk { get; set; } = 500;
+
+    /// <summary>The most keys one request resolves remotely; chunks beyond it are not fetched.</summary>
+    public int MaxResolveKeys { get; set; } = 2_000;
+
+    /// <summary>The largest request body.</summary>
+    public int MaxRequestBytes { get; set; } = 262_144;
+
+    /// <summary>The most queries one batch may carry.</summary>
+    public int MaxBatchQueries { get; set; } = 10;
+
+    /// <summary>The longest regex pattern a filter operand may carry, in characters.</summary>
+    public int RegexMaxLength { get; set; } = 200;
+
+    /// <summary>The most rows one lookup returns per parent.</summary>
+    public int MaxLookupLimit { get; set; } = 100;
+}
+
+/// <summary>Time and memory bounds on the aggregate.</summary>
+public sealed class ExecutionOptions
+{
+    /// <summary>The ceiling <see cref="MaxTimeMs"/> is clamped to.</summary>
+    public const int MaxTimeCeilingMs = 60_000;
+
+    /// <summary><c>maxTimeMS</c> on every aggregate; a timeout is 504 <c>QUERY_TIMEOUT</c>.</summary>
+    public int MaxTimeMs { get; set; } = 10_000;
+
+    /// <summary>The budget of one remote resolve call.</summary>
+    public int ResolveTimeoutMs { get; set; } = 2_000;
+
+    /// <summary><c>allowDiskUse</c> on every aggregate; null leaves the server's default (spill allowed on 6.0+).</summary>
+    public bool? AllowDiskUse { get; set; }
+
+    /// <summary>The effective <c>maxTimeMS</c>: the configured value under the ceiling.</summary>
+    public int EffectiveMaxTimeMs => Math.Clamp(MaxTimeMs, 1, MaxTimeCeilingMs);
+
+    /// <summary>The effective resolve budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
+    public int EffectiveResolveTimeoutMs => Math.Clamp(ResolveTimeoutMs, 1, EffectiveMaxTimeMs);
+}
+
+/// <summary>How operands are encoded for members whose storage is not uniform.</summary>
+public sealed class RepresentationOptions
+{
+    /// <summary>Whether a guid operand also matches legacy subtype 3 and string storage. Off: this fleet has stored standard guids since 2022.</summary>
+    public bool GuidTolerant { get; set; }
+
+    /// <summary><c>tolerant</c> matches decimals stored as Decimal128 and as strings; <c>typed</c> Decimal128 only, after the migration.</summary>
+    public string DecimalMode { get; set; } = "tolerant";
+
+    /// <summary>Whether decimal operands are matched in both storage forms.</summary>
+    public bool DecimalTolerant => !string.Equals(DecimalMode, "typed", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>In-process caches.</summary>
+public sealed class CacheOptions
+{
+    /// <summary>How long a resolved remote row stays cached.</summary>
+    public int ResolveTtlSeconds { get; set; } = 60;
+
+    /// <summary>The most resolved rows the cache holds.</summary>
+    public int ResolveCacheMaxEntries { get; set; } = 50_000;
+
+    /// <summary>How long an organisation's addon definitions stay cached on replicas that did not write them.</summary>
+    public int AddonDefinitionTtlSeconds { get; set; } = 30;
+}
+
+/// <summary>Cursor signing.</summary>
+public sealed class CursorOptions
+{
+    /// <summary>The secret cursors are signed with; the base package derives it from the host's auth token. The engine refuses to run without one.</summary>
+    public string? SigningKey { get; set; }
+}

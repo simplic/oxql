@@ -1,432 +1,154 @@
-using System.Collections;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using OxQL.AspNetCore.Models;
-using OxQL.AspNetCore.TypeEnrichment;
+using OxQL.Core.Binding;
+using OxQL.Core.Engine;
 using OxQL.Core.Models;
-using OxQL.Core.Registration;
 
 namespace OxQL.AspNetCore.Controllers;
 
-/// <summary>
-/// API controller that exposes OxQL query execution over HTTP.
-/// </summary>
+/// <summary>The query surface: <c>POST query</c>, <c>POST batch</c>, <c>GET health</c>, <c>POST explain</c>.</summary>
 [ApiController]
 [Route("[controller]")]
 public class OxQLController : ControllerBase
 {
-    private readonly IOxQLQueryService _queryService;
-    private readonly OxQLEndpointOptions _options;
-    private readonly ILogger<OxQLController> _logger;
-    private readonly OxQLTypeRegistry _typeRegistry;
-    private readonly IEnumerable<IOxQLTypeEnricher> _typeEnrichers;
+    private readonly IOxQLQueryService queryService;
+    private readonly OxQLOptions options;
+    private readonly ILogger<OxQLController> logger;
 
-    public OxQLController(
-        IOxQLQueryService queryService,
-        IOptions<OxQLEndpointOptions> options,
-        ILogger<OxQLController> logger,
-        OxQLTypeRegistry typeRegistry,
-        IEnumerable<IOxQLTypeEnricher> typeEnrichers)
+    public OxQLController(IOxQLQueryService queryService, OxQLOptions options, ILogger<OxQLController> logger)
     {
-        _queryService   = queryService   ?? throw new ArgumentNullException(nameof(queryService));
-        _options        = options?.Value  ?? new OxQLEndpointOptions();
-        _logger         = logger          ?? throw new ArgumentNullException(nameof(logger));
-        _typeRegistry   = typeRegistry    ?? throw new ArgumentNullException(nameof(typeRegistry));
-        _typeEnrichers  = typeEnrichers   ?? throw new ArgumentNullException(nameof(typeEnrichers));
+        this.queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    /// <summary>
-    /// Executes an OxQL query and returns paginated results.
-    /// </summary>
-    /// <param name="request">The query request body.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>
-    /// 200 OK with query results, 400 Bad Request for validation errors,
-    /// or 500 Internal Server Error for unexpected failures.
-    /// </returns>
+    /// <summary>Executes one query.</summary>
     [HttpPost("query")]
-    [ProducesResponseType(typeof(OxQLQueryResult), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status500InternalServerError)]
-    public async Task<IActionResult> Query(
-        [FromBody] QueryRequest request,
-        CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(QueryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status504GatewayTimeout)]
+    public async Task<IActionResult> Query([FromBody] QueryRequest request, CancellationToken cancellationToken)
     {
-        if (!_typeRegistry.TryGet(request.EntityType, out _))
+        if (TooLarge() is { } tooLarge)
+            return tooLarge.ToActionResult();
+
+        var outcome = await queryService.ExecuteAsync(request, cancellationToken);
+
+        return outcome switch
         {
-            return BadRequest(new OxQLErrorResponse
-            {
-                Type = "validation_error",
-                Title = "Query validation failed.",
-                Status = StatusCodes.Status400BadRequest,
-                Errors =
-                [
-                    new OxQLFieldError
-                    {
-                        Code = "UNKNOWN_TYPE",
-                        Message = $"No OxQL type registration found for entity type '{request.EntityType}'."
-                    }
-                ]
-            });
-        }
-
-        try
-        {
-            var result = await _queryService.ExecuteAsync(request, cancellationToken);
-            return Ok(result);
-        }
-        catch (QueryValidationException ex)
-        {
-            _logger.LogWarning("Query validation failed with {ErrorCount} error(s): {FirstError}",
-                ex.Errors.Count, ex.Errors[0].Message);
-
-            return BadRequest(new OxQLErrorResponse
-            {
-                Type = "validation_error",
-                Title = "Query validation failed.",
-                Status = StatusCodes.Status400BadRequest,
-                Errors = ex.Errors.Select(OxQLFieldError.FromValidationError).ToList()
-            });
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Client disconnected – nothing to return
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error executing OxQL query for entity type '{EntityType}'",
-                request.EntityType);
-
-            var response = new OxQLErrorResponse
-            {
-                Type = "internal_error",
-                Title = "An unexpected error occurred while executing the query.",
-                Status = StatusCodes.Status500InternalServerError
-            };
-
-            if (_options.IncludeErrorDetails)
-            {
-                response = response with
-                {
-                    Errors =
-                    [
-                        new OxQLFieldError
-                        {
-                            Code = "INTERNAL_ERROR",
-                            Message = ex.Message
-                        }
-                    ]
-                };
-            }
-
-            return StatusCode(StatusCodes.Status500InternalServerError, response);
-        }
-    }
-
-    /// <summary>
-    /// Returns all registered OxQL entity types and their public property structure.
-    /// </summary>
-    [HttpGet("types")]
-    [AllowAnonymous]
-    [ProducesResponseType(typeof(IReadOnlyList<OxQLTypeDescriptor>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Types(CancellationToken cancellationToken)
-    {
-        var descriptors = new List<OxQLTypeDescriptor>();
-
-        foreach (var r in _typeRegistry.Registrations.OrderBy(r => r.TypeName))
-        {
-            var properties = BuildProperties(r.ClrType).ToList();
-
-            if (r.Extendable && _typeEnrichers.Any())
-            {
-                var ctx = new OxQLTypeEnrichmentContext(HttpContext, r);
-                foreach (var enricher in _typeEnrichers)
-                {
-                    try
-                    {
-                        var extra = await enricher.GetPropertiesAsync(ctx, cancellationToken);
-                        if (extra is not null)
-                            properties.AddRange(extra);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex,
-                            "Type enricher {EnricherType} failed for entity type '{TypeName}' and was skipped.",
-                            enricher.GetType().Name, r.TypeName);
-                    }
-                }
-            }
-
-            descriptors.Add(new OxQLTypeDescriptor
-            {
-                TypeName       = r.TypeName,
-                CollectionName = r.CollectionName,
-                DatabaseName   = r.DatabaseName,
-                ClrType        = r.ClrType?.FullName,
-                Properties     = properties
-            });
-        }
-
-        return Ok(descriptors);
-    }
-
-    /// <summary>
-    /// Health-check endpoint that confirms the OxQL query service is available.
-    /// Always reachable, even when the endpoint is protected with authorization,
-    /// so infrastructure probes do not require credentials.
-    /// </summary>
-    [HttpGet("health")]
-    [AllowAnonymous]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    public IActionResult Health()
-    {
-        return Ok(new { status = "healthy", service = "oxql" });
-    }
-
-    /// <summary>
-    /// Returns the generated backend pipeline for a query without executing it.
-    /// Only available when <see cref="OxQLEndpointOptions.EnableExplain"/> is <c>true</c>.
-    /// </summary>
-    [HttpPost("explain")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(OxQLErrorResponse), StatusCodes.Status500InternalServerError)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Explain(
-        [FromBody] QueryRequest request,
-        CancellationToken cancellationToken)
-    {
-        if (!_options.EnableExplain)
-            return NotFound();
-
-        try
-        {
-            var stages = await _queryService.ExplainAsync(request, cancellationToken);
-            return Ok(new { pipeline = stages });
-        }
-        catch (QueryValidationException ex)
-        {
-            return BadRequest(new OxQLErrorResponse
-            {
-                Type = "validation_error",
-                Title = "Query validation failed.",
-                Status = StatusCodes.Status400BadRequest,
-                Errors = ex.Errors.Select(OxQLFieldError.FromValidationError).ToList()
-            });
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error explaining OxQL query for entity type '{EntityType}'",
-                request.EntityType);
-
-            var response = new OxQLErrorResponse
-            {
-                Type = "internal_error",
-                Title = "An unexpected error occurred while explaining the query.",
-                Status = StatusCodes.Status500InternalServerError
-            };
-
-            if (_options.IncludeErrorDetails)
-            {
-                response = response with
-                {
-                    Errors =
-                    [
-                        new OxQLFieldError
-                        {
-                            Code = "INTERNAL_ERROR",
-                            Message = ex.Message
-                        }
-                    ]
-                };
-            }
-
-            return StatusCode(StatusCodes.Status500InternalServerError, response);
-        }
-    }
-
-    // ── helpers ────────────────────────────────────────────────────────────────
-
-    private const int MaxPropertyDepth = 8;
-
-    /// <summary>
-    /// Builds a list of <see cref="OxQLPropertyDescriptor"/> entries for all
-    /// public readable instance properties of <paramref name="clrType"/>.
-    /// Recursion is guarded by <paramref name="visited"/> to break reference cycles
-    /// and by <paramref name="depth"/> to prevent excessively deep output.
-    /// </summary>
-    private static IReadOnlyList<OxQLPropertyDescriptor> BuildProperties(
-        Type? clrType,
-        HashSet<Type>? visited = null,
-        int depth = 0)
-    {
-        if (clrType is null || depth >= MaxPropertyDepth) return [];
-
-        visited ??= [];
-        if (!visited.Add(clrType)) return [];   // cycle guard
-
-        return clrType
-            .GetProperties(
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.Instance)
-            .Where(p => p.CanRead)
-            .Select(p => DescribeProperty(p.Name, p.PropertyType, visited, depth + 1))
-            .ToList();
-    }
-
-    private static OxQLPropertyDescriptor DescribeProperty(
-        string name,
-        Type type,
-        HashSet<Type> visited,
-        int depth)
-    {
-        // Strip Nullable<T>
-        bool outerNullable = false;
-        var inner = Nullable.GetUnderlyingType(type);
-        if (inner is not null)
-        {
-            outerNullable = true;
-            type = inner;
-        }
-        else if (!type.IsValueType)
-        {
-            outerNullable = true;   // reference types are nullable by convention
-        }
-
-        // ── Dictionary<K,V> ────────────────────────────────────────────────
-        if (TryDictionaryTypes(type, out var keyType, out var valType))
-        {
-            var valueDesc = DescribeProperty("value", valType!, visited, depth);
-            return new OxQLPropertyDescriptor
-            {
-                Name     = name,
-                Kind     = "dictionary",
-                Nullable = outerNullable,
-                KeyKind  = ScalarKind(keyType!) ?? keyType!.Name,
-                Items    = valueDesc with { Name = "value" }
-            };
-        }
-
-        // ── Array / collection ─────────────────────────────────────────────
-        if (TryCollectionElement(type, out var elemType))
-        {
-            var itemDesc = DescribeProperty("item", elemType!, visited, depth);
-            return new OxQLPropertyDescriptor
-            {
-                Name     = name,
-                Kind     = "array",
-                Nullable = outerNullable,
-                Items    = itemDesc with { Name = "item" }
-            };
-        }
-
-        // ── Scalar ─────────────────────────────────────────────────────────
-        var scalarKind = ScalarKind(type);
-        if (scalarKind is not null)
-        {
-            return new OxQLPropertyDescriptor
-            {
-                Name     = name,
-                Kind     = scalarKind,
-                Nullable = outerNullable
-            };
-        }
-
-        // ── Complex object — recurse ───────────────────────────────────────
-        var childProps = BuildProperties(type, visited, depth);
-        return new OxQLPropertyDescriptor
-        {
-            Name       = name,
-            Kind       = "object",
-            Nullable   = outerNullable,
-            Properties = childProps.Count > 0 ? childProps : null
+            QueryOutcome.Success success => Ok(success.Result),
+            QueryOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
     }
 
-    /// <summary>Returns a JSON-style scalar kind name, or <c>null</c> if the type is not scalar.</summary>
-    private static string? ScalarKind(Type t)
+    /// <summary>Executes several queries in order; always 200, each entry carries its own outcome.</summary>
+    [HttpPost("batch")]
+    [ProducesResponseType(typeof(BatchResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Batch([FromBody] BatchRequest batch, CancellationToken cancellationToken)
     {
-        if (t == typeof(string))             return "string";
-        if (t == typeof(bool))               return "boolean";
-        if (t == typeof(byte)   ||
-            t == typeof(short)  ||
-            t == typeof(int)    ||
-            t == typeof(long)   ||
-            t == typeof(float)  ||
-            t == typeof(double) ||
-            t == typeof(decimal))            return "number";
-        if (t == typeof(Guid))               return "Guid";
-        if (t == typeof(DateTime))           return "DateTime";
-        if (t == typeof(DateTimeOffset))     return "DateTimeOffset";
-        if (t == typeof(TimeSpan))           return "TimeSpan";
-        if (t == typeof(object))             return "object";
-        return null;
+        if (TooLarge() is { } tooLarge)
+            return tooLarge.ToActionResult();
+
+        if (batch.Queries.Count > options.Limits.MaxBatchQueries)
+            return Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.BatchTooLarge,
+                Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
+            }]).ToActionResult();
+
+        var results = new List<JsonNode?>(batch.Queries.Count);
+
+        foreach (var query in batch.Queries)
+        {
+            var outcome = await queryService.ExecuteAsync(query, batch.MaxTimeMs, cancellationToken);
+
+            results.Add(outcome switch
+            {
+                QueryOutcome.Success success => JsonSerializer.SerializeToNode(success.Result, JsonOptions.Wire),
+                QueryOutcome.Refused refused => JsonSerializer.SerializeToNode(Log(refused.Refusal), JsonOptions.Wire),
+                _ => null,
+            });
+        }
+
+        return Ok(new BatchResponse { Results = results });
     }
 
-    private static bool TryCollectionElement(Type type, out Type? elementType)
+    /// <summary>The engine version, contract and capabilities. Always reachable.</summary>
+    [HttpGet("health")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public IActionResult Health([FromServices] IQueryEngine engine)
     {
-        // T[]
-        if (type.IsArray)
+        var remote = engine is IEngineFeatures features && features.RemoteResolve;
+
+        return Ok(new
         {
-            elementType = type.GetElementType()!;
-            return true;
-        }
-
-        if (type.IsGenericType)
-        {
-            var def  = type.GetGenericTypeDefinition();
-            var args = type.GetGenericArguments();
-
-            // Skip Dictionary — handled separately
-            if (def == typeof(Dictionary<,>)         ||
-                def == typeof(IDictionary<,>)         ||
-                def == typeof(IReadOnlyDictionary<,>))
+            status = "healthy",
+            service = "oxql",
+            engine = new
             {
-                elementType = null;
-                return false;
-            }
-
-            // IList<T>, List<T>, IEnumerable<T>, ICollection<T>, HashSet<T>, …
-            if (args.Length == 1 &&
-                typeof(System.Collections.IEnumerable).IsAssignableFrom(type))
-            {
-                elementType = args[0];
-                return true;
-            }
-        }
-
-        elementType = null;
-        return false;
+                version = typeof(OxQLController).Assembly.GetName().Version?.ToString(),
+                contract = EngineCapabilities.Contract,
+            },
+            capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
+        });
     }
 
-    private static bool TryDictionaryTypes(Type type, out Type? keyType, out Type? valueType)
+    /// <summary>The bound pipeline and the emitted stages, without executing; 404 unless enabled.</summary>
+    [HttpPost("explain")]
+    [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Explain([FromBody] QueryRequest request, CancellationToken cancellationToken)
     {
-        if (type.IsGenericType)
+        if (!options.Explain.Enabled)
+            return NotFound();
+
+        var outcome = await queryService.ExplainAsync(request, cancellationToken);
+
+        return outcome switch
         {
-            var def  = type.GetGenericTypeDefinition();
-            var args = type.GetGenericArguments();
+            ExplainOutcome.Success success => Ok(success.Result),
+            ExplainOutcome.Refused refused => refused.Refusal.ToActionResult(),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
+    }
 
-            if ((def == typeof(Dictionary<,>)          ||
-                 def == typeof(IDictionary<,>)          ||
-                 def == typeof(IReadOnlyDictionary<,>)) &&
-                args.Length == 2)
-            {
-                keyType   = args[0];
-                valueType = args[1];
-                return true;
-            }
-        }
+    private Refusal? TooLarge()
+    {
+        var length = Request.ContentLength;
 
-        keyType = valueType = null;
-        return false;
+        return length is { } bytes && bytes > options.Limits.MaxRequestBytes
+            ? Refusal.RequestTooLarge((int)Math.Min(bytes, int.MaxValue), options.Limits.MaxRequestBytes)
+            : null;
+    }
+
+    private Refusal Log(Refusal refusal)
+    {
+        if (refusal.Status >= 500)
+            logger.LogError("OxQL refusal {Type}: {Title}", refusal.Type, refusal.Title);
+        else
+            logger.LogInformation("OxQL refusal {Type} {Code}: {Message}", refusal.Type, refusal.Errors?[0].Code, refusal.Errors?[0].Message);
+
+        return refusal;
     }
 }
 
+/// <summary>The serializer options the wire uses.</summary>
+public static class JsonOptions
+{
+    /// <summary>camelCase, nulls omitted.</summary>
+    public static readonly JsonSerializerOptions Wire = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+}

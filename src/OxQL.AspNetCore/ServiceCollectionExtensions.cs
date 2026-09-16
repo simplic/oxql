@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using OxQL.AspNetCore.Authorization;
 using OxQL.AspNetCore.Controllers;
+using OxQL.AspNetCore.Resolve;
 using OxQL.AspNetCore.Scope;
 
 namespace OxQL.AspNetCore;
@@ -32,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
+        services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();
 
         services.AddOptions<Microsoft.AspNetCore.Mvc.JsonOptions>()
             .Configure<IEnumerable<JsonConverter>>((opts, converters) =>

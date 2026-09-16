@@ -373,6 +373,17 @@
           }
         },
         {
+          "name": "vehicleId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "vehicle.vehicle",
+            "field": "id",
+            "joinable": false,
+            "inferred": false
+          }
+        },
+        {
           "name": "missingId",
           "kind": "guid",
           "nullable": false,

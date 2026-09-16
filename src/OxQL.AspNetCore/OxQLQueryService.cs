@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OxQL.AspNetCore.Batch;
 using OxQL.AspNetCore.Compat;
 using OxQL.AspNetCore.Scope;
 using OxQL.Core.Binding;
@@ -74,6 +75,36 @@ public sealed class OxQLQueryService : IOxQLQueryService
         }
 
         return await engine.ExecuteAsync(request, context, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+
+        if (batch.Queries.Count > options.Limits.MaxBatchQueries)
+            return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.BatchTooLarge,
+                Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
+            }]));
+
+        var results = new List<System.Text.Json.Nodes.JsonNode?>(batch.Queries.Count);
+
+        // Sequential per host: the parallelism of a batch is across services, not within one.
+        foreach (var query in batch.Queries)
+        {
+            var outcome = await ExecuteAsync(query, batch.MaxTimeMs, cancellationToken);
+
+            results.Add(outcome switch
+            {
+                QueryOutcome.Success success => System.Text.Json.JsonSerializer.SerializeToNode(success.Result, Controllers.JsonOptions.Wire),
+                QueryOutcome.Refused refused => System.Text.Json.JsonSerializer.SerializeToNode(refused.Refusal, Controllers.JsonOptions.Wire),
+                _ => null,
+            });
+        }
+
+        return new BatchOutcome.Success(new BatchResponse { Results = results });
     }
 
     /// <inheritdoc/>

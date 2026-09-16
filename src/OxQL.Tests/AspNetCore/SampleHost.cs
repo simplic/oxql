@@ -45,8 +45,12 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
 
     public EntityModel Model { get; init; } = BindHost.Probe;
 
+    /// <summary>The host environment; Development by default, which is one of the strict ones.</summary>
+    public string Environment { get; init; } = "Development";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment(Environment);
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
         {

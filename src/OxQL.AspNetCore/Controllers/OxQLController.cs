@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using OxQL.AspNetCore.Batch;
 using OxQL.AspNetCore.Models;
-using OxQL.Core.Binding;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 
@@ -59,41 +58,62 @@ public class OxQLController : ControllerBase
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status413PayloadTooLarge)]
     public async Task<IActionResult> Batch([FromBody] BatchRequest batch, CancellationToken cancellationToken)
     {
-        if (batch.Queries.Count > options.Limits.MaxBatchQueries)
-            return Log(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.BatchTooLarge,
-                Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
-            }])).ToActionResult();
+        var outcome = await queryService.BatchAsync(batch, cancellationToken);
 
-        var results = new List<JsonNode?>(batch.Queries.Count);
-
-        foreach (var query in batch.Queries)
+        return outcome switch
         {
-            var outcome = await queryService.ExecuteAsync(query, batch.MaxTimeMs, cancellationToken);
-
-            results.Add(outcome switch
-            {
-                QueryOutcome.Success success => JsonSerializer.SerializeToNode(success.Result, JsonOptions.Wire),
-                QueryOutcome.Refused refused => JsonSerializer.SerializeToNode(Log(refused.Refusal), JsonOptions.Wire),
-                _ => null,
-            });
-        }
-
-        return Ok(new BatchResponse { Results = results });
+            BatchOutcome.Success success => Ok(success.Response),
+            BatchOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
     }
 
-    /// <summary>The engine version, contract and capabilities. Always reachable.</summary>
+    /// <summary>
+    /// The engine version, contract and capabilities, and the state of every service the model
+    /// references remotely (configured on this host, reachable right now). Always reachable.
+    /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public IActionResult Health([FromServices] IQueryEngine engine)
+    public async Task<IActionResult> Health([FromServices] IQueryEngine engine, [FromServices] IEntityModelProvider models, [FromServices] IRemoteQueryClient? client, CancellationToken cancellationToken)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
+        List<RemoteServiceState>? services = null;
+
+        if (client is not null)
+        {
+            services = [];
+
+            foreach (var service in ModelOrNull(models) is { } model ? RemoteReferences.ServicesOf(model) : [])
+            {
+                var configured = client.IsConfigured(service);
+                bool? reachable = null;
+
+                if (configured)
+                {
+                    using var probe = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+                    probe.CancelAfter(TimeSpan.FromSeconds(2));
+
+                    try
+                    {
+                        reachable = await client.IsReachableAsync(service, probe.Token);
+                    }
+                    catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        reachable = false;
+                    }
+                }
+
+                services.Add(new RemoteServiceState(service, configured, reachable));
+            }
+        }
+
+        var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
         return Ok(new
         {
-            status = "healthy",
+            status = degraded ? "degraded" : "healthy",
             service = "oxql",
             engine = new
             {
@@ -101,7 +121,23 @@ public class OxQLController : ControllerBase
                 contract = EngineCapabilities.Contract,
             },
             capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
+            remote = services,
         });
+    }
+
+    /// <summary>One service the model references remotely: known to this host, and answering right now (null when not probed).</summary>
+    public sealed record RemoteServiceState(string Service, bool Configured, bool? Reachable);
+
+    private static Model.EntityModel? ModelOrNull(IEntityModelProvider models)
+    {
+        try
+        {
+            return models.Model;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The bound pipeline, the emitted stages, the count stages and the index advisory, without executing; 404 unless <c>Explain:Enabled</c>.</summary>

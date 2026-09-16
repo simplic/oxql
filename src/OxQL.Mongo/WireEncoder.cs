@@ -16,7 +16,10 @@ namespace OxQL.Mongo;
 public static class WireEncoder
 {
     /// <summary>Encodes one row of the final shape.</summary>
-    public static JsonObject Encode(BsonDocument row, BoundPipeline bound)
+    public static JsonObject Encode(BsonDocument row, BoundPipeline bound) => Encode(row, bound, null);
+
+    /// <summary>Encodes one row of the final shape, with the objects a remote resolve produced for it under their aliases.</summary>
+    public static JsonObject Encode(BsonDocument row, BoundPipeline bound, IReadOnlyDictionary<string, JsonNode?>? remote)
     {
         var shape = bound.FinalShape;
         var result = new JsonObject();
@@ -50,7 +53,9 @@ public static class WireEncoder
                     break;
 
                 case ShapeNode.Remote:
-                    result[name] = row.TryGetValue(name, out var remoteValue) ? Verbatim(remoteValue) : null;
+                    result[name] = remote is not null && remote.TryGetValue(name, out var resolvedRemote)
+                        ? resolvedRemote
+                        : row.TryGetValue(name, out var remoteValue) ? Verbatim(remoteValue) : null;
                     break;
 
                 case ShapeNode.Scalar scalar:

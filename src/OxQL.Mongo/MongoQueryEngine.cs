@@ -25,7 +25,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IAggregateRunner runner;
     private readonly CursorCodec cursors;
     private readonly OxQLOptions options;
-    private readonly IRemoteQueryClient? remote;
+    private readonly RemoteResolver? remote;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -38,13 +38,14 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         IRemoteQueryClient? remote = null,
         ILogger<MongoQueryEngine>? logger = null,
         bool includeErrorDetails = false,
-        IIndexSource? indexes = null)
+        IIndexSource? indexes = null,
+        ResolveCache? cache = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.remote = remote;
+        this.remote = remote is null ? null : new RemoteResolver(remote, cache ?? new ResolveCache(this.options), this.options);
         this.indexes = indexes;
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
@@ -70,6 +71,22 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
         var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse);
+        var resolveCalls = 0;
+        var cacheHits = 0;
+
+        // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
+        if (compiled.SemiJoins.Count > 0)
+        {
+            var refused = await remote!.SemiJoinAsync(compiled, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+
+            resolveCalls += compiled.SemiJoins.Select(slot => RemoteResolver.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
+
+            if (refused is not null)
+            {
+                Log(bound, timer, 0, false, false, context, refused, resolveCalls, 0);
+                return QueryOutcome.Of(refused);
+            }
+        }
 
         IReadOnlyList<BsonDocument> rows;
         IReadOnlyList<BsonDocument>? countRows = null;
@@ -90,13 +107,33 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             var refusal = MapDriverError(exception);
 
             timedOut = refusal.Status == 504;
-            Log(bound, timer, 0, timedOut, false, context, refusal);
+            Log(bound, timer, 0, timedOut, false, context, refusal, resolveCalls, 0);
 
             return QueryOutcome.Of(refusal);
         }
 
         var hasNextPage = rows.Count > compiled.Limit;
         var page = hasNextPage ? rows.Take(compiled.Limit).ToList() : rows;
+
+        // Remote resolves run over the trimmed page; an owner that does not answer yields null rows and a diagnostic, never a failed page.
+        IReadOnlyList<IReadOnlyDictionary<string, JsonNode?>>? resolved = null;
+
+        if (compiled.RemoteResolves.Count > 0)
+        {
+            var resolution = await remote!.ResolveAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+
+            resolveCalls += resolution.Calls;
+            cacheHits += resolution.CacheHits;
+
+            if (resolution.Refusal is not null)
+            {
+                Log(bound, timer, 0, false, false, context, resolution.Refusal, resolveCalls, cacheHits);
+                return QueryOutcome.Of(resolution.Refusal);
+            }
+
+            resolved = resolution.Rows;
+            diagnostics.AddRange(resolution.Diagnostics);
+        }
 
         long? totalCount = null;
         bool? capped = null;
@@ -116,8 +153,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var items = new List<JsonNode?>(page.Count);
 
         // Contract 1 rows come back as the driver returned them, through the v1 converter.
-        foreach (var row in page)
-            items.Add(context.Contract == 1 ? CompatRows.Encode(row) : WireEncoder.Encode(row, bound));
+        for (var index = 0; index < page.Count; index++)
+            items.Add(context.Contract == 1 ? CompatRows.Encode(page[index]) : WireEncoder.Encode(page[index], bound, resolved?[index]));
 
         var result = new QueryResult
         {
@@ -126,10 +163,14 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
         };
 
-        Log(bound, timer, page.Count, timedOut, capped == true, context, null);
+        Log(bound, timer, page.Count, timedOut, capped == true, context, null, resolveCalls, cacheHits);
 
         return QueryOutcome.Of(result);
     }
+
+    /// <summary>What is left of the request's time budget for the owners.</summary>
+    private static TimeSpan Remaining(CompiledQuery compiled, Stopwatch timer) =>
+        TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
 
     /// <inheritdoc/>
     public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
@@ -194,20 +235,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Keyset, fields, 0);
     }
 
-    private static BsonValue ValueAt(BsonDocument document, string storage)
-    {
-        BsonValue current = document;
-
-        foreach (var segment in storage.Split('.'))
-        {
-            if (current is BsonDocument inner && inner.TryGetValue(segment, out var next))
-                current = next;
-            else
-                return BsonNull.Value;
-        }
-
-        return current;
-    }
+    private static BsonValue ValueAt(BsonDocument document, string storage) =>
+        RemoteResolver.ValueAt(document, storage) ?? BsonNull.Value;
 
     private Refusal MapDriverError(Exception exception)
     {
@@ -228,17 +257,18 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
     }
 
-    private void Log(BoundPipeline bound, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal)
+    private void Log(BoundPipeline bound, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal, int resolveCalls, int resolveCacheHits)
     {
         logger.LogInformation(
-            "OxQL {Entity} stages={Stages} rows={Rows} elapsedMs={ElapsedMs} timedOut={TimedOut} countCapped={CountCapped} resolveCalls={ResolveCalls} compat={Compat} user={UserId} org={OrganisationId} correlation={CorrelationId} outcome={Outcome}",
+            "OxQL {Entity} stages={Stages} rows={Rows} elapsedMs={ElapsedMs} timedOut={TimedOut} countCapped={CountCapped} resolveCalls={ResolveCalls} resolveCacheHits={ResolveCacheHits} compat={Compat} user={UserId} org={OrganisationId} correlation={CorrelationId} outcome={Outcome}",
             bound.Entity.Id,
             string.Join(",", bound.Stages.Select(stage => stage.GetType().Name.ToLowerInvariant())),
             rows,
             timer.Elapsed.TotalMilliseconds,
             timedOut,
             countCapped,
-            0,
+            resolveCalls,
+            resolveCacheHits,
             context.Contract == 1,
             context.UserId,
             context.Organisation,

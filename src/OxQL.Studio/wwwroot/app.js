@@ -802,9 +802,10 @@
             displayName: descriptor.displayName,
             references: descriptor.references,
             typeId: descriptor.type ? String(descriptor.type).replace(/^#\/types\//, "") : null,
+            isAddon: !!descriptor.__addon,
             properties: null,
             items: null,
-            enumValues: null
+            enumValues: Array.isArray(descriptor.values) ? descriptor.values.map(v => ({ name: v.label ?? v.name ?? v.value, value: v.value })) : null
         };
 
         if (node.kind === "object" && node.typeId && pool[node.typeId]) {
@@ -836,8 +837,7 @@
                 key: Array.isArray(type.key) ? type.key : [],
                 display: type.display,
                 aliases: (type.aliases || []).filter(a => !String(a).startsWith("$")),
-                properties: (type.properties || []).map(p => resolveDescriptor(p, pool, 0, seen)),
-                addons: []
+                properties: (type.properties || []).map(p => resolveDescriptor(p, pool, 0, seen))
             });
         }
         out.sort((a, b) => a.typeName.localeCompare(b.typeName));
@@ -845,28 +845,32 @@
     }
 
     /**
-     * Merges the organisation's addon definitions (GET /schema/addons) under `addon.<path>`
-     * on their entity. The endpoint answers per entity in the schema's descriptor form:
-     * { "<entityId>": [ { path|name, kind, displayName?, values? }, … ] } (or the same map
-     * under an `entities` member). A host without the endpoint keeps the explorer as is.
+     * Slots the organisation's addon definitions (GET /schema/addons) into the schema document
+     * itself, so every consumer of the document sees them as ordinary members. The endpoint
+     * answers { "<entityId>": [ <property descriptor>, … ] }: each entry is a schema property
+     * descriptor exactly as the document's `properties` carry them (name = the definition path,
+     * kind, nullable, displayName, description; a closed value list inline as `values`), and
+     * the list is the set of properties of the entity's `addon` member. Here the entity's
+     * `addon` descriptor is retargeted from an untyped dictionary to an object whose pooled
+     * type "<entityId>.addon" holds the descriptors, and paths read `addon.<name>` like any
+     * nested member. A host without the endpoint keeps the document as is.
      */
-    function mergeAddons(entities, addons) {
-        const map = addons && typeof addons === "object" && !Array.isArray(addons)
-            ? (addons.entities && typeof addons.entities === "object" ? addons.entities : addons)
-            : {};
-        for (const entity of entities) {
-            const list = map[entity.typeName];
-            if (!Array.isArray(list)) continue;
-            entity.addons = list
-                .filter(d => d && !d.retired && (d.path || d.name))
-                .map(d => ({
-                    name: "addon." + (d.path || d.name),
-                    kind: d.kind || "unknown",
-                    nullable: true,
-                    displayName: d.displayName,
-                    enumValues: Array.isArray(d.values) ? d.values.map(v => ({ name: v.label ?? v.value, value: v.value })) : null,
-                    isAddon: true
-                }));
+    function applyAddons(doc, addons) {
+        if (!doc?.types || !addons || typeof addons !== "object" || Array.isArray(addons)) return;
+        for (const [entityId, list] of Object.entries(addons)) {
+            const entity = doc.types[entityId];
+            if (!entity || !Array.isArray(entity.properties) || !Array.isArray(list)) continue;
+            const bag = entity.properties.find(p => p && p.name === "addon");
+            if (!bag) continue;
+            const poolId = entityId + ".addon";
+            doc.types[poolId] = {
+                properties: list
+                    .filter(d => d && d.name && !d.retired)
+                    .map(d => ({ nullable: true, ...d, __addon: true }))
+            };
+            bag.kind = "object";
+            bag.type = "#/types/" + poolId;
+            delete bag.value;
         }
     }
 
@@ -888,13 +892,15 @@
                 return;
             }
             const doc = await res.json();
-            const entities = entitiesOf(doc);
 
-            // Addon definitions are per organisation and live beside the schema; optional.
+            // Addon definitions are per organisation and live beside the schema; they slot
+            // into the document before it is read, so nothing below knows they were separate.
             try {
                 const addonRes = await fetch(SCHEMA + "/addons", { headers });
-                if (addonRes.ok) mergeAddons(entities, await addonRes.json());
+                if (addonRes.ok) applyAddons(doc, await addonRes.json());
             } catch { /* no addon endpoint on this host */ }
+
+            const entities = entitiesOf(doc);
 
             if (!entities.length) {
                 list.innerHTML = `<div class="empty">The schema declares no entities.</div>`;
@@ -944,7 +950,6 @@
         const children = document.createElement("div");
         children.className = "prop-children";
         (t.properties || []).forEach(p => children.appendChild(renderProp(p, "")));
-        (t.addons || []).forEach(p => children.appendChild(renderProp(p, "")));
         node.appendChild(children);
 
         header.addEventListener("click", () => {
@@ -1132,7 +1137,6 @@
             }
         };
         walk(t.properties, "", 0);
-        for (const a of t.addons || []) out.push(a.name);
         return out;
     }
 

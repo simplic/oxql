@@ -74,9 +74,8 @@ public sealed class RemoteResolver
         var calls = byService.Select(async group =>
         {
             var queries = group.Select(slot => SemiJoinQuery(slot, cap)).ToList();
-            var request = new BatchRequest { Queries = queries, MaxTimeMs = (int)budget.TotalMilliseconds };
 
-            return (Service: group.Key, Slots: group.ToList(), Outcome: await CallAsync(group.Key, request, budget, cancellationToken).ConfigureAwait(false));
+            return (Service: group.Key, Slots: group.ToList(), Outcome: await CallInBatchesAsync(group.Key, queries, budget, cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(calls).ConfigureAwait(false);
@@ -180,9 +179,7 @@ public sealed class RemoteResolver
                     owners.Add((plan, chunk));
                 }
 
-            var request = new BatchRequest { Queries = queries, MaxTimeMs = (int)budget.TotalMilliseconds };
-
-            return (Service: group.Key, Owners: owners, Outcome: await CallAsync(group.Key, request, budget, cancellationToken).ConfigureAwait(false));
+            return (Service: group.Key, Owners: owners, Outcome: await CallInBatchesAsync(group.Key, queries, budget, cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -412,6 +409,29 @@ public sealed class RemoteResolver
             return TimeSpan.FromMilliseconds(1);
 
         return remaining < ceiling ? remaining : ceiling;
+    }
+
+    /// <summary>
+    /// The queries for one owner, in batches no larger than the batch cap (the owner's is
+    /// assumed equal to this host's), each within the budget, results concatenated in order.
+    /// </summary>
+    private async Task<CallOutcome> CallInBatchesAsync(string service, IReadOnlyList<QueryRequest> queries, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var size = Math.Max(1, options.Limits.MaxBatchQueries);
+        var results = new List<JsonNode?>(queries.Count);
+
+        for (var start = 0; start < queries.Count; start += size)
+        {
+            var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = (int)budget.TotalMilliseconds };
+            var outcome = await CallAsync(service, request, budget, cancellationToken).ConfigureAwait(false);
+
+            if (outcome.Failure is not null)
+                return outcome;
+
+            results.AddRange(outcome.Results);
+        }
+
+        return new CallOutcome(results, null);
     }
 
     /// <summary>One call to one owner within the budget; a timeout or a transport fault is an outcome, never an exception.</summary>

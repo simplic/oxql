@@ -144,6 +144,28 @@ public class RemoteResolverTests
     }
 
     [Fact]
+    public async Task More_queries_than_the_batch_cap_go_to_the_owner_in_several_batches()
+    {
+        var (engine, runner, client) = Host(options =>
+        {
+            options.Limits.ResolveKeyChunk = 1;
+            options.Limits.MaxBatchQueries = 2;
+        });
+        runner.PageRows = [Row(Id1, "a", "c1"), Row(Id2, "b", "c2"), Row(Id3, "c", "c3")];
+        client.Script = (_, query, _) =>
+        {
+            var key = query.Pipeline[0].Match!.Condition!.Value!.Value[0].GetString()!;
+            return new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", key, ("name", key.ToUpperInvariant())));
+        };
+
+        var result = await Success(engine, ResolveContact);
+
+        client.Calls.Should().HaveCount(2, "three one-key chunks under a cap of two need two batches");
+        client.Calls.Select(call => call.Request.Queries.Count).Should().Equal(2, 1);
+        result.Items.Select(item => item!["contact"]!["name"]!.GetValue<string>()).Should().Equal("C1", "C2", "C3");
+    }
+
+    [Fact]
     public async Task An_owner_refusal_is_the_callers_refusal_at_the_resolve_stage()
     {
         var (engine, runner, client) = Host();

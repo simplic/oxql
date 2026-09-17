@@ -622,6 +622,7 @@ public class StageRulesTests
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "vincario._v.data", Kind = AddonKind.String },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Old", Kind = AddonKind.String, Retired = true },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Status", Kind = AddonKind.String, Values = [new AddonValue("open", "Open"), new AddonValue("done", "Done")] },
+                    new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Prio", Kind = AddonKind.Int, Values = [new AddonValue("1", "Low"), new AddonValue("2", "High")] },
                   ]
                 : []);
     }
@@ -659,6 +660,54 @@ public class StageRulesTests
         var projected = await Bound("""[{ "project": { "addon.Undefined": 1, "addon.Kunde": 1 } }]""", WithDefinitions());
 
         ((BoundStage.Project)projected.Stages[0]).Paths.Select(path => path.Storage).Should().Equal("Addon.Undefined", "Addon.Kunde");
+    }
+
+    [Fact]
+    public async Task A_closed_value_list_admits_its_values_and_keeps_the_tolerant_form()
+    {
+        var bound = await Bound("""[{ "match": { "addon.Status": { "eq": "open" }, "addon.Prio": { "in": [2, "1"] } } }]""", WithDefinitions());
+        var leaves = ((BoundCondition.And)((BoundStage.Match)bound.Stages[0]).Condition).Conditions.Cast<BoundCondition.Leaf>().ToList();
+
+        leaves[0].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonString("open"));
+
+        // An int key compares on the digits, written as a number or a string, and still matches both storage forms.
+        leaves[1].Operand.Should().BeOfType<BoundOperand.Set>().Which.Values.Should().Equal(new BsonInt64(2), new BsonString("2"), new BsonInt64(1), new BsonString("1"));
+
+        var negated = await Bound("""[{ "match": { "addon.Status": { "nin": ["done"] }, "addon.Prio": { "neq": 1 } } }]""", WithDefinitions());
+
+        ((BoundCondition.And)((BoundStage.Match)negated.Stages[0]).Condition).Conditions.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task A_value_outside_a_closed_list_is_refused_as_an_unknown_member()
+    {
+        var error = await Error("""[{ "match": { "addon.Status": { "eq": "closed" } } }]""", Codes.UnknownEnumMember, WithDefinitions());
+
+        error.Path.Should().Be("addon.Status");
+        error.Message.Should().Contain("'closed'").And.Contain("open, done");
+
+        await Error("""[{ "match": { "addon.Status": { "in": ["open", "closed"] } } }]""", Codes.UnknownEnumMember, WithDefinitions());
+        await Error("""[{ "match": { "addon.Status": { "neq": "closed" } } }]""", Codes.UnknownEnumMember, WithDefinitions());
+        await Error("""[{ "match": { "addon.Prio": { "eq": 3 } } }]""", Codes.UnknownEnumMember, WithDefinitions());
+        await Error("""[{ "match": { "addon.Prio": { "nin": ["3"] } } }]""", Codes.UnknownEnumMember, WithDefinitions());
+    }
+
+    [Fact]
+    public async Task A_variable_bound_to_a_closed_list_key_is_checked_like_a_literal()
+    {
+        var bound = await Bound("""[{ "match": { "addon.Status": { "eq": { "$var": "s" } } } }]""", WithDefinitions(), variables: """{ "s": "done" }""");
+
+        Leaf(bound).Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonString("done"));
+
+        await Error("""[{ "match": { "addon.Status": { "eq": { "$var": "s" } } } }]""", Codes.UnknownEnumMember, WithDefinitions(), variables: """{ "s": "closed" }""");
+    }
+
+    [Fact]
+    public async Task A_key_without_a_value_list_accepts_any_value_of_its_kind()
+    {
+        var bound = await Bound("""[{ "match": { "addon.Kunde.name": { "eq": "anything" }, "addon.SoloplanNr": { "in": [7, 8] } } }]""", WithDefinitions());
+
+        ((BoundCondition.And)((BoundStage.Match)bound.Stages[0]).Condition).Conditions.Should().HaveCount(2);
     }
 
     [Fact]

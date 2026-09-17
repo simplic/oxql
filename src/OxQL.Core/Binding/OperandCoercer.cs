@@ -35,6 +35,7 @@ public sealed class OperandCoercer
     private static readonly IReadOnlySet<string> StringOperators = new HashSet<string>(StringComparer.Ordinal) { "contains", "startsWith", "endsWith", "regex" };
     private static readonly IReadOnlySet<string> OrderedOperators = new HashSet<string>(StringComparer.Ordinal) { "gt", "gte", "lt", "lte" };
     private static readonly IReadOnlySet<string> SetOperators = new HashSet<string>(StringComparer.Ordinal) { "in", "nin" };
+    private static readonly IReadOnlySet<string> ClosedListOperators = new HashSet<string>(StringComparer.Ordinal) { "eq", "neq", "in", "nin" };
     private static readonly IReadOnlySet<string> IgnoreCaseOperators = new HashSet<string>(StringComparer.Ordinal) { "eq", "neq", "in", "nin", "contains", "startsWith", "endsWith" };
 
     /// <summary>Whether <paramref name="op"/> applies to <paramref name="kind"/>.</summary>
@@ -119,7 +120,12 @@ public sealed class OperandCoercer
                         continue;
                     }
 
-                    var alternatives = CoerceScalar(item, path, kind, stage, errors, $"{path.Wire}[{index++}]");
+                    var label = $"{path.Wire}[{index++}]";
+
+                    if (!InClosedList(item, path, kind, op, stage, errors, label))
+                        continue;
+
+                    var alternatives = CoerceScalar(item, path, kind, stage, errors, label);
 
                     if (alternatives is not null)
                         values.AddRange(alternatives);
@@ -171,6 +177,9 @@ public sealed class OperandCoercer
             errors.Add(Error(Codes.InvalidOperand, $"'{path.Wire}' expects {Expected(path)}, not an array; use 'in' for a set.", stage, path.Wire));
             return null;
         }
+
+        if (!InClosedList(element, path, kind, op, stage, errors, path.Wire))
+            return null;
 
         var scalar = CoerceScalar(element, path, kind, stage, errors, path.Wire);
 
@@ -408,6 +417,34 @@ public sealed class OperandCoercer
 
         errors.Add(Error(Codes.InvalidOperand, $"'{label}' expects {failure ?? Expected(path)}.", stage, path.Wire));
         return null;
+    }
+
+    /// <summary>
+    /// A defined addon key with a closed value list accepts only its values on <c>eq</c>,
+    /// <c>neq</c>, <c>in</c> and <c>nin</c>: a string as written, an integer by its digits.
+    /// Anything else is <c>UNKNOWN_ENUM_MEMBER</c>, the same refusal an enum member off the list gets.
+    /// </summary>
+    private static bool InClosedList(JsonElement element, ResolvedPath path, Kind kind, string op, int stage, List<QueryValidationError> errors, string label)
+    {
+        if (path.Addon?.Values is not { Count: > 0 } allowed || !ClosedListOperators.Contains(op))
+            return true;
+
+        var written = kind switch
+        {
+            Kind.Int or Kind.Long => TryInteger(element, out var integer) ? integer.ToString(CultureInfo.InvariantCulture) : null,
+            _ => element.ValueKind == JsonValueKind.String ? element.GetString() : element.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False ? element.GetRawText() : null,
+        };
+
+        if (written is not null && allowed.Any(value => string.Equals(value.Value, written, StringComparison.Ordinal)))
+            return true;
+
+        errors.Add(Error(
+            Codes.UnknownEnumMember,
+            $"'{written ?? element.GetRawText()}' is not one of the values defined for '{label}': {string.Join(", ", allowed.Select(value => value.Value))}.",
+            stage,
+            path.Wire));
+
+        return false;
     }
 
     private static IReadOnlyList<BsonValue> Bool(bool value, bool addon) =>

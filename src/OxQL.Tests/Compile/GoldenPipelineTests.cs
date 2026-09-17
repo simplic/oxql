@@ -244,6 +244,21 @@ public class GoldenPipelineTests
     }
 
     [Fact]
+    public async Task A_projection_keeps_the_reference_member_a_remote_resolve_reads()
+    {
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }]""")).PageStages[1]
+            .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "the resolver keys the page rows on the member after the aggregate");
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contactNumber": 1 } }]""")).PageStages[1]
+            .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "a kept member is not added twice");
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0, "addon": 0 } }]""")).PageStages[1]
+            .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0 } }"), "an exclusion of the member is not emitted");
+
+        var nothingLeft = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0 } }]""");
+
+        nothingLeft.PageStages.Should().NotContain(stage => stage.Contains("$project"), "an empty $project is not a valid stage");
+    }
+
+    [Fact]
     public async Task Sort_adds_the_key_as_tie_breaker_on_a_root_shape()
     {
         (await Compile("""[{ "sort": [{ "number": "desc" }, { "count": "asc" }] }]""")).PageStages[1]

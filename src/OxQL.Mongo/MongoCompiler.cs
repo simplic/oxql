@@ -113,7 +113,8 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    emitted.Add(Project(project));
+                    if (Project(project, remote) is { } projection)
+                        emitted.Add(projection);
                     break;
 
                 case BoundStage.Sort sort:
@@ -453,23 +454,41 @@ public static class MongoCompiler
 
     // ---- project, sort ----------------------------------------------------------------------
 
-    private static BsonDocument Project(BoundStage.Project project)
+    /// <summary>
+    /// The projection. A remote resolve reads its reference member off the page rows after the
+    /// aggregate, so the member survives every projection in storage; the wire output follows
+    /// the shape and drops it again when it was not kept. Null when nothing is left to emit.
+    /// </summary>
+    private static BsonDocument? Project(BoundStage.Project project, IReadOnlyList<BoundStage.Resolve> remoteResolves)
     {
         var projection = new BsonDocument();
+        var kept = remoteResolves.Select(resolve => resolve.Reference.Storage).Where(storage => storage is not null).Select(storage => storage!).ToList();
 
         foreach (var path in project.Paths)
         {
             if (path.Storage is null)
                 continue;
 
+            if (!project.Inclusion && kept.Any(storage => Covers(path.Storage, storage)))
+                continue;
+
             projection[path.Storage] = project.Inclusion ? 1 : 0;
         }
+
+        if (project.Inclusion)
+            foreach (var storage in kept)
+                if (!project.Paths.Any(path => path.Storage is not null && Covers(path.Storage, storage)))
+                    projection[storage] = 1;
 
         if (!project.IncludeId && !projection.Contains(KeyStorage))
             projection[KeyStorage] = 0;
 
-        return new BsonDocument("$project", projection);
+        return projection.ElementCount == 0 ? null : new BsonDocument("$project", projection);
     }
+
+    /// <summary>Whether a projected storage path is the reference path or one of its ancestors.</summary>
+    private static bool Covers(string projected, string reference) =>
+        reference == projected || reference.StartsWith(projected + ".", StringComparison.Ordinal);
 
     private static BsonDocument Sort(IReadOnlyList<BoundSortField> fields, bool tieBreak)
     {

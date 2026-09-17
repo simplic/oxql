@@ -230,6 +230,22 @@ public class RemoteResolverTests
         vehicleQuery.Pipeline[0].Match!.Condition!.Value!.Value[0].GetString().Should().Be(Vehicle1.ToString(), "a guid key travels as the wire string");
     }
 
+    [Fact]
+    public async Task A_projection_without_the_reference_member_still_resolves_and_the_wire_omits_the_member()
+    {
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", "c1")];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
+
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1 } }, { "page": { "limit": 10 } }]""");
+
+        var row = result.Items.Should().ContainSingle().Subject!.AsObject();
+
+        row["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
+        row["number"]!.GetValue<string>().Should().Be("a");
+        row.ContainsKey("contactNumber").Should().BeFalse("the projection dropped it from the wire view");
+    }
+
     // ---- semi-join ------------------------------------------------------------------------
 
     private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }, { "page": { "limit": 10, "includeTotalCount": true } }]""";

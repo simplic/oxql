@@ -68,12 +68,17 @@ public sealed class RemoteResolver
             return null;
 
         var cap = options.Limits.MaxSemiJoinIds;
+
+        // The owner pages like any host: one page holds at most its page ceiling (assumed equal
+        // to this host's, like the batch cap), so the ids are read page by page along the
+        // owner's cursor until the set is complete or exceeds the cap.
+        var pageSize = Math.Max(1, Math.Min(options.Limits.MaxPageSize, cap + 1));
         var byService = slots.GroupBy(slot => ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity), StringComparer.Ordinal).ToList();
         var budget = Budget(remaining);
 
         var calls = byService.Select(async group =>
         {
-            var queries = group.Select(slot => SemiJoinQuery(slot, cap)).ToList();
+            var queries = group.Select(slot => SemiJoinQuery(slot, pageSize, cursor: null)).ToList();
 
             return (Service: group.Key, Slots: group.ToList(), Outcome: await CallInBatchesAsync(group.Key, queries, budget, cancellationToken).ConfigureAwait(false));
         }).ToList();
@@ -88,35 +93,59 @@ public sealed class RemoteResolver
             for (var index = 0; index < call.Slots.Count; index++)
             {
                 var slot = call.Slots[index];
-                var remote = (ShapeNode.Remote)slot.Leaf.Path.Root;
-                var stageIndex = StageIndexOf(compiled.Bound, slot);
                 var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
+                var refusal = await CollectIdsAsync(call.Service, slot, StageIndexOf(compiled.Bound, slot), result, pageSize, cap, budget, cancellationToken).ConfigureAwait(false);
 
-                if (result is null || !Succeeded(result))
-                    return Refused(result, remote.TargetEntity, stageIndex);
-
-                var items = result["items"]!.AsArray();
-
-                if (items.Count > cap)
-                    return Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{remote.TargetEntity}'; narrow it.", stageIndex);
-
-                var reference = remote.Reference;
-                var field = reference.Path?.Reference?.TargetField ?? "id";
-
-                foreach (var item in items)
-                {
-                    var value = item?[field];
-
-                    if (value is not null)
-                        slot.Ids.Add(OwnerValueToBson(value, reference));
-                }
+                if (refusal is not null)
+                    return refusal;
             }
         }
 
         return null;
     }
 
-    private static QueryRequest SemiJoinQuery(SemiJoinSlot slot, int cap)
+    /// <summary>
+    /// Reads one slot's ids out of the owner's first page and follows the owner's cursor for
+    /// the rest, one call per page; more than the cap in total is refused as soon as it shows.
+    /// </summary>
+    private async Task<Refusal?> CollectIdsAsync(string service, SemiJoinSlot slot, int? stageIndex, JsonNode? result, int pageSize, int cap, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var remote = (ShapeNode.Remote)slot.Leaf.Path.Root;
+        var reference = remote.Reference;
+        var field = reference.Path?.Reference?.TargetField ?? "id";
+
+        while (true)
+        {
+            if (result is null || !Succeeded(result))
+                return Refused(result, remote.TargetEntity, stageIndex);
+
+            foreach (var item in result["items"]!.AsArray())
+            {
+                var value = item?[field];
+
+                if (value is not null)
+                    slot.Ids.Add(OwnerValueToBson(value, reference));
+            }
+
+            if (slot.Ids.Count > cap)
+                return Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{remote.TargetEntity}'; narrow it.", stageIndex);
+
+            var pageInfo = result["pageInfo"] as JsonObject;
+            var cursor = pageInfo?["nextCursor"]?.GetValue<string>();
+
+            if (pageInfo?["hasNextPage"]?.GetValue<bool>() != true || string.IsNullOrEmpty(cursor))
+                return null;
+
+            var next = await CallInBatchesAsync(service, [SemiJoinQuery(slot, pageSize, cursor)], budget, cancellationToken).ConfigureAwait(false);
+
+            if (next.Failure is { } failure)
+                return Refusal.NotExecutable(Codes.ResolveUnavailable, $"The owner of '{service}' did not answer the semi-join ({failure}); the condition cannot be evaluated.");
+
+            result = next.Results.Count > 0 ? next.Results[0] : null;
+        }
+    }
+
+    private static QueryRequest SemiJoinQuery(SemiJoinSlot slot, int pageSize, string? cursor)
     {
         var remote = (ShapeNode.Remote)slot.Leaf.Path.Root;
         var alias = remote.StoragePrefix;
@@ -139,7 +168,7 @@ public sealed class RemoteResolver
             [
                 new PipelineStage { Match = new MatchStage { Condition = condition }, Keys = ["match"] },
                 new PipelineStage { Project = new ProjectStage { Fields = new Dictionary<string, int>(StringComparer.Ordinal) { [field] = 1 } }, Keys = ["project"] },
-                new PipelineStage { Page = new PageStage { Limit = Math.Min(cap + 1, int.MaxValue) }, Keys = ["page"] },
+                new PipelineStage { Page = new PageStage { Limit = pageSize, Cursor = cursor }, Keys = ["page"] },
             ],
         };
     }

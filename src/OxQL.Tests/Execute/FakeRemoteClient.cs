@@ -20,6 +20,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
 
         /// <summary>A refusal envelope.</summary>
         public sealed record Refused(string Code, string Message) : Answer;
+
+        /// <summary>Rows with a page after them, reachable through <paramref name="NextCursor"/>.</summary>
+        public sealed record Page(string NextCursor, params JsonObject[] Items) : Answer;
     }
 
     /// <summary>The answer per (service, query index in the batch); a service without an entry answers no rows.</summary>
@@ -62,6 +65,11 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
                 {
                     ["items"] = new JsonArray(rows.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
                     ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                },
+                Answer.Page page => new JsonObject
+                {
+                    ["items"] = new JsonArray(page.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
+                    ["pageInfo"] = new JsonObject { ["hasNextPage"] = true, ["nextCursor"] = page.NextCursor },
                 },
                 Answer.Refused refused => new JsonObject
                 {

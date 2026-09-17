@@ -260,7 +260,8 @@ public class RemoteResolverTests
         ask.Pipeline[0].Match!.Condition!.Path.Should().Be("matchCode");
         ask.Pipeline[0].Match!.Condition!.Options!.IgnoreCase.Should().BeTrue();
         ask.Pipeline[1].Project!.Fields.Keys.Should().Equal("id");
-        ask.Pipeline[2].Page!.Limit.Should().Be(10_001, "the cap plus one decides whether the set is too large");
+        ask.Pipeline[2].Page!.Limit.Should().Be(500, "the owner is asked page by page, never for more than a page ceiling at once");
+        ask.Pipeline[2].Page!.Cursor.Should().BeNull();
 
         var expected = new BsonDocument("$match", new BsonDocument("VehicleId", new BsonDocument("$in", new BsonArray { new BsonBinaryData(Vehicle1, GuidRepresentation.Standard) })));
 
@@ -280,6 +281,59 @@ public class RemoteResolverTests
         refusal.Status.Should().Be(422);
         refusal.Errors![0].Code.Should().Be(Codes.SemiJoinTooLarge);
         refusal.Errors[0].Stage.Should().Be(1);
+        runner.Calls.Should().BeEmpty();
+    }
+
+    private const string SemiJoinOneRow = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1" } } }, { "page": { "limit": 1 } }]""";
+
+    private static readonly Guid Vehicle2 = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002");
+
+    [Fact]
+    public async Task A_semi_join_follows_the_owners_cursor_when_the_ids_span_pages()
+    {
+        var (engine, runner, client) = Host(options => options.Limits.MaxPageSize = 1);
+        runner.PageRows = [Row(Id1, "a", null, Vehicle1)];
+        client.Script = (_, query, _) => query.Pipeline[0].Match!.Condition!.Op == "in"
+            ? new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString(), ("matchCode", "V-1")))
+            : query.Pipeline[2].Page!.Cursor is null
+                ? new FakeRemoteClient.Answer.Page("owner-page-2", FakeRemoteClient.Row("id", Vehicle1.ToString()))
+                : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle2.ToString()));
+
+        var result = await Success(engine, SemiJoinOneRow);
+
+        result.Items.Should().ContainSingle();
+
+        var asks = client.Calls.Where(call => call.Request.Queries[0].Pipeline[0].Match!.Condition!.Op != "in").ToList();
+
+        asks.Should().HaveCount(2, "the second page is read through the owner's cursor");
+        asks[0].Request.Queries[0].Pipeline[2].Page!.Limit.Should().Be(1);
+        asks[0].Request.Queries[0].Pipeline[2].Page!.Cursor.Should().BeNull();
+        asks[1].Request.Queries[0].Pipeline[2].Page!.Cursor.Should().Be("owner-page-2");
+
+        var expected = new BsonDocument("$match", new BsonDocument("VehicleId", new BsonDocument("$in", new BsonArray
+        {
+            new BsonBinaryData(Vehicle1, GuidRepresentation.Standard),
+            new BsonBinaryData(Vehicle2, GuidRepresentation.Standard),
+        })));
+
+        runner.Calls[0].Stages[1].ShouldBeBson(expected, "both pages' ids are substituted");
+    }
+
+    [Fact]
+    public async Task A_semi_join_above_the_cap_across_pages_is_refused()
+    {
+        var (engine, runner, client) = Host(options =>
+        {
+            options.Limits.MaxPageSize = 1;
+            options.Limits.MaxSemiJoinIds = 1;
+        });
+        client.Script = (_, query, _) => query.Pipeline[2].Page!.Cursor is null
+            ? new FakeRemoteClient.Answer.Page("owner-page-2", FakeRemoteClient.Row("id", Vehicle1.ToString()))
+            : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle2.ToString()));
+
+        var refusal = await Refused(engine, SemiJoinOneRow);
+
+        refusal.Errors![0].Code.Should().Be(Codes.SemiJoinTooLarge);
         runner.Calls.Should().BeEmpty();
     }
 

@@ -4,18 +4,65 @@ using System.Text.Json.Serialization;
 namespace OxQL.Core.Models;
 
 /// <summary>A group stage: keys and aggregates, which replace the shape.</summary>
+[JsonConverter(typeof(GroupStageConverter))]
 public sealed record GroupStage
 {
     /// <summary>The keys.</summary>
     [JsonPropertyName("by")]
-    public required IReadOnlyList<GroupByField> By { get; init; }
+    public IReadOnlyList<GroupByField> By { get; init; } = [];
 
     /// <summary>The aggregates by alias.</summary>
     [JsonPropertyName("fields")]
-    public required IReadOnlyDictionary<string, AggregationExpression> Fields { get; init; }
+    public IReadOnlyDictionary<string, AggregationExpression> Fields { get; init; } = new Dictionary<string, AggregationExpression>(StringComparer.Ordinal);
+
+    /// <summary>Member names the caller wrote that the stage does not have.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Unknown { get; init; } = [];
+}
+
+internal sealed class GroupStageConverter : JsonConverter<GroupStage>
+{
+    public override GroupStage? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var stage = new GroupStage();
+        var unknown = new List<string>();
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            return stage;
+
+        foreach (var property in doc.RootElement.EnumerateObject())
+        {
+            switch (property.Name)
+            {
+                case "by":
+                    stage = stage with { By = JsonSerializer.Deserialize<IReadOnlyList<GroupByField>>(property.Value.GetRawText(), options) ?? [] };
+                    break;
+                case "fields":
+                    stage = stage with { Fields = JsonSerializer.Deserialize<IReadOnlyDictionary<string, AggregationExpression>>(property.Value.GetRawText(), options) ?? new Dictionary<string, AggregationExpression>(StringComparer.Ordinal) };
+                    break;
+                default:
+                    unknown.Add(property.Name);
+                    break;
+            }
+        }
+
+        return stage with { Unknown = unknown };
+    }
+
+    public override void Write(Utf8JsonWriter writer, GroupStage value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WritePropertyName("by");
+        JsonSerializer.Serialize(writer, value.By, options);
+        writer.WritePropertyName("fields");
+        JsonSerializer.Serialize(writer, value.Fields, options);
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>One group key: a scalar path, or a truncated date.</summary>
+[JsonConverter(typeof(GroupByFieldConverter))]
 public sealed record GroupByField
 {
     /// <summary>The wire path to group by.</summary>
@@ -28,7 +75,46 @@ public sealed record GroupByField
 
     /// <summary>The output alias.</summary>
     [JsonPropertyName("as")]
-    public required string As { get; init; }
+    public string As { get; init; } = "";
+
+    /// <summary>Member names the caller wrote that a key does not have.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Unknown { get; init; } = [];
+}
+
+internal sealed class GroupByFieldConverter : JsonConverter<GroupByField>
+{
+    public override GroupByField? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var key = new GroupByField { As = "" };
+        var unknown = new List<string>();
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            return key;
+
+        foreach (var property in doc.RootElement.EnumerateObject())
+        {
+            switch (property.Name)
+            {
+                case "path": key = key with { Path = property.Value.GetString() }; break;
+                case "as": key = key with { As = property.Value.GetString() ?? "" }; break;
+                case "dateTrunc": key = key with { DateTrunc = JsonSerializer.Deserialize<DateTruncExpression>(property.Value.GetRawText(), options) }; break;
+                default: unknown.Add(property.Name); break;
+            }
+        }
+
+        return key with { Unknown = unknown };
+    }
+
+    public override void Write(Utf8JsonWriter writer, GroupByField value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (value.Path is not null) writer.WriteString("path", value.Path);
+        if (value.DateTrunc is not null) { writer.WritePropertyName("dateTrunc"); JsonSerializer.Serialize(writer, value.DateTrunc, options); }
+        writer.WriteString("as", value.As);
+        writer.WriteEndObject();
+    }
 }
 
 /// <summary>A date truncation: the local boundary in <c>timezone</c>, emitted as the UTC instant.</summary>
@@ -74,6 +160,15 @@ public sealed record QueryExpression
     public string? Var { get; init; }
     public string? Operator { get; init; }
     public IReadOnlyList<QueryExpression>? Operands { get; init; }
+
+    /// <summary>
+    /// The keys of an object the reader does not recognise as a path, a variable, a literal
+    /// wrapper or an arithmetic operator — a misspelled operator among them. Carried through
+    /// for the binder to refuse with a code rather than compiled as a literal object, which
+    /// Mongo evaluates to missing and yields a column of nulls with a 200.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? Unrecognised { get; init; }
 
     [JsonIgnore]
     public bool IsPath => Path is not null;
@@ -154,10 +249,15 @@ internal sealed class QueryExpressionConverter : JsonConverter<QueryExpression>
             if (root.TryGetProperty("literal", out var literalElement))
                 return new QueryExpression { Literal = literalElement.Clone() };
 
+            var names = new List<string>();
+
             foreach (var property in root.EnumerateObject())
             {
                 if (!QueryExpression.ArithmeticOperators.Contains(property.Name))
+                {
+                    names.Add(property.Name);
                     continue;
+                }
 
                 var operands = new List<QueryExpression>();
 
@@ -172,6 +272,10 @@ internal sealed class QueryExpressionConverter : JsonConverter<QueryExpression>
 
                 return new QueryExpression { Operator = property.Name, Operands = operands };
             }
+
+            // An object that named nothing the reader knows is not a literal: a literal is
+            // written {"literal": ...}. Reporting the keys lets the binder say which.
+            return new QueryExpression { Literal = root.Clone(), Unrecognised = names };
         }
 
         return new QueryExpression { Literal = root.Clone() };

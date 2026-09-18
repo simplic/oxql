@@ -24,6 +24,10 @@ public static class Codes
     public const string InvalidOperand = "INVALID_OPERAND";
     public const string UnknownEnumMember = "UNKNOWN_ENUM_MEMBER";
     public const string OperandNotArray = "OPERAND_NOT_ARRAY";
+
+    /// <summary>An ordered comparison over a decimal member whose storage is text, which cannot be ordered numerically.</summary>
+    public const string DecimalTextNotOrderable = "DECIMAL_TEXT_NOT_ORDERABLE";
+
     public const string UnboundVariable = "UNBOUND_VARIABLE";
     public const string InvalidVariable = "INVALID_VARIABLE";
 
@@ -49,6 +53,13 @@ public static class Codes
     public const string InvalidSortDirection = "INVALID_SORT_DIRECTION";
     public const string LookupNotDeclared = "LOOKUP_NOT_DECLARED";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
+    /// <summary>
+    /// Reserved and currently unreachable: the shape it was written for — a condition on a
+    /// remote resolve's alias — is accepted and pushed down to the owner as a semi-join, which
+    /// answers 200 with the right rows. It stays in the closed list because the client
+    /// declares and translates it too, and the two lists are one contract; removing it is a
+    /// coordinated change on both sides, not a tidy-up here.
+    /// </summary>
     public const string ResolveNotFilterable = "RESOLVE_NOT_FILTERABLE";
     public const string ResolveNotSortable = "RESOLVE_NOT_SORTABLE";
 
@@ -90,7 +101,17 @@ public static class Codes
     public const string TotalCountCapped = "TOTAL_COUNT_CAPPED";
     public const string ResolveTimeout = "RESOLVE_TIMEOUT";
     public const string ResolveUnreachable = "RESOLVE_UNREACHABLE";
+    /// <summary>
+    /// Dormant at the shipped defaults rather than dead: one resolve stage cannot need more
+    /// distinct keys than the page has rows, and <c>MaxPageSize</c> (500) is below
+    /// <c>MaxResolveKeys</c> (2 000), so it cannot fire until a host raises the page size past
+    /// the resolve cap. <see cref="Models.LimitOptions.MaxResolveKeys"/> says so where an
+    /// operator will read it.
+    /// </summary>
     public const string ResolvePartial = "RESOLVE_PARTIAL";
     public const string SortOnAddon = "SORT_ON_ADDON";
     public const string RegexUnanchored = "REGEX_UNANCHORED";
+
+    /// <summary>An ordered comparison on a decimal member covered the numerically stored rows only; rows still stored as text are outside it.</summary>
+    public const string DecimalTextExcluded = "DECIMAL_TEXT_EXCLUDED";
 }

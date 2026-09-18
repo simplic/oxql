@@ -227,13 +227,21 @@ public static class WireEncoder
                 };
 
             case Kind.Decimal:
+                // One member used to read back in two spellings: the typed bracket canonical
+                // and the text bracket verbatim, so "1000" and "1000.00" came out of the same
+                // column and neither could be compared or fed back. Both are canonical now,
+                // and it is the spelling an operand is built with, so a value read out of a
+                // row finds the row it came from. Text that is not a decimal at all stays
+                // verbatim: normalising it would invent a number the row does not hold.
                 return value switch
                 {
-                    BsonDecimal128 m => JsonValue.Create(Decimal128.ToDecimal(m.Value).ToString("G29", CultureInfo.InvariantCulture)),
-                    BsonString text => JsonValue.Create(text.Value),
+                    BsonDecimal128 m => JsonValue.Create(DecimalText.Canonical(Decimal128.ToDecimal(m.Value))),
+                    BsonString text => JsonValue.Create(decimal.TryParse(text.Value, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var parsedText)
+                        ? DecimalText.Canonical(parsedText)
+                        : text.Value),
                     BsonInt32 i => JsonValue.Create(i.Value.ToString(CultureInfo.InvariantCulture)),
                     BsonInt64 l => JsonValue.Create(l.Value.ToString(CultureInfo.InvariantCulture)),
-                    BsonDouble d => JsonValue.Create(((decimal)d.Value).ToString("G29", CultureInfo.InvariantCulture)),
+                    BsonDouble d => JsonValue.Create(DecimalText.Canonical((decimal)d.Value)),
                     _ => Verbatim(value),
                 };
 
@@ -285,12 +293,16 @@ public static class WireEncoder
                 };
 
             case Kind.Enum:
+                // An enum backed by a long carries values JSON's number cannot hold: every
+                // JavaScript caller read 9007199254740993 back as ...992 and wrote a value
+                // that matches nothing. A value inside Int32 stays a number, which is every
+                // enum the fleet declares; above it the value travels as a string, the way
+                // Kind.Long does and for the same reason.
                 return value switch
                 {
                     BsonInt32 i => JsonValue.Create(i.Value),
-                    BsonInt64 l => JsonValue.Create(l.Value),
-                    BsonString name when shape?.Type?.EnumValues.FirstOrDefault(member => member.Name == name.Value) is { } member =>
-                        member.Value is >= int.MinValue and <= int.MaxValue ? JsonValue.Create((int)member.Value) : JsonValue.Create(member.Value),
+                    BsonInt64 l => Enumeral(l.Value),
+                    BsonString name when shape?.Type?.EnumValues.FirstOrDefault(member => member.Name == name.Value) is { } member => Enumeral(member.Value),
                     _ => Verbatim(value),
                 };
 
@@ -305,6 +317,15 @@ public static class WireEncoder
                 return Verbatim(value);
         }
     }
+
+    /// <summary>An enum's numeric value: a JSON number while it is one a caller can read, a string above that.</summary>
+    private static JsonNode? Enumeral(long value) =>
+        value is >= int.MinValue and <= int.MaxValue
+            ? JsonValue.Create((int)value)
+            : JsonValue.Create(value.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>Whether a 64-bit integer survives a JSON round trip through an IEEE-754 double.</summary>
+    private static bool SafeInteger(long value) => value is >= -9007199254740991 and <= 9007199254740991;
 
     private static string Iso(DateTime utc) => utc.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
 
@@ -334,7 +355,16 @@ public static class WireEncoder
                 return JsonValue.Create(value.AsInt32);
 
             case BsonType.Int64:
-                return JsonValue.Create(value.AsInt64);
+                // A member the shape does not describe — the addon bag's values above all —
+                // is rendered by its BSON type alone, so a 64-bit integer used to travel as a
+                // JSON number and every JavaScript caller lost it: an addon `long` holding
+                // 9007199254740993 arrived as ...992, a value that then matches nothing.
+                // Kind.Long stringifies for exactly this reason; here the kind is not known,
+                // so the range decides. Inside it the value is exact as a number and stays
+                // one, which leaves every addon integer in use today unchanged.
+                return SafeInteger(value.AsInt64)
+                    ? JsonValue.Create(value.AsInt64)
+                    : JsonValue.Create(value.AsInt64.ToString(CultureInfo.InvariantCulture));
 
             case BsonType.Double:
                 return double.IsFinite(value.AsDouble) ? JsonValue.Create(value.AsDouble) : null;

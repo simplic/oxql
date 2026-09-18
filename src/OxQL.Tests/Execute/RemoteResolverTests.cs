@@ -414,17 +414,23 @@ public class RemoteResolverTests
     }
 
     [Fact]
-    public void The_cache_is_bounded_and_keyed_by_entity_organisation_key_select_and_filter()
+    public void The_cache_is_bounded_and_keyed_by_entity_field_organisation_key_select_and_filter()
     {
         var options = BindHost.Options(o => o.Cache.ResolveCacheMaxEntries = 2);
         using var cache = new ResolveCache(options);
         var row = new JsonObject { ["number"] = "c1" };
 
-        cache.Set(ResolveCache.KeyOf("crm.contact", BindHost.Organisation, "c1", "s", "f"), row);
-        cache.TryGet(ResolveCache.KeyOf("crm.contact", BindHost.Organisation, "c1", "s", "f"), out var hit).Should().BeTrue();
+        cache.Set(ResolveCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "s", "f"), row);
+        cache.TryGet(ResolveCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "s", "f"), out var hit).Should().BeTrue();
         hit.Should().NotBeSameAs(row, "a hit is a clone: a node cannot have two parents");
-        cache.TryGet(ResolveCache.KeyOf("crm.contact", Guid.NewGuid(), "c1", "s", "f"), out _).Should().BeFalse("another organisation never sees the row");
-        cache.TryGet(ResolveCache.KeyOf("crm.contact", BindHost.Organisation, "c1", "other", "f"), out _).Should().BeFalse("another select is another entry");
+        cache.TryGet(ResolveCache.KeyOf("crm.contact", "id", Guid.NewGuid(), "c1", "s", "f"), out _).Should().BeFalse("another organisation never sees the row");
+        cache.TryGet(ResolveCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "other", "f"), out _).Should().BeFalse("another select is another entry");
+
+        // F-ENT-002: two references onto one entity through different members of it are two
+        // sets of rows. Without the field in the key, whichever resolve ran first inside the
+        // TTL answered for both and the other silently inherited its rows.
+        cache.TryGet(ResolveCache.KeyOf("crm.contact", "number", BindHost.Organisation, "c1", "s", "f"), out _)
+            .Should().BeFalse("another target field is another join and another entry");
 
         cache.Set("k2", row);
         cache.Set("k3", row);

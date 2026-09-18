@@ -79,6 +79,16 @@ public sealed record FilterCondition
     /// <summary>True for an <c>any</c> condition.</summary>
     [JsonIgnore]
     public bool IsAny => Any is not null;
+
+    /// <summary>
+    /// True for a group the caller wrote with no conditions in it. The binder refuses it and
+    /// names the spelling that is there: an empty <c>not</c> reads as <c>not</c>.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsEmptyGroup => (And is { Count: 0 }) || (Or is { Count: 0 }) || (Not is not null && ReferenceEquals(Not, EmptyGroup));
+
+    /// <summary>The sentinel an empty <c>not</c> carries, so the refusal can name <c>not</c>.</summary>
+    internal static readonly FilterCondition EmptyGroup = new() { And = [] };
 }
 
 /// <summary>
@@ -124,8 +134,11 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
                 case NotKey:
                     parts.Add(new FilterCondition
                     {
+                        // An empty `not` is kept as an empty `not`, not as a substituted `and`:
+                        // the binder reports the spelling it refuses, and reporting "'and' has
+                        // no conditions" sent the caller looking for an `and` they never wrote.
                         Not = property.Value.ValueKind == JsonValueKind.Object
-                            ? ReadFromElement(property.Value, options) ?? new FilterCondition { And = [] }
+                            ? ReadFromElement(property.Value, options) ?? new FilterCondition { Not = FilterCondition.EmptyGroup }
                             : throw new JsonException("'not' takes a condition object."),
                     });
                     break;

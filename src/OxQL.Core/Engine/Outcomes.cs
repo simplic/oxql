@@ -125,13 +125,21 @@ public sealed record Refusal
         Errors = [new QueryValidationError { Code = Binding.Codes.QueryTimeout, Message = message }],
     };
 
-    /// <summary>An engine fault: 500, details only when the host allows.</summary>
+    /// <summary>
+    /// An engine fault: 500 carrying a coded refusal envelope, with the detail only when the
+    /// host allows it. The code travels either way: a 500 with no envelope is indistinguishable
+    /// from an unreachable service, so a caller shown one goes debugging the wrong layer.
+    /// </summary>
     public static Refusal Internal(string? detail) => new()
     {
         Type = "internal_error",
         Title = "An unexpected error occurred while executing the query.",
         Status = 500,
-        Errors = detail is null ? null : [new QueryValidationError { Code = Binding.Codes.InternalError, Message = detail }],
+        Errors = [new QueryValidationError
+        {
+            Code = Binding.Codes.InternalError,
+            Message = detail ?? "The engine could not answer this request; the detail is in the service log under the correlation id.",
+        }],
     };
 
     /// <summary>The body too large: 413.</summary>

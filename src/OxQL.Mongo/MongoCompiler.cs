@@ -46,6 +46,12 @@ public sealed record CompiledQuery
     /// a contract 1 row is rendered from the document, so the executor drops it there.
     /// </summary>
     public bool KeyKeptAgainstProjection { get; init; }
+
+    /// <summary>
+    /// Storage paths of the paging sort the projection dropped and the compiler kept, for the
+    /// same reason and with the same consequence as <see cref="KeyKeptAgainstProjection"/>.
+    /// </summary>
+    public IReadOnlyList<string> SortKeptAgainstProjection { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline.</summary>
@@ -89,6 +95,16 @@ public static class MongoCompiler
         // again on the way out.
         var keepKey = bound.PagingMode == PagingMode.Keyset || unwoundOffsetPaging;
         var keyKeptAgainstProjection = false;
+
+        // The same rule as the key, for the sort. NextCursor mints each leg by reading the
+        // value off the document it hands back, so a projection that removed the sort path
+        // left the leg reading a member that is not there: `?? BsonNull` turned "absent from
+        // the projection" into the value null, the null-aware predicate re-admitted every
+        // non-null row, and the walk returned its first page for as long as it was asked.
+        var sortStorages = keepKey
+            ? sortFields.Select(field => field.Path.Storage).Where(storage => storage is not null).Select(storage => storage!).Distinct(StringComparer.Ordinal).ToList()
+            : [];
+        var sortKeptAgainstProjection = new List<string>();
 
         // The leading scope, with the keyset predicate merged in on a root shape.
         var scope = ScopeFilter(bound.Scope);
@@ -147,7 +163,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote, keepKey, reservedIndexes, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, remote, keepKey, reservedIndexes, sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -232,6 +248,7 @@ public static class MongoCompiler
             AllowDiskUse = options.AllowDiskUse,
             CountCap = options.CountCap,
             KeyKeptAgainstProjection = keyKeptAgainstProjection,
+            SortKeptAgainstProjection = sortKeptAgainstProjection,
         };
     }
 
@@ -316,8 +333,13 @@ public static class MongoCompiler
                 return new BsonDocument(storage, new BsonDocument(op == "nin" ? "$nin" : "$in", values));
 
             case BoundOperand.Tolerant tolerant:
+                // A regex alternative — the decimal text bracket — is a pattern, and $ne
+                // against a pattern compares the pattern itself rather than matching with it.
+                // $nor of the positive comparisons negates whatever the alternatives are, and
+                // agrees with $and of $ne on a missing member, which is the only case where
+                // the two could differ for a scalar.
                 if (op == "neq")
-                    return new BsonDocument("$and", new BsonArray(tolerant.Alternatives.Select(value => new BsonDocument(storage, new BsonDocument("$ne", value)))));
+                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, leaf.IgnoreCase))));
 
                 return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, leaf.IgnoreCase))));
 
@@ -343,14 +365,25 @@ public static class MongoCompiler
             "gte" => new BsonDocument(storage, new BsonDocument("$gte", value)),
             "lt" => new BsonDocument(storage, new BsonDocument("$lt", value)),
             "lte" => new BsonDocument(storage, new BsonDocument("$lte", value)),
-            "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(value.AsString), flags)),
-            "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(value.AsString), flags)),
-            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(value.AsString) + "$", flags)),
-            "regex" => new BsonDocument(storage, new BsonRegularExpression(value.AsString, flags)),
+            // The binder refuses a text operator on a member that holds no text, so `value`
+            // is a string by the time it gets here; Text() keeps that from being an
+            // InvalidCastException and a bare 500 if a path ever reaches this without it.
+            "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
+            "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
+            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),
+            "regex" => new BsonDocument(storage, new BsonRegularExpression(Text(value), flags)),
             "exists" => new BsonDocument(storage, new BsonDocument("$exists", value)),
             _ => new BsonDocument(storage, value),
         };
     }
+
+    /// <summary>The text of an operand for a pattern comparison, whatever BSON type it arrived as.</summary>
+    private static string Text(BsonValue value) => value switch
+    {
+        BsonString text => text.Value,
+        BsonInt32 code => ((char)code.Value).ToString(),
+        _ => value.ToString() ?? "",
+    };
 
     // ---- joins ------------------------------------------------------------------------------
 
@@ -460,8 +493,13 @@ public static class MongoCompiler
 
         var document = new BsonDocument();
 
+        // A scalar $group _id normalises a missing member to null; a subdocument _id omits the
+        // field instead, so the same data bucketed a null and a missing value together under
+        // one key and apart under two, and the row lost the member altogether — `undefined`
+        // where the type says `string | null`. $ifNull makes every leg of a composite key
+        // behave the way the single-key form already does.
         foreach (var key in keys)
-            document[key.As] = KeyExpression(key);
+            document[key.As] = new BsonDocument("$ifNull", new BsonArray { KeyExpression(key), BsonNull.Value });
 
         return document;
     }
@@ -526,6 +564,8 @@ public static class MongoCompiler
         IReadOnlyList<BoundStage.Resolve> remoteResolves,
         bool keepKey,
         IReadOnlyList<string> reservedIndexes,
+        IReadOnlyList<string> sortStorages,
+        List<string> sortKeptAgainstProjection,
         ref bool keyKeptAgainstProjection)
     {
         var projection = new BsonDocument();
@@ -533,6 +573,23 @@ public static class MongoCompiler
 
         // An index the paging sort still has to read survives the projection like a reference does.
         kept.AddRange(reservedIndexes);
+
+        // So does a path the paging sort orders by and the cursor is minted from. What the
+        // caller did not ask for is recorded, so a contract 1 row loses it again.
+        foreach (var storage in sortStorages)
+        {
+            if (storage == KeyStorage || kept.Contains(storage, StringComparer.Ordinal))
+                continue;
+
+            kept.Add(storage);
+
+            var asked = project.Inclusion
+                ? project.Paths.Any(path => path.Storage is not null && Covers(path.Storage, storage))
+                : !project.Paths.Any(path => path.Storage is not null && Covers(path.Storage, storage));
+
+            if (!asked)
+                sortKeptAgainstProjection.Add(storage);
+        }
 
         foreach (var path in project.Paths)
         {

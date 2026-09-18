@@ -159,10 +159,28 @@ internal static class ModelAssembler
                 continue;
             }
 
+            // A local target's key is right there to read, and the local branch above reads
+            // it. A remote target's is not, and defaulting to "id" is a guess: asked for the
+            // ids of an owner keyed on something else, the owner answers rows keyed by a
+            // member that happens to be called `id` and every row of the join is wrong, with
+            // a 200 and no diagnostic. A declaration this host cannot complete is a finding,
+            // and no reference is emitted, so the resolve is refused instead of answered
+            // wrongly. The fix is one argument on the attribute: [OxQLReference(target, field)].
+            if (pending.TargetField is null)
+            {
+                findings.Add(new BuildFinding(
+                    BuildCodes.ReferenceTargetFieldUnknown,
+                    pending.OwnerLabel,
+                    $"The reference names '{target}' in another service and no target field, and this host cannot read that entity's key, so no reference is emitted. Declare the field the reference points at.",
+                    target));
+
+                continue;
+            }
+
             pending.Member.Reference = new ReferenceDef
             {
                 TargetEntity = target,
-                TargetField = pending.TargetField ?? WireNames.IdWire,
+                TargetField = pending.TargetField,
                 DeclaredBy = pending.Source,
                 IsRemote = true,
             };

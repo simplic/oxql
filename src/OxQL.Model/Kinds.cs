@@ -121,6 +121,18 @@ public static class Kinds
     /// <summary>The wire spelling of a kind.</summary>
     public static string NameOf(Kind kind) => Names[kind];
 
+    /// <summary>
+    /// The wire spelling with its indefinite article. Refusal messages are read by the person
+    /// whose filter was refused, and concatenating "a " in front of the spelling produced
+    /// "a enum", "a int", "a object" and "a array".
+    /// </summary>
+    public static string WithArticle(Kind kind)
+    {
+        var name = Names[kind];
+
+        return (name[0] is 'a' or 'e' or 'i' or 'o' or 'u' ? "an " : "a ") + name;
+    }
+
     /// <summary>Parses a wire spelling; null when it is not a kind.</summary>
     public static Kind? Parse(string? name) =>
         name is not null && ByName.TryGetValue(name, out var kind) ? kind : null;

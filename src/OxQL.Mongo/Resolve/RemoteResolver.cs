@@ -408,7 +408,7 @@ public sealed class RemoteResolver
 
         public int CacheHits { get; set; }
 
-        public string CacheKey(string key) => ResolveCache.KeyOf(Stage.TargetEntity, organisation, key, selectHash, filterHash);
+        public string CacheKey(string key) => ResolveCache.KeyOf(Stage.TargetEntity, Stage.TargetField, organisation, key, selectHash, filterHash);
     }
 
     private StagePlan Plan(BoundStage.Resolve stage, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
@@ -474,13 +474,18 @@ public sealed class RemoteResolver
         if (stage.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
             pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), Wire)!, Keys = ["match"] });
 
-        if (stage.RemoteSelect is { Count: > 0 } select)
-        {
-            var fields = select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal);
+        // A projection always travels. With a select it is the caller's; without one it is
+        // the reserved $default key, which the owner expands to its own entity's key and
+        // display members — the pair the local half of this stage keeps. Sending none asked
+        // the owner for whole documents: ~2 KB a row where the local path returns two members,
+        // organizationId and every other member of the owner's row included, for a caller
+        // that wanted a label.
+        var projection = stage.RemoteSelect is { Count: > 0 } select
+            ? select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal)
+            : new Dictionary<string, int>(StringComparer.Ordinal) { ["$default"] = 1 };
 
-            fields[stage.TargetField] = 1;
-            pipeline.Add(new PipelineStage { Project = new ProjectStage { Fields = fields }, Keys = ["project"] });
-        }
+        projection[stage.TargetField] = 1;
+        pipeline.Add(new PipelineStage { Project = new ProjectStage { Fields = projection }, Keys = ["project"] });
 
         pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count }, Keys = ["page"] });
 

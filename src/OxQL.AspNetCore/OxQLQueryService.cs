@@ -16,6 +16,16 @@ namespace OxQL.AspNetCore;
 /// The host's face of the engine: builds the request context from the scope provider and the
 /// contract header, rewrites a contract 1 request through the <see cref="CompatBinder"/> and
 /// logs it, runs the engine, and hands the outcome to the controller.
+/// <para>
+/// It is also the boundary that guarantees the shape of an answer. Everything below it — the
+/// binder, the compiler, the operand coercion, the row encoding — is written to refuse rather
+/// than throw, and four separate live findings showed that where one of them throws anyway
+/// the caller gets a bare HTTP 500: no code, no path, no stage, no envelope, and a client that
+/// reports "the service could not be reached" for what is a caller error or an engine defect.
+/// <see cref="Guarded"/> turns any escaped exception into a coded <c>INTERNAL_ERROR</c>
+/// refusal, logged with its detail and its correlation id. The four causes are fixed at their
+/// sites; this is what covers the fifth.
+/// </para>
 /// </summary>
 public sealed class OxQLQueryService : IOxQLQueryService
 {
@@ -32,6 +42,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
     private readonly IAddonDefinitionSource addons;
     private readonly IHttpContextAccessor? httpContextAccessor;
     private readonly ILogger compatLog;
+    private readonly ILogger faultLog;
+    private readonly bool includeErrorDetails;
     private CompatBinder? compat;
     private EntityModel? compatModel;
 
@@ -42,7 +54,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
         IEntityModelProvider models,
         IAddonDefinitionSource? addons = null,
         IHttpContextAccessor? httpContextAccessor = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        bool includeErrorDetails = false)
     {
         this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
         this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
@@ -51,6 +64,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
         this.addons = addons ?? EmptyAddonDefinitionSource.Instance;
         this.httpContextAccessor = httpContextAccessor;
         compatLog = loggerFactory?.CreateLogger(CompatLogCategory) ?? NullLogger.Instance;
+        faultLog = loggerFactory?.CreateLogger(typeof(OxQLQueryService).FullName!) ?? NullLogger.Instance;
+        this.includeErrorDetails = includeErrorDetails;
     }
 
     /// <inheritdoc/>
@@ -58,9 +73,19 @@ public sealed class OxQLQueryService : IOxQLQueryService
         ExecuteAsync(request, null, cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken = default)
+    public Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken = default) =>
+        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, cancellationToken));
+
+    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        // A null query is a caller error, not a fault: the batch route can carry one
+        // ({"queries":[null]}) and the body of the query route can be the literal `null`.
+        if (request is null)
+            return QueryOutcome.Of(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownStage,
+                Message = "The request is empty; a query carries an entityType and a pipeline.",
+            }]));
 
         var context = await ContextAsync(maxTimeMs, cancellationToken);
 
@@ -78,9 +103,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
     }
 
     /// <inheritdoc/>
-    public async Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default)
+    public Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default) =>
+        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, cancellationToken));
+
+    private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(batch);
+        if (batch is null || batch.Queries is null)
+            return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownStage,
+                Message = "The batch is empty; a batch carries a queries array.",
+            }]));
 
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)
             return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
@@ -108,9 +141,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
     }
 
     /// <inheritdoc/>
-    public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default)
+    public Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
+        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, cancellationToken));
+
+    private async Task<ExplainOutcome> RunExplainAsync(QueryRequest request, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        if (request is null)
+            return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownStage,
+                Message = "The request is empty; a query carries an entityType and a pipeline.",
+            }]));
 
         var context = await ContextAsync(null, cancellationToken);
 
@@ -125,6 +166,28 @@ public sealed class OxQLQueryService : IOxQLQueryService
         }
 
         return await engine.ExplainAsync(request, context, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> and turns anything it throws into a coded refusal of the
+    /// right outcome shape. A cancellation the caller asked for is not a fault and travels on.
+    /// </summary>
+    private async Task<T> Guarded<T>(Func<Refusal, T> refused, Func<Task<T>> work)
+    {
+        try
+        {
+            return await work().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            faultLog.LogError(exception, "OxQL unhandled fault on the query path; answered INTERNAL_ERROR");
+
+            return refused(Refusal.Internal(includeErrorDetails ? exception.Message : null));
+        }
     }
 
     /// <summary>The context of the current request.</summary>

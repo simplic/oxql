@@ -343,6 +343,41 @@ public class ClrModelBuilderTests
         reference.IsRemote.Should().BeTrue();
     }
 
+    /// <summary>
+    /// F-ENT-001. A remote target's key cannot be read on this host, and defaulting the field
+    /// to <c>"id"</c> was a guess: asked for the ids of an owner keyed on something else, the
+    /// owner answered rows keyed by whatever member happens to be called <c>id</c>, and every
+    /// row of the join was wrong with a 200 and no diagnostic. Proven on the lab's
+    /// <c>crm.conformance</c>: <c>Alpha(W-1)</c> resolved to <c>Widget Three</c>. The local
+    /// branch reads the key and gets it right, which is what made the remote default
+    /// indefensible; a declaration this host cannot complete is a finding now, and the resolve
+    /// is refused rather than answered wrongly.
+    /// </summary>
+    [Fact]
+    public void A_remote_reference_without_a_declared_field_is_dropped_with_a_finding()
+    {
+        // Declared explicitly rather than by attribute: an [OxQLType] anywhere in this
+        // assembly would join the probe graph and change the equivalence snapshots.
+        var model = ClrModelBuilder.Build([new EntityDeclaration("probe.unfielded", "probe.unfielded", typeof(UnfieldedReferences), "unfielded", null, false)]);
+        var entity = model.Entities["probe.unfielded"];
+
+        entity.Path("partnerId")!.Reference.Should().BeNull("a guessed join is worse than no join");
+        model.Findings.Should().ContainSingle(finding =>
+            finding.Code == BuildCodes.ReferenceTargetFieldUnknown && finding.Target == "probe.unfielded#partnerId");
+
+        // The same declaration with the field named binds, which is the one-argument fix.
+        entity.Path("declaredId")!.Reference!.TargetField.Should().Be("code");
+        entity.Path("declaredId")!.Reference!.IsRemote.Should().BeTrue();
+    }
+
+    /// <summary>A local target's key is read from the model, so no field is needed and none is guessed.</summary>
+    [Fact]
+    public void A_local_reference_reads_its_target_key_rather_than_assuming_id()
+    {
+        Path("customerId").Reference!.TargetField.Should().Be("id", "probe.customer keys on id");
+        Model.Findings.Should().NotContain(finding => finding.Code == BuildCodes.ReferenceTargetFieldUnknown && finding.Target == "probe.order#customerId");
+    }
+
     [Fact]
     public void An_attribute_reference_to_an_unknown_local_entity_is_dropped_with_a_finding()
     {
@@ -529,5 +564,23 @@ public class ClrModelBuilderTests
         {
             public string? B { get; set; }
         }
+    }
+
+    /// <summary>
+    /// Two references into another service, one naming the target field and one not. Not
+    /// carrying <c>[OxQLType]</c>: it is declared to the builder by hand so it stays out of
+    /// the probe graph.
+    /// </summary>
+    private sealed class UnfieldedReferences
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        [OxQL.Model.Attributes.OxQLReference("partner.partner")]
+        public Guid PartnerId { get; set; }
+
+        [OxQL.Model.Attributes.OxQLReference("partner.partner", "code")]
+        public Guid DeclaredId { get; set; }
     }
 }

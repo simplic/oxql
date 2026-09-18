@@ -82,17 +82,36 @@ public class GoldenPipelineTests
     [Fact]
     public async Task A_decimal_is_matched_in_both_storage_forms()
     {
+        // F2: the text bracket is an anchored regex over every scale the driver could have
+        // written the value with, not one canonical spelling. `"12.50"` used to bind the
+        // string alternative `"12.5"` — G29 drops the trailing zero — so the value the
+        // service itself returns for a string-stored row did not find that row.
         var compiled = await Compile("""[{ "match": { "amount": { "eq": "12.50" } } }]""");
 
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { Amount: NumberDecimal("12.50") }, { Amount: "12.5" } ] } }"""));
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
+            { $match: { $or: [
+                { Amount: NumberDecimal("12.50") },
+                { Amount: { $regularExpression: { pattern: "^12\\.50*$", options: "" } } } ] } }
+            """));
 
+        // F3: an ordered comparison gets no text bracket. Mongo compares text by characters,
+        // so `$gt: "10"` admitted "9.5" and excluded "100.00"; numbers only is what $sum and
+        // $min already answer over the same member, and the rows it does not reach are named
+        // in a diagnostic instead of being silently mis-ordered.
         var range = await Compile("""[{ "match": { "amount": { "gt": 10 } } }]""");
 
-        range.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { Amount: { $gt: NumberDecimal("10") } }, { Amount: { $gt: "10" } } ] } }"""));
+        range.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { Amount: { $gt: NumberDecimal("10") } } }"""));
+        range.Bound.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == Codes.DecimalTextExcluded && diagnostic.Path == "amount");
 
+        // A regex alternative is a pattern, and $ne against a pattern compares the pattern
+        // itself rather than matching with it, so the negation is $nor of the positives.
         var negated = await Compile("""[{ "match": { "amount": { "neq": 10 } } }]""");
 
-        negated.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $and: [ { Amount: { $ne: NumberDecimal("10") } }, { Amount: { $ne: "10" } } ] } }"""));
+        negated.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
+            { $match: { $nor: [
+                { Amount: NumberDecimal("10") },
+                { Amount: { $regularExpression: { pattern: "^10(?:\\.0+)?$", options: "" } } } ] } }
+            """));
     }
 
     [Fact]
@@ -207,18 +226,22 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Group_reshapes_to_the_aliases_and_counts_groups_after_the_group()
     {
+        // G2: every leg of a composite _id is wrapped in $ifNull. A scalar $group _id
+        // normalises a missing member to null; a subdocument _id omits the field instead, so
+        // the same data bucketed null and missing together under one key and apart under two,
+        // and the row lost the member altogether.
         var compiled = await Compile("""[{ "group": { "by": [{ "path": "state", "as": "st" }, { "dateTrunc": { "path": "when", "unit": "week", "timezone": "Europe/Berlin" }, "as": "wk" }], "fields": { "n": { "count": true }, "total": { "sum": "amount" }, "kinds": { "countDistinct": "number" }, "x": { "max": { "add": ["ratio", 1] } } } } }, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $group: { _id: { st: "$State", wk: { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
+            """{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
             """{ $addFields: { kinds: { $size: "$kinds" } } }""",
             """{ $project: { st: "$_id.st", wk: "$_id.wk", n: 1, total: 1, kinds: 1, x: 1, _id: 0 } }""",
             "{ $sort: { n: -1 } }",
             "{ $limit: 6 }");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            """{ $group: { _id: { st: "$State", wk: { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
+            """{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
             """{ $addFields: { kinds: { $size: "$kinds" } } }""",
             """{ $project: { st: "$_id.st", wk: "$_id.wk", n: 1, total: 1, kinds: 1, x: 1, _id: 0 } }""",
             "{ $limit: 100001 }",
@@ -355,8 +378,8 @@ public class GoldenPipelineTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $or: [
-                { $or: [ { "Addon.Preis": NumberDecimal("1.5") }, { "Addon.Preis": "1.5" } ] },
-                { $or: [ { "Addon.Preis._v": NumberDecimal("1.5") }, { "Addon.Preis._v": "1.5" } ] } ] } }
+                { $or: [ { "Addon.Preis": NumberDecimal("1.5") }, { "Addon.Preis": { $regularExpression: { pattern: "^1\\.50*$", options: "" } } } ] },
+                { $or: [ { "Addon.Preis._v": NumberDecimal("1.5") }, { "Addon.Preis._v": { $regularExpression: { pattern: "^1\\.50*$", options: "" } } } ] } ] } }
             """));
     }
 

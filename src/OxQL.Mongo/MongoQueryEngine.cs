@@ -162,6 +162,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 if (compiled.KeyKeptAgainstProjection)
                     page[index].Remove("_id");
 
+                foreach (var storage in compiled.SortKeptAgainstProjection)
+                    RemoveAt(page[index], storage);
+
                 items.Add(CompatRows.Encode(page[index]));
             }
             else
@@ -249,8 +252,28 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Keyset, fields, 0);
     }
 
+    /// <summary>
+    /// A sort leg's value off the page's last row. The compiler keeps every paging sort path
+    /// in storage against a projection that would have dropped it, so a member that is not
+    /// there is a member the row does not hold — which is a null, and orders with one.
+    /// </summary>
     private static BsonValue ValueAt(BsonDocument document, string storage) =>
         RemoteResolver.ValueAt(document, storage) ?? BsonNull.Value;
+
+    /// <summary>Removes a dotted storage path from a document; a contract 1 row loses what only the paging read.</summary>
+    private static void RemoveAt(BsonDocument document, string storage)
+    {
+        var cut = storage.IndexOf('.', StringComparison.Ordinal);
+
+        if (cut < 0)
+        {
+            document.Remove(storage);
+            return;
+        }
+
+        if (document.TryGetValue(storage[..cut], out var inner) && inner is BsonDocument nested)
+            RemoveAt(nested, storage[(cut + 1)..]);
+    }
 
     private Refusal MapDriverError(Exception exception)
     {

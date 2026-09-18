@@ -434,9 +434,15 @@ public sealed class Shape
             bagStorage = storagePrefix + "." + bagStorage;
 
         var storage = bagStorage + "." + definitionPath;
-        var definition = Addons.TryGetValue(entity.Id, out var definitions)
-            ? definitions.FirstOrDefault(candidate => string.Equals(candidate.Path, definitionPath, StringComparison.Ordinal))
-            : null;
+        // Retire-and-recreate is the ordinary life of an addon key, and both rows survive.
+        // FirstOrDefault took whichever the source listed first and the retired check below
+        // then refused the path, never looking for the live definition behind it: the same
+        // key that /schema/addons publishes as queryable answered NOT_FILTERABLE. A live
+        // definition wins; a retired one is the answer only when there is no live one.
+        var candidates = Addons.TryGetValue(entity.Id, out var definitions)
+            ? definitions.Where(candidate => string.Equals(candidate.Path, definitionPath, StringComparison.Ordinal)).ToList()
+            : [];
+        var definition = candidates.FirstOrDefault(candidate => !candidate.Retired) ?? candidates.FirstOrDefault();
 
         if (definition is null || definition.Retired || definition.Kind == AddonKind.Object)
             return PathResolution.Ok(new ResolvedPath

@@ -162,7 +162,6 @@ public class StageRulesTests
     [InlineData("stateName", "\"Shipped\"", "\"Shipped\"")]
     [InlineData("stateName", "1", "\"Shipped\"")]
     [InlineData("initial", "\"a\"", "97")]
-    [InlineData("moneyText", "1.5", "\"1.5\"")]
     [InlineData("guidText", "\"195fb742-82b3-405e-b77b-42838eb0aaa9\"", "\"195fb742-82b3-405e-b77b-42838eb0aaa9\"")]
     [InlineData("blob", "\"AQID\"", "BinData(0, \"AQID\")")]
     public async Task An_operand_is_encoded_from_the_kind_and_the_storage_representation(string path, string operand, string expected)
@@ -198,9 +197,13 @@ public class StageRulesTests
         var bound = await Bound("""[{ "match": { "amount": { "eq": "12.50" } } }]""");
         var tolerant = Leaf(bound).Operand.Should().BeOfType<BoundOperand.Tolerant>().Subject;
 
+        // F2: the text alternative is a pattern over every scale the driver could have
+        // written the value with. It used to be the single spelling G29 produces — "12.5" —
+        // which never matches a row the driver wrote as "12.50", and 14 of the 15 rows that
+        // hold 125 000 were unreachable by the value the service itself returned for them.
         tolerant.Alternatives.Should().HaveCount(2);
         tolerant.Alternatives[0].Should().Be(new BsonDecimal128(new Decimal128(12.50m)));
-        tolerant.Alternatives[1].Should().Be(new BsonString("12.5"));
+        tolerant.Alternatives[1].Should().Be(new BsonRegularExpression("^12\\.50*$"));
 
         var typed = await Bound("""[{ "match": { "amount": { "eq": 12.5 } } }]""",
             BindHost.Context(BindHost.Options(options => options.Representation.DecimalMode = "typed")));
@@ -639,7 +642,8 @@ public class StageRulesTests
         leaves[0].Path.Kind.Should().Be(Kind.Long);
         leaves[0].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives.Should().Equal(new BsonInt64(5), new BsonString("5"));
         leaves[1].Path.Kind.Should().Be(Kind.Decimal);
-        leaves[1].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives.Should().HaveCount(2);
+        leaves[1].Operand.Should().BeOfType<BoundOperand.Single>()
+            .Which.Value.Should().Be(new BsonDecimal128(new Decimal128(1.5m)), "an ordered comparison gets no text bracket: text orders by characters, not by value");
         leaves[2].Path.Storage.Should().Be("Addon.Ablieferbelege vorhanden");
         leaves[2].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives.Should().Equal(BsonBoolean.True, new BsonString("true"));
         leaves[3].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives[1].Should().Be(new BsonString("2026-01-01T00:00:00Z"));

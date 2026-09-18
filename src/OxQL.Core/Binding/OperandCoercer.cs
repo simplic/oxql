@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Xml;
 using MongoDB.Bson;
+using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
 
@@ -19,11 +20,13 @@ public sealed class OperandCoercer
 
     private readonly OxQLOptions options;
     private readonly QueryVariables? variables;
+    private readonly List<Diagnostic>? diagnostics;
 
-    public OperandCoercer(OxQLOptions options, QueryVariables? variables)
+    public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null)
     {
         this.options = options;
         this.variables = variables;
+        this.diagnostics = diagnostics;
     }
 
     /// <summary>The operators, case-sensitive.</summary>
@@ -52,6 +55,19 @@ public sealed class OperandCoercer
 
     /// <summary>Whether <c>ignoreCase</c> applies to <paramref name="op"/> on <paramref name="kind"/>.</summary>
     public static bool IgnoreCaseApplies(string op, Kind kind) => kind == Kind.String && IgnoreCaseOperators.Contains(op);
+
+    /// <summary>
+    /// A <c>char</c> member: published as a <c>string</c> because that is what it is on the
+    /// wire, stored as its code point. It compares by value, so <c>eq</c>, <c>neq</c>,
+    /// <c>in</c>, <c>nin</c> and the ordered operators work on it; the four operators that
+    /// need text — <c>contains</c>, <c>startsWith</c>, <c>endsWith</c>, <c>regex</c> — have no
+    /// text to work on and used to reach the compiler and throw there.
+    /// </summary>
+    public static bool IsCharRepresented(ResolvedPath path) =>
+        path is not null && path.LeafKind == Kind.String && path.Leaf?.Representation.BsonType == BsonType.Int32;
+
+    /// <summary>Whether <paramref name="op"/> needs the member to carry text rather than a value.</summary>
+    public static bool NeedsText(string op) => StringOperators.Contains(op);
 
     /// <summary>Coerces one operand; null with errors added when it cannot be.</summary>
     public BoundOperand? Coerce(JsonElement? raw, ResolvedPath path, string op, int stage, List<QueryValidationError> errors)
@@ -111,8 +127,30 @@ public sealed class OperandCoercer
                 var values = new List<BsonValue>();
                 var index = 0;
 
-                foreach (var item in element.EnumerateArray())
+                foreach (var rawItem in element.EnumerateArray())
                 {
+                    var item = rawItem;
+                    var label = $"{path.Wire}[{index}]";
+
+                    // An element may be a variable wrapper of its own: the whole-array form and
+                    // the per-element form are both specified, and only the first used to work.
+                    if (item.ValueKind == JsonValueKind.Object && TryVariable(item, out var itemName))
+                    {
+                        if (!TryResolveVariable(itemName!, out item))
+                        {
+                            errors.Add(Error(Codes.UnboundVariable, $"The variable '{itemName}' is not bound.", stage, path.Wire));
+                            index++;
+                            continue;
+                        }
+
+                        if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                        {
+                            errors.Add(Error(Codes.InvalidVariable, $"The variable '{itemName}' holds {(item.ValueKind == JsonValueKind.Array ? "an array" : "an object")}; an element of '{op}' holds a value.", stage, path.Wire));
+                            index++;
+                            continue;
+                        }
+                    }
+
                     if (item.ValueKind == JsonValueKind.Null)
                     {
                         values.Add(BsonNull.Value);
@@ -120,12 +158,12 @@ public sealed class OperandCoercer
                         continue;
                     }
 
-                    var label = $"{path.Wire}[{index++}]";
+                    index++;
 
                     if (!InClosedList(item, path, kind, op, stage, errors, label))
                         continue;
 
-                    var alternatives = CoerceScalar(item, path, kind, stage, errors, label);
+                    var alternatives = CoerceScalar(item, path, kind, op, stage, errors, label);
 
                     if (alternatives is not null)
                         values.AddRange(alternatives);
@@ -181,7 +219,7 @@ public sealed class OperandCoercer
         if (!InClosedList(element, path, kind, op, stage, errors, path.Wire))
             return null;
 
-        var scalar = CoerceScalar(element, path, kind, stage, errors, path.Wire);
+        var scalar = CoerceScalar(element, path, kind, op, stage, errors, path.Wire);
 
         if (scalar is null)
             return null;
@@ -235,7 +273,7 @@ public sealed class OperandCoercer
         return count == 1 && name is not null;
     }
 
-    private IReadOnlyList<BsonValue>? CoerceScalar(JsonElement element, ResolvedPath path, Kind kind, int stage, List<QueryValidationError> errors, string label)
+    private IReadOnlyList<BsonValue>? CoerceScalar(JsonElement element, ResolvedPath path, Kind kind, string op, int stage, List<QueryValidationError> errors, string label)
     {
         var representation = path.Leaf?.Representation ?? Representation.None;
         var addon = path.Addon is not null;
@@ -272,16 +310,7 @@ public sealed class OperandCoercer
 
             case Kind.Decimal:
                 if (TryDecimal(element, out var money))
-                {
-                    var canonical = new BsonString(money.ToString("G29", CultureInfo.InvariantCulture));
-
-                    if (representation.BsonType == BsonType.String)
-                        return [canonical];
-
-                    var typed = new BsonDecimal128(new Decimal128(money));
-
-                    return addon || options.Representation.DecimalTolerant ? [typed, canonical] : [typed];
-                }
+                    return Decimal(money, path, op, representation, addon, stage, errors, label);
 
                 failure = "a decimal number";
                 break;
@@ -358,20 +387,22 @@ public sealed class OperandCoercer
 
                 if (TryInteger(element, out var number))
                 {
-                    if (representation.BsonType == BsonType.String)
+                    // The membership check does not depend on the storage: a number that names
+                    // no declared member is as wrong on a numerically stored enum as on a
+                    // string-stored one, and used to be passed through to storage unchecked —
+                    // matching nothing, or matching an undeclared stored value, with a 200.
+                    var byValue = type?.EnumValues.FirstOrDefault(value => value.Value == number);
+
+                    if (byValue is null)
                     {
-                        var byValue = type?.EnumValues.FirstOrDefault(value => value.Value == number);
-
-                        if (byValue is null)
-                        {
-                            errors.Add(Error(Codes.UnknownEnumMember, $"'{number}' is not a member of the enum at '{label}'.", stage, path.Wire));
-                            return null;
-                        }
-
-                        return [new BsonString(byValue.Name)];
+                        errors.Add(Error(Codes.UnknownEnumMember, $"'{number}' is not a member of the enum at '{label}'.", stage, path.Wire));
+                        return null;
                     }
 
-                    return representation.BsonType == BsonType.Int64 ? [new BsonInt64(number)] : [new BsonInt32(checked((int)number))];
+                    if (representation.BsonType == BsonType.String)
+                        return [new BsonString(byValue.Name)];
+
+                    return Enumeral(byValue.Value, representation, path, stage, errors, label);
                 }
 
                 if (element.ValueKind == JsonValueKind.String)
@@ -388,7 +419,7 @@ public sealed class OperandCoercer
                     if (representation.BsonType == BsonType.String)
                         return [new BsonString(member.Name)];
 
-                    return representation.BsonType == BsonType.Int64 ? [new BsonInt64(member.Value)] : [new BsonInt32(checked((int)member.Value))];
+                    return Enumeral(member.Value, representation, path, stage, errors, label);
                 }
 
                 failure = "an enum member name or number";
@@ -417,6 +448,99 @@ public sealed class OperandCoercer
 
         errors.Add(Error(Codes.InvalidOperand, $"'{label}' expects {failure ?? Expected(path)}.", stage, path.Wire));
         return null;
+    }
+
+    /// <summary>
+    /// The alternatives a decimal operand is compared against.
+    /// <para>
+    /// The typed bracket is a <c>Decimal128</c> and is exact. The text bracket — rows written
+    /// before the migration — is reached by an anchored regex over every scale the driver
+    /// could have written the value with, because one canonical spelling cannot match
+    /// <c>"125000.00"</c> and <c>"125000"</c> at once and the value the service itself returns
+    /// must find the row it came from.
+    /// </para>
+    /// <para>
+    /// An <b>ordered</b> comparison gets no text bracket at all. Mongo compares a string
+    /// bracket lexicographically, which agrees with numeric order only while every value
+    /// shares one integer width and one scale, so the bracket that was added to save those
+    /// rows is what returned wrong ones: <c>lt "100000"</c> dropped <c>"99999.99"</c> and
+    /// <c>gte "99999.99"</c> dropped <c>"125000.00"</c>. Numbers only is what <c>$sum</c>,
+    /// <c>$min</c> and <c>$max</c> already answer over the same member, it keeps the index,
+    /// and it cannot return a row on the wrong side of the bound; the rows it does not reach
+    /// are named in a diagnostic rather than silently mis-ordered. Where <em>every</em> row is
+    /// text — the member's declared representation is <c>String</c> — there is no typed
+    /// bracket to fall back to and no answer that is not a guess, so the range is refused.
+    /// </para>
+    /// </summary>
+    private IReadOnlyList<BsonValue>? Decimal(
+        decimal money,
+        ResolvedPath path,
+        string op,
+        Representation representation,
+        bool addon,
+        int stage,
+        List<QueryValidationError> errors,
+        string label)
+    {
+        var text = new BsonRegularExpression(DecimalText.ScalePattern(money));
+        var ordered = OrderedOperators.Contains(op);
+
+        if (representation.BsonType == BsonType.String)
+        {
+            if (!ordered)
+                return [text];
+
+            errors.Add(Error(
+                Codes.DecimalTextNotOrderable,
+                $"'{label}' stores its decimal as text, which orders by characters rather than by value; '{op}' over it cannot be answered correctly. Compare it with eq, neq, in or nin, or migrate the member to Decimal128.",
+                stage,
+                path.Wire));
+
+            return null;
+        }
+
+        var typed = new BsonDecimal128(new Decimal128(money));
+
+        if (!addon && !options.Representation.DecimalTolerant)
+            return [typed];
+
+        if (!ordered)
+            return [typed, text];
+
+        diagnostics?.Add(new Diagnostic
+        {
+            Code = Codes.DecimalTextExcluded,
+            Message = $"'{label}' may hold decimals written as text; '{op}' covers the numerically stored rows only, because text does not order by value.",
+            Stage = stage,
+            Path = path.Wire,
+        });
+
+        return [typed];
+    }
+
+    /// <summary>
+    /// An enum's stored number. <c>TryInteger</c> has already accepted the operand as a
+    /// <c>long</c>, so a value outside <c>Int32</c> under an <c>Int32</c> representation used
+    /// to throw <c>OverflowException</c> out of the binder and leave the caller a bare 500 —
+    /// while a value above <c>long.MaxValue</c> was correctly refused one parse earlier.
+    /// </summary>
+    private static IReadOnlyList<BsonValue>? Enumeral(long value, Representation representation, ResolvedPath path, int stage, List<QueryValidationError> errors, string label)
+    {
+        if (representation.BsonType == BsonType.Int64)
+            return [new BsonInt64(value)];
+
+        if (value is < int.MinValue or > int.MaxValue)
+        {
+            errors.Add(Error(
+                Codes.InvalidOperand,
+                $"'{value}' is outside the range the enum at '{label}' is stored in ({int.MinValue} to {int.MaxValue}).",
+                stage,
+                path.Wire));
+
+            return null;
+        }
+
+        return [new BsonInt32((int)value)];
     }
 
     /// <summary>

@@ -99,7 +99,9 @@ public sealed class Binder
     private sealed class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
     {
         private readonly OxQLOptions options = context.Options;
-        private readonly OperandCoercer coercer = new(context.Options, request.Variables);
+        private const string DefaultSelectKey = "$default";
+
+        private readonly OperandCoercer coercer = new(context.Options, request.Variables, diagnostics);
         private readonly List<BoundStage> stages = [];
         private readonly Dictionary<string, IReadOnlyList<AddonDefinition>> addons = new(StringComparer.Ordinal);
         private Shape shape = null!;
@@ -125,6 +127,14 @@ public sealed class Binder
             for (var index = 0; index < pipeline.Count; index++)
             {
                 var stage = pipeline[index];
+
+                // A null element is a caller error, not a fault: `[null]` used to reach
+                // `stage.Kind` and leave the caller a bare 500.
+                if (stage is null)
+                {
+                    errors.Add(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null));
+                    continue;
+                }
 
                 if (page is not null && stage.Kind != "page")
                 {
@@ -271,6 +281,12 @@ public sealed class Binder
 
             if (condition.Not is not null)
             {
+                if (condition.IsEmptyGroup)
+                {
+                    errors.Add(Error(Codes.EmptyLogicalGroup, "'not' has no condition.", index, null));
+                    return null;
+                }
+
                 var inner = BindCondition(condition.Not, at, index);
 
                 return inner is null ? null : new BoundCondition.Not(inner);
@@ -308,13 +324,22 @@ public sealed class Binder
             {
                 errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
                     ? $"'{condition.Path}' is unknown to the model; it can be projected, not filtered."
-                    : $"'{condition.Path}' is a {Kinds.NameOf(path.Kind)}; a filter needs a scalar.", index, condition.Path));
+                    : $"'{condition.Path}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
                 return null;
             }
 
             if (!path.IsRemote && !OperandCoercer.Applies(op, path.LeafKind))
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not apply to a {Kinds.NameOf(path.LeafKind)}.", index, condition.Path));
+                errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not apply to {Kinds.WithArticle(path.LeafKind)}.", index, condition.Path));
+                return null;
+            }
+
+            // A char is a string on the wire and a code point in storage, so the four text
+            // operators pass the kind gate above and have nothing to match against; they used
+            // to reach the compiler and throw InvalidCastException into a bare 500.
+            if (!path.IsRemote && OperandCoercer.NeedsText(op) && OperandCoercer.IsCharRepresented(path))
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path));
                 return null;
             }
 
@@ -570,6 +595,15 @@ public sealed class Binder
 
         private void BindUnwind(UnwindStage unwind, int index)
         {
+            if (!CheckStageMembers(unwind.Unknown, "unwind", "path, as, preserveNull, includeIndex", index))
+                return;
+
+            if (unwind.Path is null)
+            {
+                errors.Add(Error(Codes.UnknownPath, "An unwind names the collection to unwind under 'path'.", index, null));
+                return;
+            }
+
             if (++unwinds > options.Limits.MaxUnwindStages)
                 errors.Add(Error(Codes.MaxUnwindStagesExceeded, $"The pipeline has more than {options.Limits.MaxUnwindStages} unwind stages.", index, null));
 
@@ -613,7 +647,7 @@ public sealed class Binder
 
             if (alias is not null && indexAlias is not null && alias == indexAlias)
             {
-                errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used for both the element and the index.", index, null));
+                errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used for both the element and the index.", index, alias));
                 return;
             }
 
@@ -629,6 +663,13 @@ public sealed class Binder
 
         private void BindGroup(GroupStage group, int index)
         {
+            if (!CheckStageMembers(group.Unknown, "group", "by, fields", index))
+                return;
+
+            foreach (var by in group.By)
+                if (!CheckStageMembers(by.Unknown, "a group key", "path, dateTrunc, as", index))
+                    return;
+
             var keys = new List<GroupKey>();
             var fields = new List<Aggregate>();
             var aliases = new HashSet<string>(StringComparer.Ordinal);
@@ -640,13 +681,13 @@ public sealed class Binder
             {
                 if (!Identifier.IsMatch(by.As ?? ""))
                 {
-                    errors.Add(Error(Codes.InvalidAlias, $"'{by.As}' is not a plain identifier.", index, null));
+                    errors.Add(Error(Codes.InvalidAlias, $"'{by.As}' is not a plain identifier.", index, by.As));
                     continue;
                 }
 
                 if (!aliases.Add(by.As))
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'{by.As}' is used twice in the group.", index, null));
+                    errors.Add(Error(Codes.AliasCollision, $"'{by.As}' is used twice in the group.", index, by.As));
                     continue;
                 }
 
@@ -684,7 +725,7 @@ public sealed class Binder
 
                 if (!Kinds.IsScalar(path.Kind))
                 {
-                    errors.Add(Error(Codes.NotFilterable, $"'{by.Path}' is a {Kinds.NameOf(path.Kind)}; a group key needs a scalar.", index, by.Path));
+                    errors.Add(Error(Codes.NotFilterable, $"'{by.Path}' is {Kinds.WithArticle(path.Kind)}; a group key needs a scalar.", index, by.Path));
                     continue;
                 }
 
@@ -695,13 +736,13 @@ public sealed class Binder
             {
                 if (!Identifier.IsMatch(alias))
                 {
-                    errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, null));
+                    errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, alias));
                     continue;
                 }
 
                 if (!aliases.Add(alias))
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used twice in the group.", index, null));
+                    errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used twice in the group.", index, alias));
                     continue;
                 }
 
@@ -732,7 +773,7 @@ public sealed class Binder
 
                 if (NumericAggregates.Contains(function) && kind is not (Kind.Int or Kind.Long or Kind.Double or Kind.Decimal))
                 {
-                    errors.Add(Error(Codes.InvalidAggregateArgument, $"'{function}' needs a numeric argument; '{alias}' is over a {Kinds.NameOf(kind)}.", index, null));
+                    errors.Add(Error(Codes.InvalidAggregateArgument, $"'{function}' needs a numeric argument; '{alias}' is over {Kinds.WithArticle(kind)}.", index, null));
                     continue;
                 }
 
@@ -780,10 +821,22 @@ public sealed class Binder
 
             var timezone = string.IsNullOrWhiteSpace(trunc.Timezone) ? "UTC" : trunc.Timezone.Trim();
 
-            if (timezone != "UTC" && !TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out _))
+            if (timezone != "UTC")
             {
-                errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
-                return null;
+                // The lookup is case-insensitive and Mongo's $dateTrunc is not, so a spelling
+                // that passes here and travels on verbatim used to throw at execution and
+                // leave the caller a bare 500. The zone the lookup found carries the canonical
+                // id, which is the one that goes on the wire; a runtime without the IANA table
+                // (globalization-invariant) reports no IANA id, and there the caller's
+                // spelling is the best there is.
+                if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone))
+                {
+                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
+                    return null;
+                }
+
+                if (zone.HasIanaId)
+                    timezone = zone.Id;
             }
 
             string? weekStart = null;
@@ -806,6 +859,24 @@ public sealed class Binder
         {
             kind = Kind.Unknown;
             shapeDef = null;
+
+            // An object naming no operator the engine knows used to compile as a literal
+            // object, which Mongo evaluates to missing: {"power": …}, {"bogus": 1} and {}
+            // all answered 200 with a column of nulls under min, max, first, last and push,
+            // and were caught under sum and avg only because those check the argument's kind.
+            // An unknown aggregate function is refused; an unknown argument operator is too.
+            if (expression.Unrecognised is { } unrecognised)
+            {
+                errors.Add(Error(
+                    Codes.InvalidAggregateArgument,
+                    unrecognised.Count == 0
+                        ? $"The argument of '{function}' is an empty object; it names no path, variable, literal or operator."
+                        : $"'{string.Join(", ", unrecognised)}' is not an argument operator; one of {string.Join(", ", QueryExpression.ArithmeticOperators)} is, or a path, a literal or a variable.",
+                    index,
+                    null));
+
+                return null;
+            }
 
             if (expression.IsPath)
             {
@@ -897,8 +968,13 @@ public sealed class Binder
 
         // ---- project -------------------------------------------------------------------------
 
-        private void BindProject(ProjectStage project, int index)
+        private void BindProject(ProjectStage rawProject, int index)
         {
+            var project = ExpandDefault(rawProject, index);
+
+            if (project is null)
+                return;
+
             if (project.Fields.Count == 0)
             {
                 errors.Add(Error(Codes.MixedProjection, "A projection names at least one path.", index, null));
@@ -949,6 +1025,37 @@ public sealed class Binder
             shape = shape.WithProjection(inclusion, (inclusion ? included : excluded).Concat(inclusion && idIncluded ? [WireNames.IdWire] : Array.Empty<string>()).Concat(!inclusion && idExcluded ? [WireNames.IdWire] : Array.Empty<string>()), includeId);
         }
 
+        /// <summary>
+        /// Expands the reserved <c>$default</c> key of a projection to the entity's key and
+        /// display members — the same pair a resolve with no <c>select</c> keeps locally.
+        /// A remote resolve has no model of its target and so cannot name that pair itself;
+        /// with this the owner applies it, and the remote default is the local one rather
+        /// than the owner's whole row.
+        /// </summary>
+        private ProjectStage? ExpandDefault(ProjectStage project, int index)
+        {
+            if (!project.Fields.ContainsKey(DefaultSelectKey))
+                return project;
+
+            if (shape.Grouped || !shape.IsRootShape)
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{DefaultSelectKey}' is the entity's key and display members; the shape here is not the entity's.", index, DefaultSelectKey));
+                return null;
+            }
+
+            var fields = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var (name, value) in project.Fields)
+                if (name != DefaultSelectKey)
+                    fields[name] = value;
+
+            foreach (var wire in new[] { entity.Key?.Wire, entity.Display?.Wire })
+                if (wire is not null)
+                    fields[wire] = 1;
+
+            return new ProjectStage { Fields = fields };
+        }
+
         // ---- sort ----------------------------------------------------------------------------
 
         private void BindSort(IReadOnlyList<Models.SortField> fields, int index)
@@ -957,6 +1064,19 @@ public sealed class Binder
 
             foreach (var field in fields)
             {
+                if (field.Extra.Count > 0)
+                {
+                    errors.Add(Error(Codes.UnknownStageMember,
+                        $"A sort entry names one path; this one also names '{string.Join(", ", field.Extra)}'. Write one object per key: [{{\"{field.Path}\": \"{field.Direction}\"}}, …].", index, field.Path));
+                    continue;
+                }
+
+                if (field.Path.Length == 0)
+                {
+                    errors.Add(Error(Codes.UnknownStageMember, "A sort entry is an object of one path and a direction: {\"path\": \"asc\"}.", index, null));
+                    continue;
+                }
+
                 var ascending = field.Direction switch
                 {
                     "asc" => true,
@@ -986,7 +1106,7 @@ public sealed class Binder
                         ? $"'{field.Path}' lies in a collection; a sort needs one value per row."
                         : path.Kind == Kind.Unknown
                             ? $"'{field.Path}' is unknown to the model; it cannot order rows."
-                            : $"'{field.Path}' is a {Kinds.NameOf(path.Kind)}; a sort needs a scalar.", index, field.Path));
+                            : $"'{field.Path}' is {Kinds.WithArticle(path.Kind)}; a sort needs a scalar.", index, field.Path));
                     continue;
                 }
 
@@ -1002,10 +1122,31 @@ public sealed class Binder
             sort = stage;
         }
 
+        /// <summary>
+        /// Refuses a stage that carries a member the engine does not have. Only lookup and
+        /// resolve used to do this; every other stage was read by System.Text.Json, whose
+        /// default is to skip an unmapped member — so a page carrying <c>skip</c> instead of
+        /// <c>offset</c>, or an unwind carrying <c>preserveNulls</c>, bound with the member
+        /// dropped and the default applied, and answered a question nobody asked.
+        /// </summary>
+        private bool CheckStageMembers(IReadOnlyList<string> unknown, string stage, string members, int index)
+        {
+            if (unknown.Count == 0)
+                return true;
+
+            errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.", index, null));
+
+            return false;
+        }
+
         // ---- page ----------------------------------------------------------------------------
 
         private void BindPage(PageStage stage, int index)
         {
+            if (!CheckStageMembers(stage.Unknown, "page", "limit, offset, cursor, includeTotalCount", index))
+                return;
+
             if (page is not null)
             {
                 errors.Add(Error(Codes.MultiplePageStages, "A pipeline has at most one page stage.", index, null));
@@ -1042,13 +1183,13 @@ public sealed class Binder
 
             if (string.IsNullOrEmpty(alias) || !Identifier.IsMatch(alias))
             {
-                errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, null));
+                errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, alias));
                 return false;
             }
 
             if (shape.IsTaken(alias))
             {
-                errors.Add(Error(Codes.AliasCollision, $"'{alias}' collides with a member or an earlier alias.", index, null));
+                errors.Add(Error(Codes.AliasCollision, $"'{alias}' collides with a member or an earlier alias.", index, alias));
                 return false;
             }
 

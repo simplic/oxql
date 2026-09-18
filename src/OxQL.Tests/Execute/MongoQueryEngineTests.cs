@@ -181,7 +181,9 @@ public class MongoQueryEngineTests
         var internalError = await Refused(fault, "[]");
 
         internalError.Status.Should().Be(500);
-        internalError.Errors.Should().BeNull("details stay inside unless the host allows");
+        internalError.Errors!.Should().ContainSingle()
+            .Which.Code.Should().Be(Codes.InternalError, "the code travels even when the detail does not: a 500 with no envelope is indistinguishable from an unreachable service");
+        internalError.Errors[0].Message.Should().NotContain("boom", "the detail stays inside unless the host allows it");
 
         var (verbose, _) = Host(runner => runner.Fail = new InvalidOperationException("boom"), details: true);
         (await Refused(verbose, "[]")).Errors![0].Message.Should().Be("boom");

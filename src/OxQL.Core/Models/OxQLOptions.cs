@@ -53,6 +53,45 @@ public sealed class OxQLOptions
 
     /// <inheritdoc cref="LimitOptions.RegexMaxLength"/>
     public int RegexMaxLength { get => Limits.RegexMaxLength; set => Limits.RegexMaxLength = value; }
+
+    /// <summary>
+    /// Clamps the limits whose relationship the documentation states and nothing enforced.
+    /// Returns one sentence per adjustment, for the host to log: silence about a configuration
+    /// that breaks a feature is worse than a line at startup.
+    /// <para>
+    /// At the shipped defaults nothing is adjusted. Raise <c>MaxSemiJoinIds</c> without raising
+    /// <c>MaxOffset</c> — which is exactly what the design table told an operator to do, its
+    /// stated default being twice the implementation's — and the tail of every large id set
+    /// went out of reach: the resolver walks the owner's pages by offset, the owner refuses
+    /// above its own <c>MaxOffset</c>, and the caller sees the whole query refused with
+    /// <c>MAX_OFFSET_EXCEEDED</c> rather than the <c>SEMI_JOIN_TOO_LARGE</c> the contract
+    /// promises.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Normalise()
+    {
+        var adjustments = new List<string>();
+
+        if (Limits.MaxSemiJoinIds > Limits.MaxOffset)
+        {
+            adjustments.Add($"OxQL:Limits:MaxSemiJoinIds was {Limits.MaxSemiJoinIds}, above MaxOffset ({Limits.MaxOffset}); it is clamped to MaxOffset, because a semi-join reads the owner's ids by offset and cannot reach past it. Raise MaxOffset to raise it.");
+            Limits.MaxSemiJoinIds = Limits.MaxOffset;
+        }
+
+        if (Limits.ResolveKeyChunk > Limits.MaxPageSize)
+        {
+            adjustments.Add($"OxQL:Limits:ResolveKeyChunk was {Limits.ResolveKeyChunk}, above MaxPageSize ({Limits.MaxPageSize}); it is clamped, because a resolve chunk is asked for as one page of the owner.");
+            Limits.ResolveKeyChunk = Limits.MaxPageSize;
+        }
+
+        if (Limits.DefaultPageSize > Limits.MaxPageSize)
+        {
+            adjustments.Add($"OxQL:Limits:DefaultPageSize was {Limits.DefaultPageSize}, above MaxPageSize ({Limits.MaxPageSize}); it is clamped, because a request that names no limit would otherwise be refused for the host's own default.");
+            Limits.DefaultPageSize = Limits.MaxPageSize;
+        }
+
+        return adjustments;
+    }
 }
 
 /// <summary>Contract 1 compatibility.</summary>
@@ -122,7 +161,15 @@ public sealed class LimitOptions
     /// <summary>How many keys one remote resolve call carries.</summary>
     public int ResolveKeyChunk { get; set; } = 500;
 
-    /// <summary>The most keys one request resolves remotely; chunks beyond it are not fetched.</summary>
+    /// <summary>
+    /// The most keys one request resolves remotely; chunks beyond it are not fetched and the
+    /// page carries a <c>RESOLVE_PARTIAL</c> diagnostic.
+    /// <para>
+    /// One resolve stage cannot need more distinct keys than the page has rows, so while this
+    /// is at or above <see cref="MaxPageSize"/> the cap — and its diagnostic — cannot be
+    /// reached. Raising <c>MaxPageSize</c> past it is what brings it into play.
+    /// </para>
+    /// </summary>
     public int MaxResolveKeys { get; set; } = 2_000;
 
     /// <summary>The largest request body.</summary>

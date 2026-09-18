@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Bson;
 using OxQL.AspNetCore;
@@ -269,5 +270,61 @@ public class HostTests
         var scope = host.Runner.Calls.Single().Stages[0]["$match"].AsBsonDocument;
 
         scope["OrganizationId"].Should().Be(new BsonBinaryData(other, GuidRepresentation.Standard));
+    }
+
+    // ---- the request boundary: nothing leaves as a bare 500 ---------------------------------
+
+    /// <summary>
+    /// Four batteries each provoked a bare HTTP 500 from a malformed or unusual request, in
+    /// four different areas, while <c>INTERNAL_ERROR</c> was published, switched on by the
+    /// client and never emitted by the engine. The four causes are fixed at their sites; this
+    /// is the guard that covers the fifth, because a 500 with no envelope is reported by the
+    /// client as "the service could not be reached", which sends people to the wrong layer.
+    /// </summary>
+    [Fact]
+    public async Task An_escaped_exception_is_a_coded_internal_error_refusal_not_a_bare_500()
+    {
+        using var host = new SampleHost();
+        host.Runner.Fail = new InvalidOperationException("boom");
+
+        var response = await host.Client().PostAsync(Query, SampleHost.Json(WireSpelled));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        body!["type"]!.GetValue<string>().Should().Be("internal_error");
+        body["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InternalError);
+        body["errors"]![0]!["message"]!.GetValue<string>().Should().NotBeEmpty();
+        host.Logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("internal_error", StringComparison.Ordinal),
+            "the fault is logged whether or not the detail travels");
+    }
+
+    /// <summary>
+    /// R5. <c>{"queries":[null]}</c> answered 500 through <c>ArgumentNullException</c>, while
+    /// every neighbouring malformed shape correctly answered a coded 400.
+    /// </summary>
+    [Fact]
+    public async Task R5_a_null_query_in_a_batch_is_refused_with_a_code()
+    {
+        using var host = new SampleHost();
+
+        var response = await host.Client().PostAsync("/OxQL/batch", SampleHost.Json("""{ "queries": [null] }"""));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "a batch answers per query");
+        body!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
+        body["results"]![0]!["type"]!.GetValue<string>().Should().Be("validation_error");
+    }
+
+    /// <summary>R5. A null pipeline element is a caller error too, not a fault.</summary>
+    [Fact]
+    public async Task R5_a_null_pipeline_element_is_refused_with_a_code()
+    {
+        using var host = new SampleHost();
+
+        var response = await host.Client().PostAsync(Query, SampleHost.Json("""{ "entityType": "probe.order", "pipeline": [null] }"""));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body?.ToJsonString());
+        body!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
     }
 }

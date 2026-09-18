@@ -35,6 +35,12 @@ public static class ServiceCollectionExtensions
 
     private static IServiceCollection AddOxQLCore(this IServiceCollection services, OxQLOptions options)
     {
+        // The limits whose relationship the documentation states are enforced here rather than
+        // trusted: there was no options validator anywhere, and a configuration the design
+        // document itself recommends silently put the tail of every large id set out of reach.
+        foreach (var adjustment in options.Normalise())
+            services.AddSingleton(new OxQLOptionsAdjustment(adjustment));
+
         services.AddSingleton(options);
         services.AddSingleton(provider => new CursorCodec(provider.GetRequiredService<OxQLOptions>().Cursor.SigningKey));
         services.TryAddSingleton<IAddonDefinitionSource>(EmptyAddonDefinitionSource.Instance);
@@ -43,3 +49,6 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
+
+/// <summary>One limit the registration clamped, for the host to log at startup.</summary>
+public sealed record OxQLOptionsAdjustment(string Message);

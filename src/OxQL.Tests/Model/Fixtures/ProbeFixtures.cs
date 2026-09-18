@@ -114,7 +114,7 @@ public class OrderModel : Keyed
     [OxQLReference("crm.contact", "number")]
     public string? ContactNumber { get; set; }
 
-    [OxQLReference("vehicle.vehicle")]
+    [OxQLReference("vehicle.vehicle", "id")]
     public Guid? VehicleId { get; set; }
 
     [OxQLReference("probe.missing")]

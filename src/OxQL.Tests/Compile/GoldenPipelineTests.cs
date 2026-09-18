@@ -198,7 +198,7 @@ public class GoldenPipelineTests
             $"{{ $match: {OrgJson} }}",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: true, includeArrayIndex: "i" } }""",
             """{ $set: { it: "$Items" } }""",
-            """{ $sort: { "Items.Quantity": -1 } }""",
+            """{ $sort: { "Items.Quantity": -1, _id: 1, i: 1 } }""",
             "{ $skip: 20 }",
             "{ $limit: 11 }");
         compiled.PagingMode.Should().Be(PagingMode.Offset);
@@ -236,11 +236,14 @@ public class GoldenPipelineTests
         (await Compile("""[{ "project": { "number": 1, "shipTo.city": 1, "qrCode": 1 } }]""")).PageStages[1]
             .ShouldBeBson(BsonDocument.Parse("""{ $project: { Number: 1, "ShipTo.City": 1, QRCode: 1 } }"""));
         (await Compile("""[{ "project": { "number": 1, "id": 0 } }]""")).PageStages[1]
-            .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, _id: 0 } }"));
+            .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "the key the cursor and the tie-breaker read survives a projection that drops it");
         (await Compile("""[{ "project": { "addon": 0, "items": 0 } }]""")).PageStages[1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0, Items: 0 } }"));
         (await Compile("""[{ "project": { "addon": 0, "id": 0 } }]""")).PageStages[1]
-            .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0, _id: 0 } }"));
+            .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0 } }"), "an exclusion that names the key keeps it for the same reason");
+
+        (await Compile("""[{ "project": { "number": 1, "id": 0 } }]""")).KeyKeptAgainstProjection
+            .Should().BeTrue("a contract 1 row drops the key again in the executor");
     }
 
     [Fact]
@@ -280,6 +283,54 @@ public class GoldenPipelineTests
     }
 
     [Fact]
+    public async Task An_unwound_page_is_ordered_by_the_key_and_one_index_per_unwind()
+    {
+        // No sort of the caller's: $skip over $unwind output nothing ordered repeats and drops
+        // rows between pages, so the binder supplies the key and the compiler completes it.
+        var compiled = await Compile("""[{ "unwind": { "path": "items" } }, { "page": { "limit": 10, "offset": 20 } }]""");
+
+        ShouldBe(compiled.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            """{ $sort: { _id: 1, __oxIx0: 1 } }""",
+            """{ $unset: ["__oxIx0"] }""",
+            "{ $skip: 20 }",
+            "{ $limit: 11 }");
+
+        compiled.Bound.PagingMode.Should().Be(PagingMode.Offset);
+        compiled.Bound.Sort!.Fields.Should().ContainSingle()
+            .Which.Path.Wire.Should().Be("id", "the default sort is bound, so it reaches the canonical form and the fingerprint");
+    }
+
+    [Fact]
+    public async Task A_grouped_page_is_ordered_by_its_keys()
+    {
+        var compiled = await Compile("""[{ "group": { "by": [{ "path": "state", "as": "st" }, { "path": "number", "as": "no" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]""");
+
+        compiled.PageStages[^2].ShouldBeBson(BsonDocument.Parse("""{ $sort: { st: 1, no: 1 } }"""), "the keys are unique per group; an aggregate adds nothing to the order");
+        compiled.PageStages.Should().NotContain(stage => stage.ToJson().Contains("__oxIx"), "a group replaces the row, so no unwind index survives it");
+    }
+
+    [Fact]
+    public async Task A_keyset_cursor_survives_a_projection_that_drops_the_key()
+    {
+        // Without the key the sort reads a member that is not there and the cursor is built from
+        // null, which matches nothing: page two came back empty.
+        var compiled = await Compile("""[{ "project": { "number": 1, "id": 0 } }, { "page": { "limit": 2 } }]""");
+
+        compiled.Bound.PagingMode.Should().Be(PagingMode.Keyset);
+        compiled.KeyKeptAgainstProjection.Should().BeTrue();
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"));
+        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("{ $sort: { _id: 1 } }"));
+
+        var id = ObjectId.GenerateNewId();
+        var cursor = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["Number"] = "n" });
+
+        cursor.Fields.Should().ContainSingle()
+            .Which.Value.Should().Be((BsonValue)id, "the cursor reads the key the projection would have dropped");
+    }
+
+    [Fact]
     public async Task An_offset_cursor_after_a_group_skips()
     {
         var first = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": {} } }, { "page": { "limit": 2 } }]""");
@@ -290,6 +341,7 @@ public class GoldenPipelineTests
             $"{{ $match: {OrgJson} }}",
             """{ $group: { _id: "$State" } }""",
             """{ $project: { st: "$_id", _id: 0 } }""",
+            """{ $sort: { st: 1 } }""",
             "{ $skip: 4 }",
             "{ $limit: 3 }");
         compiled.Offset.Should().Be(4);

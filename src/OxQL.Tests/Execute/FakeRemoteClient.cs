@@ -23,6 +23,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
 
         /// <summary>Rows with a page after them, reachable through <paramref name="NextCursor"/>.</summary>
         public sealed record Page(string NextCursor, params JsonObject[] Items) : Answer;
+
+        /// <summary>A page that carries the count a semi-join's first call asks for.</summary>
+        public sealed record Counted(long TotalCount, bool Capped, bool HasNextPage, params JsonObject[] Items) : Answer;
     }
 
     /// <summary>The answer per (service, query index in the batch); a service without an entry answers no rows.</summary>
@@ -71,6 +74,16 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
                     ["items"] = new JsonArray(page.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
                     ["pageInfo"] = new JsonObject { ["hasNextPage"] = true, ["nextCursor"] = page.NextCursor },
                 },
+                Answer.Counted counted => new JsonObject
+                {
+                    ["items"] = new JsonArray(counted.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
+                    ["pageInfo"] = new JsonObject
+                    {
+                        ["hasNextPage"] = counted.HasNextPage,
+                        ["totalCount"] = counted.TotalCount,
+                        ["totalCountCapped"] = counted.Capped,
+                    },
+                },
                 Answer.Refused refused => new JsonObject
                 {
                     ["type"] = "validation_error",
@@ -86,7 +99,15 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
 
     public bool IsConfigured(string serviceKey) => Configured is null || Configured.Contains(serviceKey);
 
-    public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(Reachable.Contains(serviceKey));
+    /// <summary>How many reachability probes were answered; the health cache is measured by it.</summary>
+    public int Reachability { get; private set; }
+
+    public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken)
+    {
+        Reachability++;
+
+        return Task.FromResult(Reachable.Contains(serviceKey));
+    }
 
     /// <summary>An owner row: the target field plus the members named.</summary>
     public static JsonObject Row(string field, string key, params (string Name, object? Value)[] members)

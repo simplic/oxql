@@ -305,14 +305,14 @@ public class RemoteResolverTests
     private static readonly Guid Vehicle2 = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002");
 
     [Fact]
-    public async Task A_semi_join_follows_the_owners_cursor_when_the_ids_span_pages()
+    public async Task A_semi_join_reads_the_ids_that_span_pages_by_offset()
     {
         var (engine, runner, client) = Host(options => options.Limits.MaxPageSize = 1);
         runner.PageRows = [Row(Id1, "a", null, Vehicle1)];
         client.Script = (_, query, _) => query.Pipeline[0].Match!.Condition!.Op == "in"
             ? new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString(), ("matchCode", "V-1")))
-            : query.Pipeline[2].Page!.Cursor is null
-                ? new FakeRemoteClient.Answer.Page("owner-page-2", FakeRemoteClient.Row("id", Vehicle1.ToString()))
+            : query.Pipeline[2].Page!.Offset is null
+                ? new FakeRemoteClient.Answer.Counted(2, false, true, FakeRemoteClient.Row("id", Vehicle1.ToString()))
                 : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle2.ToString()));
 
         var result = await Success(engine, SemiJoinOneRow);
@@ -321,10 +321,11 @@ public class RemoteResolverTests
 
         var asks = client.Calls.Where(call => call.Request.Queries[0].Pipeline[0].Match!.Condition!.Op != "in").ToList();
 
-        asks.Should().HaveCount(2, "the second page is read through the owner's cursor");
-        asks[0].Request.Queries[0].Pipeline[2].Page!.Limit.Should().Be(1);
-        asks[0].Request.Queries[0].Pipeline[2].Page!.Cursor.Should().BeNull();
-        asks[1].Request.Queries[0].Pipeline[2].Page!.Cursor.Should().Be("owner-page-2");
+        asks.Should().HaveCount(2, "the count comes with the first page and the second page is addressed by offset");
+        asks[0].Request.Queries[0].Pipeline[2].Page!.IncludeTotalCount.Should().BeTrue("the first call asks how large the answer is");
+        asks[0].Request.Queries[0].Pipeline[2].Page!.Offset.Should().BeNull();
+        asks[1].Request.Queries[0].Pipeline[2].Page!.Offset.Should().Be(1);
+        asks[1].Request.Queries[0].Pipeline[2].Page!.IncludeTotalCount.Should().BeFalse("the count was answered once");
 
         var expected = new BsonDocument("$match", new BsonDocument("VehicleId", new BsonDocument("$in", new BsonArray
         {
@@ -336,21 +337,55 @@ public class RemoteResolverTests
     }
 
     [Fact]
-    public async Task A_semi_join_above_the_cap_across_pages_is_refused()
+    public async Task A_semi_join_above_the_cap_is_refused_on_the_count_without_reading_a_page()
+    {
+        var (engine, runner, client) = Host(options => options.Limits.MaxSemiJoinIds = 10);
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Counted(11, false, true, FakeRemoteClient.Row("id", Vehicle1.ToString()));
+
+        var refusal = await Refused(engine, SemiJoinOneRow);
+
+        refusal.Errors![0].Code.Should().Be(Codes.SemiJoinTooLarge);
+        client.Calls.Should().ContainSingle("the count refuses the condition after one round trip");
+        runner.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_semi_join_whose_count_the_owner_capped_walks_its_pages_and_still_refuses()
     {
         var (engine, runner, client) = Host(options =>
         {
             options.Limits.MaxPageSize = 1;
             options.Limits.MaxSemiJoinIds = 1;
         });
-        client.Script = (_, query, _) => query.Pipeline[2].Page!.Cursor is null
-            ? new FakeRemoteClient.Answer.Page("owner-page-2", FakeRemoteClient.Row("id", Vehicle1.ToString()))
+
+        // A capped count below our own cap says nothing, so the pages decide.
+        client.Script = (_, query, _) => query.Pipeline[2].Page!.Offset is null
+            ? new FakeRemoteClient.Answer.Counted(1, true, true, FakeRemoteClient.Row("id", Vehicle1.ToString()))
             : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle2.ToString()));
 
         var refusal = await Refused(engine, SemiJoinOneRow);
 
         refusal.Errors![0].Code.Should().Be(Codes.SemiJoinTooLarge);
         runner.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_second_page_of_the_same_filter_asks_the_owner_nothing()
+    {
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", null, Vehicle1)];
+        client.Script = (_, query, _) => query.Pipeline[0].Match!.Condition!.Op == "in"
+            ? new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString(), ("matchCode", "V-1")))
+            : new FakeRemoteClient.Answer.Counted(1, false, false, FakeRemoteClient.Row("id", Vehicle1.ToString()));
+
+        await Success(engine, SemiJoinOneRow);
+
+        var asked = client.Calls.Count(call => call.Request.Queries[0].Pipeline[0].Match!.Condition!.Op != "in");
+
+        await Success(engine, SemiJoinOneRow);
+
+        client.Calls.Count(call => call.Request.Queries[0].Pipeline[0].Match!.Condition!.Op != "in")
+            .Should().Be(asked, "the id list is cached per entity, organisation and condition");
     }
 
     [Fact]

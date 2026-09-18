@@ -153,11 +153,57 @@ public sealed class Binder
             if (conditions > options.Limits.MaxConditions)
                 errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
 
+            if (errors.Count == 0)
+                DefaultSort();
+
             if (page is null)
             {
                 page = new BoundStage.Page(options.Limits.DefaultPageSize, 0, null, false);
                 stages.Add(page);
             }
+        }
+
+        /// <summary>
+        /// A grouped or unwound shape pages by offset, and <c>$skip</c> over output nothing
+        /// ordered repeats and drops rows between pages. When the caller wrote no sort the
+        /// binder supplies one that is total: the group keys, which are unique per group, or the
+        /// entity key, which the compiler completes with the index of every unwind. It is bound
+        /// like any other sort, so it travels into the canonical form, the fingerprint and
+        /// explain, and a cursor issued before it existed is refused rather than silently
+        /// paging a different order.
+        /// </summary>
+        private void DefaultSort()
+        {
+            if (sort is not null || shape.IsRootShape)
+                return;
+
+            var fields = new List<BoundSortField>();
+
+            if (shape.Grouped)
+            {
+                // The keys only: an aggregate is not unique per group and adds nothing to the order.
+                foreach (var key in stages.OfType<BoundStage.Group>().LastOrDefault()?.Keys ?? [])
+                    if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
+                        fields.Add(new BoundSortField(resolved.Path!, true));
+            }
+            else if (shape.Resolve(Model.Build.WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
+            {
+                fields.Add(new BoundSortField(key.Path!, true));
+            }
+
+            // A group over no key yields exactly one row; there is nothing to order.
+            if (fields.Count == 0)
+                return;
+
+            var stage = new BoundStage.Sort(fields);
+
+            // The page stage is last when the caller wrote one, and stays last.
+            if (page is not null)
+                stages.Insert(stages.Count - 1, stage);
+            else
+                stages.Add(stage);
+
+            sort = stage;
         }
 
         public BoundPipeline Result(BoundStage.Scope scope)
@@ -420,7 +466,7 @@ public sealed class Binder
             var limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
 
             if (limit < 1 || limit > options.Limits.MaxLookupLimit)
-                errors.Add(Error(Codes.PageSizeExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent.", index, null));
+                errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
 
             stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKey.Storage!, childPath.Storage!));
             shape = shape.WithRoot(alias, new ShapeNode.Array(child, alias));

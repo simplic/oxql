@@ -139,7 +139,11 @@ public static class BoundCanonical
         _ => new JsonObject { ["unknown"] = stage.GetType().Name },
     };
 
-    private static JsonNode RenderCondition(BoundCondition condition) => condition switch
+    /// <summary>
+    /// One condition in its canonical form. Public so a caller can key a cache by the condition
+    /// it is about to ask an owner, without inventing a second rendering of the same tree.
+    /// </summary>
+    public static JsonNode RenderCondition(BoundCondition condition) => condition switch
     {
         BoundCondition.And and => new JsonObject { ["and"] = new JsonArray(and.Conditions.Select(RenderCondition).ToArray()) },
         BoundCondition.Or or => new JsonObject { ["or"] = new JsonArray(or.Conditions.Select(RenderCondition).ToArray()) },

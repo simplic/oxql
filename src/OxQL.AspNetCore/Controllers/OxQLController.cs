@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using OxQL.AspNetCore.Batch;
+using OxQL.AspNetCore.Health;
 using OxQL.AspNetCore.Models;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
@@ -69,46 +70,23 @@ public class OxQLController : ControllerBase
     }
 
     /// <summary>
-    /// The engine version, contract and capabilities, and the state of every service the model
-    /// references remotely (configured on this host, reachable right now). Always reachable.
+    /// The engine version, contract, capabilities and limits, and the state of every service the
+    /// model references remotely. Anonymous and always reachable, so it answers "why is my list
+    /// not working" from a browser; the reachability behind it is measured at most once per
+    /// <c>OxQL:Cache:HealthProbeTtlSeconds</c> and shared, so asking often costs nothing.
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Health([FromServices] IQueryEngine engine, [FromServices] IEntityModelProvider models, [FromServices] IRemoteQueryClient? client, CancellationToken cancellationToken)
+    public async Task<IActionResult> Health(
+        [FromServices] IQueryEngine engine,
+        [FromServices] IEntityModelProvider models,
+        [FromServices] RemoteHealthProbe probe,
+        [FromServices] IRemoteQueryClient? client,
+        CancellationToken cancellationToken)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-        List<RemoteServiceState>? services = null;
-
-        if (client is not null)
-        {
-            services = [];
-
-            foreach (var service in ModelOrNull(models) is { } model ? RemoteReferences.ServicesOf(model) : [])
-            {
-                var configured = client.IsConfigured(service);
-                bool? reachable = null;
-
-                if (configured)
-                {
-                    using var probe = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-                    probe.CancelAfter(TimeSpan.FromSeconds(2));
-
-                    try
-                    {
-                        reachable = await client.IsReachableAsync(service, probe.Token);
-                    }
-                    catch (Exception) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        reachable = false;
-                    }
-                }
-
-                services.Add(new RemoteServiceState(service, configured, reachable));
-            }
-        }
-
+        var services = client is null ? null : await probe.StateAsync(ModelOrNull(models), client, cancellationToken);
         var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
         return Ok(new
@@ -121,12 +99,37 @@ public class OxQLController : ControllerBase
                 contract = EngineCapabilities.Contract,
             },
             capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
+            limits = Limits(options.Limits),
             remote = services,
         });
     }
 
-    /// <summary>One service the model references remotely: known to this host, and answering right now (null when not probed).</summary>
-    public sealed record RemoteServiceState(string Service, bool Configured, bool? Reachable);
+    /// <summary>
+    /// Every limit the engine enforces. The schema document publishes the ones a caller checks a
+    /// request against before sending it; this is the whole set, for diagnosis.
+    /// </summary>
+    private static object Limits(Core.Models.LimitOptions limits) => new
+    {
+        maxPageSize = limits.MaxPageSize,
+        defaultPageSize = limits.DefaultPageSize,
+        maxPipelineStages = limits.MaxPipelineStages,
+        maxLookupStages = limits.MaxLookupStages,
+        maxUnwindStages = limits.MaxUnwindStages,
+        maxResolveStages = limits.MaxResolveStages,
+        maxGroupFields = limits.MaxGroupFields,
+        maxProjectionFields = limits.MaxProjectionFields,
+        maxConditions = limits.MaxConditions,
+        maxVariables = limits.MaxVariables,
+        maxOffset = limits.MaxOffset,
+        countCap = limits.CountCap,
+        maxSemiJoinIds = limits.MaxSemiJoinIds,
+        resolveKeyChunk = limits.ResolveKeyChunk,
+        maxResolveKeys = limits.MaxResolveKeys,
+        maxRequestBytes = limits.MaxRequestBytes,
+        maxBatchQueries = limits.MaxBatchQueries,
+        regexMaxLength = limits.RegexMaxLength,
+        maxLookupLimit = limits.MaxLookupLimit,
+    };
 
     private static Model.EntityModel? ModelOrNull(IEntityModelProvider models)
     {

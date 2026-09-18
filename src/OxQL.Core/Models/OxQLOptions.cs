@@ -2,7 +2,8 @@ namespace OxQL.Core.Models;
 
 /// <summary>
 /// The engine's configuration, bound from the host's <c>OxQL</c> section. Every limit has a
-/// default and is published in the schema's <c>limits</c>; every execution value has a
+/// default and is published on <c>GET /oxql/health</c>; the schema's <c>limits</c> carries the
+/// ones a caller checks a request against before sending it. Every execution value has a
 /// ceiling the engine clamps to. The flat limit members mirror <see cref="Limits"/> for the
 /// callers that read them before the section was nested.
 /// </summary>
@@ -68,7 +69,7 @@ public sealed class ExplainOptions
     public bool Enabled { get; set; }
 }
 
-/// <summary>Every cap a request is checked against; each is published in the schema's <c>limits</c>.</summary>
+/// <summary>Every cap a request is checked against. All are published on <c>/oxql/health</c>; the schema publishes the ones a caller can act on in advance.</summary>
 public sealed class LimitOptions
 {
     /// <summary>The largest page a request may ask for.</summary>
@@ -107,8 +108,16 @@ public sealed class LimitOptions
     /// <summary>The count above which <c>totalCount</c> is reported as the cap with <c>totalCountCapped</c>.</summary>
     public int CountCap { get; set; } = 100_000;
 
-    /// <summary>The most ids a semi-join may substitute; a larger set is refused, never truncated.</summary>
-    public int MaxSemiJoinIds { get; set; } = 10_000;
+    /// <summary>
+    /// The most ids a semi-join may substitute; a larger set is refused, never truncated.
+    /// <para>
+    /// Kept at or below the owner's <see cref="MaxOffset"/> so every page of ids is reachable by
+    /// offset and the whole set arrives in one batch. Raising it past that puts the tail of the
+    /// set out of reach, and the substituted <c>$in</c> grows with it: the list travels in every
+    /// page request and costs the database one index seek per id.
+    /// </para>
+    /// </summary>
+    public int MaxSemiJoinIds { get; set; } = 5_000;
 
     /// <summary>How many keys one remote resolve call carries.</summary>
     public int ResolveKeyChunk { get; set; } = 500;
@@ -175,6 +184,14 @@ public sealed class CacheOptions
 
     /// <summary>How long an organisation's addon definitions stay cached on replicas that did not write them.</summary>
     public int AddonDefinitionTtlSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// How long <c>/oxql/health</c> reuses the reachability it last measured. The probe calls
+    /// every service the model references, so without it an anonymous caller turns one request
+    /// into one call per service; with it that cost is paid once per interval however often the
+    /// endpoint is asked. Freshness is worth less here than the endpoint staying cheap.
+    /// </summary>
+    public int HealthProbeTtlSeconds { get; set; } = 10;
 }
 
 /// <summary>Cursor signing.</summary>

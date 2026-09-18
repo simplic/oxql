@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.Configure<OxQLEndpointOptions>(opts => configure?.Invoke(opts));
         services.AddHttpContextAccessor();
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
+        services.TryAddSingleton<Health.RemoteHealthProbe>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();
 

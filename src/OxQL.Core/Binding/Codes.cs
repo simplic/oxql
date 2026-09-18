@@ -63,6 +63,7 @@ public static class Codes
     public const string MaxVariablesExceeded = "MAX_VARIABLES_EXCEEDED";
     public const string InvalidPageLimit = "INVALID_PAGE_LIMIT";
     public const string PageSizeExceeded = "PAGE_SIZE_EXCEEDED";
+    public const string LookupLimitExceeded = "LOOKUP_LIMIT_EXCEEDED";
     public const string MaxOffsetExceeded = "MAX_OFFSET_EXCEEDED";
     public const string BatchTooLarge = "BATCH_TOO_LARGE";
     public const string RequestTooLarge = "REQUEST_TOO_LARGE";

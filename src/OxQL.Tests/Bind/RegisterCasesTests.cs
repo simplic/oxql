@@ -144,7 +144,8 @@ public class RegisterCasesTests
         var compiled = MongoCompiler.Compile(bound, Options);
 
         bound.PagingMode.Should().Be(PagingMode.Offset);
-        compiled.PageStages.Should().NotContain(stage => stage.Contains("$sort"), "no key is appended to a grouped shape");
+        compiled.PageStages.Should().ContainSingle(stage => stage.Contains("$sort"), "a grouped page is ordered by its keys or $skip pages an order Mongo never produced")
+            .Which["$sort"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("type", 1), "the group keys order the page; no key is appended to a grouped shape");
         MongoQueryEngine.NextCursor(compiled, new BsonDocument("type", 1)).Should().BeEquivalentTo(new CursorPayload(bound.Fingerprint, PagingMode.Offset, [], 1));
     }
 

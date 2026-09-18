@@ -39,6 +39,13 @@ public sealed record CompiledQuery
     public bool? AllowDiskUse { get; init; }
 
     public required int CountCap { get; init; }
+
+    /// <summary>
+    /// The projection excluded the key and the compiler kept it anyway so the sort and the
+    /// cursor have something to read. Contract 2 rows follow the shape and never show it;
+    /// a contract 1 row is rendered from the document, so the executor drops it there.
+    /// </summary>
+    public bool KeyKeptAgainstProjection { get; init; }
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline.</summary>
@@ -54,6 +61,9 @@ public static class MongoCompiler
 {
     private const string KeyStorage = "_id";
 
+    /// <summary>The prefix of an unwind index the compiler adds for paging and removes again.</summary>
+    private const string ReservedIndex = "__oxIx";
+
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
         ArgumentNullException.ThrowIfNull(bound);
@@ -64,6 +74,21 @@ public static class MongoCompiler
         var remote = new List<BoundStage.Resolve>();
         var semiJoins = new List<SemiJoinSlot>();
         var sortFields = bound.Sort?.Fields ?? [];
+
+        // Rows of an unwound shape share their parent's key, so the key alone does not order
+        // them: the index of every unwind completes it. A group replaces the row, and its keys
+        // are the order, so this is the unwound case only.
+        // `bound.Sort` is the sort the indexes complete; without one there is nothing to
+        // complete, and an index injected here would reach the rows with nothing to remove it.
+        var unwoundOffsetPaging = bound.PagingMode == PagingMode.Offset && !bound.FinalShape.Grouped && bound.Sort is not null;
+        var reservedIndexes = new List<string>();
+        IReadOnlyList<BoundSortField>? pagingSort = null;
+
+        // The key orders and identifies a page. A projection that drops it leaves the sort and
+        // the cursor reading a member that is not there, so it is kept in storage and dropped
+        // again on the way out.
+        var keepKey = bound.PagingMode == PagingMode.Keyset || unwoundOffsetPaging;
+        var keyKeptAgainstProjection = false;
 
         // The leading scope, with the keyset predicate merged in on a root shape.
         var scope = ScopeFilter(bound.Scope);
@@ -98,11 +123,20 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Unwind unwind:
+                    // The caller's index when it asked for one, otherwise a reserved one the
+                    // paging sort uses and the pipeline drops again before it skips.
+                    var indexField = unwind.IncludeIndex;
+
+                    if (unwoundOffsetPaging && indexField is null)
+                        reservedIndexes.Add(indexField = ReservedIndex + reservedIndexes.Count);
+                    else if (unwoundOffsetPaging)
+                        reservedIndexes.Add(indexField!);
+
                     emitted.Add(new BsonDocument("$unwind", new BsonDocument
                     {
                         ["path"] = "$" + unwind.Path.Storage,
                         ["preserveNullAndEmptyArrays"] = unwind.PreserveNull,
-                    }.AddIf(unwind.IncludeIndex is not null, "includeArrayIndex", unwind.IncludeIndex)));
+                    }.AddIf(indexField is not null, "includeArrayIndex", indexField)));
 
                     if (unwind.As is not null)
                         emitted.Add(new BsonDocument("$set", new BsonDocument(unwind.As, "$" + unwind.Path.Storage)));
@@ -113,8 +147,15 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote) is { } projection)
+                    if (Project(project, remote, keepKey, reservedIndexes, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
+                    break;
+
+                // The last sort is the one the page is taken in, so on an unwound shape it is
+                // emitted after the loop with the tie-breakers that make it total. Any earlier
+                // sort is the caller's own and stays where it was written.
+                case BoundStage.Sort sort when unwoundOffsetPaging && ReferenceEquals(sort, bound.Sort):
+                    pagingSort = sort.Fields;
                     break;
 
                 case BoundStage.Sort sort:
@@ -139,8 +180,28 @@ public static class MongoCompiler
             }
         }
 
-        if (!sortEmitted && bound.PagingMode == PagingMode.Keyset)
+        if (pagingSort is not null)
+        {
+            stages.Add(Sort(pagingSort, tieBreak: true, reservedIndexes));
+
+            // What ordered the page and was never asked for has no business in a row. An offset
+            // cursor carries only its offset, so the key is free to go here; a keyset cursor
+            // reads it off the last row and keeps it (stripped from a contract 1 row instead).
+            var drop = reservedIndexes.Where(name => name.StartsWith(ReservedIndex, StringComparison.Ordinal)).ToList();
+
+            if (keyKeptAgainstProjection)
+            {
+                drop.Add(KeyStorage);
+                keyKeptAgainstProjection = false;
+            }
+
+            if (drop.Count > 0)
+                stages.Add(new BsonDocument("$unset", new BsonArray(drop)));
+        }
+        else if (!sortEmitted && bound.PagingMode == PagingMode.Keyset)
+        {
             stages.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
+        }
 
         var offset = page.Cursor is { Mode: PagingMode.Offset } offsetCursor ? offsetCursor.Offset : page.Offset;
 
@@ -170,6 +231,7 @@ public static class MongoCompiler
             MaxTimeMs = options.MaxTimeMs,
             AllowDiskUse = options.AllowDiskUse,
             CountCap = options.CountCap,
+            KeyKeptAgainstProjection = keyKeptAgainstProjection,
         };
     }
 
@@ -459,10 +521,18 @@ public static class MongoCompiler
     /// aggregate, so the member survives every projection in storage; the wire output follows
     /// the shape and drops it again when it was not kept. Null when nothing is left to emit.
     /// </summary>
-    private static BsonDocument? Project(BoundStage.Project project, IReadOnlyList<BoundStage.Resolve> remoteResolves)
+    private static BsonDocument? Project(
+        BoundStage.Project project,
+        IReadOnlyList<BoundStage.Resolve> remoteResolves,
+        bool keepKey,
+        IReadOnlyList<string> reservedIndexes,
+        ref bool keyKeptAgainstProjection)
     {
         var projection = new BsonDocument();
         var kept = remoteResolves.Select(resolve => resolve.Reference.Storage).Where(storage => storage is not null).Select(storage => storage!).ToList();
+
+        // An index the paging sort still has to read survives the projection like a reference does.
+        kept.AddRange(reservedIndexes);
 
         foreach (var path in project.Paths)
         {
@@ -472,6 +542,14 @@ public static class MongoCompiler
             if (!project.Inclusion && kept.Any(storage => Covers(path.Storage, storage)))
                 continue;
 
+            // An exclusion that names the key writes it here; an inclusion leaves it to the
+            // IncludeId rule below. Both have to keep it when paging still reads it.
+            if (!project.Inclusion && path.Storage == KeyStorage && keepKey)
+            {
+                keyKeptAgainstProjection = true;
+                continue;
+            }
+
             projection[path.Storage] = project.Inclusion ? 1 : 0;
         }
 
@@ -480,8 +558,16 @@ public static class MongoCompiler
                 if (!project.Paths.Any(path => path.Storage is not null && Covers(path.Storage, storage)))
                     projection[storage] = 1;
 
+        // Excluding the key leaves the sort and the cursor reading a member that is not there,
+        // which pages an order Mongo never produced; keep it and record that the caller did not
+        // ask for it, so the row loses it again.
         if (!project.IncludeId && !projection.Contains(KeyStorage))
-            projection[KeyStorage] = 0;
+        {
+            if (keepKey)
+                keyKeptAgainstProjection = true;
+            else
+                projection[KeyStorage] = 0;
+        }
 
         return projection.ElementCount == 0 ? null : new BsonDocument("$project", projection);
     }
@@ -490,12 +576,25 @@ public static class MongoCompiler
     private static bool Covers(string projected, string reference) =>
         reference == projected || reference.StartsWith(projected + ".", StringComparison.Ordinal);
 
-    private static BsonDocument Sort(IReadOnlyList<BoundSortField> fields, bool tieBreak)
+    private static BsonDocument Sort(IReadOnlyList<BoundSortField> fields, bool tieBreak, IReadOnlyList<string>? indexes = null)
     {
         var sort = new BsonDocument();
 
         foreach (var field in fields)
             sort[field.Path.Storage!] = field.Ascending ? 1 : -1;
+
+        // The key first, then one index per unwind: rows of one parent differ only by position.
+        if (indexes is { Count: > 0 })
+        {
+            if (!sort.Contains(KeyStorage))
+                sort[KeyStorage] = 1;
+
+            foreach (var index in indexes)
+                if (!sort.Contains(index))
+                    sort[index] = 1;
+
+            return new BsonDocument("$sort", sort);
+        }
 
         if (tieBreak && !sort.Contains(KeyStorage))
             sort[KeyStorage] = 1;

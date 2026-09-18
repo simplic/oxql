@@ -42,6 +42,20 @@ public class RemoteHostTests
     }
 
     [Fact]
+    public async Task Health_probes_once_per_interval_however_often_it_is_asked()
+    {
+        var client = new FakeRemoteClient();
+        client.Reachable.Add("crm");
+
+        using var host = HostWith(client);
+
+        for (var call = 0; call < 5; call++)
+            (await host.CreateClient().GetAsync("/OxQL/health")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        client.Reachability.Should().Be(2, "one probe per referenced service, shared by every caller inside the interval");
+    }
+
+    [Fact]
     public void A_reference_into_an_unconfigured_service_stops_a_strict_host()
     {
         var client = new FakeRemoteClient { Configured = ["vehicle"] };

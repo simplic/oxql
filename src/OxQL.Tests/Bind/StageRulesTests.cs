@@ -561,7 +561,7 @@ public class StageRulesTests
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.nothing", "path": "customerId", "as": "orders" } }]""", Codes.UnknownEntity);
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "name" } }]""", Codes.AliasCollision);
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "sort": [{ "orders.number": "asc" }] }]""", Codes.NotSortable);
-        await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": 1000 } }]""", Codes.PageSizeExceeded);
+        await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": 1000 } }]""", Codes.LookupLimitExceeded);
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "localPath": "customerId", "foreignPath": "id", "as": "orders" } }]""", Codes.UnknownStageMember);
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "localPath": "customerId", "foreignPath": "id", "as": "orders" } }]""", Codes.LegacyStageUnsupported, BindHost.Context(contract: 1));
         await BindHost.ErrorAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "lookup": { "from": "probe.order", "path": "customerId", "as": "more" } }]""", Codes.MaxLookupStagesExceeded,

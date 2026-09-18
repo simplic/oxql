@@ -77,7 +77,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
         if (compiled.SemiJoins.Count > 0)
         {
-            var refused = await remote!.SemiJoinAsync(compiled, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var refused = await remote!.SemiJoinAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
             resolveCalls += compiled.SemiJoins.Select(slot => RemoteResolver.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
 
@@ -152,9 +152,23 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1])) : null;
         var items = new List<JsonNode?>(page.Count);
 
-        // Contract 1 rows come back as the driver returned them, through the v1 converter.
+        // Contract 1 rows come back as the driver returned them, through the v1 converter; a key
+        // the compiler kept against the caller's projection is theirs to lose again, and the
+        // cursor above has already read it.
         for (var index = 0; index < page.Count; index++)
-            items.Add(context.Contract == 1 ? CompatRows.Encode(page[index]) : WireEncoder.Encode(page[index], bound, resolved?[index]));
+        {
+            if (context.Contract == 1)
+            {
+                if (compiled.KeyKeptAgainstProjection)
+                    page[index].Remove("_id");
+
+                items.Add(CompatRows.Encode(page[index]));
+            }
+            else
+            {
+                items.Add(WireEncoder.Encode(page[index], bound, resolved?[index]));
+            }
+        }
 
         var result = new QueryResult
         {

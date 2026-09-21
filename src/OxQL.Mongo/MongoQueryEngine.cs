@@ -288,11 +288,29 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             case MongoCommandException command when command.Code is 292 or 16819 or 16820 or 16945:
                 return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match.");
 
+            // An accumulator over its memory cap, which spilling to disk does not lift, and a
+            // row that outgrew the document size limit: both are the query's cost, not a fault.
+            case MongoCommandException command when command.Code is 146 or 10334:
+                return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query builds a value larger than the server allows, typically a push or countDistinct over too many rows; narrow the match or group by more keys.");
+
+            // The binder validates a pattern with the .NET parser and the server compiles it
+            // with PCRE2; a construct only the first accepts is rejected here.
+            case MongoCommandException command when IsPatternRejection(command):
+                return Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]);
+
             default:
                 logger.LogError(exception, "OxQL engine fault");
                 return Refusal.Internal(includeErrorDetails ? exception.Message : null);
         }
     }
+
+    /// <summary>
+    /// Whether the server refused to compile a pattern: its dedicated code, or the generic
+    /// <c>BadValue</c> when the message names a regular expression.
+    /// </summary>
+    private static bool IsPatternRejection(MongoCommandException command) =>
+        command.Code == 51091
+        || (command.Code == 2 && command.ErrorMessage is { } message && message.Contains("egular expression", StringComparison.Ordinal));
 
     private void Log(BoundPipeline bound, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal, int resolveCalls, int resolveCacheHits)
     {

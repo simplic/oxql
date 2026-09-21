@@ -670,8 +670,9 @@ public sealed class OperandCoercer
             span = XmlConvert.ToTimeSpan(text);
             return true;
         }
-        catch (FormatException)
+        catch (Exception exception) when (exception is FormatException or OverflowException)
         {
+            // A duration that is not one, or one a TimeSpan cannot hold.
             return false;
         }
     }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace OxQL.Core.Binding;
@@ -15,11 +16,24 @@ public static class RegexGuard
     /// <summary>A backreference.</summary>
     private static readonly Regex Backreference = new(@"(?<!\\)\\[1-9]|\\k<", RegexOptions.Compiled);
 
+    /// <summary>
+    /// The longest pattern the server compiles, in UTF-8 bytes. A longer one is rejected at
+    /// execution, whatever <c>RegexMaxLength</c> allows and whether the caller wrote the pattern
+    /// or the compiler built it from a text operand.
+    /// </summary>
+    internal const int MaxPatternBytes = 32_764;
+
+    /// <summary>The two anchors the compiler may put around an escaped literal.</summary>
+    private const int AnchorBytes = 2;
+
     /// <summary>Checks a pattern; null when it passes, else the code and message.</summary>
     public static (string Code, string Message)? Check(string pattern, int maxLength)
     {
         if (pattern.Length > maxLength)
             return (Codes.RegexTooLong, $"The pattern is {pattern.Length} characters; the limit is {maxLength}.");
+
+        if (Encoding.UTF8.GetByteCount(pattern) > MaxPatternBytes)
+            return (Codes.RegexTooLong, $"The pattern is longer than the {MaxPatternBytes} bytes the database compiles.");
 
         if (Backreference.IsMatch(pattern))
             return (Codes.InvalidRegex, "Backreferences are not allowed.");
@@ -41,6 +55,14 @@ public static class RegexGuard
 
     /// <summary>Whether a pattern is anchored at its start, so an index can bound it.</summary>
     public static bool IsAnchored(string pattern) => pattern.StartsWith('^') || pattern.StartsWith(@"\A", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a literal still fits the server's pattern limit once it is escaped and anchored:
+    /// <c>contains</c>, <c>startsWith</c>, <c>endsWith</c> and every <c>ignoreCase</c> comparison
+    /// compile their text operand to a pattern.
+    /// </summary>
+    public static bool LiteralFits(string literal) =>
+        Encoding.UTF8.GetByteCount(Escape(literal)) + AnchorBytes <= MaxPatternBytes;
 
     /// <summary>Escapes a literal for use inside a pattern.</summary>
     public static string Escape(string literal) => Regex.Escape(literal);

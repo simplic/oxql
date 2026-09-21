@@ -371,6 +371,14 @@ public sealed class Binder
             if (operand is null)
                 return null;
 
+            // A text operand that is matched as a pattern is escaped and anchored by the
+            // compiler; one the database cannot compile is a caller error, refused here.
+            if (!path.IsRemote && (ignoreCase || op is "contains" or "startsWith" or "endsWith") && TextsOf(operand).Any(text => !RegexGuard.LiteralFits(text)))
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"The operand of '{op}' on '{condition.Path}' is too long to be matched as text.", index, condition.Path));
+                return null;
+            }
+
             if (op == "regex" && operand is BoundOperand.Single { Value: BsonString pattern } && !RegexGuard.IsAnchored(pattern.Value))
                 diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
@@ -379,6 +387,15 @@ public sealed class Binder
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, path.IsRemote);
         }
+
+        /// <summary>The text values of an operand: the ones a pattern comparison is built from.</summary>
+        private static IEnumerable<string> TextsOf(BoundOperand operand) => operand switch
+        {
+            BoundOperand.Single { Value: BsonString text } => [text.Value],
+            BoundOperand.Set set => set.Values.OfType<BsonString>().Select(text => text.Value),
+            BoundOperand.Tolerant tolerant => tolerant.Alternatives.OfType<BsonString>().Select(text => text.Value),
+            _ => [],
+        };
 
         private BoundCondition? BindGroup(IReadOnlyList<FilterCondition> group, Shape at, int index, string name, Func<IReadOnlyList<BoundCondition>, BoundCondition> make)
         {

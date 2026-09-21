@@ -37,6 +37,17 @@ public sealed class Shape
     /// <summary>The name of the implicit root.</summary>
     public const string ImplicitRoot = "";
 
+    /// <summary>
+    /// The most segments a path may have. A segment below an addon bag and the key of a
+    /// dictionary are the caller's text and become part of a field name in storage, so the
+    /// whole path is held to what the database accepts as one, with room to spare: no model
+    /// path and no addon definition comes near it.
+    /// </summary>
+    private const int MaxSegments = 64;
+
+    /// <summary>The longest segment a path may have, in characters; see <see cref="MaxSegments"/>.</summary>
+    private const int MaxSegmentLength = 256;
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> NoAddons =
         new Dictionary<string, IReadOnlyList<AddonDefinition>>(StringComparer.Ordinal);
 
@@ -196,6 +207,9 @@ public sealed class Shape
 
         var segments = wire.Split('.');
 
+        if (segments.Length > MaxSegments)
+            return PathResolution.Fail(Codes.InvalidPath, $"The path has {segments.Length} segments; a path has at most {MaxSegments}.");
+
         foreach (var segment in segments)
         {
             if (segment.Length == 0)
@@ -203,6 +217,12 @@ public sealed class Shape
 
             if (segment[0] == '$')
                 return PathResolution.Fail(Codes.InvalidPath, $"'{wire}' has a segment starting with '$'.");
+
+            if (segment.Length > MaxSegmentLength)
+                return PathResolution.Fail(Codes.InvalidPath, $"The path has a segment of {segment.Length} characters; a segment has at most {MaxSegmentLength}.");
+
+            if (segment.Any(char.IsControl))
+                return PathResolution.Fail(Codes.InvalidPath, "The path has a control character in it.");
         }
 
         string rootName;

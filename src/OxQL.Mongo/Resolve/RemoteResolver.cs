@@ -35,8 +35,6 @@ public sealed record ResolveResult
 /// </summary>
 public sealed class RemoteResolver
 {
-    private static readonly JsonSerializerOptions Wire = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
-
     private readonly IRemoteQueryClient client;
     private readonly ResolveCache cache;
     private readonly SemiJoinCache semiJoinIds;
@@ -472,7 +470,7 @@ public sealed class RemoteResolver
         };
 
         if (stage.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
-            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), Wire)!, Keys = ["match"] });
+            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!, Keys = ["match"] });
 
         // A projection always travels. With a select it is the caller's; without one it is
         // the reserved $default key, which the owner expands to its own entity's key and

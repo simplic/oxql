@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -171,15 +170,4 @@ public class OxQLController : ControllerBase
 
         return refusal;
     }
-}
-
-/// <summary>The serializer options the wire uses.</summary>
-public static class JsonOptions
-{
-    /// <summary>camelCase, nulls omitted.</summary>
-    public static readonly JsonSerializerOptions Wire = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
 }

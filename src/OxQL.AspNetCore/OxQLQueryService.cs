@@ -131,8 +131,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
             results.Add(outcome switch
             {
-                QueryOutcome.Success success => System.Text.Json.JsonSerializer.SerializeToNode(success.Result, Controllers.JsonOptions.Wire),
-                QueryOutcome.Refused refused => System.Text.Json.JsonSerializer.SerializeToNode(refused.Refusal, Controllers.JsonOptions.Wire),
+                QueryOutcome.Success success => System.Text.Json.JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire),
+                QueryOutcome.Refused refused => System.Text.Json.JsonSerializer.SerializeToNode(refused.Refusal, OxQLJson.Wire),
                 _ => null,
             });
         }

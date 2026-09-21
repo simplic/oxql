@@ -27,7 +27,7 @@ public sealed record CompatRewrite
 }
 
 /// <summary>
-/// Contract 1 compatibility (design §12): a request without the contract header, while
+/// Contract 1 compatibility: a request without the contract header, while
 /// <c>Compat:Enabled</c>, may spell paths as the driver stores them (<c>MatchCode</c>,
 /// <c>Status.Name</c>, <c>_id</c>) or as the CLR declares them, and may wrap operands in
 /// the v1 type hints (<c>$date</c>, <c>$uuid</c>, <c>$uuid3</c>, <c>$long</c>, <c>$decimal</c>,

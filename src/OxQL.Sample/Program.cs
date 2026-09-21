@@ -1,4 +1,3 @@
-using MongoDB.Bson;
 using OxQL.AspNetCore;
 using OxQL.Core;
 using OxQL.Core.Engine;
@@ -27,7 +26,7 @@ builder.Services.AddOxQLMongo(options =>
 // ── OxQL ASP.NET Core controller ────────────────────────────────────────
 // Routes: POST /OxQL/query, POST /OxQL/batch, GET /OxQL/health, POST /OxQL/explain (the last
 // one answers only while OxQL:Explain:Enabled is true in the configuration section above).
-builder.Services.AddOxQLAspNetCore<BsonDocument>();
+builder.Services.AddOxQLAspNetCore();
 
 // ── The organisation scope (mandatory) ──────────────────────────────────
 // The engine applies `organizationId eq <this>` at every entry into an entity and refuses to

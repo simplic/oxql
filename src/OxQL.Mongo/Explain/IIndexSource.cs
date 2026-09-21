@@ -16,7 +16,7 @@ public interface IIndexSource
     Task<IReadOnlyList<BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken);
 
     /// <summary>
-    /// The server's explain of the stages, or null when it cannot be obtained. Measured on 8.0:
+    /// The server's explain of the stages, or null when it cannot be obtained. On MongoDB 8.0
     /// the pipelined <c>$lookup</c> form the compiler emits reports <c>indexesUsed</c> only at
     /// <c>executionStats</c> verbosity (<c>queryPlanner</c> shows nothing for it), so the explain
     /// executes the page pipeline. It therefore runs under the same ceiling as the query would,

@@ -19,7 +19,8 @@ public static class ServiceCollectionExtensions
     /// <see cref="IOxQLScopeProvider"/>; without a scope provider the host fails on startup, so a
     /// service cannot run the engine unscoped.
     /// </summary>
-    /// <typeparam name="T">Kept for source compatibility with the v1 registration; the engine no longer depends on the document type.</typeparam>
+    /// <typeparam name="T">Kept for source compatibility with the 1.x registration; the engine no longer depends on the document type.</typeparam>
+    [Obsolete("The document type is no longer used. Call AddOxQLAspNetCore(configure) without a type argument; this overload will be removed in the next major version.")]
     public static IServiceCollection AddOxQLAspNetCore<T>(this IServiceCollection services, Action<OxQLEndpointOptions>? configure = null) =>
         services.AddOxQLAspNetCore(configure);
 

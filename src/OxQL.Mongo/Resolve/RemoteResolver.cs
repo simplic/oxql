@@ -28,7 +28,7 @@ public sealed record ResolveResult
 }
 
 /// <summary>
-/// The remote half of resolve (design §11): after the page is fixed, one batch per owning
+/// The remote half of resolve: after the page is fixed, one batch per owning
 /// service carrying one query per resolve stage and key chunk, cached per key for a TTL;
 /// and, before the page runs, the semi-join that asks an owner for the ids a condition on
 /// its rows selects, refusing above the cap rather than truncating.
@@ -494,10 +494,9 @@ public sealed class RemoteResolver
 
         // A projection always travels. With a select it is the caller's; without one it is
         // the reserved $default key, which the owner expands to its own entity's key and
-        // display members — the pair the local half of this stage keeps. Sending none asked
-        // the owner for whole documents: ~2 KB a row where the local path returns two members,
-        // organizationId and every other member of the owner's row included, for a caller
-        // that wanted a label.
+        // display members — the pair the local half of this stage keeps. Without a projection
+        // the owner answers with whole documents, organizationId and every other member
+        // included, to a caller that wanted a label.
         var projection = stage.RemoteSelect is { Count: > 0 } select
             ? select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal)
             : new Dictionary<string, int>(StringComparer.Ordinal) { ["$default"] = 1 };

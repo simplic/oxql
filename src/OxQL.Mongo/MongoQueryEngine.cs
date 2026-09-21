@@ -92,10 +92,16 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         IReadOnlyList<BsonDocument>? countRows = null;
         var timedOut = false;
 
+        // The page and the count run together and end together: when one fails the other is
+        // cancelled rather than left to hold a connection until its own time budget runs out.
+        using var aggregates = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<IReadOnlyList<BsonDocument>>? pageTask = null;
+        Task<IReadOnlyList<BsonDocument>>? countTask = null;
+
         try
         {
-            var pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions, cancellationToken);
-            var countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, cancellationToken) : null;
+            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions, aggregates.Token);
+            countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token) : null;
 
             rows = await pageTask.ConfigureAwait(false);
 
@@ -104,6 +110,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            aggregates.Cancel();
+            Observe(pageTask);
+            Observe(countTask);
+
             var refusal = MapDriverError(exception);
 
             timedOut = refusal.Status == 504;
@@ -184,6 +194,13 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         return QueryOutcome.Of(result);
     }
+
+    /// <summary>
+    /// Reads the failure of an aggregate nobody awaits any more, so it ends here instead of
+    /// surfacing later as an unobserved task exception. The refusal does not wait for it.
+    /// </summary>
+    private static void Observe(Task? abandoned) =>
+        abandoned?.ContinueWith(static task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
     /// <summary>What is left of the request's time budget for the owners.</summary>
     private static TimeSpan Remaining(CompiledQuery compiled, Stopwatch timer) =>

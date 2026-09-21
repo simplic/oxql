@@ -7,6 +7,7 @@ using MongoDB.Driver.Core.Connections;
 using MongoDB.Driver.Core.Servers;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
+using OxQL.Model;
 using OxQL.Mongo;
 using OxQL.Tests.Bind;
 using Xunit;
@@ -51,6 +52,85 @@ public class CoreHardeningEngineTests
 
         refusal.Status.Should().Be(400);
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidRegex);
+    }
+
+    /// <summary>Fails the page asynchronously and leaves the count running until its token is cancelled or the test releases it.</summary>
+    private sealed class FailingPageRunner(Exception pageFailure) : IAggregateRunner
+    {
+        public TaskCompletionSource<IReadOnlyList<BsonDocument>> Count { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken CountToken { get; private set; }
+
+        public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
+        {
+            if (stages[^1].Contains("$count"))
+            {
+                CountToken = cancellationToken;
+                return await Count.Task;
+            }
+
+            await Task.Yield();
+            throw pageFailure;
+        }
+    }
+
+    private const string Counted = """[{ "page": { "limit": 1, "includeTotalCount": true } }]""";
+
+    [Fact]
+    public async Task A_failed_page_cancels_the_count_that_runs_beside_it()
+    {
+        var runner = new FailingPageRunner(CommandFailure(292, "Sort exceeded memory limit"));
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
+
+        using var caller = new CancellationTokenSource();
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, Counted), BindHost.Context(), caller.Token);
+
+        outcome.Should().BeOfType<QueryOutcome.Refused>().Which.Refusal.Status.Should().Be(422);
+        runner.CountToken.IsCancellationRequested.Should().BeTrue("the count has nobody left to answer");
+        caller.IsCancellationRequested.Should().BeFalse("the caller's own token is not the engine's to cancel");
+    }
+
+    [Fact]
+    public async Task A_count_that_fails_after_the_page_did_is_observed()
+    {
+        const string marker = "count failed after the page";
+        var unobserved = new List<string>();
+
+        void Record(object? sender, UnobservedTaskExceptionEventArgs args) =>
+            unobserved.AddRange(args.Exception.InnerExceptions.Select(inner => inner.Message));
+
+        TaskScheduler.UnobservedTaskException += Record;
+
+        try
+        {
+            await RunAndAbandonAsync(marker);
+
+            for (var pass = 0; pass < 3; pass++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Record;
+        }
+
+        unobserved.Should().NotContain(marker);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static async Task RunAndAbandonAsync(string marker)
+    {
+        var runner = new FailingPageRunner(CommandFailure(292, "Sort exceeded memory limit"));
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
+
+        await engine.ExecuteAsync(BindHost.Request(Order, Counted), BindHost.Context());
+
+        runner.Count.SetException(new InvalidOperationException(marker));
+
+        // The continuation that reads the failure runs on the pool.
+        await Task.Delay(50);
     }
 
     [Fact]

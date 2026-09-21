@@ -84,9 +84,8 @@ public sealed class RemoteResolver
 
         foreach (var slot in slots)
         {
-            if (semiJoinIds.TryGet(SemiJoinCache.KeyOf(TargetOf(slot), organisation, slot.Leaf), out var cached))
-                foreach (var value in cached)
-                    slot.Ids.Add(value);
+            if (semiJoinIds.TryGet(CacheKeyOf(slot, organisation, pageSize), out var cached))
+                Fill(slot, cached);
             else
                 pending.Add(slot);
         }
@@ -194,10 +193,8 @@ public sealed class RemoteResolver
             if (plan.Ids.Count > cap)
                 return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
 
-            foreach (var value in plan.Ids)
-                slot.Ids.Add(value);
-
-            semiJoinIds.Set(SemiJoinCache.KeyOf(TargetOf(slot), organisation, slot.Leaf), plan.Ids);
+            Fill(slot, plan.Ids);
+            semiJoinIds.Set(CacheKeyOf(slot, organisation, pageSize), plan.Ids);
         }
 
         return null;
@@ -208,7 +205,8 @@ public sealed class RemoteResolver
     {
         public string Service { get; } = service;
 
-        public List<BsonValue> Ids { get; } = [];
+        /// <summary>The owner's wire values of the target field, in the order they arrived.</summary>
+        public List<string> Ids { get; } = [];
 
         public Queue<int> Queue { get; } = new();
 
@@ -224,6 +222,22 @@ public sealed class RemoteResolver
         plan.Ids.AddRange(page);
 
         return page.Count >= pageSize;
+    }
+
+    /// <summary>
+    /// The cache key of a slot: the organisation and the first-page query the owner is sent, which
+    /// between them determine every wire value the owner answers with.
+    /// </summary>
+    private static string CacheKeyOf(SemiJoinSlot slot, Guid organisation, int pageSize) =>
+        SemiJoinCache.KeyOf(organisation, SemiJoinQuery(slot, pageSize, offset: 0, count: true));
+
+    /// <summary>Fills a slot with the owner's wire values, encoded as this slot's reference member is stored.</summary>
+    private static void Fill(SemiJoinSlot slot, IReadOnlyList<string> values)
+    {
+        var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
+
+        foreach (var value in values)
+            slot.Ids.Add(OwnerValueToBson(value, reference));
     }
 
     /// <summary>The target entity a semi-join leaf reaches through.</summary>
@@ -253,16 +267,16 @@ public sealed class RemoteResolver
         return (total.GetValue<long>(), info["totalCountCapped"]?.GetValue<bool>() == true);
     }
 
-    /// <summary>The ids of one owner page, encoded as the parent's reference member is stored.</summary>
-    private static List<BsonValue> IdsOf(JsonNode result, SemiJoinSlot slot)
+    /// <summary>The target field's wire values of one owner page.</summary>
+    private static List<string> IdsOf(JsonNode result, SemiJoinSlot slot)
     {
         var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
         var field = reference.Path?.Reference?.TargetField ?? "id";
-        var values = new List<BsonValue>();
+        var values = new List<string>();
 
         foreach (var item in result["items"]!.AsArray())
             if (item?[field] is { } value)
-                values.Add(OwnerValueToBson(value, reference));
+                values.Add(value is JsonValue scalar ? scalar.ToString() : value.ToJsonString());
 
         return values;
     }
@@ -411,7 +425,9 @@ public sealed class RemoteResolver
 
     private StagePlan Plan(BoundStage.Resolve stage, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
     {
-        var selectHash = ResolveCache.HashOf(stage.RemoteSelect is null ? null : string.Join(",", stage.RemoteSelect));
+        // The select is hashed as a JSON array: a joined string would give two different lists
+        // whose paths contain the separator the same hash.
+        var selectHash = ResolveCache.HashOf(stage.RemoteSelect is null ? null : JsonSerializer.Serialize(stage.RemoteSelect));
         var filterHash = ResolveCache.HashOf(stage.RemoteFilter?.GetRawText());
         var plan = new StagePlan(stage, selectHash, filterHash, organisation);
         var misses = new List<string>();
@@ -511,9 +527,8 @@ public sealed class RemoteResolver
     }
 
     /// <summary>An owner's wire value of the target field as the reference member stores it.</summary>
-    private static BsonValue OwnerValueToBson(JsonNode value, ResolvedPath reference)
+    private static BsonValue OwnerValueToBson(string text, ResolvedPath reference)
     {
-        var text = value is JsonValue scalar ? scalar.ToString() : value.ToJsonString();
         var representation = reference.Leaf?.Representation ?? Representation.None;
 
         switch (reference.LeafKind)

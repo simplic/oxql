@@ -1,16 +1,22 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
-using MongoDB.Bson;
-using OxQL.Core.Binding;
 using OxQL.Core.Models;
 
 namespace OxQL.Mongo.Resolve;
 
 /// <summary>
 /// The id lists a semi-join asked an owner for, keyed by target entity, organisation and the
-/// canonical form of the condition. A grid paging a filtered list asks the same question on
-/// every block; without this every block pays the owner again.
+/// query the owner was sent. A grid paging a filtered list asks the same question on every
+/// block; without this every block pays the owner again.
+/// <para>
+/// An entry holds the owner's wire values, which depend on nothing but the organisation and
+/// that query: the target entity, the condition relative to it, and the target field it
+/// projects. How a parent stores its reference member is not part of the answer, so each
+/// caller encodes the values for its own member, and two references into one entity share an
+/// entry only when they ask the owner the same thing.
+/// </para>
 /// <para>
 /// Sized by id count rather than by entry, which is why this is not <see cref="ResolveCache"/>:
 /// one resolved row is one unit, a list of several thousand ids is not.
@@ -31,19 +37,21 @@ public sealed class SemiJoinCache : IDisposable
         ttl = TimeSpan.FromSeconds(Math.Max(1, options.Cache.ResolveTtlSeconds));
     }
 
-    /// <summary>The key of one semi-join answer.</summary>
-    public static string KeyOf(string targetEntity, Guid organisation, BoundCondition condition)
+    /// <summary>The key of one semi-join answer: the organisation and the first-page query its owner is sent.</summary>
+    public static string KeyOf(Guid organisation, QueryRequest ownerQuery)
     {
-        var canonical = BoundCanonical.RenderCondition(condition).ToJsonString();
-        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];
+        ArgumentNullException.ThrowIfNull(ownerQuery);
 
-        return string.Join('|', targetEntity, organisation.ToString("D"), hash);
+        var sent = JsonSerializer.Serialize(ownerQuery, OxQLJson.Wire);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sent)));
+
+        return string.Join('|', ownerQuery.EntityType, organisation.ToString("D"), hash);
     }
 
-    /// <summary>The cached ids, or false. Returned as a copy: the caller fills a live filter slot with them.</summary>
-    public bool TryGet(string key, out IReadOnlyList<BsonValue> ids)
+    /// <summary>The cached wire values, or false. The list is shared and read-only; a caller encodes it for its own reference member.</summary>
+    public bool TryGet(string key, out IReadOnlyList<string> ids)
     {
-        if (cache.TryGetValue(key, out BsonValue[]? cached) && cached is not null)
+        if (cache.TryGetValue(key, out string[]? cached) && cached is not null)
         {
             ids = cached;
             return true;
@@ -54,7 +62,7 @@ public sealed class SemiJoinCache : IDisposable
     }
 
     /// <summary>Stores one answer for the TTL, at a size of one per id.</summary>
-    public void Set(string key, IReadOnlyList<BsonValue> ids) =>
+    public void Set(string key, IReadOnlyList<string> ids) =>
         cache.Set(key, ids.ToArray(), new MemoryCacheEntryOptions { Size = Math.Max(1, ids.Count), AbsoluteExpirationRelativeToNow = ttl });
 
     /// <inheritdoc/>

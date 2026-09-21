@@ -128,11 +128,18 @@ public sealed class Binder
             {
                 var stage = pipeline[index];
 
-                // A null element is a caller error, not a fault: `[null]` used to reach
-                // `stage.Kind` and leave the caller a bare 500.
+                // A null element is a caller error, not a fault, and is refused with a code.
                 if (stage is null)
                 {
                     errors.Add(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null));
+                    continue;
+                }
+
+                // So is a known stage key whose value is null: the key is recorded, the member
+                // is not, and no stage binds from nothing.
+                if (stage.Kind is { } kind && !HasMember(stage, kind))
+                {
+                    errors.Add(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null));
                     continue;
                 }
 
@@ -666,6 +673,12 @@ public sealed class Binder
             if (!CheckStageMembers(group.Unknown, "group", "by, fields", index))
                 return;
 
+            if (group.By.Any(by => by is null) || group.Fields.Any(field => field.Value is null))
+            {
+                errors.Add(Error(Codes.UnknownStageMember, "A group key is an object of path or dateTrunc and as, and an aggregate is an object of one function; neither is null.", index, null));
+                return;
+            }
+
             foreach (var by in group.By)
                 if (!CheckStageMembers(by.Unknown, "a group key", "path, dateTrunc, as", index))
                     return;
@@ -1064,6 +1077,12 @@ public sealed class Binder
 
             foreach (var field in fields)
             {
+                if (field is null)
+                {
+                    errors.Add(Error(Codes.UnknownStageMember, "A sort entry is an object of one path and a direction: {\"path\": \"asc\"}; this one is null.", index, null));
+                    continue;
+                }
+
                 if (field.Extra.Count > 0)
                 {
                     errors.Add(Error(Codes.UnknownStageMember,
@@ -1122,12 +1141,26 @@ public sealed class Binder
             sort = stage;
         }
 
+        /// <summary>Whether the stage carries a value under its one key; the JSON literal <c>null</c> leaves none.</summary>
+        private static bool HasMember(PipelineStage stage, string kind) => kind switch
+        {
+            "match" => stage.Match is not null,
+            "lookup" => stage.Lookup is not null,
+            "resolve" => stage.Resolve is not null,
+            "unwind" => stage.Unwind is not null,
+            "group" => stage.Group is not null,
+            "project" => stage.Project is not null,
+            "sort" => stage.Sort is not null,
+            "page" => stage.Page is not null,
+            _ => false,
+        };
+
         /// <summary>
-        /// Refuses a stage that carries a member the engine does not have. Only lookup and
-        /// resolve used to do this; every other stage was read by System.Text.Json, whose
-        /// default is to skip an unmapped member — so a page carrying <c>skip</c> instead of
-        /// <c>offset</c>, or an unwind carrying <c>preserveNulls</c>, bound with the member
-        /// dropped and the default applied, and answered a question nobody asked.
+        /// Refuses a stage that carries a member the engine does not have. System.Text.Json
+        /// skips an unmapped member by default, so every stage records the names it does not
+        /// know: a page carrying <c>skip</c> instead of <c>offset</c>, or an unwind carrying
+        /// <c>preserveNulls</c>, is refused rather than bound with the member dropped and the
+        /// default applied.
         /// </summary>
         private bool CheckStageMembers(IReadOnlyList<string> unknown, string stage, string members, int index)
         {

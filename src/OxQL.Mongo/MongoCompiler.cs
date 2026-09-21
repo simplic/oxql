@@ -65,10 +65,10 @@ public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Count
 /// </summary>
 public static class MongoCompiler
 {
-    private const string KeyStorage = "_id";
+    private const string KeyStorage = Aliases.KeyStorage;
 
-    /// <summary>The prefix of an unwind index the compiler adds for paging and removes again.</summary>
-    private const string ReservedIndex = "__oxIx";
+    /// <summary>The prefix of an unwind index the compiler adds for paging and removes again; no caller alias starts with it.</summary>
+    private const string ReservedIndex = Aliases.ReservedPrefix + "oxIx";
 
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
@@ -418,7 +418,8 @@ public static class MongoCompiler
         pipeline.Add(new BsonDocument("$limit", 1));
         pipeline.Add(new BsonDocument("$project", Select(resolve.Select!)));
 
-        var temporary = resolve.As + "__arr";
+        // No caller alias ends in the suffix, so the temporary field shadows nothing.
+        var temporary = resolve.As + Aliases.ReservedSuffix;
 
         yield return new BsonDocument("$lookup", new BsonDocument
         {

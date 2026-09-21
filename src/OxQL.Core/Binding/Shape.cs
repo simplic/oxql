@@ -115,10 +115,16 @@ public sealed class Shape
             Addons);
     }
 
-    /// <summary>Whether a root name is taken: by a root, or by a member of the implicit root entity.</summary>
+    /// <summary>
+    /// Whether a root name is taken: by a root, or by a member of the implicit root entity under
+    /// its wire name or its storage name. An alias is written into the row in storage, where a
+    /// member lives under its storage name, so either spelling would shadow the member.
+    /// </summary>
     public bool IsTaken(string alias) =>
         Roots.ContainsKey(alias)
-        || (Roots.TryGetValue(ImplicitRoot, out var root) && root is ShapeNode.Entity entity && entity.Def.Root.Member(alias) is not null);
+        || (Roots.TryGetValue(ImplicitRoot, out var root) && root is ShapeNode.Entity entity
+            && (entity.Def.Root.Member(alias) is not null
+                || entity.Def.Root.Members.Any(member => string.Equals(member.StorageName, alias, StringComparison.Ordinal))));
 
     public Shape WithRoot(string alias, ShapeNode node)
     {

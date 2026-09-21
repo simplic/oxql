@@ -601,8 +601,8 @@ public class StageRulesTests
         Leaf(remote, 1).Operand.Should().BeOfType<BoundOperand.Raw>();
         remote.HasSemiJoin.Should().BeTrue();
 
-        await Error("""[{ "resolve": { "path": "number", "as": "x" } }]""", Codes.ResolveNotDeclared);
-        await Error("""[{ "resolve": { "path": "missingId", "as": "x" } }]""", Codes.ResolveNotDeclared);
+        await Error("""[{ "resolve": { "path": "number", "as": "r" } }]""", Codes.ResolveNotDeclared);
+        await Error("""[{ "resolve": { "path": "missingId", "as": "r" } }]""", Codes.ResolveNotDeclared);
         await Error("""[{ "resolve": { "path": "customerId", "as": "customer" } }]""", Codes.AliasCollision);
         await Error("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "sort": [{ "contact.name": "asc" }] }]""", Codes.ResolveNotSortable);
         await Error("""[{ "resolve": { "source": "crm.customer", "localPath": "customerId", "as": "x" } }]""", Codes.UnknownStageMember);

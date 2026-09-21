@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using MongoDB.Bson;
 using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
@@ -17,7 +16,6 @@ namespace OxQL.Core.Binding;
 /// </summary>
 public sealed class Binder
 {
-    private static readonly Regex Identifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private static readonly IReadOnlySet<string> Units = new HashSet<string>(StringComparer.Ordinal) { "year", "quarter", "month", "week", "day", "hour", "minute", "second" };
     private static readonly IReadOnlySet<string> WeekDays = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
     private static readonly IReadOnlySet<string> Aggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg", "min", "max", "first", "last", "push", "count", "countDistinct" };
@@ -709,9 +707,9 @@ public sealed class Binder
 
             foreach (var by in group.By)
             {
-                if (!Identifier.IsMatch(by.As ?? ""))
+                if (Aliases.Problem(by.As) is { } keyProblem)
                 {
-                    errors.Add(Error(Codes.InvalidAlias, $"'{by.As}' is not a plain identifier.", index, by.As));
+                    errors.Add(Error(Codes.InvalidAlias, keyProblem, index, by.As));
                     continue;
                 }
 
@@ -764,9 +762,9 @@ public sealed class Binder
 
             foreach (var (alias, aggregate) in group.Fields)
             {
-                if (!Identifier.IsMatch(alias))
+                if (Aliases.Problem(alias) is { } fieldProblem)
                 {
-                    errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, alias));
+                    errors.Add(Error(Codes.InvalidAlias, fieldProblem, index, alias));
                     continue;
                 }
 
@@ -1231,13 +1229,13 @@ public sealed class Binder
         {
             checkedAlias = alias ?? "";
 
-            if (string.IsNullOrEmpty(alias) || !Identifier.IsMatch(alias))
+            if (Aliases.Problem(alias) is { } problem)
             {
-                errors.Add(Error(Codes.InvalidAlias, $"'{alias}' is not a plain identifier.", index, alias));
+                errors.Add(Error(Codes.InvalidAlias, problem, index, alias));
                 return false;
             }
 
-            if (shape.IsTaken(alias))
+            if (shape.IsTaken(checkedAlias))
             {
                 errors.Add(Error(Codes.AliasCollision, $"'{alias}' collides with a member or an earlier alias.", index, alias));
                 return false;

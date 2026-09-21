@@ -161,6 +161,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1])) : null;
         var items = new List<JsonNode?>(page.Count);
+        var unfit = new List<string>();
 
         // Contract 1 rows come back as the driver returned them, through the v1 converter; a key
         // the compiler kept against the caller's projection is theirs to lose again, and the
@@ -179,9 +180,20 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             }
             else
             {
-                items.Add(WireEncoder.Encode(page[index], bound, resolved?[index]));
+                items.Add(WireEncoder.Encode(page[index], bound, resolved?[index], unfit));
             }
         }
+
+        // Stored values outside their kind's range travel verbatim; said once per request, by
+        // path and never by value.
+        if (unfit.Count > 0)
+            logger.LogWarning(
+                "OxQL {Entity} returned {Count} stored values verbatim because they do not fit their kind; paths={Paths} org={OrganisationId} correlation={CorrelationId}",
+                bound.Entity.Id,
+                unfit.Count,
+                string.Join(",", unfit.Distinct(StringComparer.Ordinal).Take(10)),
+                context.Organisation,
+                context.CorrelationId);
 
         var result = new QueryResult
         {

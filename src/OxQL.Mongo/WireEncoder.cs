@@ -12,6 +12,9 @@ namespace OxQL.Mongo;
 /// The output pass: walks the final shape, not the document, rendering storage names to wire
 /// names and every value by its kind in the schema's wire encoding. Members the document
 /// carries that the shape does not are omitted; <c>unknown</c> members pass through verbatim.
+/// So does a stored value its kind cannot express — a <c>Decimal128</c> <c>NaN</c>, a date outside
+/// the calendar, a duration outside <see cref="TimeSpan"/>: one such value never costs the page
+/// it is on.
 /// </summary>
 public static class WireEncoder
 {
@@ -19,7 +22,14 @@ public static class WireEncoder
     public static JsonObject Encode(BsonDocument row, BoundPipeline bound) => Encode(row, bound, null);
 
     /// <summary>Encodes one row of the final shape, with the objects a remote resolve produced for it under their aliases.</summary>
-    public static JsonObject Encode(BsonDocument row, BoundPipeline bound, IReadOnlyDictionary<string, JsonNode?>? remote)
+    public static JsonObject Encode(BsonDocument row, BoundPipeline bound, IReadOnlyDictionary<string, JsonNode?>? remote) => Encode(row, bound, remote, null);
+
+    /// <summary>
+    /// Encodes one row of the final shape, with the objects a remote resolve produced for it under
+    /// their aliases. <paramref name="unfit"/> collects the wire path of every value that did not
+    /// fit its kind and was rendered verbatim instead, so the caller can say so once.
+    /// </summary>
+    public static JsonObject Encode(BsonDocument row, BoundPipeline bound, IReadOnlyDictionary<string, JsonNode?>? remote, ICollection<string>? unfit)
     {
         var shape = bound.FinalShape;
         var result = new JsonObject();
@@ -29,45 +39,45 @@ public static class WireEncoder
             switch (node)
             {
                 case ShapeNode.Entity entity when name == Shape.ImplicitRoot:
-                    EncodeMembers(row, entity.Def.Root, result, "", shape, Shape.ImplicitRoot);
+                    EncodeMembers(row, entity.Def.Root, result, "", shape, Shape.ImplicitRoot, unfit);
                     break;
 
                 case ShapeNode.Entity entity:
                     result[name] = row.TryGetValue(name, out var resolved) && resolved is BsonDocument resolvedDocument
-                        ? EncodeObject(resolvedDocument, entity.Def.Root, name + ".", shape, name)
+                        ? EncodeObject(resolvedDocument, entity.Def.Root, name + ".", shape, name, unfit)
                         : null;
                     break;
 
                 case ShapeNode.Element element:
                     if (row.TryGetValue(name, out var elementValue))
-                        result[name] = EncodeValue(elementValue, ElementShape(element.Source), name, shape, name);
+                        result[name] = EncodeValue(elementValue, ElementShape(element.Source), name, shape, name, unfit);
                     break;
 
                 case ShapeNode.Array array:
                     if (row.TryGetValue(name, out var arrayValue) && arrayValue is BsonArray items)
                         result[name] = new JsonArray(items.Select(item => item is BsonDocument document
-                            ? (JsonNode?)EncodeObject(document, array.Target.Root, name + ".", shape, name)
+                            ? (JsonNode?)EncodeObject(document, array.Target.Root, name + ".", shape, name, unfit)
                             : Verbatim(item)).ToArray());
                     else
                         result[name] = new JsonArray();
                     break;
 
+                // The owner's row, or null when the owner had none: the local document holds
+                // nothing under the alias.
                 case ShapeNode.Remote:
-                    result[name] = remote is not null && remote.TryGetValue(name, out var resolvedRemote)
-                        ? resolvedRemote
-                        : row.TryGetValue(name, out var remoteValue) ? Verbatim(remoteValue) : null;
+                    result[name] = remote is not null && remote.TryGetValue(name, out var resolvedRemote) ? resolvedRemote : null;
                     break;
 
                 case ShapeNode.Scalar scalar:
                     if (row.TryGetValue(name, out var scalarValue))
-                        result[name] = EncodeScalar(scalarValue, scalar.Kind, null);
+                        result[name] = EncodeScalar(scalarValue, scalar.Kind, null, name, unfit);
                     break;
 
                 case ShapeNode.GroupOutput output:
                     if (row.TryGetValue(name, out var outputValue))
                         result[name] = output.Shape is not null
-                            ? EncodeValue(outputValue, output.Shape, name, shape, name)
-                            : EncodeScalar(outputValue, output.Kind, null);
+                            ? EncodeValue(outputValue, output.Shape, name, shape, name, unfit)
+                            : EncodeScalar(outputValue, output.Kind, null, name, unfit);
                     break;
             }
         }
@@ -75,16 +85,16 @@ public static class WireEncoder
         return result;
     }
 
-    private static JsonObject EncodeObject(BsonDocument document, TypeDef type, string wirePrefix, Shape shape, string root)
+    private static JsonObject EncodeObject(BsonDocument document, TypeDef type, string wirePrefix, Shape shape, string root, ICollection<string>? unfit)
     {
         var result = new JsonObject();
 
-        EncodeMembers(document, type, result, wirePrefix, shape, root);
+        EncodeMembers(document, type, result, wirePrefix, shape, root, unfit);
 
         return result;
     }
 
-    private static void EncodeMembers(BsonDocument document, TypeDef type, JsonObject into, string wirePrefix, Shape shape, string root)
+    private static void EncodeMembers(BsonDocument document, TypeDef type, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit)
     {
         foreach (var member in type.Members)
         {
@@ -100,7 +110,7 @@ public static class WireEncoder
                 ? ElementShapeOf(member)
                 : member;
 
-            into[member.WireName] = EncodeValue(value, memberShape, wire, shape, root);
+            into[member.WireName] = EncodeValue(value, memberShape, wire, shape, root, unfit);
         }
     }
 
@@ -116,8 +126,11 @@ public static class WireEncoder
         _ => shape,
     };
 
-    /// <summary>Encodes a value by its shape.</summary>
-    public static JsonNode? EncodeValue(BsonValue value, ShapeDef? shape, string wire, Shape? context, string root)
+    /// <summary>Encodes a value by its shape, at <paramref name="wire"/> under <paramref name="root"/> of the row's shape <paramref name="context"/>.</summary>
+    public static JsonNode? EncodeValue(BsonValue value, ShapeDef? shape, string wire, Shape context, string root) =>
+        EncodeValue(value, shape, wire, context, root, null);
+
+    private static JsonNode? EncodeValue(BsonValue value, ShapeDef? shape, string wire, Shape context, string root, ICollection<string>? unfit)
     {
         if (value is null || value.IsBsonNull || value.IsBsonUndefined)
             return null;
@@ -129,28 +142,26 @@ public static class WireEncoder
         {
             case Kind.Object:
                 return value is BsonDocument document && shape.Type is not null
-                    ? EncodeObject(document, shape.Type, wire + ".", context ?? Shape.ForEntity(EntityOf(shape)), root)
+                    ? EncodeObject(document, shape.Type, wire + ".", context, root, unfit)
                     : Verbatim(value);
 
             case Kind.Array:
                 return value is BsonArray array
-                    ? new JsonArray(array.Select(item => EncodeValue(item, shape.Of, wire, context, root)).ToArray())
+                    ? new JsonArray(array.Select(item => EncodeValue(item, shape.Of, wire, context, root, unfit)).ToArray())
                     : Verbatim(value);
 
             case Kind.Dictionary:
-                return EncodeDictionary(value, shape, wire, context, root);
+                return EncodeDictionary(value, shape, wire, context, root, unfit);
 
             case Kind.Unknown:
                 return Verbatim(value);
 
             default:
-                return EncodeScalar(value, shape.Kind, shape);
+                return EncodeScalar(value, shape.Kind, shape, wire, unfit);
         }
     }
 
-    private static EntityDef EntityOf(ShapeDef shape) => throw new InvalidOperationException("An object shape needs a context.");
-
-    private static JsonNode? EncodeDictionary(BsonValue value, ShapeDef shape, string wire, Shape? context, string root)
+    private static JsonNode? EncodeDictionary(BsonValue value, ShapeDef shape, string wire, Shape context, string root, ICollection<string>? unfit)
     {
         var result = new JsonObject();
         var keyWire = wire + ".*";
@@ -159,19 +170,19 @@ public static class WireEncoder
         {
             case DictionaryRepresentation.Document when value is BsonDocument document:
                 foreach (var element in document)
-                    result[element.Name] = EncodeValue(element.Value, shape.Value, keyWire, context, root);
+                    result[element.Name] = EncodeValue(element.Value, shape.Value, keyWire, context, root, unfit);
                 return result;
 
             case DictionaryRepresentation.ArrayOfDocuments when value is BsonArray pairs:
                 foreach (var pair in pairs.OfType<BsonDocument>())
                     if (pair.TryGetValue("k", out var key))
-                        result[key.ToString() ?? ""] = pair.TryGetValue("v", out var item) ? EncodeValue(item, shape.Value, keyWire, context, root) : null;
+                        result[key.ToString() ?? ""] = pair.TryGetValue("v", out var item) ? EncodeValue(item, shape.Value, keyWire, context, root, unfit) : null;
                 return result;
 
             case DictionaryRepresentation.ArrayOfArrays when value is BsonArray tuples:
                 foreach (var tuple in tuples.OfType<BsonArray>())
                     if (tuple.Count == 2)
-                        result[tuple[0].ToString() ?? ""] = EncodeValue(tuple[1], shape.Value, keyWire, context, root);
+                        result[tuple[0].ToString() ?? ""] = EncodeValue(tuple[1], shape.Value, keyWire, context, root, unfit);
                 return result;
 
             default:
@@ -179,12 +190,33 @@ public static class WireEncoder
         }
     }
 
-    /// <summary>Encodes a scalar by kind; a value whose BSON type does not fit the kind passes through verbatim.</summary>
-    public static JsonNode? EncodeScalar(BsonValue value, Kind kind, ShapeDef? shape)
+    /// <summary>
+    /// Encodes a scalar by kind. A value whose BSON type does not fit the kind passes through
+    /// verbatim, and so does one whose type fits and whose value does not: what is stored is
+    /// the database's to hold, and a row that holds it is still a row.
+    /// </summary>
+    public static JsonNode? EncodeScalar(BsonValue value, Kind kind, ShapeDef? shape) => EncodeScalar(value, kind, shape, null, null);
+
+    private static JsonNode? EncodeScalar(BsonValue value, Kind kind, ShapeDef? shape, string? wire, ICollection<string>? unfit)
     {
         if (value is null || value.IsBsonNull || value.IsBsonUndefined)
             return null;
 
+        try
+        {
+            return EncodeInRange(value, kind, shape);
+        }
+        catch (Exception exception) when (exception is OverflowException or ArgumentException)
+        {
+            // Every conversion above that leaves its range says so with one of these two.
+            unfit?.Add(wire ?? Kinds.NameOf(kind));
+
+            return Verbatim(value);
+        }
+    }
+
+    private static JsonNode? EncodeInRange(BsonValue value, Kind kind, ShapeDef? shape)
+    {
         switch (kind)
         {
             case Kind.String:
@@ -327,9 +359,27 @@ public static class WireEncoder
     /// <summary>Whether a 64-bit integer survives a JSON round trip through an IEEE-754 double.</summary>
     private static bool SafeInteger(long value) => value is >= -9007199254740991 and <= 9007199254740991;
 
+    private static bool TryDecimal(Decimal128 stored, out decimal number)
+    {
+        try
+        {
+            number = Decimal128.ToDecimal(stored);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            number = default;
+            return false;
+        }
+    }
+
     private static string Iso(DateTime utc) => utc.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
 
-    /// <summary>A value the shape does not describe, rendered by its BSON type alone.</summary>
+    /// <summary>
+    /// A value the shape does not describe, rendered by its BSON type alone. It renders every
+    /// value the database can hold: it is what the encoder falls back to, so it has nothing to
+    /// fall back to itself.
+    /// </summary>
     public static JsonNode? Verbatim(BsonValue value)
     {
         switch (value.BsonType)
@@ -370,10 +420,19 @@ public static class WireEncoder
                 return double.IsFinite(value.AsDouble) ? JsonValue.Create(value.AsDouble) : null;
 
             case BsonType.Decimal128:
-                return JsonValue.Create(Decimal128.ToDecimal(value.AsDecimal128).ToString("G29", CultureInfo.InvariantCulture));
+                // NaN, the infinities and the magnitudes a decimal cannot hold keep the
+                // database's own spelling.
+                return JsonValue.Create(TryDecimal(value.AsDecimal128, out var number)
+                    ? number.ToString("G29", CultureInfo.InvariantCulture)
+                    : value.AsDecimal128.ToString());
 
             case BsonType.DateTime:
-                return JsonValue.Create(Iso(value.ToUniversalTime()));
+                // A date outside the calendar has no ISO form; its milliseconds since the epoch do.
+                var date = (BsonDateTime)value;
+
+                return JsonValue.Create(date.IsValidDateTime
+                    ? Iso(date.ToUniversalTime())
+                    : date.MillisecondsSinceEpoch.ToString(CultureInfo.InvariantCulture));
 
             case BsonType.ObjectId:
                 return JsonValue.Create(value.AsObjectId.ToString());
@@ -383,8 +442,8 @@ public static class WireEncoder
 
                 return binary.SubType switch
                 {
-                    BsonBinarySubType.UuidStandard => JsonValue.Create(binary.ToGuid(GuidRepresentation.Standard).ToString()),
-                    BsonBinarySubType.UuidLegacy => JsonValue.Create(binary.ToGuid(GuidRepresentation.CSharpLegacy).ToString()),
+                    BsonBinarySubType.UuidStandard when binary.Bytes.Length == 16 => JsonValue.Create(binary.ToGuid(GuidRepresentation.Standard).ToString()),
+                    BsonBinarySubType.UuidLegacy when binary.Bytes.Length == 16 => JsonValue.Create(binary.ToGuid(GuidRepresentation.CSharpLegacy).ToString()),
                     _ => JsonValue.Create(Convert.ToBase64String(binary.Bytes)),
                 };
 

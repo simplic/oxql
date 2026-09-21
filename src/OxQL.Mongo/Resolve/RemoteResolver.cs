@@ -103,8 +103,8 @@ public sealed class RemoteResolver
             var queries = members.Select(slot => SemiJoinQuery(slot, pageSize, offset: 0, count: true)).ToList();
             var outcome = await CallInBatchesAsync(group.Key, queries, DeadlineBudget(deadline), cancellationToken).ConfigureAwait(false);
 
-            if (outcome.Failure is { } failure)
-                return Unanswered(group.Key, failure);
+            if (outcome.Failure is not null)
+                return Unanswered(group.Key, outcome);
 
             for (var index = 0; index < members.Count; index++)
             {
@@ -167,8 +167,8 @@ public sealed class RemoteResolver
 
             foreach (var call in calls.Select(task => task.Result))
             {
-                if (call.Outcome.Failure is { } failure)
-                    return Unanswered(call.Service, failure);
+                if (call.Outcome.Failure is not null)
+                    return Unanswered(call.Service, call.Outcome);
 
                 for (var index = 0; index < call.Entries.Count; index++)
                 {
@@ -252,8 +252,10 @@ public sealed class RemoteResolver
         return left <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : left < ceiling ? left : ceiling;
     }
 
-    private static Refusal Unanswered(string service, Failure failure) =>
-        Refusal.NotExecutable(Codes.ResolveUnavailable, $"The owner of '{service}' did not answer the semi-join ({failure}); the condition cannot be evaluated.");
+    private static Refusal Unanswered(string service, CallOutcome outcome) =>
+        Refusal.NotExecutable(Codes.ResolveUnavailable, outcome.Status is { } status
+            ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
+            : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.");
 
     private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
         Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{TargetOf(slot)}'; narrow it.", stage);
@@ -362,7 +364,9 @@ public sealed class RemoteResolver
                     Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
                     Message = failure == Failure.Timeout
                         ? $"The owner of '{call.Service}' did not answer within {options.Execution.EffectiveResolveTimeoutMs} ms; '{string.Join("', '", stagesHit)}' is null on this page."
-                        : $"The owner of '{call.Service}' could not be reached; '{string.Join("', '", stagesHit)}' is null on this page.",
+                        : call.Outcome.Status is { } status
+                            ? $"The owner of '{call.Service}' answered with HTTP {status}; '{string.Join("', '", stagesHit)}' is null on this page."
+                            : $"The owner of '{call.Service}' could not be reached; '{string.Join("', '", stagesHit)}' is null on this page.",
                     Params = new Dictionary<string, object?> { ["service"] = call.Service, ["aliases"] = stagesHit },
                 });
                 continue;
@@ -570,7 +574,8 @@ public sealed class RemoteResolver
         Unreachable,
     }
 
-    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure);
+    /// <summary>The results of a call, or why there are none; <see cref="Status"/> is set when the owner was reached and answered with an HTTP error.</summary>
+    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null);
 
     private TimeSpan Budget(TimeSpan remaining)
     {
@@ -621,6 +626,12 @@ public sealed class RemoteResolver
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return new CallOutcome([], Failure.Timeout);
+        }
+        catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested && exception.StatusCode is { } status)
+        {
+            // The owner was reached and said no: a rejected key, a body over its cap, a fault of
+            // its own. The status keeps that apart from a network that is down.
+            return new CallOutcome([], Failure.Unreachable, (int)status);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {

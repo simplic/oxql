@@ -175,7 +175,7 @@ public class OxQLController : ControllerBase
         if (refusal.Status >= 500)
             logger.LogError("OxQL refusal {Type}: {Title}", refusal.Type, refusal.Title);
         else
-            logger.LogInformation("OxQL refusal {Type} {Code}: {Message}", refusal.Type, refusal.Errors?[0].Code, refusal.Errors?[0].Message);
+            logger.LogInformation("OxQL refusal {Type} {Code}: {Message}", refusal.Type, LogText.Of(refusal.Errors?[0].Code), LogText.Of(refusal.Errors?[0].Message));
 
         return refusal;
     }

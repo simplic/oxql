@@ -7,7 +7,6 @@ using OxQL.AspNetCore.Scope;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
-using OxQL.Model;
 using OxQL.Model.Addon;
 
 namespace OxQL.AspNetCore;
@@ -18,13 +17,12 @@ namespace OxQL.AspNetCore;
 /// logs it, runs the engine, and hands the outcome to the controller.
 /// <para>
 /// It is also the boundary that guarantees the shape of an answer. Everything below it — the
-/// binder, the compiler, the operand coercion, the row encoding — is written to refuse rather
-/// than throw, and four separate live findings showed that where one of them throws anyway
-/// the caller gets a bare HTTP 500: no code, no path, no stage, no envelope, and a client that
-/// reports "the service could not be reached" for what is a caller error or an engine defect.
-/// <see cref="Guarded"/> turns any escaped exception into a coded <c>INTERNAL_ERROR</c>
-/// refusal, logged with its detail and its correlation id. The four causes are fixed at their
-/// sites; this is what covers the fifth.
+/// scope provider, the rewrite, the binder, the compiler, the row encoding — is written to
+/// refuse rather than throw, but a caller must get an envelope even where one of them throws:
+/// a bare HTTP 500 carries no code, and a client reports it as "the service could not be
+/// reached". <see cref="Guarded"/> turns any escaped exception into a coded
+/// <c>INTERNAL_ERROR</c> refusal and logs it with the request's correlation id, which the
+/// refusal's message names so the log line can be found from the response.
 /// </para>
 /// </summary>
 public sealed class OxQLQueryService : IOxQLQueryService
@@ -43,10 +41,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
     private readonly IHttpContextAccessor? httpContextAccessor;
     private readonly ILogger compatLog;
     private readonly ILogger faultLog;
-    private readonly bool includeErrorDetails;
-    private CompatBinder? compat;
-    private EntityModel? compatModel;
 
+    /// <summary>Creates the service for one request; the optional collaborators default to none.</summary>
     public OxQLQueryService(
         IQueryEngine engine,
         IOxQLScopeProvider scope,
@@ -54,8 +50,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
         IEntityModelProvider models,
         IAddonDefinitionSource? addons = null,
         IHttpContextAccessor? httpContextAccessor = null,
-        ILoggerFactory? loggerFactory = null,
-        bool includeErrorDetails = false)
+        ILoggerFactory? loggerFactory = null)
     {
         this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
         this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
@@ -65,7 +60,6 @@ public sealed class OxQLQueryService : IOxQLQueryService
         this.httpContextAccessor = httpContextAccessor;
         compatLog = loggerFactory?.CreateLogger(CompatLogCategory) ?? NullLogger.Instance;
         faultLog = loggerFactory?.CreateLogger(typeof(OxQLQueryService).FullName!) ?? NullLogger.Instance;
-        this.includeErrorDetails = includeErrorDetails;
     }
 
     /// <inheritdoc/>
@@ -74,7 +68,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken = default) =>
-        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, cancellationToken));
+        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, cancellationToken), cancellationToken);
 
     private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken)
     {
@@ -104,7 +98,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, cancellationToken));
+        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, cancellationToken), cancellationToken);
 
     private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, CancellationToken cancellationToken)
     {
@@ -142,7 +136,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, cancellationToken));
+        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, cancellationToken), cancellationToken);
 
     private async Task<ExplainOutcome> RunExplainAsync(QueryRequest request, CancellationToken cancellationToken)
     {
@@ -170,24 +164,45 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <summary>
     /// Runs <paramref name="work"/> and turns anything it throws into a coded refusal of the
-    /// right outcome shape. A cancellation the caller asked for is not a fault and travels on.
+    /// right outcome shape. A cancellation the caller asked for is not a fault and travels on;
+    /// any other cancellation (a collaborator's own timeout) is a fault like the rest.
     /// </summary>
-    private async Task<T> Guarded<T>(Func<Refusal, T> refused, Func<Task<T>> work)
+    private async Task<T> Guarded<T>(Func<Refusal, T> refused, Func<Task<T>> work, CancellationToken cancellationToken)
     {
         try
         {
             return await work().ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception exception)
         {
-            faultLog.LogError(exception, "OxQL unhandled fault on the query path; answered INTERNAL_ERROR");
+            var correlation = CorrelationOrTrace();
 
-            return refused(Refusal.Internal(includeErrorDetails ? exception.Message : null));
+            faultLog.LogError(exception, "OxQL unhandled fault on the query path; answered INTERNAL_ERROR correlation={CorrelationId}", correlation);
+
+            return refused(Refusal.Internal($"The engine could not answer this request; the detail is in the service log under the correlation id '{correlation}'."));
         }
+    }
+
+    /// <summary>The correlation id of the current request for the fault line; the scope provider may be what failed, so it is not relied on.</summary>
+    private string CorrelationOrTrace()
+    {
+        var httpContext = httpContextAccessor?.HttpContext;
+        string? correlation = null;
+
+        try
+        {
+            correlation = scope.CorrelationId(httpContext);
+        }
+        catch (Exception)
+        {
+            // The trace identifier below stands in.
+        }
+
+        return LogText.Of(correlation ?? httpContext?.TraceIdentifier) ?? "unknown";
     }
 
     /// <summary>The context of the current request.</summary>
@@ -226,20 +241,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
     /// <summary>Rewrites a contract 1 request and writes the compat log line.</summary>
     private CompatRewrite Compat(QueryRequest request, RequestContext context)
     {
-        var model = models.Model;
-
-        if (compat is null || !ReferenceEquals(compatModel, model))
-        {
-            compat = new CompatBinder(model);
-            compatModel = model;
-        }
-
-        var rewrite = compat.Rewrite(request);
+        var rewrite = new CompatBinder(models.Model).Rewrite(request);
 
         compatLog.LogInformation(
             "OxQL.Compat contract 1 request for {Entity}: firstLegacyPath={FirstLegacyPath} legacyPaths={LegacyPaths} typeHints={TypeHints} refused={Refused} user={UserId} org={OrganisationId} correlation={CorrelationId}",
-            request.EntityType,
-            rewrite.FirstLegacyPath,
+            LogText.Of(request.EntityType),
+            LogText.Of(rewrite.FirstLegacyPath),
             rewrite.LegacyPaths,
             rewrite.TypeHints,
             rewrite.Refusal?.Errors?[0].Code,

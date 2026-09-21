@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using MongoDB.Bson;
 using OxQL.Core.Cursor;
@@ -851,20 +852,18 @@ public sealed class Binder
 
             if (timezone != "UTC")
             {
-                // The lookup is case-insensitive and Mongo's $dateTrunc is not, so a spelling
-                // that passes here and travels on verbatim used to throw at execution and
-                // leave the caller a bare 500. The zone the lookup found carries the canonical
-                // id, which is the one that goes on the wire; a runtime without the IANA table
-                // (globalization-invariant) reports no IANA id, and there the caller's
-                // spelling is the best there is.
-                if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone))
+                // Mongo's $dateTrunc takes an IANA id, spelled exactly. The runtime's lookup is
+                // looser: it ignores case on some platforms and also finds a zone by its Windows
+                // id. What goes on the wire is therefore the id of the zone that was found when
+                // that is an IANA id, the IANA id the runtime maps a Windows id to otherwise,
+                // and nothing when there is no such mapping.
+                if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone) || !TryIanaId(zone, out var iana))
                 {
                     errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
                     return null;
                 }
 
-                if (zone.HasIanaId)
-                    timezone = zone.Id;
+                timezone = iana;
             }
 
             string? weekStart = null;
@@ -881,6 +880,15 @@ public sealed class Binder
             }
 
             return new DateTrunc(path, trunc.Unit!, timezone, weekStart);
+        }
+
+        private static bool TryIanaId(TimeZoneInfo zone, [NotNullWhen(true)] out string? iana)
+        {
+            if (!zone.HasIanaId)
+                return TimeZoneInfo.TryConvertWindowsIdToIanaId(zone.Id, out iana);
+
+            iana = zone.Id;
+            return true;
         }
 
         private BoundExpression? BindExpression(QueryExpression expression, int index, string function, out Kind kind, out ShapeDef? shapeDef)

@@ -25,6 +25,10 @@ public class RemoteHostTests
 
         using var host = HostWith(client);
 
+        // The first request starts the measurement and does not wait for it.
+        await host.CreateClient().GetAsync("/OxQL/health");
+        await host.Services.GetRequiredService<OxQL.AspNetCore.Health.RemoteHealthProbe>().Refreshing;
+
         var response = await host.CreateClient().GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);
 
@@ -51,6 +55,8 @@ public class RemoteHostTests
 
         for (var call = 0; call < 5; call++)
             (await host.CreateClient().GetAsync("/OxQL/health")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await host.Services.GetRequiredService<OxQL.AspNetCore.Health.RemoteHealthProbe>().Refreshing;
 
         client.Reachability.Should().Be(2, "one probe per referenced service, shared by every caller inside the interval");
     }

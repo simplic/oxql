@@ -71,21 +71,25 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// The engine version, contract, capabilities and limits, and the state of every service the
     /// model references remotely. Anonymous and always reachable, so it answers "why is my list
-    /// not working" from a browser; the reachability behind it is measured at most once per
-    /// <c>OxQL:Cache:HealthProbeTtlSeconds</c> and shared, so asking often costs nothing.
+    /// not working" from a browser. It never waits for another service: the reachability is the
+    /// last one measured, refreshed in the background at most once per
+    /// <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is null until the first
+    /// measurement has finished. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
+    /// starts no measurement; that is the form one host asks of another, so a probe never sets off
+    /// the probed service's own probes.
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Health(
+    public IActionResult Health(
         [FromServices] IQueryEngine engine,
         [FromServices] IEntityModelProvider models,
         [FromServices] RemoteHealthProbe probe,
         [FromServices] IRemoteQueryClient? client,
-        CancellationToken cancellationToken)
+        [FromQuery] bool shallow = false)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-        var services = client is null ? null : await probe.StateAsync(ModelOrNull(models), client, cancellationToken);
+        var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
         var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
         return Ok(new

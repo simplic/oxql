@@ -21,7 +21,7 @@ public static class ServiceCollectionExtensions
         return services.AddOxQLCore(options);
     }
 
-    /// <summary>Adds the options bound from a configuration section (<c>OxQL</c>), every key of Appendix A.</summary>
+    /// <summary>Adds the options bound from a configuration section (<c>OxQL</c>); the README lists every key.</summary>
     public static IServiceCollection AddOxQLCore(this IServiceCollection services, IConfiguration section, Action<OxQLOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(section);
@@ -35,9 +35,9 @@ public static class ServiceCollectionExtensions
 
     private static IServiceCollection AddOxQLCore(this IServiceCollection services, OxQLOptions options)
     {
-        // The limits whose relationship the documentation states are enforced here rather than
-        // trusted: there was no options validator anywhere, and a configuration the design
-        // document itself recommends silently put the tail of every large id set out of reach.
+        // The limits are brought into range here rather than trusted: this is the one place
+        // every configuration passes through. Each adjustment is registered so the engine can
+        // log it when it is built.
         foreach (var adjustment in options.Normalise())
             services.AddSingleton(new OxQLOptionsAdjustment(adjustment));
 
@@ -50,5 +50,5 @@ public static class ServiceCollectionExtensions
     }
 }
 
-/// <summary>One limit the registration clamped, for the host to log at startup.</summary>
+/// <summary>One limit the registration adjusted; the engine logs each as a warning when it is built.</summary>
 public sealed record OxQLOptionsAdjustment(string Message);

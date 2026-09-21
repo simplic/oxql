@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
+using OxQL.Core;
 using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
@@ -68,16 +69,25 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IIndexSource>(provider => new MongoIndexSource(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
         services.TryAddSingleton(provider => new ResolveCache(provider.GetRequiredService<OxQLOptions>()));
 
-        services.AddSingleton<IQueryEngine>(provider => new MongoQueryEngine(
-            provider.GetRequiredService<IEntityModelProvider>(),
-            provider.GetRequiredService<IAggregateRunner>(),
-            provider.GetRequiredService<CursorCodec>(),
-            provider.GetRequiredService<OxQLOptions>(),
-            provider.GetService<IRemoteQueryClient>(),
-            provider.GetService<ILogger<MongoQueryEngine>>(),
-            mongoOptions.IncludeErrorDetails,
-            provider.GetService<IIndexSource>(),
-            provider.GetRequiredService<ResolveCache>()));
+        services.AddSingleton<IQueryEngine>(provider =>
+        {
+            var logger = provider.GetService<ILogger<MongoQueryEngine>>();
+
+            // The engine is built once, so a limit the registration had to adjust is said once.
+            foreach (var adjustment in provider.GetServices<OxQLOptionsAdjustment>())
+                logger?.LogWarning("OxQL configuration adjusted: {Adjustment}", adjustment.Message);
+
+            return new MongoQueryEngine(
+                provider.GetRequiredService<IEntityModelProvider>(),
+                provider.GetRequiredService<IAggregateRunner>(),
+                provider.GetRequiredService<CursorCodec>(),
+                provider.GetRequiredService<OxQLOptions>(),
+                provider.GetService<IRemoteQueryClient>(),
+                logger,
+                mongoOptions.IncludeErrorDetails,
+                provider.GetService<IIndexSource>(),
+                provider.GetRequiredService<ResolveCache>());
+        });
 
         return services;
     }

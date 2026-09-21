@@ -55,22 +55,43 @@ public sealed class OxQLOptions
     public int RegexMaxLength { get => Limits.RegexMaxLength; set => Limits.RegexMaxLength = value; }
 
     /// <summary>
-    /// Clamps the limits whose relationship the documentation states and nothing enforced.
-    /// Returns one sentence per adjustment, for the host to log: silence about a configuration
-    /// that breaks a feature is worse than a line at startup.
+    /// Brings the limits into the range the engine can work with: every limit is at least 1
+    /// (<c>MaxOffset</c> at least 0, which turns offset paging off), and the limits whose
+    /// relationship the documentation states are clamped to it. Returns one sentence per
+    /// adjustment, which the engine logs when it is built: silence about a configuration that
+    /// breaks a feature is worse than a line at startup.
     /// <para>
-    /// At the shipped defaults nothing is adjusted. Raise <c>MaxSemiJoinIds</c> without raising
-    /// <c>MaxOffset</c> — which is exactly what the design table told an operator to do, its
-    /// stated default being twice the implementation's — and the tail of every large id set
-    /// went out of reach: the resolver walks the owner's pages by offset, the owner refuses
-    /// above its own <c>MaxOffset</c>, and the caller sees the whole query refused with
-    /// <c>MAX_OFFSET_EXCEEDED</c> rather than the <c>SEMI_JOIN_TOO_LARGE</c> the contract
-    /// promises.
+    /// At the shipped defaults nothing is adjusted. A limit below 1 refuses every request it
+    /// applies to, or reaches the database as a <c>$limit</c> it rejects. <c>MaxSemiJoinIds</c>
+    /// above <c>MaxOffset</c> puts the tail of every large id set out of reach: the resolver
+    /// walks the owner's pages by offset, the owner refuses above its own <c>MaxOffset</c>, and
+    /// the caller sees the whole query refused with <c>MAX_OFFSET_EXCEEDED</c> rather than the
+    /// <c>SEMI_JOIN_TOO_LARGE</c> the contract promises.
     /// </para>
     /// </summary>
     public IReadOnlyList<string> Normalise()
     {
         var adjustments = new List<string>();
+
+        Limits.MaxPageSize = AtLeast(1, Limits.MaxPageSize, nameof(LimitOptions.MaxPageSize), adjustments);
+        Limits.DefaultPageSize = AtLeast(1, Limits.DefaultPageSize, nameof(LimitOptions.DefaultPageSize), adjustments);
+        Limits.MaxPipelineStages = AtLeast(1, Limits.MaxPipelineStages, nameof(LimitOptions.MaxPipelineStages), adjustments);
+        Limits.MaxLookupStages = AtLeast(1, Limits.MaxLookupStages, nameof(LimitOptions.MaxLookupStages), adjustments);
+        Limits.MaxUnwindStages = AtLeast(1, Limits.MaxUnwindStages, nameof(LimitOptions.MaxUnwindStages), adjustments);
+        Limits.MaxResolveStages = AtLeast(1, Limits.MaxResolveStages, nameof(LimitOptions.MaxResolveStages), adjustments);
+        Limits.MaxGroupFields = AtLeast(1, Limits.MaxGroupFields, nameof(LimitOptions.MaxGroupFields), adjustments);
+        Limits.MaxProjectionFields = AtLeast(1, Limits.MaxProjectionFields, nameof(LimitOptions.MaxProjectionFields), adjustments);
+        Limits.MaxConditions = AtLeast(1, Limits.MaxConditions, nameof(LimitOptions.MaxConditions), adjustments);
+        Limits.MaxVariables = AtLeast(1, Limits.MaxVariables, nameof(LimitOptions.MaxVariables), adjustments);
+        Limits.MaxOffset = AtLeast(0, Limits.MaxOffset, nameof(LimitOptions.MaxOffset), adjustments);
+        Limits.CountCap = AtLeast(1, Limits.CountCap, nameof(LimitOptions.CountCap), adjustments);
+        Limits.MaxSemiJoinIds = AtLeast(1, Limits.MaxSemiJoinIds, nameof(LimitOptions.MaxSemiJoinIds), adjustments);
+        Limits.ResolveKeyChunk = AtLeast(1, Limits.ResolveKeyChunk, nameof(LimitOptions.ResolveKeyChunk), adjustments);
+        Limits.MaxResolveKeys = AtLeast(1, Limits.MaxResolveKeys, nameof(LimitOptions.MaxResolveKeys), adjustments);
+        Limits.MaxRequestBytes = AtLeast(1, Limits.MaxRequestBytes, nameof(LimitOptions.MaxRequestBytes), adjustments);
+        Limits.MaxBatchQueries = AtLeast(1, Limits.MaxBatchQueries, nameof(LimitOptions.MaxBatchQueries), adjustments);
+        Limits.RegexMaxLength = AtLeast(1, Limits.RegexMaxLength, nameof(LimitOptions.RegexMaxLength), adjustments);
+        Limits.MaxLookupLimit = AtLeast(1, Limits.MaxLookupLimit, nameof(LimitOptions.MaxLookupLimit), adjustments);
 
         if (Limits.MaxSemiJoinIds > Limits.MaxOffset)
         {
@@ -91,6 +112,16 @@ public sealed class OxQLOptions
         }
 
         return adjustments;
+    }
+
+    private static int AtLeast(int minimum, int value, string name, List<string> adjustments)
+    {
+        if (value >= minimum)
+            return value;
+
+        adjustments.Add($"OxQL:Limits:{name} was {value}; it is raised to {minimum}, the least the engine can work with.");
+
+        return minimum;
     }
 }
 

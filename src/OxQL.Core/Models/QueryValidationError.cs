@@ -23,23 +23,3 @@ public sealed record QueryValidationError
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Path { get; init; }
 }
-
-/// <summary>Thrown by callers that want a refusal as an exception; the engine itself never throws for a caller error.</summary>
-public sealed class QueryValidationException : Exception
-{
-    /// <summary>The errors.</summary>
-    public IReadOnlyList<QueryValidationError> Errors { get; }
-
-    /// <summary>Wraps a list of errors.</summary>
-    public QueryValidationException(IReadOnlyList<QueryValidationError> errors)
-        : base($"Query validation failed with {errors.Count} error(s): {(errors.Count > 0 ? errors[0].Message : "")}")
-    {
-        Errors = errors;
-    }
-
-    /// <summary>Wraps one message as an internal error.</summary>
-    public QueryValidationException(string message) : base(message)
-    {
-        Errors = [new QueryValidationError { Code = Binding.Codes.InternalError, Message = message }];
-    }
-}

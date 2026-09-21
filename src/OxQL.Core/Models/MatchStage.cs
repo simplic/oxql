@@ -13,22 +13,6 @@ public sealed record MatchStage
 {
     /// <summary>The condition, or null for match-all.</summary>
     public FilterCondition? Condition { get; init; }
-
-    /// <summary>Logical AND conditions (the condition when it is an <c>and</c> group).</summary>
-    [JsonIgnore]
-    public IReadOnlyList<FilterCondition>? And => Condition?.And;
-
-    /// <summary>Logical OR conditions (the condition when it is an <c>or</c> group).</summary>
-    [JsonIgnore]
-    public IReadOnlyList<FilterCondition>? Or => Condition?.Or;
-
-    /// <summary>Logical NOT (the condition when it is a <c>not</c> group).</summary>
-    [JsonIgnore]
-    public FilterCondition? Not => Condition?.Not;
-
-    /// <summary>Returns <c>true</c> when this stage carries no condition (match everything).</summary>
-    [JsonIgnore]
-    public bool IsMatchAll => Condition is null;
 }
 
 /// <summary>Options that modify a condition.</summary>
@@ -71,10 +55,6 @@ public sealed record FilterCondition
 
     /// <summary>The operand of a <c>not</c> group.</summary>
     public FilterCondition? Not { get; init; }
-
-    /// <summary>True for a logical group.</summary>
-    [JsonIgnore]
-    public bool IsLogical => And is not null || Or is not null || Not is not null;
 
     /// <summary>True for an <c>any</c> condition.</summary>
     [JsonIgnore]

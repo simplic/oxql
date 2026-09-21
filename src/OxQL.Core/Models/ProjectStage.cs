@@ -21,14 +21,6 @@ public sealed record ProjectStage
     /// Nested input is flattened here during deserialization.
     /// </summary>
     public required IReadOnlyDictionary<string, int> Fields { get; init; }
-
-    /// <summary>
-    /// Convenience list of field paths whose projection value is <c>1</c> (included).
-    /// Used by downstream builders and validators — no JSON mapping needed.
-    /// </summary>
-    [JsonIgnore]
-    public IReadOnlyList<string> Include =>
-        Fields.Where(kv => kv.Value == 1).Select(kv => kv.Key).ToList();
 }
 
 /// <summary>

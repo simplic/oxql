@@ -45,9 +45,6 @@ public sealed record ResolvedPath
     /// <summary>The addon definition the path binds through, when it is a defined addon key.</summary>
     public AddonDefinition? Addon { get; init; }
 
-    /// <summary>True for a path under the addon bag, defined or not.</summary>
-    public bool IsAddon { get; init; }
-
     /// <summary>The kind once array traversal is accounted for.</summary>
     public Kind LeafKind => Shape?.LeafKind ?? Kind;
 

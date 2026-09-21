@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
-using OxQL.Core.Registration;
 using OxQL.Model.Addon;
 
 namespace OxQL.Core;
@@ -44,7 +43,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton(provider => new CursorCodec(provider.GetRequiredService<OxQLOptions>().Cursor.SigningKey));
         services.TryAddSingleton<IAddonDefinitionSource>(EmptyAddonDefinitionSource.Instance);
-        services.AddSingleton<OxQLTypeRegistry>();
 
         return services;
     }

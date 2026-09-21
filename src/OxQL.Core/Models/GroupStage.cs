@@ -177,9 +177,6 @@ public sealed record QueryExpression
     public bool IsVar => Var is not null;
 
     [JsonIgnore]
-    public bool IsLiteral => Literal is not null && !IsPath && !IsVar && Operator is null;
-
-    [JsonIgnore]
     public bool IsArithmetic => Operator is not null;
 
     /// <summary>The arithmetic operators.</summary>

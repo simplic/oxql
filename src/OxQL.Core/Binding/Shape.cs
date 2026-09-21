@@ -144,9 +144,6 @@ public sealed class Shape
         return new Shape(Entity, roots, Unwound, Grouped, Included, Excluded, Addons);
     }
 
-    public Shape WithAddons(IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> addons) =>
-        new(Entity, Roots, Unwound, Grouped, Included, Excluded, addons);
-
     /// <summary>The shape after unwinding <paramref name="path"/>, optionally under an alias and with an index root.</summary>
     public Shape WithUnwound(ResolvedPath path, string rootName, string? alias, string? indexAlias)
     {
@@ -474,7 +471,7 @@ public sealed class Shape
             return PathResolution.Ok(new ResolvedPath
             {
                 Wire = wire, Storage = storage, Kind = Kind.Unknown, Path = bag, Entity = entity, CollectionAncestors = ancestors,
-                Filterable = false, Sortable = false, Root = node, IsAddon = true,
+                Filterable = false, Sortable = false, Root = node,
             });
 
         var kind = AddonKinds.ToKind(definition.Kind);
@@ -491,7 +488,6 @@ public sealed class Shape
             Filterable = true,
             Sortable = ancestors == 0,
             Root = node,
-            IsAddon = true,
             Addon = definition,
         });
     }

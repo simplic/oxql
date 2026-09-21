@@ -4,15 +4,6 @@ using System.Text.Json.Serialization;
 namespace OxQL.Core.Models;
 
 /// <summary>
-/// Represents a sort stage containing multiple sort fields.
-/// </summary>
-public sealed record SortStage
-{
-    [JsonPropertyName("sort")]
-    public required IReadOnlyList<SortField> Fields { get; init; }
-}
-
-/// <summary>
 /// Represents a single sort field with path and direction.
 /// <para>
 /// Wire format: <c>{ "My.Field": "asc" }</c> or <c>{ "My.Field": "desc" }</c>
@@ -32,12 +23,6 @@ public sealed record SortField
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Extra { get; init; } = [];
-
-    [JsonIgnore]
-    public bool IsAscending => string.Equals(Direction, "asc", StringComparison.OrdinalIgnoreCase);
-
-    [JsonIgnore]
-    public bool IsDescending => string.Equals(Direction, "desc", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

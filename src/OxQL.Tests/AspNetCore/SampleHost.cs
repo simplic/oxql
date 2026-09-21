@@ -107,15 +107,18 @@ internal sealed class FakeIndexSource : IIndexSource
 
     public int ExplainCalls { get; private set; }
 
+    public int? ExplainMaxTimeMs { get; private set; }
+
     public Task<IReadOnlyList<BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken)
     {
         IndexCalls++;
         return Task.FromResult<IReadOnlyList<BsonDocument>>(IndexDocuments);
     }
 
-    public Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, CancellationToken cancellationToken)
+    public Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs, CancellationToken cancellationToken)
     {
         ExplainCalls++;
+        ExplainMaxTimeMs = maxTimeMs;
         return Task.FromResult(ExplainDocument);
     }
 }

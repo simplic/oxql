@@ -146,7 +146,12 @@ public class OxQLController : ControllerBase
         }
     }
 
-    /// <summary>The bound pipeline, the emitted stages, the count stages and the index advisory, without executing; 404 unless <c>Explain:Enabled</c>.</summary>
+    /// <summary>
+    /// The bound pipeline, the emitted stages, the count stages and the index advisory; 404 unless
+    /// <c>Explain:Enabled</c>. No rows are returned and the count never runs, but for a pipeline
+    /// with a lookup the advisory reads the server's own explain, which executes the page pipeline
+    /// once under the query's time ceiling.
+    /// </summary>
     [HttpPost("explain")]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

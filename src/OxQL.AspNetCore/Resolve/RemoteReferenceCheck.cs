@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using OxQL.Core.Engine;
 using OxQL.Model;
 
@@ -16,7 +17,8 @@ namespace OxQL.AspNetCore.Resolve;
 /// through <see cref="IRemoteQueryClient.IsConfigured"/>). A reference without one is a
 /// configuration problem of this service, never a silent runtime null: an error log on every
 /// host, and a refusal to start in <c>Development</c>, <c>Local</c> and under continuous
-/// integration, the same strict set the schema build fails fast in. A host without a remote
+/// integration (<see cref="OxQLEndpointOptions.ContinuousIntegration"/>), the same strict set
+/// the schema build fails fast in. A host without a remote
 /// query client refuses remote resolves at runtime (<c>RESOLVE_UNAVAILABLE</c>) and is not
 /// checked here.
 /// </summary>
@@ -33,10 +35,22 @@ public static class RemoteReferenceCheck
         return RemoteReferences.Of(model).Where(reference => !client.IsConfigured(reference.Service)).ToList();
     }
 
-    /// <summary>Whether a finding stops the host: the schema build's strict set, plus the conventional <c>CI</c> variable.</summary>
+    /// <summary>Whether a finding stops the host: the schema build's strict set, plus continuous integration.</summary>
+    public static bool IsStrict(string? environmentName, bool continuousIntegration) =>
+        continuousIntegration
+        || (environmentName is not null && StrictEnvironments.Contains(environmentName, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>Whether a finding stops the host, with continuous integration given as the value of one of its variables.</summary>
     public static bool IsStrict(string? environmentName, string? ciVariable) =>
-        (environmentName is not null && StrictEnvironments.Contains(environmentName, StringComparer.OrdinalIgnoreCase))
-        || (!string.IsNullOrWhiteSpace(ciVariable) && ciVariable != "0" && !string.Equals(ciVariable, "false", StringComparison.OrdinalIgnoreCase));
+        IsStrict(environmentName, ReadContinuousIntegration(ciVariable));
+
+    /// <summary>
+    /// Whether any of the variables a build server defines says so: <c>CI</c> on GitHub Actions
+    /// and GitLab, <c>TF_BUILD</c> on Azure Pipelines. Set, and neither <c>0</c> nor <c>false</c>.
+    /// </summary>
+    public static bool ReadContinuousIntegration(params string?[] variables) =>
+        variables is not null && variables.Any(variable =>
+            !string.IsNullOrWhiteSpace(variable) && variable.Trim() != "0" && !string.Equals(variable.Trim(), "false", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>One line per finding.</summary>
     public static string Describe(RemoteReference reference) =>
@@ -46,7 +60,8 @@ public static class RemoteReferenceCheck
 /// <summary>
 /// Runs <see cref="RemoteReferenceCheck"/> when the host starts. When the model is not built
 /// yet at that point (the base package builds it in its own startup filter), the check runs
-/// once on the first request instead, and a strict host answers that request with 500.
+/// once on the first request instead; a strict host with a finding then answers that request and
+/// every later one with 500 until it is restarted with the service configured.
 /// </summary>
 internal sealed class RemoteReferenceStartupFilter(IServiceProvider provider) : IStartupFilter
 {
@@ -127,5 +142,7 @@ internal sealed class RemoteReferenceStartupFilter(IServiceProvider provider) : 
     }
 
     private bool Strict() =>
-        RemoteReferenceCheck.IsStrict(provider.GetService<IHostEnvironment>()?.EnvironmentName, Environment.GetEnvironmentVariable("CI"));
+        RemoteReferenceCheck.IsStrict(
+            provider.GetService<IHostEnvironment>()?.EnvironmentName,
+            provider.GetService<IOptions<OxQLEndpointOptions>>()?.Value.ContinuousIntegration ?? false);
 }

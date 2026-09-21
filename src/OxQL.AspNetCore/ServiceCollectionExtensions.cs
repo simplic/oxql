@@ -26,10 +26,20 @@ public static class ServiceCollectionExtensions
     /// <summary>Adds the query controller.</summary>
     public static IServiceCollection AddOxQLAspNetCore(this IServiceCollection services, Action<OxQLEndpointOptions>? configure = null)
     {
-        var options = new OxQLEndpointOptions();
+        // The environment is read here, once, and travels as data from then on: what a host or
+        // a test sets on the options wins over what the machine happens to define.
+        var continuousIntegration = RemoteReferenceCheck.ReadContinuousIntegration(
+            Environment.GetEnvironmentVariable("CI"),
+            Environment.GetEnvironmentVariable("TF_BUILD"));
+
+        var options = new OxQLEndpointOptions { ContinuousIntegration = continuousIntegration };
         configure?.Invoke(options);
 
-        services.Configure<OxQLEndpointOptions>(opts => configure?.Invoke(opts));
+        services.Configure<OxQLEndpointOptions>(opts =>
+        {
+            opts.ContinuousIntegration = continuousIntegration;
+            configure?.Invoke(opts);
+        });
         services.AddHttpContextAccessor();
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
         services.TryAddSingleton<Health.RemoteHealthProbe>();

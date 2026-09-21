@@ -14,8 +14,8 @@ namespace OxQL.Tests.AspNetCore;
 /// </summary>
 public class RemoteHostTests
 {
-    private static SampleHost HostWith(FakeRemoteClient client, string environment = "Development") =>
-        new(configure: services => services.AddSingleton<IRemoteQueryClient>(client)) { Environment = environment };
+    private static SampleHost HostWith(FakeRemoteClient client, string environment = "Development", bool continuousIntegration = false) =>
+        new(configure: services => services.AddSingleton<IRemoteQueryClient>(client)) { Environment = environment, ContinuousIntegration = continuousIntegration };
 
     [Fact]
     public async Task Health_publishes_the_remote_capabilities_and_every_referenced_service()
@@ -79,7 +79,7 @@ public class RemoteHostTests
         var client = new FakeRemoteClient { Configured = ["vehicle"] };
         client.Reachable.Add("vehicle");
 
-        using var host = HostWith(client, environment: "Production");
+        using var host = HostWith(client, environment: "Production", continuousIntegration: false);
 
         var response = await host.CreateClient().GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);

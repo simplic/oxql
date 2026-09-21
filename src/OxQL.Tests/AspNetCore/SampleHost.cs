@@ -48,6 +48,9 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
     /// <summary>The host environment; Development by default, which is one of the strict ones.</summary>
     public string Environment { get; init; } = "Development";
 
+    /// <summary>Whether the host counts as running under continuous integration; pinned, so the machine's own variables decide nothing.</summary>
+    public bool ContinuousIntegration { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(Environment);
@@ -62,6 +65,7 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
             services.AddSingleton<IAggregateRunner>(Runner);
             services.RemoveAll<IIndexSource>();
             services.AddSingleton<IIndexSource>(Indexes);
+            services.PostConfigure<OxQL.AspNetCore.OxQLEndpointOptions>(endpoint => endpoint.ContinuousIntegration = ContinuousIntegration);
             configure?.Invoke(services);
         });
     }

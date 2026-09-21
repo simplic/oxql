@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using OxQL.Core.Attributes;
 
 namespace OxQL.Model.Build;
 
@@ -13,9 +14,8 @@ namespace OxQL.Model.Build;
 public sealed record EntityDeclaration(string Id, string DeclaredId, Type ClrType, string Collection, string? Database, bool Extendable);
 
 /// <summary>
-/// Finds the entities of a set of assemblies: every class carrying <c>[OxQLType]</c>. The
-/// attribute is read by name, so the model has no dependency on the package that defines it
-/// and reads it across package versions.
+/// Finds the entities of a set of assemblies: every class carrying
+/// <see cref="OxQLTypeAttribute"/>. An attribute that merely shares its name is not one.
 /// </summary>
 /// <remarks>
 /// The rules are the v1 registry's: when the attribute sits on a base class, the most derived
@@ -25,9 +25,6 @@ public sealed record EntityDeclaration(string Id, string DeclaredId, Type ClrTyp
 /// </remarks>
 public static class EntityScanner
 {
-    /// <summary>The simple name of the attribute the scan looks for.</summary>
-    public const string AttributeName = "OxQLTypeAttribute";
-
     /// <summary>The declarations of the scanned assemblies, ordered by id.</summary>
     public static IReadOnlyList<EntityDeclaration> Scan(IReadOnlyList<Assembly> assemblies, ICollection<BuildFinding> findings)
     {
@@ -45,10 +42,26 @@ public static class EntityScanner
         }
 
         List<Type> allTypes;
+        var claims = new Dictionary<string, List<(Type Type, OxQLTypeAttribute Attribute)>>(StringComparer.Ordinal);
 
+        // Loading the types and reading their attributes both resolve other assemblies, and
+        // either can fail on one that is missing at run time.
         try
         {
             allTypes = assemblies.SelectMany(assembly => assembly.GetTypes()).ToList();
+
+            foreach (var type in allTypes)
+            {
+                if (type.GetCustomAttribute<OxQLTypeAttribute>(inherit: false) is not { } attribute)
+                    continue;
+
+                var id = WireNames.NormalizeEntityId(attribute.TypeName);
+
+                if (!claims.TryGetValue(id, out var claimants))
+                    claims[id] = claimants = [];
+
+                claimants.Add((type, attribute));
+            }
         }
         catch (Exception exception)
         {
@@ -66,28 +79,6 @@ public static class EntityScanner
             .SelectMany(type => InheritanceChain(type).Skip(1).Select(baseType => (Base: baseType, Derived: type)))
             .GroupBy(pair => pair.Base, pair => pair.Derived)
             .ToDictionary(group => group.Key, group => group.ToList());
-
-        var claims = new Dictionary<string, List<(Type Type, Attribute Attribute)>>(StringComparer.Ordinal);
-
-        foreach (var type in allTypes)
-        {
-            var attribute = type.GetCustomAttributes(inherit: false).OfType<Attribute>().FirstOrDefault(candidate => candidate.GetType().Name == AttributeName);
-
-            if (attribute is null)
-                continue;
-
-            var declared = ReadString(attribute, "TypeName");
-
-            if (string.IsNullOrWhiteSpace(declared))
-                continue;
-
-            var id = WireNames.NormalizeEntityId(declared);
-
-            if (!claims.TryGetValue(id, out var claimants))
-                claims[id] = claimants = [];
-
-            claimants.Add((type, attribute));
-        }
 
         var declarations = new List<EntityDeclaration>();
         var claimedTypes = new Dictionary<Type, string>();
@@ -123,23 +114,15 @@ public static class EntityScanner
 
             declarations.Add(new EntityDeclaration(
                 id,
-                ReadString(attribute, "TypeName")!.Trim(),
+                attribute.TypeName,
                 representative,
-                ReadString(attribute, "CollectionName")?.Trim() ?? "",
-                NullIfBlank(ReadString(attribute, "DatabaseName")),
-                ReadBool(attribute, "Extendable")));
+                attribute.CollectionName,
+                attribute.DatabaseName,
+                attribute.Extendable));
         }
 
         return declarations;
     }
-
-    private static string? ReadString(Attribute attribute, string property) =>
-        attribute.GetType().GetProperty(property, BindingFlags.Public | BindingFlags.Instance)?.GetValue(attribute) as string;
-
-    private static bool ReadBool(Attribute attribute, string property) =>
-        attribute.GetType().GetProperty(property, BindingFlags.Public | BindingFlags.Instance)?.GetValue(attribute) is true;
-
-    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static IEnumerable<Type> InheritanceChain(Type type)
     {

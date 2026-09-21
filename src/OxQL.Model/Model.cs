@@ -437,7 +437,10 @@ public static class BuildCodes
     /// <summary>A collection or dictionary declares no element type, so its values are <c>unknown</c>.</summary>
     public const string CollectionUntyped = "collection-untyped";
 
-    /// <summary>A path went deeper than the walk allows; the subtree below it is not indexed.</summary>
+    /// <summary>
+    /// A path went deeper than the walk allows, or the entity has more paths than the index
+    /// holds (<c>Detail</c> is then <c>path-count</c>); what lies beyond is not indexed.
+    /// </summary>
     public const string PathDepthExceeded = "path-depth-exceeded";
 
     /// <summary>A reference names a local entity id the model does not have; the reference is dropped.</summary>

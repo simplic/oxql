@@ -9,12 +9,21 @@ namespace OxQL.Model.Build;
 /// </summary>
 /// <remarks>
 /// A type reached again on the same branch stops the walk, which is what makes cyclic graphs
-/// finite; a hard depth cap guards against a graph that grows through distinct types.
+/// finite; a hard depth cap guards against a graph that grows through distinct types. Neither
+/// bounds how many branches there are: types that reference one another densely are expanded
+/// once per route to them, which grows factorially. The index is built at startup, so a ceiling
+/// on its size bounds what a model nobody has measured can cost there.
 /// </remarks>
 internal static class PathIndexer
 {
     /// <summary>The deepest path the index describes, in segments.</summary>
     public const int MaxDepth = 32;
+
+    /// <summary>
+    /// The most paths one entity's index describes: far above what an entity's own shape
+    /// yields, and low enough that reaching it costs milliseconds.
+    /// </summary>
+    public const int MaxPaths = 20_000;
 
     /// <summary>The wire segment standing for any dictionary key.</summary>
     public const string KeySegment = "*";
@@ -34,10 +43,15 @@ internal static class PathIndexer
         public readonly List<PathDef> Paths = [];
         public readonly Dictionary<string, PathDef> Index = new(StringComparer.Ordinal);
 
+        private bool full;
+
         public void WalkMembers(TypeDef type, string? wirePrefix, string? storagePrefix, int depth, int ancestors, HashSet<TypeDef> branch)
         {
             foreach (var member in type.Members)
             {
+                if (Full(Join(wirePrefix, member.WireName)))
+                    return;
+
                 var wire = Join(wirePrefix, member.WireName);
                 var storage = storagePrefix is null || !member.Stored || member.StorageName is null
                     ? null
@@ -89,6 +103,9 @@ internal static class PathIndexer
                         });
                     var keyAncestors = representation == DictionaryRepresentation.Document ? ancestors : ancestors + 1;
 
+                    if (Full(keyWire))
+                        return;
+
                     Add(keyWire, keyStorage, member, shape.Value, depth + 1, keyAncestors);
                     Descend(shape.Value, keyWire, keyStorage, member, depth + 1, keyAncestors, branch);
                     return;
@@ -96,6 +113,24 @@ internal static class PathIndexer
                 default:
                     return;
             }
+        }
+
+        /// <summary>Whether the index has reached its ceiling; says so once, at the first path it leaves out.</summary>
+        private bool Full(string wire)
+        {
+            if (Paths.Count < MaxPaths)
+                return false;
+
+            if (!full)
+                findings.Add(new BuildFinding(
+                    BuildCodes.PathDepthExceeded,
+                    $"{entity.Id}#{wire}",
+                    $"The entity has more than {MaxPaths} paths, so this one and every path the walk had not reached yet are not described.",
+                    "path-count"));
+
+            full = true;
+
+            return true;
         }
 
         private PathDef Add(string wire, string? storage, MemberDef member, ShapeDef shape, int depth, int ancestors)

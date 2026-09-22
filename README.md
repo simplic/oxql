@@ -243,7 +243,9 @@ requirements below are met.
 ### Packages
 
 `OxQL.Model` is new and holds the entity model; `OxQL.Core` depends on it, so it arrives with
-`OxQL.Core` as a transitive reference. The other packages keep their names.
+`OxQL.Core` as a transitive reference. The other packages keep their names. `[OxQLType]` now
+lives in `OxQL.Model`; its namespace `OxQL.Core.Attributes` is unchanged and `OxQL.Core` forwards
+the type, so entity assemblies compile without a change.
 
 ### Removed registration entry points
 
@@ -258,6 +260,7 @@ requirements below are met.
 | `IExternalResolver`, `ICursorSerializer`, `IQueryAdapter<T>`, `IQueryExecutor<T>`, `IQueryPlanner`, `IQueryPlanCache`, `IQueryRequestNormalizer`, `IQueryValidator` and their implementations | `IQueryEngine`, `IRemoteQueryClient`, `CursorCodec` |
 | `OxQLEndpointOptions.RoutePrefix`, `.IncludeErrorDetails`, `.EnableExplain` | the route is `/OxQL` (controller convention); `IncludeErrorDetails` moved to `AddOxQLMongo`; explain is `OxQL:Explain:Enabled` |
 | `IOxQLQueryService.ExecuteAsync` returning `OxQLQueryResult`, `ExplainAsync` returning a list | `QueryOutcome` and `ExplainOutcome`; new `ExecuteAsync(request, maxTimeMs, ct)` and `BatchAsync` |
+| `OxQLTypeRegistry`, `QueryValidationException`, `SortStage`, the `MatchStage.And` / `Or` / `Not` helpers, `Shape.WithAddons` | removed from the public surface; no replacement is needed by a host |
 
 ### Two new mandatory requirements
 
@@ -289,6 +292,13 @@ stricter than any allow-list was, and there is no plan cache to size.
   passed neither to the server, which truncated in UTC with weeks starting on Sunday, so a ported
   grouping query gets different week buckets unless it names `weekStart`.
 - Two `sort` stages do not compose: the later one replaces the earlier one.
+- Refusals are wider, under existing codes: `INVALID_ALIAS` for an alias `_id`, starting with
+  `__` or ending in `__arr`; `ALIAS_COLLISION` for an alias equal to a member's wire or storage
+  name; `INVALID_PATH` for a path with a control character, more than 64 segments or a segment
+  over 256 characters; `INVALID_OPERAND` for a text operand of `contains`, `startsWith`,
+  `endsWith` or an `ignoreCase` comparison that no longer fits the server's 32 KB pattern limit
+  once escaped; and `INVALID_REGEX` / `QUERY_TOO_EXPENSIVE` may now also come back from
+  execution, when the server rejects a pattern or exceeds its memory limit.
 
 ## Requirements
 

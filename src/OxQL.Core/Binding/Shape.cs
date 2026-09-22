@@ -169,13 +169,13 @@ public sealed class Shape
         return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons);
     }
 
-    /// <summary>The shape after a group: only the outputs.</summary>
-    public Shape WithGroup(IEnumerable<(string Alias, Kind Kind, ShapeDef? Shape)> outputs)
+    /// <summary>The shape after a group: only the outputs, each rooted at its alias.</summary>
+    public Shape WithGroup(IEnumerable<ShapeNode.GroupOutput> outputs)
     {
         var roots = new Dictionary<string, ShapeNode>(StringComparer.Ordinal);
 
-        foreach (var (alias, kind, shape) in outputs)
-            roots[alias] = new ShapeNode.GroupOutput(kind, shape, alias);
+        foreach (var output in outputs)
+            roots[output.StoragePrefix] = output;
 
         return new Shape(Entity, roots, new HashSet<string>(StringComparer.Ordinal), grouped: true, included: null, excluded: null, Addons);
     }

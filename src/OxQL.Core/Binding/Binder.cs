@@ -369,6 +369,15 @@ public sealed class Binder
             if (operand is null)
                 return null;
 
+            // A char compares by code point, so a case-insensitive comparison is the set of
+            // the character's case forms, compared by value, rather than a pattern the
+            // stored code point could never match.
+            if (ignoreCase && OperandCoercer.IsCharRepresented(path))
+            {
+                (op, operand) = FoldCharCase(op, operand);
+                ignoreCase = false;
+            }
+
             // A text operand that is matched as a pattern is escaped and anchored by the
             // compiler; one the database cannot compile is a caller error, refused here.
             if (!path.IsRemote && (ignoreCase || op is "contains" or "startsWith" or "endsWith") && TextsOf(operand).Any(text => !RegexGuard.LiteralFits(text)))
@@ -384,6 +393,45 @@ public sealed class Binder
                 hasSemiJoin = true;
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, path.IsRemote);
+        }
+
+        /// <summary>
+        /// The comparison widened to every case form of each character in its operand: an
+        /// equality becomes a set membership when the character has another form, and a
+        /// membership takes the forms into its set.
+        /// </summary>
+        private static (string Op, BoundOperand Operand) FoldCharCase(string op, BoundOperand operand)
+        {
+            IReadOnlyList<BsonValue>? values = operand switch
+            {
+                BoundOperand.Single single => [single.Value],
+                BoundOperand.Set set => set.Values,
+                _ => null,
+            };
+
+            if (values is null)
+                return (op, operand);
+
+            var forms = new List<BsonValue>();
+
+            foreach (var value in values)
+            {
+                if (value is not BsonInt32 code)
+                {
+                    forms.Add(value);
+                    continue;
+                }
+
+                var character = (char)code.Value;
+
+                foreach (var form in new[] { character, char.ToUpperInvariant(character), char.ToLowerInvariant(character) })
+                    if (!forms.Contains(new BsonInt32(form)))
+                        forms.Add(new BsonInt32(form));
+            }
+
+            return forms.Count == 1 && operand is BoundOperand.Single
+                ? (op, new BoundOperand.Single(forms[0]))
+                : (op is "eq" or "in" ? "in" : "nin", new BoundOperand.Set(forms));
         }
 
         /// <summary>The text values of an operand: the ones a pattern comparison is built from.</summary>
@@ -785,7 +833,7 @@ public sealed class Binder
 
                 if (function == "count")
                 {
-                    fields.Add(new Aggregate(alias, function, null, Kind.Long, null));
+                    fields.Add(new Aggregate(alias, function, null, Kind.Unknown, Kind.Long, null));
                     continue;
                 }
 
@@ -806,20 +854,25 @@ public sealed class Binder
                     continue;
                 }
 
+                // A mean over 64-bit integers is taken in decimal: a double's granularity
+                // above 2^53 is coarser than one, and the wire spells a decimal the way it
+                // spells a long, so no digit is lost on either side.
                 var (outputKind, outputShape) = function switch
                 {
                     "countDistinct" => (Kind.Long, null),
-                    "avg" => (kind == Kind.Decimal ? Kind.Decimal : Kind.Double, null),
+                    "avg" => (kind is Kind.Decimal or Kind.Long ? Kind.Decimal : Kind.Double, null),
                     "push" => (Kind.Array, argumentShape),
                     _ => (kind, argumentShape),
                 };
 
-                fields.Add(new Aggregate(alias, function, argument, outputKind, outputShape));
+                fields.Add(new Aggregate(alias, function, argument, kind, outputKind, outputShape));
             }
 
             stages.Add(new BoundStage.Group(keys, fields));
-            shape = shape.WithGroup(keys.Select(key => (key.As, key.OutputKind, key.OutputShape))
-                .Concat(fields.Select(field => (field.As, field.OutputKind, field.Function == "push" ? null : field.OutputShape))));
+            shape = shape.WithGroup(keys.Select(key => new ShapeNode.GroupOutput(key.OutputKind, key.OutputShape, key.As))
+                .Concat(fields.Select(field => field.Function == "push"
+                    ? new ShapeNode.GroupOutput(field.OutputKind, null, field.As, field.ArgumentKind, field.OutputShape)
+                    : new ShapeNode.GroupOutput(field.OutputKind, field.OutputShape, field.As))));
             sort = null;
         }
 

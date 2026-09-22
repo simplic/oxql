@@ -70,8 +70,12 @@ public abstract record ShapeNode(string StoragePrefix)
     /// <summary>A scalar root: an unwind index.</summary>
     public sealed record Scalar(Kind Kind, string StoragePrefix) : ShapeNode(StoragePrefix);
 
-    /// <summary>A group output under its alias.</summary>
-    public sealed record GroupOutput(Kind Kind, ShapeDef? Shape, string StoragePrefix) : ShapeNode(StoragePrefix);
+    /// <summary>
+    /// A group output under its alias. A pushed array has no shape of its own — the alias is a
+    /// collection nothing filters or sorts — so it carries its element's kind and shape
+    /// instead, and the encoder renders each element the way a row renders the member.
+    /// </summary>
+    public sealed record GroupOutput(Kind Kind, ShapeDef? Shape, string StoragePrefix, Kind ElementKind = Kind.Unknown, ShapeDef? ElementShape = null) : ShapeNode(StoragePrefix);
 }
 
 /// <summary>A coerced operand: one value, a set, alternatives to match tolerantly, null, or a raw operand for a remote owner.</summary>
@@ -153,8 +157,8 @@ public sealed record GroupKey(string As, ResolvedPath? Path, DateTrunc? Trunc, K
 /// <summary>A date truncation key.</summary>
 public sealed record DateTrunc(ResolvedPath Path, string Unit, string Timezone, string? WeekStart);
 
-/// <summary>One aggregate.</summary>
-public sealed record Aggregate(string As, string Function, BoundExpression? Argument, Kind OutputKind, ShapeDef? OutputShape);
+/// <summary>One aggregate: its argument as bound, with the argument's kind, and the kind and shape of what it outputs.</summary>
+public sealed record Aggregate(string As, string Function, BoundExpression? Argument, Kind ArgumentKind, Kind OutputKind, ShapeDef? OutputShape);
 
 /// <summary>One sort field.</summary>
 public sealed record BoundSortField(ResolvedPath Path, bool Ascending);

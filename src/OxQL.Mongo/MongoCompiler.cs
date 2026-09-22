@@ -510,7 +510,7 @@ public static class MongoCompiler
 
         var trunc = new BsonDocument
         {
-            ["date"] = "$" + key.Trunc.Path.Storage,
+            ["date"] = TruncatedDate(key.Trunc),
             ["unit"] = key.Trunc.Unit,
             ["timezone"] = key.Trunc.Timezone,
         };
@@ -519,6 +519,29 @@ public static class MongoCompiler
             trunc["startOfWeek"] = key.Trunc.WeekStart ?? "monday";
 
         return new BsonDocument("$dateTrunc", trunc);
+    }
+
+    /// <summary>
+    /// The instant a truncation starts from. A date has no time of day and is stored as the
+    /// midnight-UTC instant of its calendar day; truncating that instant in a zone west of
+    /// UTC would read it as the evening before. Its calendar parts are therefore re-read as
+    /// a local date in the caller's zone, which is the stored instant itself in UTC. A
+    /// dateTime is an instant already and truncates as stored.
+    /// </summary>
+    private static BsonValue TruncatedDate(DateTrunc trunc)
+    {
+        var stored = "$" + trunc.Path.Storage;
+
+        if (trunc.Path.Kind != Kind.Date || trunc.Timezone == "UTC")
+            return stored;
+
+        return new BsonDocument("$dateFromParts", new BsonDocument
+        {
+            ["year"] = new BsonDocument("$year", stored),
+            ["month"] = new BsonDocument("$month", stored),
+            ["day"] = new BsonDocument("$dayOfMonth", stored),
+            ["timezone"] = trunc.Timezone,
+        });
     }
 
     private static BsonValue Accumulator(Aggregate field) => field.Function switch

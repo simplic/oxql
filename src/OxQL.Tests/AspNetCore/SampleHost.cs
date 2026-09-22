@@ -48,6 +48,9 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
     /// <summary>The host environment; Development by default, which is one of the strict ones.</summary>
     public string Environment { get; init; } = "Development";
 
+    /// <summary>Whether the host counts as running under continuous integration; pinned, so the machine's own variables decide nothing.</summary>
+    public bool ContinuousIntegration { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(Environment);
@@ -62,6 +65,7 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
             services.AddSingleton<IAggregateRunner>(Runner);
             services.RemoveAll<IIndexSource>();
             services.AddSingleton<IIndexSource>(Indexes);
+            services.PostConfigure<OxQL.AspNetCore.OxQLEndpointOptions>(endpoint => endpoint.ContinuousIntegration = ContinuousIntegration);
             configure?.Invoke(services);
         });
     }
@@ -107,15 +111,18 @@ internal sealed class FakeIndexSource : IIndexSource
 
     public int ExplainCalls { get; private set; }
 
+    public int? ExplainMaxTimeMs { get; private set; }
+
     public Task<IReadOnlyList<BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken)
     {
         IndexCalls++;
         return Task.FromResult<IReadOnlyList<BsonDocument>>(IndexDocuments);
     }
 
-    public Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, CancellationToken cancellationToken)
+    public Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs, CancellationToken cancellationToken)
     {
         ExplainCalls++;
+        ExplainMaxTimeMs = maxTimeMs;
         return Task.FromResult(ExplainDocument);
     }
 }

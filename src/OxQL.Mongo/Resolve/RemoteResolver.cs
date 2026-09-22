@@ -28,15 +28,13 @@ public sealed record ResolveResult
 }
 
 /// <summary>
-/// The remote half of resolve (design §11): after the page is fixed, one batch per owning
+/// The remote half of resolve: after the page is fixed, one batch per owning
 /// service carrying one query per resolve stage and key chunk, cached per key for a TTL;
 /// and, before the page runs, the semi-join that asks an owner for the ids a condition on
 /// its rows selects, refusing above the cap rather than truncating.
 /// </summary>
 public sealed class RemoteResolver
 {
-    private static readonly JsonSerializerOptions Wire = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
-
     private readonly IRemoteQueryClient client;
     private readonly ResolveCache cache;
     private readonly SemiJoinCache semiJoinIds;
@@ -86,9 +84,8 @@ public sealed class RemoteResolver
 
         foreach (var slot in slots)
         {
-            if (semiJoinIds.TryGet(SemiJoinCache.KeyOf(TargetOf(slot), organisation, slot.Leaf), out var cached))
-                foreach (var value in cached)
-                    slot.Ids.Add(value);
+            if (semiJoinIds.TryGet(CacheKeyOf(slot, organisation, pageSize), out var cached))
+                Fill(slot, cached);
             else
                 pending.Add(slot);
         }
@@ -106,8 +103,8 @@ public sealed class RemoteResolver
             var queries = members.Select(slot => SemiJoinQuery(slot, pageSize, offset: 0, count: true)).ToList();
             var outcome = await CallInBatchesAsync(group.Key, queries, DeadlineBudget(deadline), cancellationToken).ConfigureAwait(false);
 
-            if (outcome.Failure is { } failure)
-                return Unanswered(group.Key, failure);
+            if (outcome.Failure is not null)
+                return Unanswered(group.Key, outcome);
 
             for (var index = 0; index < members.Count; index++)
             {
@@ -170,8 +167,8 @@ public sealed class RemoteResolver
 
             foreach (var call in calls.Select(task => task.Result))
             {
-                if (call.Outcome.Failure is { } failure)
-                    return Unanswered(call.Service, failure);
+                if (call.Outcome.Failure is not null)
+                    return Unanswered(call.Service, call.Outcome);
 
                 for (var index = 0; index < call.Entries.Count; index++)
                 {
@@ -196,10 +193,8 @@ public sealed class RemoteResolver
             if (plan.Ids.Count > cap)
                 return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
 
-            foreach (var value in plan.Ids)
-                slot.Ids.Add(value);
-
-            semiJoinIds.Set(SemiJoinCache.KeyOf(TargetOf(slot), organisation, slot.Leaf), plan.Ids);
+            Fill(slot, plan.Ids);
+            semiJoinIds.Set(CacheKeyOf(slot, organisation, pageSize), plan.Ids);
         }
 
         return null;
@@ -210,7 +205,8 @@ public sealed class RemoteResolver
     {
         public string Service { get; } = service;
 
-        public List<BsonValue> Ids { get; } = [];
+        /// <summary>The owner's wire values of the target field, in the order they arrived.</summary>
+        public List<string> Ids { get; } = [];
 
         public Queue<int> Queue { get; } = new();
 
@@ -228,6 +224,22 @@ public sealed class RemoteResolver
         return page.Count >= pageSize;
     }
 
+    /// <summary>
+    /// The cache key of a slot: the organisation and the first-page query the owner is sent, which
+    /// between them determine every wire value the owner answers with.
+    /// </summary>
+    private static string CacheKeyOf(SemiJoinSlot slot, Guid organisation, int pageSize) =>
+        SemiJoinCache.KeyOf(organisation, SemiJoinQuery(slot, pageSize, offset: 0, count: true));
+
+    /// <summary>Fills a slot with the owner's wire values, encoded as this slot's reference member is stored.</summary>
+    private static void Fill(SemiJoinSlot slot, IReadOnlyList<string> values)
+    {
+        var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
+
+        foreach (var value in values)
+            slot.Ids.Add(OwnerValueToBson(value, reference));
+    }
+
     /// <summary>The target entity a semi-join leaf reaches through.</summary>
     private static string TargetOf(SemiJoinSlot slot) => ((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity;
 
@@ -240,8 +252,10 @@ public sealed class RemoteResolver
         return left <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : left < ceiling ? left : ceiling;
     }
 
-    private static Refusal Unanswered(string service, Failure failure) =>
-        Refusal.NotExecutable(Codes.ResolveUnavailable, $"The owner of '{service}' did not answer the semi-join ({failure}); the condition cannot be evaluated.");
+    private static Refusal Unanswered(string service, CallOutcome outcome) =>
+        Refusal.NotExecutable(Codes.ResolveUnavailable, outcome.Status is { } status
+            ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
+            : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.");
 
     private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
         Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{TargetOf(slot)}'; narrow it.", stage);
@@ -255,16 +269,16 @@ public sealed class RemoteResolver
         return (total.GetValue<long>(), info["totalCountCapped"]?.GetValue<bool>() == true);
     }
 
-    /// <summary>The ids of one owner page, encoded as the parent's reference member is stored.</summary>
-    private static List<BsonValue> IdsOf(JsonNode result, SemiJoinSlot slot)
+    /// <summary>The target field's wire values of one owner page.</summary>
+    private static List<string> IdsOf(JsonNode result, SemiJoinSlot slot)
     {
         var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
         var field = reference.Path?.Reference?.TargetField ?? "id";
-        var values = new List<BsonValue>();
+        var values = new List<string>();
 
         foreach (var item in result["items"]!.AsArray())
             if (item?[field] is { } value)
-                values.Add(OwnerValueToBson(value, reference));
+                values.Add(value is JsonValue scalar ? scalar.ToString() : value.ToJsonString());
 
         return values;
     }
@@ -350,7 +364,9 @@ public sealed class RemoteResolver
                     Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
                     Message = failure == Failure.Timeout
                         ? $"The owner of '{call.Service}' did not answer within {options.Execution.EffectiveResolveTimeoutMs} ms; '{string.Join("', '", stagesHit)}' is null on this page."
-                        : $"The owner of '{call.Service}' could not be reached; '{string.Join("', '", stagesHit)}' is null on this page.",
+                        : call.Outcome.Status is { } status
+                            ? $"The owner of '{call.Service}' answered with HTTP {status}; '{string.Join("', '", stagesHit)}' is null on this page."
+                            : $"The owner of '{call.Service}' could not be reached; '{string.Join("', '", stagesHit)}' is null on this page.",
                     Params = new Dictionary<string, object?> { ["service"] = call.Service, ["aliases"] = stagesHit },
                 });
                 continue;
@@ -413,7 +429,9 @@ public sealed class RemoteResolver
 
     private StagePlan Plan(BoundStage.Resolve stage, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
     {
-        var selectHash = ResolveCache.HashOf(stage.RemoteSelect is null ? null : string.Join(",", stage.RemoteSelect));
+        // The select is hashed as a JSON array: a joined string would give two different lists
+        // whose paths contain the separator the same hash.
+        var selectHash = ResolveCache.HashOf(stage.RemoteSelect is null ? null : JsonSerializer.Serialize(stage.RemoteSelect));
         var filterHash = ResolveCache.HashOf(stage.RemoteFilter?.GetRawText());
         var plan = new StagePlan(stage, selectHash, filterHash, organisation);
         var misses = new List<string>();
@@ -472,14 +490,13 @@ public sealed class RemoteResolver
         };
 
         if (stage.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
-            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), Wire)!, Keys = ["match"] });
+            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!, Keys = ["match"] });
 
         // A projection always travels. With a select it is the caller's; without one it is
         // the reserved $default key, which the owner expands to its own entity's key and
-        // display members — the pair the local half of this stage keeps. Sending none asked
-        // the owner for whole documents: ~2 KB a row where the local path returns two members,
-        // organizationId and every other member of the owner's row included, for a caller
-        // that wanted a label.
+        // display members — the pair the local half of this stage keeps. Without a projection
+        // the owner answers with whole documents, organizationId and every other member
+        // included, to a caller that wanted a label.
         var projection = stage.RemoteSelect is { Count: > 0 } select
             ? select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal)
             : new Dictionary<string, int>(StringComparer.Ordinal) { ["$default"] = 1 };
@@ -513,9 +530,8 @@ public sealed class RemoteResolver
     }
 
     /// <summary>An owner's wire value of the target field as the reference member stores it.</summary>
-    private static BsonValue OwnerValueToBson(JsonNode value, ResolvedPath reference)
+    private static BsonValue OwnerValueToBson(string text, ResolvedPath reference)
     {
-        var text = value is JsonValue scalar ? scalar.ToString() : value.ToJsonString();
         var representation = reference.Leaf?.Representation ?? Representation.None;
 
         switch (reference.LeafKind)
@@ -557,7 +573,8 @@ public sealed class RemoteResolver
         Unreachable,
     }
 
-    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure);
+    /// <summary>The results of a call, or why there are none; <see cref="Status"/> is set when the owner was reached and answered with an HTTP error.</summary>
+    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null);
 
     private TimeSpan Budget(TimeSpan remaining)
     {
@@ -608,6 +625,12 @@ public sealed class RemoteResolver
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return new CallOutcome([], Failure.Timeout);
+        }
+        catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested && exception.StatusCode is { } status)
+        {
+            // The owner was reached and said no: a rejected key, a body over its cap, a fault of
+            // its own. The status keeps that apart from a network that is down.
+            return new CallOutcome([], Failure.Unreachable, (int)status);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {

@@ -5,7 +5,8 @@ naming an entity; the engine binds every path and operand against the host's ent
 applies the caller's organisation scope at every entry into an entity, compiles one
 aggregate, executes it under guard rails, and answers rows in the same wire encoding the
 service's REST responses use. This is **contract 2**; contract 1 requests are still served
-through a compatibility mode for one release (see *Compatibility mode*).
+through a compatibility mode for one release (see *Compatibility mode*). Version 2.0 is a
+breaking package upgrade for hosts; see *Upgrading from 1.x*.
 
 The full request syntax, the operand rules per kind, and the closed lists of error and
 diagnostic codes are in [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md).
@@ -72,7 +73,7 @@ One immutable model per host, built once from every class carrying `[OxQLType("<
 - **Entity ids** are matched exactly and case-sensitively (`UNKNOWN_ENTITY` otherwise). A retired id declared by the host (`ClrModelBuilder.Build(assemblies, retiredIds)`) is answered as the current entity with an `ENTITY_ID_RETIRED` diagnostic carrying `params.currentId`.
 - **Two views.** The wire view is every public readable property, camelCase, `id` at every depth. The storage view comes from the MongoDB driver's serializer registry, so `[BsonElement]`, `[BsonId]`, `[BsonIgnore]`, `[BsonRepresentation]` and the `Id → _id` convention are observed, not inferred. A member the driver does not store is refused with `NOT_STORED`; a member whose serializer is not a document serializer (a GeoJSON point, an interface) is `unknown`: projectable, not filterable or sortable.
 - **Kinds:** `string int long double decimal bool guid date dateTime timeSpan enum binary object array dictionary unknown`.
-- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property. A target on another host is a remote reference; the model marks it and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs an error and refuses to start in `Development`, `Local` and under CI.
+- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property. A target on another host is a remote reference; the model marks it and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs an error and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`).
 - **Addon bags.** An extendable entity carries an `addon` dictionary. A key the organisation has defined binds with the definition's kind and matches tolerantly across storage representations; an undefined, retired or `object` key is `unknown`.
 
 ## A request in one look
@@ -113,8 +114,8 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 |---|---|
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; always 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. More than `Limits:MaxBatchQueries` queries is `BATCH_TOO_LARGE`. Queries run sequentially on one host. |
-| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, and with a remote client `resolve.remote`, `semiJoin`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or does not answer. |
-| `POST /oxql/explain` | 404 unless `Explain:Enabled`. `{ "bound", "stages", "count"?, "advisory"?, "diagnostics"? }`: the bound pipeline in canonical form, the emitted page and count stages, and an index advisory read from `listIndexes` (cached per collection). |
+| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, and with a remote client `resolve.remote`, `semiJoin`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
+| `POST /oxql/explain` | 404 unless `Explain:Enabled`. `{ "bound", "stages", "count"?, "advisory"?, "diagnostics"? }`: the bound pipeline in canonical form, the emitted page and count stages, and an index advisory read from `listIndexes` (cached per collection). No rows are returned and the count never runs; for a pipeline with a `lookup` the advisory reads the server's own explain, which executes the page pipeline once under `Execution:MaxTimeMs`. |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
 
@@ -139,25 +140,32 @@ them into the schema document's `limits`).
 |---|---|---|
 | `Compat:Enabled` | `true` | contract 1 for requests without the header |
 | `Explain:Enabled` | `false` | `POST /oxql/explain` answers |
-| `Limits:MaxPageSize` / `DefaultPageSize` | 500 / 100 | the page a request may ask for / gets without a limit |
+| `Limits:MaxPageSize` / `DefaultPageSize` | 500 / 100 | the page a request may ask for / gets without a limit (`DefaultPageSize` is clamped to `MaxPageSize`) |
 | `Limits:MaxPipelineStages` | 20 | caller stages; the engine's scope stage does not count |
 | `Limits:MaxLookupStages` / `MaxUnwindStages` / `MaxResolveStages` | 5 / 5 / 2 | |
 | `Limits:MaxGroupFields` / `MaxProjectionFields` | 20 / 500 | |
 | `Limits:MaxConditions` / `MaxVariables` | 200 / 64 | leaf conditions, lookup and resolve filters included |
 | `Limits:MaxOffset` | 5 000 | the largest `offset`; beyond it a cursor |
 | `Limits:CountCap` | 100 000 | above it `totalCount` is the cap and `totalCountCapped` true |
-| `Limits:MaxSemiJoinIds` | 10 000 | a larger semi-join is refused, never truncated |
-| `Limits:ResolveKeyChunk` / `MaxResolveKeys` | 500 / 2 000 | keys per remote call / per request |
+| `Limits:MaxSemiJoinIds` | 5 000 | a larger semi-join is refused, never truncated; never above `MaxOffset`, which clamps it (the ids are read from the owner by offset) |
+| `Limits:ResolveKeyChunk` / `MaxResolveKeys` | 500 / 2 000 | keys per remote call (never above `MaxPageSize`, which clamps it) / per request |
 | `Limits:MaxRequestBytes` / `MaxBatchQueries` / `RegexMaxLength` | 262 144 / 10 / 200 | |
 | `Limits:MaxLookupLimit` | 100 | rows one lookup returns per parent |
 | `Execution:MaxTimeMs` | 10 000 | `maxTimeMS` on every aggregate, clamped to 60 000; a timeout is 504 `QUERY_TIMEOUT` |
-| `Execution:ResolveTimeoutMs` | 2 000 | budget of one remote call, clamped to `MaxTimeMs` |
+| `Execution:ResolveTimeoutMs` | 2 000 | budget of one remote call, clamped to the effective `MaxTimeMs` |
 | `Execution:AllowDiskUse` | server default | when `false`, a spill is 422 `QUERY_TOO_EXPENSIVE` |
 | `Representation:GuidTolerant` | `false` | also match legacy subtype 3 and string guids |
 | `Representation:DecimalMode` | `tolerant` | match Decimal128 and string decimals; `typed` after a migration |
 | `Cache:ResolveTtlSeconds` / `ResolveCacheMaxEntries` | 60 / 50 000 | resolved remote rows |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
-| `Cursor:SigningKey` | — | required; cursors are HMAC-signed with a key derived from it |
+| `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
+| `Cursor:SigningKey` | — | required; the host does not start without it; cursors are HMAC-signed with a key derived from it |
+
+The flat 1.x key names `MaxPageSize`, `DefaultPageSize`, `MaxPipelineStages`, `MaxLookupStages`,
+`MaxUnwindStages`, `MaxGroupFields`, `MaxProjectionFields` and `RegexMaxLength` are still bound,
+directly under `OxQL`, onto the same `Limits` values. A limit set above the one it depends on is
+clamped at registration and the adjustment is registered as an `OxQLOptionsAdjustment` for the
+host to log.
 
 The Mongo connection (`ConnectionString`, `DatabaseName`, `IncludeErrorDetails`,
 `ScanAssemblies`) is configured on `AddOxQLMongo`, not in the section.
@@ -182,8 +190,10 @@ owner's internal batch route through `IRemoteQueryClient` (keys chunked by
 for `Cache:ResolveTtlSeconds`). A `match` on a path under a remote alias is a semi-join: the
 owner is asked for the matching ids first. An owner refusal becomes the caller's 422
 `RESOLVE_REFUSED` with the owner's errors; a timeout or an unreachable owner yields `null`
-under the alias and a `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE` diagnostic; a semi-join whose
-owner does not answer is 422 `RESOLVE_UNAVAILABLE`.
+under the alias and a `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE` diagnostic (the message says
+whether the owner answered with an HTTP error or was not reached at all); a semi-join whose
+owner does not answer is 422 `RESOLVE_UNAVAILABLE`. The ids a semi-join fetched are cached per
+organisation and owner query for `Cache:ResolveTtlSeconds`.
 
 ## Addon definitions
 
@@ -223,6 +233,63 @@ schema documents in `src/OxQL.Tests/Fixtures/schemas`), generated binding cases 
 entity, path, kind and operator, golden compiled pipelines, the executor and remote resolver
 against fakes, and the host surface over `WebApplicationFactory`.
 
+## Upgrading from 1.x
+
+Version 2.0 is a new engine behind the same routes. The wire contract is kept for one release
+through the compatibility mode above; the package surface is not. A host that only bumps the
+package versions does not compile, and one that compiles does not start until the two new
+requirements below are met.
+
+### Packages
+
+`OxQL.Model` is new and holds the entity model; `OxQL.Core` depends on it, so it arrives with
+`OxQL.Core` as a transitive reference. The other packages keep their names.
+
+### Removed registration entry points
+
+| 1.x | 2.0 |
+|---|---|
+| `endpoints.MapOxQL()` (`EndpointRouteBuilderExtensions`) | removed; the controller is the only surface, mapped by `app.MapControllers()` |
+| `AddOxQLEndpoint<T>(…)` | folded into `AddOxQLAspNetCore(…)` |
+| `AddOxQLAspNetCore<T>(…)` | kept and marked obsolete; the type argument is ignored. Call `AddOxQLAspNetCore(…)` |
+| `AddOxQLQueryFilter<TProvider>()` and the two delegate overloads, `IOxQLQueryFilterProvider`, `OxQLFilterInjectionContext`, `InjectedFilter`, `QueryFilterInjector` | `AddOxQLScope<TProvider>()` / `AddOxQLScope(httpContext => …)` with `IOxQLScopeProvider`; the organisation scope is applied by the engine, not injected as a filter |
+| `AddOxQLTypeEnricher<TEnricher>()` and its overloads, `IOxQLTypeEnricher`, `OxQLTypeEnrichmentContext`, `OxQLTypeDescriptor`, `OxQLPropertyDescriptor` | no equivalent; the entity model and the host's `/schema` describe the types |
+| `OxQLErrorResponse`, `OxQLFieldError`, `OxQLQueryResult` | `Refusal`, `QueryValidationError`, `QueryResult` / `QueryOutcome` (`OxQL.Core.Engine`) |
+| `IExternalResolver`, `ICursorSerializer`, `IQueryAdapter<T>`, `IQueryExecutor<T>`, `IQueryPlanner`, `IQueryPlanCache`, `IQueryRequestNormalizer`, `IQueryValidator` and their implementations | `IQueryEngine`, `IRemoteQueryClient`, `CursorCodec` |
+| `OxQLEndpointOptions.RoutePrefix`, `.IncludeErrorDetails`, `.EnableExplain` | the route is `/OxQL` (controller convention); `IncludeErrorDetails` moved to `AddOxQLMongo`; explain is `OxQL:Explain:Enabled` |
+| `IOxQLQueryService.ExecuteAsync` returning `OxQLQueryResult`, `ExplainAsync` returning a list | `QueryOutcome` and `ExplainOutcome`; new `ExecuteAsync(request, maxTimeMs, ct)` and `BatchAsync` |
+
+### Two new mandatory requirements
+
+- **A scope provider.** Register one with `AddOxQLScope`. Without it the host throws
+  `InvalidOperationException` at startup; this replaces the 1.x organisation filter provider.
+- **A cursor signing key.** Set `OxQL:Cursor:SigningKey`. Without it `AddOxQLCore` throws at
+  startup. The Simplic base package derives it from the auth token.
+
+### Configuration
+
+The `OxQL` section is now nested (`Limits`, `Execution`, `Compat`, `Explain`, `Representation`,
+`Cache`, `Cursor`); the eight flat 1.x limit keys are still read (see *Configuration*). Five 1.x
+keys are no longer read and are silently ignored by the binder: `AllowedLookupSources`,
+`AllowedResolveSources`, `AllowedPathPrefixes`, `QueryPlanCacheTtl`, `QueryPlanCacheMaxEntries`.
+Lookups and resolves are now allowed only along references the model declares, which is
+stricter than any allow-list was, and there is no plan cache to size.
+
+`DefaultPageSize` changed from 50 to 100: a request without `page.limit` gets twice the rows.
+
+### Behaviour changes for callers
+
+- Requests without `X-OxQL-Contract: 2` are served as contract 1 while `Compat:Enabled` is
+  true, which is the default for this release. Each one is logged under the `OxQL.Compat`
+  category with the user, organisation and correlation id, so the hosts can see who still needs
+  migrating before the mode is switched off in the next release.
+- `GET /OxQL/types` is removed; the host's `/schema` document describes the entities.
+- The refusal envelope no longer carries a `status` member; the HTTP status is the status.
+- `dateTrunc` truncates in the given `timezone` (default UTC) with weeks starting on Monday; 1.x
+  passed neither to the server, which truncated in UTC with weeks starting on Sunday, so a ported
+  grouping query gets different week buckets unless it names `weekStart`.
+- Two `sort` stages do not compose: the later one replaces the earlier one.
+
 ## Requirements
 
-.NET 10, MongoDB.Driver 3.9, MongoDB 6.0 or later (measured on 8.0).
+.NET 10, MongoDB.Driver 3.9, MongoDB 6.0 or later (tested on 8.0).

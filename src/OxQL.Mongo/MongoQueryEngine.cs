@@ -247,7 +247,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var listed = await indexes.IndexesAsync(entity, cancellationToken).ConfigureAwait(false);
         var hasLookup = compiled.PageStages.Any(stage => stage.Contains("$lookup"));
-        var explain = hasLookup ? await indexes.ExplainAsync(entity, compiled.PageStages, cancellationToken).ConfigureAwait(false) : null;
+        var explain = hasLookup ? await indexes.ExplainAsync(entity, compiled.PageStages, compiled.MaxTimeMs, cancellationToken).ConfigureAwait(false) : null;
 
         return IndexAdvisor.Advise(compiled.PageStages, listed, explain);
     }

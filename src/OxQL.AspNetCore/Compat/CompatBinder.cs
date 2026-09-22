@@ -27,7 +27,7 @@ public sealed record CompatRewrite
 }
 
 /// <summary>
-/// Contract 1 compatibility (design §12): a request without the contract header, while
+/// Contract 1 compatibility: a request without the contract header, while
 /// <c>Compat:Enabled</c>, may spell paths as the driver stores them (<c>MatchCode</c>,
 /// <c>Status.Name</c>, <c>_id</c>) or as the CLR declares them, and may wrap operands in
 /// the v1 type hints (<c>$date</c>, <c>$uuid</c>, <c>$uuid3</c>, <c>$long</c>, <c>$decimal</c>,
@@ -83,6 +83,15 @@ public sealed class CompatBinder
             {
                 var stage = pipeline[index];
 
+                // A null stage, like a stage whose body is null below, is the caller's error and
+                // not this rewrite's to judge: it travels on untouched and the binder refuses it
+                // with its code.
+                if (stage is null)
+                {
+                    rewritten.Add(stage!);
+                    continue;
+                }
+
                 switch (stage.Kind)
                 {
                     case "lookup":
@@ -101,24 +110,24 @@ public sealed class CompatBinder
                             }]),
                         };
 
-                    case "match":
-                        rewritten.Add(stage with { Match = RewriteMatch(stage.Match!) });
+                    case "match" when stage.Match is not null:
+                        rewritten.Add(stage with { Match = RewriteMatch(stage.Match) });
                         break;
 
-                    case "unwind":
-                        rewritten.Add(stage with { Unwind = RewriteUnwind(stage.Unwind!) });
+                    case "unwind" when stage.Unwind is not null:
+                        rewritten.Add(stage with { Unwind = RewriteUnwind(stage.Unwind) });
                         break;
 
-                    case "group":
-                        rewritten.Add(stage with { Group = RewriteGroup(stage.Group!) });
+                    case "group" when stage.Group is not null:
+                        rewritten.Add(stage with { Group = RewriteGroup(stage.Group) });
                         break;
 
-                    case "project":
-                        rewritten.Add(stage with { Project = RewriteProject(stage.Project!) });
+                    case "project" when stage.Project is not null:
+                        rewritten.Add(stage with { Project = RewriteProject(stage.Project) });
                         break;
 
-                    case "sort":
-                        rewritten.Add(stage with { Sort = RewriteSort(stage.Sort!) });
+                    case "sort" when stage.Sort is not null:
+                        rewritten.Add(stage with { Sort = RewriteSort(stage.Sort) });
                         break;
 
                     default:
@@ -203,7 +212,7 @@ public sealed class CompatBinder
 
         private GroupStage RewriteGroup(GroupStage group)
         {
-            var by = group.By.Select(key => key with
+            var by = group.By.Select(key => key is null ? key! : key with
             {
                 Path = key.Path is null ? null : Translate(key.Path, roots).Wire,
                 DateTrunc = key.DateTrunc is null ? null : key.DateTrunc with { Path = Translate(key.DateTrunc.Path, roots).Wire },
@@ -212,13 +221,14 @@ public sealed class CompatBinder
             var fields = new Dictionary<string, AggregationExpression>(StringComparer.Ordinal);
 
             foreach (var (alias, aggregate) in group.Fields)
-                fields[alias] = aggregate.Argument is null ? aggregate : aggregate with { Argument = RewriteExpression(aggregate.Argument) };
+                fields[alias] = aggregate?.Argument is null ? aggregate! : aggregate with { Argument = RewriteExpression(aggregate.Argument) };
 
             // After the group, the roots are the outputs, verbatim.
             roots.Clear();
 
             foreach (var key in by)
-                roots[key.As] = null;
+                if (key?.As is not null)
+                    roots[key.As] = null;
 
             foreach (var alias in fields.Keys)
                 roots[alias] = null;
@@ -248,7 +258,7 @@ public sealed class CompatBinder
         }
 
         private IReadOnlyList<SortField> RewriteSort(IReadOnlyList<SortField> fields) =>
-            fields.Select(field => field with
+            fields.Select(field => field is null ? field! : field with
             {
                 Path = Translate(field.Path, roots).Wire,
                 Direction = field.Direction.ToLowerInvariant() is "asc" or "desc" ? field.Direction.ToLowerInvariant() : field.Direction,

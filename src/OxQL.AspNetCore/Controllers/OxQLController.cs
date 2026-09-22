@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -72,21 +71,25 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// The engine version, contract, capabilities and limits, and the state of every service the
     /// model references remotely. Anonymous and always reachable, so it answers "why is my list
-    /// not working" from a browser; the reachability behind it is measured at most once per
-    /// <c>OxQL:Cache:HealthProbeTtlSeconds</c> and shared, so asking often costs nothing.
+    /// not working" from a browser. It never waits for another service: the reachability is the
+    /// last one measured, refreshed in the background at most once per
+    /// <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is null until the first
+    /// measurement has finished. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
+    /// starts no measurement; that is the form one host asks of another, so a probe never sets off
+    /// the probed service's own probes.
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Health(
+    public IActionResult Health(
         [FromServices] IQueryEngine engine,
         [FromServices] IEntityModelProvider models,
         [FromServices] RemoteHealthProbe probe,
         [FromServices] IRemoteQueryClient? client,
-        CancellationToken cancellationToken)
+        [FromQuery] bool shallow = false)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-        var services = client is null ? null : await probe.StateAsync(ModelOrNull(models), client, cancellationToken);
+        var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
         var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
         return Ok(new
@@ -143,7 +146,12 @@ public class OxQLController : ControllerBase
         }
     }
 
-    /// <summary>The bound pipeline, the emitted stages, the count stages and the index advisory, without executing; 404 unless <c>Explain:Enabled</c>.</summary>
+    /// <summary>
+    /// The bound pipeline, the emitted stages, the count stages and the index advisory; 404 unless
+    /// <c>Explain:Enabled</c>. No rows are returned and the count never runs, but for a pipeline
+    /// with a lookup the advisory reads the server's own explain, which executes the page pipeline
+    /// once under the query's time ceiling.
+    /// </summary>
     [HttpPost("explain")]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -167,19 +175,8 @@ public class OxQLController : ControllerBase
         if (refusal.Status >= 500)
             logger.LogError("OxQL refusal {Type}: {Title}", refusal.Type, refusal.Title);
         else
-            logger.LogInformation("OxQL refusal {Type} {Code}: {Message}", refusal.Type, refusal.Errors?[0].Code, refusal.Errors?[0].Message);
+            logger.LogInformation("OxQL refusal {Type} {Code}: {Message}", refusal.Type, LogText.Of(refusal.Errors?[0].Code), LogText.Of(refusal.Errors?[0].Message));
 
         return refusal;
     }
-}
-
-/// <summary>The serializer options the wire uses.</summary>
-public static class JsonOptions
-{
-    /// <summary>camelCase, nulls omitted.</summary>
-    public static readonly JsonSerializerOptions Wire = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
 }

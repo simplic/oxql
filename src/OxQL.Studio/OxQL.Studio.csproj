@@ -14,7 +14,7 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
-  <!-- Ship the UI assets as embedded resources so the library is fully self-contained. -->
+  <!-- Ship the UI assets as embedded resources. The Monaco editor itself is loaded from OxQLStudioOptions.MonacoCdnBase. -->
   <ItemGroup>
     <EmbeddedResource Include="wwwroot\**\*" />
   </ItemGroup>

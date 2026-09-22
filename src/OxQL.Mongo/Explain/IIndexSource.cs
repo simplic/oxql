@@ -16,13 +16,14 @@ public interface IIndexSource
     Task<IReadOnlyList<BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken);
 
     /// <summary>
-    /// The server's explain of the stages, or null when it cannot be obtained. Measured on 8.0:
+    /// The server's explain of the stages, or null when it cannot be obtained. On MongoDB 8.0
     /// the pipelined <c>$lookup</c> form the compiler emits reports <c>indexesUsed</c> only at
     /// <c>executionStats</c> verbosity (<c>queryPlanner</c> shows nothing for it), so the explain
-    /// executes the page pipeline, bounded by its own <c>$limit</c>; it is only asked for when
-    /// the pipeline has a <c>$lookup</c>.
+    /// executes the page pipeline. It therefore runs under the same ceiling as the query would,
+    /// <paramref name="maxTimeMs"/>, and an explain the server cuts off yields null like any
+    /// other it cannot give. It is only asked for when the pipeline has a <c>$lookup</c>.
     /// </summary>
-    Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, CancellationToken cancellationToken);
+    Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs, CancellationToken cancellationToken);
 }
 
 /// <summary>Reads indexes and explains on the host's client; <c>listIndexes</c> is cached 60 seconds per collection.</summary>
@@ -61,9 +62,28 @@ public sealed class MongoIndexSource : IIndexSource
     }
 
     /// <inheritdoc/>
-    public async Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, CancellationToken cancellationToken)
+    public async Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs, CancellationToken cancellationToken)
     {
-        var command = new BsonDocument
+        try
+        {
+            return await DatabaseOf(entity).RunCommandAsync<BsonDocument>(ExplainCommand(entity, stages, maxTimeMs), cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (MongoException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The explain command of the stages at <c>executionStats</c> verbosity. The time ceiling sits
+    /// on the explain command itself, which is the command the server runs and bounds.
+    /// </summary>
+    public static BsonDocument ExplainCommand(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(stages);
+
+        return new BsonDocument
         {
             ["explain"] = new BsonDocument
             {
@@ -72,16 +92,8 @@ public sealed class MongoIndexSource : IIndexSource
                 ["cursor"] = new BsonDocument(),
             },
             ["verbosity"] = "executionStats",
+            ["maxTimeMS"] = Math.Max(1, maxTimeMs),
         };
-
-        try
-        {
-            return await DatabaseOf(entity).RunCommandAsync<BsonDocument>(command, cancellationToken: cancellationToken).ConfigureAwait(false);
-        }
-        catch (MongoException)
-        {
-            return null;
-        }
     }
 
     private IMongoDatabase DatabaseOf(EntityDef entity)

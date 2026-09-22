@@ -75,14 +75,35 @@ public static class WireEncoder
 
                 case ShapeNode.GroupOutput output:
                     if (row.TryGetValue(name, out var outputValue))
-                        result[name] = output.Shape is not null
-                            ? EncodeValue(outputValue, output.Shape, name, shape, name, unfit)
-                            : EncodeScalar(outputValue, output.Kind, null, name, unfit);
+                        result[name] = EncodeOutput(outputValue, output, name, shape, unfit);
                     break;
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// A group output: a pushed array element by element in its element's encoding, so a
+    /// pushed value reads back as the row's own value would; any other output by its shape,
+    /// or by its kind where it has none.
+    /// </summary>
+    private static JsonNode? EncodeOutput(BsonValue value, ShapeNode.GroupOutput output, string name, Shape shape, ICollection<string>? unfit)
+    {
+        if (output.Kind == Kind.Array && value is BsonArray items)
+            return new JsonArray(items.Select(Element).ToArray());
+
+        return output.Shape is not null
+            ? EncodeValue(value, output.Shape, name, shape, name, unfit)
+            : EncodeScalar(value, output.Kind, null, name, unfit);
+
+        // A member under a collection pushes one array per row.
+        JsonNode? Element(BsonValue item) => item switch
+        {
+            BsonArray nested => new JsonArray(nested.Select(Element).ToArray()),
+            _ when output.ElementShape is not null => EncodeValue(item, output.ElementShape, name, shape, name, unfit),
+            _ => EncodeScalar(item, output.ElementKind, null, name, unfit),
+        };
     }
 
     private static JsonObject EncodeObject(BsonDocument document, TypeDef type, string wirePrefix, Shape shape, string root, ICollection<string>? unfit)

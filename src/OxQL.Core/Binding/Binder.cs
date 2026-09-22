@@ -785,7 +785,7 @@ public sealed class Binder
 
                 if (function == "count")
                 {
-                    fields.Add(new Aggregate(alias, function, null, Kind.Long, null));
+                    fields.Add(new Aggregate(alias, function, null, Kind.Unknown, Kind.Long, null));
                     continue;
                 }
 
@@ -806,20 +806,25 @@ public sealed class Binder
                     continue;
                 }
 
+                // A mean over 64-bit integers is taken in decimal: a double's granularity
+                // above 2^53 is coarser than one, and the wire spells a decimal the way it
+                // spells a long, so no digit is lost on either side.
                 var (outputKind, outputShape) = function switch
                 {
                     "countDistinct" => (Kind.Long, null),
-                    "avg" => (kind == Kind.Decimal ? Kind.Decimal : Kind.Double, null),
+                    "avg" => (kind is Kind.Decimal or Kind.Long ? Kind.Decimal : Kind.Double, null),
                     "push" => (Kind.Array, argumentShape),
                     _ => (kind, argumentShape),
                 };
 
-                fields.Add(new Aggregate(alias, function, argument, outputKind, outputShape));
+                fields.Add(new Aggregate(alias, function, argument, kind, outputKind, outputShape));
             }
 
             stages.Add(new BoundStage.Group(keys, fields));
-            shape = shape.WithGroup(keys.Select(key => (key.As, key.OutputKind, key.OutputShape))
-                .Concat(fields.Select(field => (field.As, field.OutputKind, field.Function == "push" ? null : field.OutputShape))));
+            shape = shape.WithGroup(keys.Select(key => new ShapeNode.GroupOutput(key.OutputKind, key.OutputShape, key.As))
+                .Concat(fields.Select(field => field.Function == "push"
+                    ? new ShapeNode.GroupOutput(field.OutputKind, null, field.As, field.ArgumentKind, field.OutputShape)
+                    : new ShapeNode.GroupOutput(field.OutputKind, field.OutputShape, field.As))));
             sort = null;
         }
 

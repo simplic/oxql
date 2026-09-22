@@ -526,6 +526,9 @@ public static class MongoCompiler
         "count" => new BsonDocument("$sum", 1),
         "countDistinct" => new BsonDocument("$addToSet", Expression(field.Argument!)),
         "sum" => new BsonDocument("$sum", Expression(field.Argument!)),
+        // A double cannot hold the mean of 64-bit integers exactly; a decimal can, and the
+        // binder types the output as one.
+        "avg" when field.ArgumentKind == Kind.Long => new BsonDocument("$avg", new BsonDocument("$toDecimal", Expression(field.Argument!))),
         "avg" => new BsonDocument("$avg", Expression(field.Argument!)),
         "min" => new BsonDocument("$min", Expression(field.Argument!)),
         "max" => new BsonDocument("$max", Expression(field.Argument!)),

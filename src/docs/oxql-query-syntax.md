@@ -73,7 +73,10 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
   where the default "some element" form applies (`ANY_NOT_APPLICABLE`).
 - `options.ignoreCase` applies to `eq neq in nin contains startsWith endsWith` on `string`
   members only (`OPTION_NOT_APPLICABLE` elsewhere). It compiles to an anchored case-insensitive
-  regex per field, which walks the field's whole index.
+  regex per field, which walks the field's whole index. On a member holding a single character,
+  published as `string` and stored as its code point, it folds the operand's case by code point
+  instead, for `eq`, `neq`, `in` and `nin`; the three text operators have no text to match
+  there and are refused with `INVALID_OPERAND`.
 
 ### Operators
 
@@ -190,10 +193,16 @@ documents whose collection is empty or absent.
   a `dateTrunc` with `unit` in `year quarter month week day hour minute second`
   (`INVALID_DATE_TRUNC_UNIT`), an optional IANA `timezone` (default UTC, `INVALID_TIMEZONE`)
   and, for `week`, `weekStart` (default `monday`). A truncated key is emitted as the UTC
-  instant of the local boundary.
+  instant of the local boundary. A `date` has no time of day and truncates on its calendar day
+  in that zone, so the bucket is local midnight of the row's own day; a `dateTime` truncates as
+  the instant it holds.
 - Aggregates: `count` (`{ "count": true }`), `countDistinct`, `sum`, `avg`, `min`, `max`,
   `first`, `last`, `push` (`UNKNOWN_AGG_FUNCTION`). `sum` and `avg` need a numeric argument
   (`INVALID_AGGREGATE_ARGUMENT`).
+- `avg` over a `long` is taken in decimal and comes back as a decimal string, the way a `sum`
+  over a long does; over an `int` or a `double` it is a JSON number. A `push` alias carries the
+  argument's value per row, each element in the member's wire encoding: a `long` as a string, a
+  `date` as `YYYY-MM-DD`, a single character as that character, an object by its members.
 - An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`,
   or an arithmetic expression `add subtract multiply divide coalesce` over an array of
   arguments.

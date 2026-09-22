@@ -263,6 +263,14 @@ the type, so entity assemblies compile without a change.
 | `IOxQLQueryService.ExecuteAsync` returning `OxQLQueryResult`, `ExplainAsync` returning a list | `QueryOutcome` and `ExplainOutcome`; new `ExecuteAsync(request, maxTimeMs, ct)` and `BatchAsync` |
 | `OxQLTypeRegistry`, `QueryValidationException`, `SortStage`, the `MatchStage.And` / `Or` / `Not` helpers, `Shape.WithAddons` | removed from the public surface; no replacement is needed by a host |
 
+Beyond the entry points, three `OxQL.Core` binder types are worth naming for a host that
+constructs bound pipeline parts itself:
+
+- `Aggregate` takes the argument's kind as its fourth positional member, `Kind ArgumentKind`.
+- `ShapeNode.GroupOutput` takes two optional trailing members, `Kind ElementKind` and
+  `ShapeDef? ElementShape`, which describe a pushed element.
+- `Shape.WithGroup` takes an `IEnumerable<ShapeNode.GroupOutput>`.
+
 ### Two new mandatory requirements
 
 - **A scope provider.** Register one with `AddOxQLScope`. Without it the host throws
@@ -287,11 +295,24 @@ stricter than any allow-list was, and there is no plan cache to size.
   true, which is the default for this release. Each one is logged under the `OxQL.Compat`
   category with the user, organisation and correlation id, so the hosts can see who still needs
   migrating before the mode is switched off in the next release.
+- Under contract 2 an entity id is matched case-sensitively and has to be spelled as the
+  schema publishes it (`UNKNOWN_ENTITY` otherwise); contract 1 requests keep v1's
+  case-insensitive matching, retired ids included.
 - `GET /OxQL/types` is removed; the host's `/schema` document describes the entities.
 - The refusal envelope no longer carries a `status` member; the HTTP status is the status.
 - `dateTrunc` truncates in the given `timezone` (default UTC) with weeks starting on Monday; 1.x
   passed neither to the server, which truncated in UTC with weeks starting on Sunday, so a ported
-  grouping query gets different week buckets unless it names `weekStart`.
+  grouping query gets different week buckets unless it names `weekStart`. A `date` member has
+  no time of day, so it truncates on its calendar day in that zone: the bucket is local
+  midnight of the row's own day. A `dateTime` truncates as the instant it holds.
+- `avg` over a `long` is taken in decimal and travels as a decimal string, the way a `sum`
+  over a long does; over an `int` or a `double` it is a JSON number. A double cannot hold the
+  mean of 64-bit integers exactly.
+- The elements of a pushed array arrive in the member's wire encoding: a `long` as a string,
+  a `date` as `YYYY-MM-DD`, a single character as that character, an object by its members.
+- `ignoreCase` on a member holding a single character folds the operand's case by code point,
+  so `eq`, `neq`, `in` and `nin` match either case; the character is stored as its code point,
+  which no case-insensitive pattern matches.
 - Two `sort` stages do not compose: the later one replaces the earlier one.
 - Refusals are wider, under existing codes: `INVALID_ALIAS` for an alias `_id`, starting with
   `__` or ending in `__arr`; `ALIAS_COLLISION` for an alias equal to a member's wire or storage

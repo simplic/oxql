@@ -436,4 +436,34 @@ public class RemoteResolverTests
         cache.Set("k3", row);
         cache.Count.Should().BeLessThanOrEqualTo(2, "the entry count is bounded");
     }
+
+    [Fact]
+    public async Task An_owner_row_without_the_projected_key_is_refused_rather_than_read_as_no_such_row()
+    {
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", "c1")];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("name", "C1"));
+
+        var refusal = await Refused(engine, """[{ "match": { "number": { "eq": "a" } } }, { "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }]""");
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors![0].Code.Should().Be(Codes.ResolveRefused);
+        refusal.Errors[0].Message.Should().Contain("'number'", "the message names the member the owner left out");
+        refusal.Errors[0].Stage.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_semi_join_owner_row_without_the_target_field_is_refused_rather_than_matching_nothing()
+    {
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", null, Vehicle1)];
+        runner.Count = 1;
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("matchCode", "V-1"));
+
+        var refusal = await Refused(engine, SemiJoin);
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors![0].Code.Should().Be(Codes.ResolveRefused);
+        refusal.Errors[0].Message.Should().Contain("'id'");
+    }
 }

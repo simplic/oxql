@@ -122,7 +122,12 @@ public sealed class RemoteResolver
                 if (total is { Value: var reported } && reported > cap)
                     return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
 
-                if (!Take(plan, result, slot, pageSize))
+                var full = Take(plan, result, slot, pageSize);
+
+                if (full is null)
+                    return WithoutKey(TargetOf(slot), TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+
+                if (full == false)
                     continue;
 
                 if (total is { Capped: false, Value: var exact })
@@ -182,7 +187,12 @@ public sealed class RemoteResolver
                     if (plan.Ids.Count > cap)
                         return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
 
-                    if (Take(plan, result, slot, pageSize) && plan.Indeterminate && offset + pageSize <= lastOffset)
+                    var full = Take(plan, result, slot, pageSize);
+
+                    if (full is null)
+                        return WithoutKey(TargetOf(slot), TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+
+                    if (full == true && plan.Indeterminate && offset + pageSize <= lastOffset)
                         plan.Queue.Enqueue(offset + pageSize);
                 }
             }
@@ -215,14 +225,21 @@ public sealed class RemoteResolver
     }
 
     /// <summary>Adds one owner page to a plan; true when the page was full, so another may follow.</summary>
-    private static bool Take(SlotPlan plan, JsonNode result, SemiJoinSlot slot, int pageSize)
+    /// <summary>Adds the owner's page of ids to the plan; true when the page was full, null when a row lacks the target field.</summary>
+    private static bool? Take(SlotPlan plan, JsonNode result, SemiJoinSlot slot, int pageSize)
     {
         var page = IdsOf(result, slot);
+
+        if (page is null)
+            return null;
 
         plan.Ids.AddRange(page);
 
         return page.Count >= pageSize;
     }
+
+    private static string TargetFieldOf(SemiJoinSlot slot) =>
+        ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference.Path?.Reference?.TargetField ?? "id";
 
     /// <summary>
     /// The cache key of a slot: the organisation and the first-page query the owner is sent, which
@@ -270,15 +287,20 @@ public sealed class RemoteResolver
     }
 
     /// <summary>The target field's wire values of one owner page.</summary>
-    private static List<string> IdsOf(JsonNode result, SemiJoinSlot slot)
+    /// <summary>The owner's ids in wire form, or null when a row does not carry the target field the host projected.</summary>
+    private static List<string>? IdsOf(JsonNode result, SemiJoinSlot slot)
     {
-        var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
-        var field = reference.Path?.Reference?.TargetField ?? "id";
+        var field = TargetFieldOf(slot);
         var values = new List<string>();
 
         foreach (var item in result["items"]!.AsArray())
-            if (item?[field] is { } value)
+        {
+            if (item is not JsonObject row || !row.ContainsKey(field))
+                return null;
+
+            if (row[field] is { } value)
                 values.Add(value is JsonValue scalar ? scalar.ToString() : value.ToJsonString());
+        }
 
         return values;
     }
@@ -385,7 +407,10 @@ public sealed class RemoteResolver
 
                 foreach (var item in result["items"]!.AsArray())
                 {
-                    var key = item?[field]?.ToString();
+                    if (item is not JsonObject row || !row.ContainsKey(field))
+                        return new ResolveResult { Refusal = WithoutKey(plan.Stage.TargetEntity, field, StageIndexOf(compiled.Bound, plan.Stage)), Calls = calls, CacheHits = cacheHits };
+
+                    var key = row[field]?.ToString();
 
                     if (key is not null)
                         byKey[key] = item;
@@ -664,6 +689,17 @@ public sealed class RemoteResolver
         };
 
         return Refusal.NotExecutable(Codes.ResolveRefused, head.Message, stage, [head, .. inner]);
+    }
+
+    /// <summary>
+    /// An owner row without the member the host projected and keys by. The host asked for that member,
+    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
+    /// </summary>
+    private static Refusal WithoutKey(string targetEntity, string field, int? stage)
+    {
+        var message = $"The owner of '{targetEntity}' answered a row without the projected member '{field}'.";
+
+        return Refusal.NotExecutable(Codes.ResolveRefused, message, stage, [new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = stage }]);
     }
 
     /// <summary>The caller's index of a bound stage: the bound stages are the caller's in order, the page appended when absent.</summary>

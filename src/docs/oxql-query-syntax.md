@@ -307,9 +307,9 @@ refusal envelope. `maxTimeMs` caps every query's aggregate under the host's ceil
 ## Contract 1 (compatibility mode)
 
 While the host's `Compat:Enabled` is true, a request without `X-OxQL-Contract: 2` is bound
-by the compatibility binder: paths may be spelled as stored (`MatchCode`, `Department._id`)
-and are resolved against the same folded shape, wire spellings work too, the v1 type-hint
-operands are accepted, operators and sort directions are read case-insensitively, and rows
-come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
+by the compatibility binder: the entity id is matched case-insensitively (retired ids too),
+paths may be spelled as stored (`MatchCode`, `Department._id`) and are resolved against the
+same folded shape, wire spellings work too, the v1 type-hint operands are accepted, operators
+and sort directions are read case-insensitively, and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
 stages are refused with `LEGACY_STAGE_UNSUPPORTED`. Every such request is logged under
 `OxQL.Compat`. When compatibility is switched off, every request is contract 2.

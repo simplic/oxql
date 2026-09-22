@@ -28,12 +28,14 @@ public sealed record CompatRewrite
 
 /// <summary>
 /// Contract 1 compatibility: a request without the contract header, while
-/// <c>Compat:Enabled</c>, may spell paths as the driver stores them (<c>MatchCode</c>,
-/// <c>Status.Name</c>, <c>_id</c>) or as the CLR declares them, and may wrap operands in
-/// the v1 type hints (<c>$date</c>, <c>$uuid</c>, <c>$uuid3</c>, <c>$long</c>, <c>$decimal</c>,
-/// <c>$oid</c>, <c>$regex</c>, <c>$null</c>). The rewrite resolves every path relative to the
-/// shape folded through the caller's stages, alias roots included, onto its wire spelling,
-/// unwraps the hints into the wire encoding, and hands the engine a contract 2 request. A v1
+/// <c>Compat:Enabled</c>, may spell the entity id in any case, may spell paths as the driver
+/// stores them (<c>MatchCode</c>, <c>Status.Name</c>, <c>_id</c>) or as the CLR declares
+/// them, and may wrap operands in the v1 type hints (<c>$date</c>, <c>$uuid</c>,
+/// <c>$uuid3</c>, <c>$long</c>, <c>$decimal</c>, <c>$oid</c>, <c>$regex</c>, <c>$null</c>).
+/// The rewrite lower-cases the entity id, which is the form the model holds every id and
+/// retired id in, resolves every path relative to the shape folded through the caller's
+/// stages, alias roots included, onto its wire spelling, unwraps the hints into the wire
+/// encoding, and hands the engine a contract 2 request. A v1
 /// <c>lookup</c> or <c>resolve</c> stage has no v2 equivalent and is refused with
 /// <c>LEGACY_STAGE_UNSUPPORTED</c>. Rows of a contract 1 request are rendered by the v1
 /// converter in the engine, so <c>_id</c> and the storage names come back as they did.
@@ -71,7 +73,11 @@ public sealed class CompatBinder
 
         public CompatRewrite Run()
         {
-            if (!string.IsNullOrWhiteSpace(request.EntityType) && model.TryResolve(request.EntityType, out var entity, out _))
+            // The model resolves an id exactly and holds every id lower-cased, so a contract 1
+            // id is folded to that form once, for the root here and for the binder after it.
+            var entityType = string.IsNullOrWhiteSpace(request.EntityType) ? request.EntityType : request.EntityType.ToLowerInvariant();
+
+            if (!string.IsNullOrWhiteSpace(entityType) && model.TryResolve(entityType, out var entity, out _))
                 roots[Shape.ImplicitRoot] = entity.Root;
             else
                 roots[Shape.ImplicitRoot] = null;
@@ -140,7 +146,7 @@ public sealed class CompatBinder
 
             return new CompatRewrite
             {
-                Request = request with { Pipeline = rewritten, Variables = variables },
+                Request = request with { EntityType = entityType, Pipeline = rewritten, Variables = variables },
                 FirstLegacyPath = firstLegacyPath,
                 LegacyPaths = legacyPaths,
                 TypeHints = typeHints,

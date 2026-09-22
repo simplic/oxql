@@ -122,9 +122,10 @@ Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE
 ## Contract header and compatibility mode
 
 Clients send `X-OxQL-Contract: 2`. While `Compat:Enabled` is true (the default for the
-compatibility release), a request **without** the header is contract 1: storage-spelled
-paths are resolved against the folded shape, the v1 type-hint operands (`$date`, `$uuid`,
-`$decimal`, …) are accepted, and rows come back in the v1 encoding (`_id`, storage names).
+compatibility release), a request **without** the header is contract 1: the entity id is
+matched case-insensitively, storage-spelled paths are resolved against the folded shape, the
+v1 type-hint operands (`$date`, `$uuid`, `$decimal`, …) are accepted, and rows come back in
+the v1 encoding (`_id`, storage names).
 The v1 `lookup` and `resolve` stages have no v2 equivalent and are refused with
 `LEGACY_STAGE_UNSUPPORTED`. Every contract 1 request is logged under the `OxQL.Compat`
 category with the first legacy path, the user, the organisation and the correlation id, so a

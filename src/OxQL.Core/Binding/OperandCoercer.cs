@@ -18,6 +18,9 @@ public sealed class OperandCoercer
 {
     private const string VarKey = "$var";
 
+    /// <summary>The JSON literal <c>null</c>, detached from the document it was parsed from.</summary>
+    internal static readonly JsonElement JsonNull = ParseNull();
+
     private readonly OxQLOptions options;
     private readonly QueryVariables? variables;
     private readonly List<Diagnostic>? diagnostics;
@@ -61,7 +64,7 @@ public sealed class OperandCoercer
     /// wire, stored as its code point. It compares by value, so <c>eq</c>, <c>neq</c>,
     /// <c>in</c>, <c>nin</c> and the ordered operators work on it; the four operators that
     /// need text — <c>contains</c>, <c>startsWith</c>, <c>endsWith</c>, <c>regex</c> — have no
-    /// text to work on and used to reach the compiler and throw there.
+    /// text to work on, and the binder refuses them.
     /// </summary>
     public static bool IsCharRepresented(ResolvedPath path) =>
         path is not null && path.LeafKind == Kind.String && path.Leaf?.Representation.BsonType == BsonType.Int32;
@@ -72,10 +75,7 @@ public sealed class OperandCoercer
     /// <summary>Coerces one operand; null with errors added when it cannot be.</summary>
     public BoundOperand? Coerce(JsonElement? raw, ResolvedPath path, string op, int stage, List<QueryValidationError> errors)
     {
-        var element = raw ?? default;
-
-        if (raw is null)
-            element = JsonDocument.Parse("null").RootElement;
+        var element = raw ?? JsonNull;
 
         // The variable wrapper is the only object operand.
         if (element.ValueKind == JsonValueKind.Object)
@@ -130,23 +130,21 @@ public sealed class OperandCoercer
                 foreach (var rawItem in element.EnumerateArray())
                 {
                     var item = rawItem;
-                    var label = $"{path.Wire}[{index}]";
+                    var label = $"{path.Wire}[{index++}]";
 
                     // An element may be a variable wrapper of its own: the whole-array form and
-                    // the per-element form are both specified, and only the first used to work.
+                    // the per-element form are both part of the contract.
                     if (item.ValueKind == JsonValueKind.Object && TryVariable(item, out var itemName))
                     {
                         if (!TryResolveVariable(itemName!, out item))
                         {
                             errors.Add(Error(Codes.UnboundVariable, $"The variable '{itemName}' is not bound.", stage, path.Wire));
-                            index++;
                             continue;
                         }
 
                         if (item.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
                         {
                             errors.Add(Error(Codes.InvalidVariable, $"The variable '{itemName}' holds {(item.ValueKind == JsonValueKind.Array ? "an array" : "an object")}; an element of '{op}' holds a value.", stage, path.Wire));
-                            index++;
                             continue;
                         }
                     }
@@ -154,11 +152,8 @@ public sealed class OperandCoercer
                     if (item.ValueKind == JsonValueKind.Null)
                     {
                         values.Add(BsonNull.Value);
-                        index++;
                         continue;
                     }
-
-                    index++;
 
                     if (!InClosedList(item, path, kind, op, stage, errors, label))
                         continue;
@@ -250,11 +245,18 @@ public sealed class OperandCoercer
         value = raw switch
         {
             JsonElement element => element,
-            null => JsonDocument.Parse("null").RootElement,
+            null => JsonNull,
             _ => JsonSerializer.SerializeToElement(raw),
         };
 
         return true;
+    }
+
+    private static JsonElement ParseNull()
+    {
+        using var document = JsonDocument.Parse("null");
+
+        return document.RootElement.Clone();
     }
 
     private static bool TryVariable(JsonElement element, out string? name)
@@ -389,8 +391,8 @@ public sealed class OperandCoercer
                 {
                     // The membership check does not depend on the storage: a number that names
                     // no declared member is as wrong on a numerically stored enum as on a
-                    // string-stored one, and used to be passed through to storage unchecked —
-                    // matching nothing, or matching an undeclared stored value, with a 200.
+                    // string-stored one. Passed on unchecked it matches nothing, or an
+                    // undeclared stored value, with a 200.
                     var byValue = type?.EnumValues.FirstOrDefault(value => value.Value == number);
 
                     if (byValue is null)
@@ -462,9 +464,8 @@ public sealed class OperandCoercer
     /// <para>
     /// An <b>ordered</b> comparison gets no text bracket at all. Mongo compares a string
     /// bracket lexicographically, which agrees with numeric order only while every value
-    /// shares one integer width and one scale, so the bracket that was added to save those
-    /// rows is what returned wrong ones: <c>lt "100000"</c> dropped <c>"99999.99"</c> and
-    /// <c>gte "99999.99"</c> dropped <c>"125000.00"</c>. Numbers only is what <c>$sum</c>,
+    /// shares one integer width and one scale: as text, <c>lt "100000"</c> drops
+    /// <c>"99999.99"</c> and <c>gte "99999.99"</c> drops <c>"125000.00"</c>. Numbers only is what <c>$sum</c>,
     /// <c>$min</c> and <c>$max</c> already answer over the same member, it keeps the index,
     /// and it cannot return a row on the wrong side of the bound; the rows it does not reach
     /// are named in a diagnostic rather than silently mis-ordered. Where <em>every</em> row is
@@ -519,10 +520,9 @@ public sealed class OperandCoercer
     }
 
     /// <summary>
-    /// An enum's stored number. <c>TryInteger</c> has already accepted the operand as a
-    /// <c>long</c>, so a value outside <c>Int32</c> under an <c>Int32</c> representation used
-    /// to throw <c>OverflowException</c> out of the binder and leave the caller a bare 500 —
-    /// while a value above <c>long.MaxValue</c> was correctly refused one parse earlier.
+    /// An enum's stored number. <c>TryInteger</c> accepts the operand as a <c>long</c>, so a
+    /// value outside <c>Int32</c> under an <c>Int32</c> representation is checked here and
+    /// refused, the way a value above <c>long.MaxValue</c> is refused one parse earlier.
     /// </summary>
     private static IReadOnlyList<BsonValue>? Enumeral(long value, Representation representation, ResolvedPath path, int stage, List<QueryValidationError> errors, string label)
     {

@@ -33,7 +33,7 @@ public sealed record EntityStorage(string Collection, string? Database = null);
 /// Builds the model from an Ox Schema document (format 1.x). Storage names follow the
 /// document's rule: <c>storageName</c> where published, otherwise the wire name with its first
 /// letter upper-cased and <c>id</c> as <c>_id</c> at every depth. Representations are the
-/// fleet's measured defaults per kind. Tests, tooling and the Studio use it; a host uses
+/// defaults the services store each kind in. Tests, tooling and the Studio use it; a host uses
 /// <see cref="ClrModelBuilder"/>.
 /// </summary>
 public sealed class DocumentModelBuilder
@@ -67,7 +67,7 @@ public sealed class DocumentModelBuilder
     public static EntityModel Build(JsonElement document, DocumentModelOptions? options = null) =>
         new DocumentModelBuilder(options ?? new DocumentModelOptions()).BuildCore(document);
 
-    /// <summary>The representation the fleet stores a kind in when nothing pins another: the measured defaults.</summary>
+    /// <summary>The representation a kind is stored in when nothing pins another.</summary>
     public static Representation DefaultRepresentation(Kind kind) => kind switch
     {
         Kind.String => Representation.Of(BsonType.String),

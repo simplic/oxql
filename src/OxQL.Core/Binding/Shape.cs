@@ -457,11 +457,9 @@ public sealed class Shape
             bagStorage = storagePrefix + "." + bagStorage;
 
         var storage = bagStorage + "." + definitionPath;
-        // Retire-and-recreate is the ordinary life of an addon key, and both rows survive.
-        // FirstOrDefault took whichever the source listed first and the retired check below
-        // then refused the path, never looking for the live definition behind it: the same
-        // key that /schema/addons publishes as queryable answered NOT_FILTERABLE. A live
-        // definition wins; a retired one is the answer only when there is no live one.
+        // Retire-and-recreate is the ordinary life of an addon key, and both rows survive, in
+        // no particular order. A live definition wins; a retired one is the answer only when
+        // there is no live one, so a key the schema publishes as queryable is queryable here.
         var candidates = Addons.TryGetValue(entity.Id, out var definitions)
             ? definitions.Where(candidate => string.Equals(candidate.Path, definitionPath, StringComparison.Ordinal)).ToList()
             : [];

@@ -97,10 +97,9 @@ public static class MongoCompiler
         var keyKeptAgainstProjection = false;
 
         // The same rule as the key, for the sort. NextCursor mints each leg by reading the
-        // value off the document it hands back, so a projection that removed the sort path
-        // left the leg reading a member that is not there: `?? BsonNull` turned "absent from
-        // the projection" into the value null, the null-aware predicate re-admitted every
-        // non-null row, and the walk returned its first page for as long as it was asked.
+        // value off the document it hands back, so the sort paths survive every projection in
+        // storage: a leg read from a member that is not there is the value null, and a null
+        // leg re-admits every non-null row, which pages the first page for ever.
         var sortStorages = keepKey
             ? sortFields.Select(field => field.Path.Storage).Where(storage => storage is not null).Select(storage => storage!).Distinct(StringComparer.Ordinal).ToList()
             : [];
@@ -366,8 +365,8 @@ public static class MongoCompiler
             "lt" => new BsonDocument(storage, new BsonDocument("$lt", value)),
             "lte" => new BsonDocument(storage, new BsonDocument("$lte", value)),
             // The binder refuses a text operator on a member that holds no text, so `value`
-            // is a string by the time it gets here; Text() keeps that from being an
-            // InvalidCastException and a bare 500 if a path ever reaches this without it.
+            // is a string by the time it gets here; Text() renders any other type rather than
+            // casting it.
             "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
             "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),
@@ -495,10 +494,9 @@ public static class MongoCompiler
         var document = new BsonDocument();
 
         // A scalar $group _id normalises a missing member to null; a subdocument _id omits the
-        // field instead, so the same data bucketed a null and a missing value together under
-        // one key and apart under two, and the row lost the member altogether — `undefined`
-        // where the type says `string | null`. $ifNull makes every leg of a composite key
-        // behave the way the single-key form already does.
+        // field instead, which would bucket a null and a missing value apart and leave the
+        // row without the member. $ifNull makes every leg of a composite key behave the way
+        // the single-key form does.
         foreach (var key in keys)
             document[key.As] = new BsonDocument("$ifNull", new BsonArray { KeyExpression(key), BsonNull.Value });
 

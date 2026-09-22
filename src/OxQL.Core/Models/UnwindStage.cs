@@ -35,8 +35,8 @@ public sealed record UnwindStage
 
     /// <summary>
     /// Member names the caller wrote that the stage does not have. System.Text.Json skips an
-    /// unmapped member by default, so <c>preserveNulls</c> for <c>preserveNull</c> bound with
-    /// the member dropped and the default applied, silently.
+    /// unmapped member by default, so they are recorded here and the binder refuses them:
+    /// <c>preserveNulls</c> for <c>preserveNull</c> is an error, not the default applied.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];

@@ -202,7 +202,7 @@ public sealed class Binder
                     if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
                         fields.Add(new BoundSortField(resolved.Path!, true));
             }
-            else if (shape.Resolve(Model.Build.WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
+            else if (shape.Resolve(WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
             {
                 fields.Add(new BoundSortField(key.Path!, true));
             }
@@ -341,8 +341,7 @@ public sealed class Binder
             }
 
             // A char is a string on the wire and a code point in storage, so the four text
-            // operators pass the kind gate above and have nothing to match against; they used
-            // to reach the compiler and throw InvalidCastException into a bare 500.
+            // operators pass the kind gate above and have nothing to match against.
             if (!path.IsRemote && OperandCoercer.NeedsText(op) && OperandCoercer.IsCharRepresented(path))
             {
                 errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path));
@@ -674,8 +673,9 @@ public sealed class Binder
                 return;
             }
 
-            var rootName = shape.Roots.ContainsKey(unwind.Path.Split('.')[0]) && unwind.Path.Split('.')[0] != Shape.ImplicitRoot
-                ? unwind.Path.Split('.')[0]
+            var firstSegment = unwind.Path.Split('.')[0];
+            var rootName = shape.Roots.ContainsKey(firstSegment) && firstSegment != Shape.ImplicitRoot
+                ? firstSegment
                 : Shape.ImplicitRoot;
 
             stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias));
@@ -896,11 +896,9 @@ public sealed class Binder
             kind = Kind.Unknown;
             shapeDef = null;
 
-            // An object naming no operator the engine knows used to compile as a literal
-            // object, which Mongo evaluates to missing: {"power": …}, {"bogus": 1} and {}
-            // all answered 200 with a column of nulls under min, max, first, last and push,
-            // and were caught under sum and avg only because those check the argument's kind.
-            // An unknown aggregate function is refused; an unknown argument operator is too.
+            // An object naming no operator the engine knows is not a literal: compiled as one,
+            // Mongo evaluates it to missing and the column comes back null with a 200. An
+            // unknown aggregate function is refused, and an unknown argument operator is too.
             if (expression.Unrecognised is { } unrecognised)
             {
                 errors.Add(Error(
@@ -985,7 +983,7 @@ public sealed class Binder
                 return new BoundExpression.Arithmetic(expression.Operator!, operands);
             }
 
-            var constant = OperandCoercer.Literal(expression.Literal ?? JsonDocument.Parse("null").RootElement);
+            var constant = OperandCoercer.Literal(expression.Literal ?? OperandCoercer.JsonNull);
 
             kind = KindOf(constant);
             return new BoundExpression.Literal(constant);
@@ -1055,7 +1053,7 @@ public sealed class Binder
                     paths.Add(id.Path!);
             }
 
-            var includeId = inclusion ? !idExcluded : !idExcluded;
+            var includeId = !idExcluded;
 
             stages.Add(new BoundStage.Project(inclusion, paths, includeId));
             shape = shape.WithProjection(inclusion, (inclusion ? included : excluded).Concat(inclusion && idIncluded ? [WireNames.IdWire] : Array.Empty<string>()).Concat(!inclusion && idExcluded ? [WireNames.IdWire] : Array.Empty<string>()), includeId);

@@ -16,10 +16,9 @@ public sealed record SortField
     public required string Direction { get; init; }
 
     /// <summary>
-    /// The keys of the entry beyond the first. A sort entry is a single-key object; the
-    /// converter used to return the first key and drop the rest, so
-    /// <c>{"a":"asc","b":"desc"}</c> ordered by <c>a</c> alone with a 200 and no diagnostic —
-    /// while the converter's own error message calls that shape invalid.
+    /// The keys of the entry beyond the first. A sort entry is a single-key object, so
+    /// <c>{"a":"asc","b":"desc"}</c> is carried through for the binder to refuse rather than
+    /// ordered by <c>a</c> alone.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Extra { get; init; } = [];

@@ -259,12 +259,10 @@ public static class WireEncoder
                 };
 
             case Kind.Decimal:
-                // One member used to read back in two spellings: the typed bracket canonical
-                // and the text bracket verbatim, so "1000" and "1000.00" came out of the same
-                // column and neither could be compared or fed back. Both are canonical now,
-                // and it is the spelling an operand is built with, so a value read out of a
-                // row finds the row it came from. Text that is not a decimal at all stays
-                // verbatim: normalising it would invent a number the row does not hold.
+                // The typed bracket and the text bracket read back in one canonical spelling,
+                // the one an operand is built with, so a value read out of a row finds the
+                // row it came from. Text that is not a decimal at all stays verbatim:
+                // normalising it would invent a number the row does not hold.
                 return value switch
                 {
                     BsonDecimal128 m => JsonValue.Create(DecimalText.Canonical(Decimal128.ToDecimal(m.Value))),
@@ -325,11 +323,10 @@ public static class WireEncoder
                 };
 
             case Kind.Enum:
-                // An enum backed by a long carries values JSON's number cannot hold: every
-                // JavaScript caller read 9007199254740993 back as ...992 and wrote a value
-                // that matches nothing. A value inside Int32 stays a number, which is every
-                // enum the fleet declares; above it the value travels as a string, the way
-                // Kind.Long does and for the same reason.
+                // An enum backed by a long carries values JSON's number cannot hold: a
+                // JavaScript caller reads 9007199254740993 back as ...992, a value that
+                // matches nothing. A value inside Int32 stays a number; above it the value
+                // travels as a string, the way Kind.Long does and for the same reason.
                 return value switch
                 {
                     BsonInt32 i => JsonValue.Create(i.Value),
@@ -406,12 +403,11 @@ public static class WireEncoder
 
             case BsonType.Int64:
                 // A member the shape does not describe — the addon bag's values above all —
-                // is rendered by its BSON type alone, so a 64-bit integer used to travel as a
-                // JSON number and every JavaScript caller lost it: an addon `long` holding
-                // 9007199254740993 arrived as ...992, a value that then matches nothing.
-                // Kind.Long stringifies for exactly this reason; here the kind is not known,
-                // so the range decides. Inside it the value is exact as a number and stays
-                // one, which leaves every addon integer in use today unchanged.
+                // is rendered by its BSON type alone. As a JSON number a 64-bit integer loses
+                // precision in a JavaScript caller: 9007199254740993 arrives as ...992, a
+                // value that matches nothing. Kind.Long stringifies for exactly this reason;
+                // here the kind is not known, so the range decides: inside it the value is
+                // exact as a number and stays one.
                 return SafeInteger(value.AsInt64)
                     ? JsonValue.Create(value.AsInt64)
                     : JsonValue.Create(value.AsInt64.ToString(CultureInfo.InvariantCulture));

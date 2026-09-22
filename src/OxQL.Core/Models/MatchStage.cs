@@ -115,8 +115,7 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
                     parts.Add(new FilterCondition
                     {
                         // An empty `not` is kept as an empty `not`, not as a substituted `and`:
-                        // the binder reports the spelling it refuses, and reporting "'and' has
-                        // no conditions" sent the caller looking for an `and` they never wrote.
+                        // the binder reports the spelling it refuses, and the caller wrote no `and`.
                         Not = property.Value.ValueKind == JsonValueKind.Object
                             ? ReadFromElement(property.Value, options) ?? new FilterCondition { Not = FilterCondition.EmptyGroup }
                             : throw new JsonException("'not' takes a condition object."),

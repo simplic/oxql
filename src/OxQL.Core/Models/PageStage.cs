@@ -25,8 +25,8 @@ public sealed record PageStage
 
     /// <summary>
     /// Member names the caller wrote that the stage does not have — <c>skip</c> for
-    /// <c>offset</c> among them, which used to bind with the member dropped and the page
-    /// taken from the top.
+    /// <c>offset</c> among them. The binder refuses them: a dropped member would take the page
+    /// from the top.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];

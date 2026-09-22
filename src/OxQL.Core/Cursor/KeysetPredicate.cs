@@ -6,9 +6,9 @@ namespace OxQL.Core.Cursor;
 public sealed record KeysetField(string Storage, bool Ascending, BsonValue Value);
 
 /// <summary>
-/// The null-aware keyset predicate, in the exact forms the Stage 0 spike measured index-backed:
-/// Mongo's range operators never match null or missing, so each leg is built from the last
-/// value's bracket. Assembled as an <c>$or</c> over the legs of every prefix, the key last.
+/// The null-aware keyset predicate, in forms an index on the sort fields serves: Mongo's range
+/// operators never match null or missing, so each leg is built from the last value's bracket.
+/// Assembled as an <c>$or</c> over the legs of every prefix, the key last.
 /// </summary>
 public static class KeysetPredicate
 {

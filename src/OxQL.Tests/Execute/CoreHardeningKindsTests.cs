@@ -185,4 +185,31 @@ public class CoreHardeningKindsTests
         (await GroupStage("""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "day", "timezone": "America/New_York" }, "as": "bucket" }], "fields": {} } }]"""))
             .ShouldBeBson(BsonDocument.Parse("""{ $group: { _id: { $dateTrunc: { date: "$When", unit: "day", timezone: "America/New_York" } } } }"""));
     }
+
+    // ---- ignoreCase on a char ---------------------------------------------------------------
+
+    /// <summary>
+    /// A char is a string on the wire and a code point in storage. A case-insensitive
+    /// pattern has no text to match there, so the comparison becomes the set of the
+    /// character's case forms, compared by value.
+    /// </summary>
+    [Theory]
+    [InlineData("eq", "\"a\"", "{ Initial: { $in: [97, 65] } }")]
+    [InlineData("eq", "\"A\"", "{ Initial: { $in: [65, 97] } }")]
+    [InlineData("neq", "\"a\"", "{ Initial: { $nin: [97, 65] } }")]
+    [InlineData("in", "[\"a\", \"1\"]", "{ Initial: { $in: [97, 65, 49] } }")]
+    [InlineData("nin", "[\"b\"]", "{ Initial: { $nin: [98, 66] } }")]
+    [InlineData("eq", "\"1\"", "{ Initial: 49 }")]
+    public async Task A_case_insensitive_comparison_on_a_char_folds_its_case_by_code_point(string op, string operand, string expected)
+    {
+        var pipeline = $$"""[{ "match": { "initial": { "{{op}}": {{operand}}, "options": { "ignoreCase": true } } } }]""";
+        var bound = await Bound(pipeline);
+
+        Leaf(bound).IgnoreCase.Should().BeFalse("the fold replaces the pattern");
+        MongoCompiler.Compile(bound, Options).PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: {{expected}} }"""));
+    }
+
+    [Fact]
+    public async Task A_case_insensitive_text_operator_on_a_char_is_still_refused() =>
+        await BindHost.ErrorAsync(BindHost.Probe, Order, """[{ "match": { "initial": { "contains": "a", "options": { "ignoreCase": true } } } }]""", Codes.InvalidOperand);
 }

@@ -115,7 +115,7 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; always 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. More than `Limits:MaxBatchQueries` queries is `BATCH_TOO_LARGE`. Queries run sequentially on one host. |
 | `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, and with a remote client `resolve.remote`, `semiJoin`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
-| `POST /oxql/explain` | 404 unless `Explain:Enabled`. `{ "bound", "stages", "count"?, "advisory"?, "diagnostics"? }`: the bound pipeline in canonical form, the emitted page and count stages, and an index advisory read from `listIndexes` (cached per collection). No rows are returned and the count never runs; for a pipeline with a `lookup` the advisory reads the server's own explain, which executes the page pipeline once under `Execution:MaxTimeMs`. |
+| `POST /oxql/explain` | 404 unless `Explain:Enabled`. `{ "bound", "stages", "count"?, "collation"?, "advisory"?, "diagnostics"? }`: the bound pipeline in canonical form, the emitted page and count stages, the collation both run under when a string folds, and an index advisory read from `listIndexes` (cached per collection). No rows are returned and the count never runs; for a pipeline with a `lookup` the advisory reads the server's own explain, which executes the page pipeline once under `Execution:MaxTimeMs`. |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
 
@@ -157,6 +157,7 @@ them into the schema document's `limits`).
 | `Execution:AllowDiskUse` | server default | when `false`, a spill is 422 `QUERY_TOO_EXPENSIVE` |
 | `Representation:GuidTolerant` | `false` | also match legacy subtype 3 and string guids |
 | `Representation:DecimalMode` | `tolerant` | match Decimal128 and string decimals; `typed` after a migration |
+| `Representation:Collation:Locale` / `Strength` | `de` / `1` | the collation a contract 2 string comparison, sort and group key folds under; strength 1 folds case and accents, 2 case only, 3 and above tell both apart (clamped to 1–5; an empty locale falls back to `de`) |
 | `Cache:ResolveTtlSeconds` / `ResolveCacheMaxEntries` | 60 / 50 000 | resolved remote rows |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
 | `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
@@ -182,6 +183,15 @@ under its own scope. Driver errors map to 504 `QUERY_TIMEOUT` (code 50), 422
 `QUERY_TOO_EXPENSIVE` (code 292) and 500 `INTERNAL_ERROR` (details only with
 `IncludeErrorDetails`).
 
+Under contract 2 a string comparison, sort or group key folds case and accents under the
+`Representation:Collation`. The aggregate carries the collation only when something folds; a
+request over other kinds is emitted exactly as before. A comparison that opts out with
+`caseSensitive` inside such an aggregate is an anchored pattern, which the collation does not
+reach; `startsWith` under the collation is a range, `contains` and `endsWith` stay patterns
+with the `i` flag and fold case only; the engine never inspects indexes, so every form is
+correct on a collection with no index but `_id`. A join on a string key compares the key byte
+for byte again inside the join, so ids never fold; a guid or binary key is untouched.
+
 ## Remote resolve
 
 `resolve` follows a declared reference. A local target compiles to an indexed `$lookup`; a
@@ -189,7 +199,8 @@ remote target is fetched after the page is fixed, per owning service, in one cal
 owner's internal batch route through `IRemoteQueryClient` (keys chunked by
 `Limits:ResolveKeyChunk`, results cached per entity, organisation, key, `select` and `filter`
 for `Cache:ResolveTtlSeconds`). A `match` on a path under a remote alias is a semi-join: the
-owner is asked for the matching ids first. An owner refusal becomes the caller's 422
+owner is asked for the matching ids first, and binds the condition under its own default;
+`caseSensitive` or `ignoreCase` travel to it as the caller wrote them. An owner refusal becomes the caller's 422
 `RESOLVE_REFUSED` with the owner's errors; a timeout or an unreachable owner yields `null`
 under the alias and a `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE` diagnostic (the message says
 whether the owner answered with an HTTP error or was not reached at all); a semi-join whose
@@ -310,17 +321,29 @@ stricter than any allow-list was, and there is no plan cache to size.
   mean of 64-bit integers exactly.
 - The elements of a pushed array arrive in the member's wire encoding: a `long` as a string,
   a `date` as `YYYY-MM-DD`, a single character as that character, an object by its members.
-- `ignoreCase` on a member holding a single character folds the operand's case by code point,
-  so `eq`, `neq`, `in` and `nin` match either case; the character is stored as its code point,
-  which no case-insensitive pattern matches.
+- Under contract 2 string comparisons, sorts and group keys are case- and accent-insensitive by
+  default (`muller` matches `Müller`), under a collation the host configures
+  (`Representation:Collation`, German at primary strength unless changed). `options.caseSensitive:
+  true` on a condition and `{ "path": { "direction": "asc", "caseSensitive": true } }` on a sort
+  entry opt out; an exact sort needs every string comparison of the request to be exact too.
+  `ignoreCase` is accepted for one release as the alias with the opposite sense
+  (`ignoreCase: false` is `caseSensitive: true`). An ordered comparison on a string orders
+  under the collation and cannot opt out. Contract 1 folds only with `ignoreCase: true`, as
+  before, and knows no `caseSensitive`.
+- A member holding a single character folds the operand's case by code point, so `eq`, `neq`,
+  `in` and `nin` match either case unless `caseSensitive`; the character is stored as its code
+  point, which neither a pattern nor a collation reaches.
 - Two `sort` stages do not compose: the later one replaces the earlier one.
 - Refusals are wider, under existing codes: `INVALID_ALIAS` for an alias `_id`, starting with
   `__` or ending in `__arr`; `ALIAS_COLLISION` for an alias equal to a member's wire or storage
   name; `INVALID_PATH` for a path with a control character, more than 64 segments or a segment
   over 256 characters; `INVALID_OPERAND` for a text operand of `contains`, `startsWith`,
-  `endsWith` or an `ignoreCase` comparison that no longer fits the server's 32 KB pattern limit
-  once escaped; and `INVALID_REGEX` / `QUERY_TOO_EXPENSIVE` may now also come back from
-  execution, when the server rejects a pattern or exceeds its memory limit.
+  `endsWith`, a contract 1 `ignoreCase` comparison or a `caseSensitive` comparison inside a
+  request that folds elsewhere, when it no longer fits the server's 32 KB pattern limit once
+  escaped; `OPTION_NOT_APPLICABLE` for `caseSensitive` where it does not apply, for a
+  `caseSensitive` sort inside a request that folds, and for `caseSensitive` and `ignoreCase`
+  disagreeing on one condition; and `INVALID_REGEX` / `QUERY_TOO_EXPENSIVE` may now also come
+  back from execution, when the server rejects a pattern or exceeds its memory limit.
 
 ## Requirements
 

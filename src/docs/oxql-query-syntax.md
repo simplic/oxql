@@ -53,7 +53,8 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 
 ```jsonc
 { "match": {
-    "number": { "startsWith": "S-", "options": { "ignoreCase": true } },
+    "number": { "startsWith": "s-" },
+    "reference": { "eq": "ABC-1", "options": { "caseSensitive": true } },
     "createdAt": { "gte": "2026-01-01T00:00:00Z", "lt": { "$var": "until" } },
     "or": [
       { "status": { "in": ["Open", 2] } },
@@ -71,12 +72,20 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
   paths relative to the element (compiled to `$elemMatch`). It is refused on a collection already
   unwound, on a collection reached through another collection, and on collections of scalars,
   where the default "some element" form applies (`ANY_NOT_APPLICABLE`).
-- `options.ignoreCase` applies to `eq neq in nin contains startsWith endsWith` on `string`
-  members only (`OPTION_NOT_APPLICABLE` elsewhere). It compiles to an anchored case-insensitive
-  regex per field, which walks the field's whole index. On a member holding a single character,
-  published as `string` and stored as its code point, it folds the operand's case by code point
-  instead, for `eq`, `neq`, `in` and `nin`; the three text operators have no text to match
-  there and are refused with `INVALID_OPERAND`.
+- A comparison on a `string` member folds case and accents: `muller` matches `Müller` and
+  `MÜLLER`. The request then runs under the host's collation (German, primary strength, unless
+  configured otherwise), `eq neq in nin gt gte lt lte` compare under it, `startsWith` is a
+  range under it, and `contains` and `endsWith` are patterns, which fold case but not accents.
+  A request that compares, sorts and groups no string runs without a collation.
+- `options.caseSensitive: true` compares exactly. It applies to `eq neq in nin contains
+  startsWith endsWith` on `string` members (`OPTION_NOT_APPLICABLE` elsewhere: an ordered
+  comparison orders under the collation of the whole request and cannot leave it, a `regex` is
+  the caller's own pattern, and a member without text has nothing to fold). `options.ignoreCase`
+  is accepted for one release as the alias with the opposite sense — `ignoreCase: false` is
+  `caseSensitive: true`, `ignoreCase: true` restates the default — and the two must not
+  disagree. On a member holding a single character, published as `string` and stored as its
+  code point, `eq neq in nin` fold the operand's case by code point instead; the three text
+  operators have no text to match there and are refused with `INVALID_OPERAND`.
 
 ### Operators
 
@@ -88,7 +97,7 @@ Anything else is `UNKNOWN_OPERATOR`.
 | `eq`, `neq` | every kind | one value, or `null` (`eq null` = absent or null; `neq null` = present and non-null) |
 | `gt`, `gte`, `lt`, `lte` | `int long double decimal date dateTime timeSpan string enum` | one value |
 | `in`, `nin` | every scalar kind | an array of values (`OPERAND_NOT_ARRAY` otherwise); `in []` matches nothing, `nin []` everything |
-| `contains`, `startsWith`, `endsWith` | `string` | a string; escaped and anchored by the engine |
+| `contains`, `startsWith`, `endsWith` | `string` | a string; `startsWith` is a range under the collation, the others a pattern escaped and anchored by the engine |
 | `regex` | `string` | a pattern up to `RegexMaxLength` (`REGEX_TOO_LONG`); nested quantifiers and backreferences are `INVALID_REGEX`; an unanchored pattern is diagnosed `REGEX_UNANCHORED` |
 | `exists` | every kind | a boolean |
 
@@ -160,7 +169,9 @@ it names, one object under the alias, `null` when the target does not exist or f
 indexed `$lookup`; a remote target (an entity of another service) is fetched from its owner
 after the page is fixed. Under a remote alias, a `match` is a semi-join (the owner supplies the
 matching ids; more than `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`) and a `sort` is refused
-(`RESOLVE_NOT_SORTABLE`). At most `MaxResolveStages` per request.
+(`RESOLVE_NOT_SORTABLE`). The owner binds a semi-join condition under its own default;
+`caseSensitive` or `ignoreCase` travel to it as written. At most `MaxResolveStages` per
+request. A join compares its id exactly, whatever the id's kind: a string id never folds.
 
 ## Stage: `unwind`
 
@@ -206,6 +217,9 @@ documents whose collection is empty or absent.
 - An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`,
   or an arithmetic expression `add subtract multiply divide coalesce` over an array of
   arguments.
+- A string key folds case and accents under the collation: `Open` and `OPEN` are one group,
+  reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
+  same way.
 - After `group` the shape is only the `by` and `fields` aliases (unique among each other, at
   most `MaxGroupFields`); rows carry those names only. Paging after `group` is by offset
   behind the cursor.
@@ -224,11 +238,19 @@ explicitly; at most `MaxProjectionFields` paths.
 
 ```jsonc
 { "sort": [ { "createdAt": "desc" }, { "number": "asc" } ] }
+{ "sort": [ { "number": { "direction": "asc", "caseSensitive": true } } ] }   // exact order
 ```
 
-Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SORT_DIRECTION`).
-Paths must be scalar and sortable in the current shape (not under a collection); after
-`group` only keys and aggregates. On a root shape the engine appends `id` as the tie-breaker.
+Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SORT_DIRECTION`),
+or the object form with `direction` and `caseSensitive` (any other member is
+`UNKNOWN_STAGE_MEMBER`). Paths must be scalar and sortable in the current shape (not under a
+collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
+as the tie-breaker.
+
+A string orders under the collation, case and accents folded, unless the entry says
+`caseSensitive: true`. An exact sort runs in a request where every string comparison and key is
+exact too; when another comparison, sort or group key of the request folds, it is refused with
+`OPTION_NOT_APPLICABLE`, as is `caseSensitive` on a member that is not a string.
 
 ## Stage: `page`
 
@@ -319,6 +341,8 @@ While the host's `Compat:Enabled` is true, a request without `X-OxQL-Contract: 2
 by the compatibility binder: the entity id is matched case-insensitively (retired ids too),
 paths may be spelled as stored (`MatchCode`, `Department._id`) and are resolved against the
 same folded shape, wire spellings work too, the v1 type-hint operands are accepted, operators
-and sort directions are read case-insensitively, and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
+and sort directions are read case-insensitively, a string comparison is exact unless it says
+`ignoreCase: true` (a pattern; `caseSensitive` is not an option there), sorts and group keys
+are exact, and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
 stages are refused with `LEGACY_STAGE_UNSUPPORTED`. Every such request is logged under
 `OxQL.Compat`. When compatibility is switched off, every request is contract 2.

@@ -46,7 +46,7 @@ public class CaseInsensitiveEngineTests
         await Success(engine, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, null, DefaultCollation));
+        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, true, DefaultCollation));
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public class CaseInsensitiveEngineTests
         await Success(engine, """[{ "match": { "count": { "eq": 1 } } }, { "sort": [{ "when": "desc" }] }, { "page": { "includeTotalCount": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, null));
+        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, true));
     }
 
     [Fact]

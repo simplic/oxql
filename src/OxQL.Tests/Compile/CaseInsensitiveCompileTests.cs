@@ -188,15 +188,17 @@ public class CaseInsensitiveCompileTests
     {
         var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"], "filter": { "matchCode": { "eq": "m" } } } }]""");
 
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+        compiled.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }
             """));
         compiled.Collation.Should().NotBeNull("the filter folds");
 
         var lookup = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "filter": { "number": { "eq": "x" } } } }]""", "probe.customer");
 
-        lookup.PageStages[1]["$lookup"].AsBsonDocument.Names.Should().Equal("from", "localField", "foreignField", "pipeline", "as");
-        lookup.PageStages[1]["$lookup"]["pipeline"].AsBsonArray[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Number: 'x' } }"));
+        var lookupStage = lookup.PageStages.Single(stage => stage.Contains("$lookup"));
+
+        lookupStage["$lookup"].AsBsonDocument.Names.Should().Equal("from", "localField", "foreignField", "pipeline", "as");
+        lookupStage["$lookup"]["pipeline"].AsBsonArray[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Number: 'x' } }"));
     }
 
     [Fact]
@@ -204,7 +206,7 @@ public class CaseInsensitiveCompileTests
     {
         var resolve = await CompileJoin(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }, { "match": { "title": { "eq": "t" } } }]""");
 
-        resolve.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+        resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [
                 { $match: {{OrgJson}} },
                 { $match: { $expr: { $cond: {
@@ -217,7 +219,7 @@ public class CaseInsensitiveCompileTests
         resolve.Collation.Should().NotBeNull();
 
         var lookup = await CompileJoin(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs" } }, { "match": { "name": { "eq": "x" } } }]""");
-        var join = lookup.PageStages[1]["$lookup"].AsBsonDocument;
+        var join = lookup.PageStages.Single(stage => stage.Contains("$lookup"))["$lookup"].AsBsonDocument;
 
         join.Names.Should().Equal("from", "localField", "foreignField", "let", "pipeline", "as");
         join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code' }"));
@@ -231,7 +233,7 @@ public class CaseInsensitiveCompileTests
     {
         var resolve = await CompileJoin(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }]""");
 
-        resolve.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+        resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().BeNull();

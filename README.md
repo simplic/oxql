@@ -154,7 +154,8 @@ them into the schema document's `limits`).
 | `Limits:MaxLookupLimit` | 100 | rows one lookup returns per parent |
 | `Execution:MaxTimeMs` | 10 000 | `maxTimeMS` on every aggregate, clamped to 60 000; a timeout is 504 `QUERY_TIMEOUT` |
 | `Execution:ResolveTimeoutMs` | 2 000 | budget of one remote call, clamped to the effective `MaxTimeMs` |
-| `Execution:AllowDiskUse` | server default | when `false`, a spill is 422 `QUERY_TOO_EXPENSIVE` |
+| `Execution:AllowDiskUse` | `true` | a sort or group over the server's memory limit spills to disk and finishes slowly; when `false`, it is 422 `QUERY_TOO_EXPENSIVE`; unset in code (`null`) leaves the server's default |
+| `Execution:SlowQueryMs` | 1 000 | a request whose whole time (binding, aggregates, count, remote resolves) exceeds it is logged at warning level with the entity, the stage kinds, whether a regex, an unbounded sort, a count or a remote resolve was involved, the duration and the row count — never an operand; `0` turns the line off |
 | `Representation:GuidTolerant` | `false` | also match legacy subtype 3 and string guids |
 | `Representation:DecimalMode` | `tolerant` | match Decimal128 and string decimals; `typed` after a migration |
 | `Representation:Collation:Locale` / `Strength` | `de` / `1` | the collation a contract 2 string comparison, sort and group key folds under; strength 1 folds case and accents, 2 case only, 3 and above tell both apart (clamped to 1–5; an empty locale falls back to `de`) |
@@ -300,6 +301,13 @@ stricter than any allow-list was, and there is no plan cache to size.
 
 `DefaultPageSize` changed from 50 to 100: a request without `page.limit` gets twice the rows.
 
+`Execution:AllowDiskUse` defaults to `true`: a sort or group that outgrows the server's memory
+limit spills to disk and finishes slowly instead of failing with `QUERY_TOO_EXPENSIVE`, whatever
+the server's own default. Set it to `false` to refuse such queries as before.
+
+`Execution:SlowQueryMs` is new (default 1 000): a request slower than that is logged once more,
+at warning level, with what shaped it. Set it to `0` to turn the line off.
+
 ### Behaviour changes for callers
 
 - Requests without `X-OxQL-Contract: 2` are served as contract 1 while `Compat:Enabled` is
@@ -334,6 +342,15 @@ stricter than any allow-list was, and there is no plan cache to size.
   `in` and `nin` match either case unless `caseSensitive`; the character is stored as its code
   point, which neither a pattern nor a collation reaches.
 - Two `sort` stages do not compose: the later one replaces the earlier one.
+- A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or `resolve`
+  reads runs after the page is taken, on the page's rows alone; the rows are the same, the
+  join is paid per page row, and the sort stays next to the limit. A join a later stage reads,
+  a join before a `group`, and a join whose alias a projection narrows or drops stay where they
+  were written. The count pipeline never carries a join only the rows' display reads; explain
+  shows the order the server runs.
+- `page.includeTotalCount` also takes a positive integer: the request's own count cap, under
+  the host's `CountCap`; `totalCount` and `totalCountCapped` then read against it. Contract 1
+  keeps the boolean form only.
 - Refusals are wider, under existing codes: `INVALID_ALIAS` for an alias `_id`, starting with
   `__` or ending in `__arr`; `ALIAS_COLLISION` for an alias equal to a member's wire or storage
   name; `INVALID_PATH` for a path with a control character, more than 64 segments or a segment

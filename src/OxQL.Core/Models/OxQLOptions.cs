@@ -244,14 +244,30 @@ public sealed class ExecutionOptions
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;
 
-    /// <summary><c>allowDiskUse</c> on every aggregate; null leaves the server's default (spill allowed on 6.0+).</summary>
-    public bool? AllowDiskUse { get; set; }
+    /// <summary>
+    /// <c>allowDiskUse</c> on every aggregate. True by default: a sort or a group that outgrows
+    /// the server's in-memory limit spills to disk and finishes slowly instead of failing with
+    /// <c>QUERY_TOO_EXPENSIVE</c>, whatever the server's own default is set to. False refuses
+    /// such a query; null leaves the server's default.
+    /// </summary>
+    public bool? AllowDiskUse { get; set; } = true;
+
+    /// <summary>
+    /// The total time of a request, binding, aggregates and remote resolves included, above
+    /// which it is logged at warning level with what shaped it: the entity, the stage kinds,
+    /// whether a regex, an unbounded sort, a count or a remote resolve was involved, the
+    /// duration and the row count, never an operand. 0 turns the line off.
+    /// </summary>
+    public int SlowQueryMs { get; set; } = 1_000;
 
     /// <summary>The effective <c>maxTimeMS</c>: the configured value under the ceiling.</summary>
     public int EffectiveMaxTimeMs => Math.Clamp(MaxTimeMs, 1, MaxTimeCeilingMs);
 
     /// <summary>The effective resolve budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
     public int EffectiveResolveTimeoutMs => Math.Clamp(ResolveTimeoutMs, 1, EffectiveMaxTimeMs);
+
+    /// <summary>The effective slow-query threshold: the configured value, never negative; 0 is off.</summary>
+    public int EffectiveSlowQueryMs => Math.Max(0, SlowQueryMs);
 }
 
 /// <summary>How operands are encoded for members whose storage is not uniform.</summary>

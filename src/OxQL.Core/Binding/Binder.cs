@@ -1422,7 +1422,21 @@ public sealed class Binder
             if (stage.Cursor is not null && stage.Offset is not null)
                 errors.Add(Error(Codes.InvalidPageLimit, "A page continues from a cursor or jumps by an offset, not both.", index, null));
 
-            page = new BoundStage.Page(Math.Max(1, limit), Math.Max(0, offset), null, stage.IncludeTotalCount);
+            // The number form of includeTotalCount is the request's own count cap, under the
+            // host's; contract 1 has the boolean form only.
+            int? countCap = null;
+
+            if (stage.TotalCountCap is { } cap)
+            {
+                if (context.Contract == 1)
+                    errors.Add(Error(Codes.LegacyStageUnsupported, "'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2).", index, null));
+                else if (cap < 1)
+                    errors.Add(Error(Codes.InvalidPageLimit, $"The count cap {cap} is not a positive integer; includeTotalCount is true, false or a positive integer.", index, null));
+                else
+                    countCap = Math.Min(cap, options.Limits.CountCap);
+            }
+
+            page = new BoundStage.Page(Math.Max(1, limit), Math.Max(0, offset), null, stage.IncludeTotalCount, countCap);
             pageIndex = index;
             stages.Add(page);
         }

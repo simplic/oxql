@@ -152,7 +152,8 @@ public abstract record BoundStage
 
     public sealed record Sort(IReadOnlyList<BoundSortField> Fields) : BoundStage;
 
-    public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount) : BoundStage;
+    /// <summary>The page; <paramref name="CountCap"/> is the request's own count cap, already under the host's, or null for the host's.</summary>
+    public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount, int? CountCap = null) : BoundStage;
 }
 
 /// <summary>One group key.</summary>

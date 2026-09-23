@@ -179,7 +179,7 @@ public class GoldenPipelineTests
         var unread = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "page": { "includeTotalCount": true } }]""", "probe.customer");
 
         unread.CountStages!.Should().HaveCount(3, "a lookup nothing reads is not in the count");
-        unread.PageStages[1]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
+        unread.PageStages[^1]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
     }
 
     [Fact]

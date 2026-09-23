@@ -6,7 +6,9 @@ namespace OxQL.Core.Models;
 /// <summary>
 /// Represents a single sort field with path and direction.
 /// <para>
-/// Wire format: <c>{ "My.Field": "asc" }</c> or <c>{ "My.Field": "desc" }</c>
+/// Wire format: <c>{ "My.Field": "asc" }</c>, <c>{ "My.Field": "desc" }</c>, or the object
+/// form <c>{ "My.Field": { "direction": "asc", "caseSensitive": true } }</c> for a string member
+/// that is to order by its exact value rather than folding case.
 /// </para>
 /// </summary>
 [JsonConverter(typeof(SortFieldConverter))]
@@ -14,6 +16,13 @@ public sealed record SortField
 {
     public required string Path { get; init; }
     public required string Direction { get; init; }
+
+    /// <summary>Whether a string member orders by its exact value; null when the entry does not say.</summary>
+    public bool? CaseSensitive { get; init; }
+
+    /// <summary>The members of the object form the engine does not know, for the binder to refuse.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Unknown { get; init; } = [];
 
     /// <summary>
     /// The keys of the entry beyond the first. A sort entry is a single-key object, so
@@ -26,10 +35,13 @@ public sealed record SortField
 
 /// <summary>
 /// Converts <see cref="SortField"/> to/from the compact wire format
-/// <c>{ "Field.Path": "asc" }</c>.
+/// <c>{ "Field.Path": "asc" }</c> and its object form.
 /// </summary>
 internal sealed class SortFieldConverter : JsonConverter<SortField>
 {
+    private const string DirectionKey = "direction";
+    private const string CaseSensitiveKey = "caseSensitive";
+
     public override SortField? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var doc = JsonDocument.ParseValue(ref reader);
@@ -45,7 +57,9 @@ internal sealed class SortFieldConverter : JsonConverter<SortField>
         {
             if (first is null)
             {
-                first = new SortField { Path = prop.Name, Direction = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString()! : prop.Value.ToString() };
+                first = prop.Value.ValueKind == JsonValueKind.Object
+                    ? ReadObjectForm(prop.Name, prop.Value)
+                    : new SortField { Path = prop.Name, Direction = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString()! : prop.Value.ToString() };
                 continue;
             }
 
@@ -59,10 +73,43 @@ internal sealed class SortFieldConverter : JsonConverter<SortField>
             : first with { Extra = extra };
     }
 
+    /// <summary>The object form: a direction and, optionally, <c>caseSensitive</c>; anything else is recorded for the binder.</summary>
+    private static SortField ReadObjectForm(string path, JsonElement value)
+    {
+        var direction = "";
+        bool? caseSensitive = null;
+        var unknown = new List<string>();
+
+        foreach (var member in value.EnumerateObject())
+        {
+            if (member.Name == DirectionKey && member.Value.ValueKind == JsonValueKind.String)
+                direction = member.Value.GetString()!;
+            else if (member.Name == CaseSensitiveKey && member.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                caseSensitive = member.Value.ValueKind == JsonValueKind.True;
+            else
+                unknown.Add(member.Name);
+        }
+
+        return new SortField { Path = path, Direction = direction, CaseSensitive = caseSensitive, Unknown = unknown };
+    }
+
     public override void Write(Utf8JsonWriter writer, SortField value, JsonSerializerOptions options)
     {
         writer.WriteStartObject();
-        writer.WriteString(value.Path, value.Direction);
+
+        if (value.CaseSensitive is { } caseSensitive)
+        {
+            writer.WritePropertyName(value.Path);
+            writer.WriteStartObject();
+            writer.WriteString(DirectionKey, value.Direction);
+            writer.WriteBoolean(CaseSensitiveKey, caseSensitive);
+            writer.WriteEndObject();
+        }
+        else
+        {
+            writer.WriteString(value.Path, value.Direction);
+        }
+
         writer.WriteEndObject();
     }
 }

@@ -110,6 +110,18 @@ public sealed class Binder
         private int lookups, unwinds, resolves, conditions;
         private bool hasSemiJoin;
 
+        /// <summary>Contract 2, where a string comparison, sort or group key folds case unless it opts out.</summary>
+        private readonly bool contract2 = context.Contract != 1;
+
+        /// <summary>Whether something folds under the collation, which the whole aggregate then carries.</summary>
+        private bool collated;
+
+        /// <summary>The sort entries that opted out of the fold, by stage: they cannot run inside a collated aggregate.</summary>
+        private readonly List<(int Stage, string Path)> exactSorts = [];
+
+        /// <summary>The comparisons that opted out of the fold with a text too long for a pattern: refused once the aggregate turns out collated.</summary>
+        private readonly List<(int Stage, string Path, string Op)> exactTexts = [];
+
         public async Task RunAsync()
         {
             await LoadAddonsAsync(entity);
@@ -169,6 +181,19 @@ public sealed class Binder
             if (conditions > options.Limits.MaxConditions)
                 errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
 
+            // One aggregate runs under one collation, and a sort has no form the collation
+            // does not reach: an exact sort needs every string comparison and key in the
+            // request to be exact as well.
+            if (collated)
+            {
+                foreach (var (stage, path) in exactSorts)
+                    errors.Add(Error(Codes.OptionNotApplicable, $"The sort on '{path}' asks for the exact order, but another comparison, sort or group key of the request folds case; a request orders exactly only when every string comparison in it is caseSensitive.", stage, path));
+
+                // Inside a collated aggregate an exact comparison is a pattern, with the pattern's limit.
+                foreach (var (stage, path, op) in exactTexts)
+                    errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, path), stage, path));
+            }
+
             if (errors.Count == 0)
                 DefaultSort();
 
@@ -197,10 +222,11 @@ public sealed class Binder
 
             if (shape.Grouped)
             {
-                // The keys only: an aggregate is not unique per group and adds nothing to the order.
+                // The keys only: an aggregate is not unique per group and adds nothing to the
+                // order. A string key folded into its group, so its order folds the same way.
                 foreach (var key in stages.OfType<BoundStage.Group>().LastOrDefault()?.Keys ?? [])
                     if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
-                        fields.Add(new BoundSortField(resolved.Path!, true));
+                        fields.Add(new BoundSortField(resolved.Path!, true, contract2 && key.OutputKind == Kind.String));
             }
             else if (shape.Resolve(WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
             {
@@ -253,6 +279,7 @@ public sealed class Binder
                 Fingerprint = fingerprint,
                 Canonical = BoundCanonical.Render(scope, stages, page, mode).ToJsonString(),
                 HasSemiJoin = hasSemiJoin,
+                Collated = collated,
             };
         }
 
@@ -348,26 +375,27 @@ public sealed class Binder
                 return null;
             }
 
-            var ignoreCase = false;
-
-            if (condition.Options is { } conditionOptions)
-            {
-                if (conditionOptions.Unknown is { Count: > 0 } unknown)
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option.", index, condition.Path));
-
-                if (conditionOptions.IgnoreCase)
-                {
-                    if (path.IsRemote || OperandCoercer.IgnoreCaseApplies(op, path.LeafKind))
-                        ignoreCase = true;
-                    else
-                        errors.Add(Error(Codes.OptionNotApplicable, $"'ignoreCase' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; '{condition.Path}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'.", index, condition.Path));
-                }
-            }
+            var caseSensitive = BindCaseOption(condition, path, op, index);
 
             var operand = coercer.Coerce(condition.Value, path, op, index, errors);
 
             if (operand is null)
                 return null;
+
+            // Under a remote alias the owner binds the comparison: what the caller wrote travels
+            // as written, and nothing written leaves the owner its own default.
+            if (path.IsRemote)
+            {
+                hasSemiJoin = true;
+
+                return new BoundCondition.Leaf(path, op, operand, caseSensitive is { } remoteChoice ? !remoteChoice : null, IsSemiJoin: true);
+            }
+
+            // Under contract 2 a string comparison folds case and accents unless it opts out;
+            // under contract 1 it folds when asked to, as it always has.
+            var ignoreCase = contract2
+                ? caseSensitive is not true && OperandCoercer.FoldsByDefault(op, path)
+                : caseSensitive is false && OperandCoercer.IgnoreCaseApplies(op, path.LeafKind);
 
             // A char compares by code point, so a case-insensitive comparison is the set of
             // the character's case forms, compared by value, rather than a pattern the
@@ -378,21 +406,94 @@ public sealed class Binder
                 ignoreCase = false;
             }
 
+            // A null and an empty set compare no text; there is nothing to fold.
+            if (ignoreCase && !TextsOf(operand).Any())
+                ignoreCase = false;
+
+            // A contract 1 fold is a pattern; only a contract 2 fold needs the collation.
+            if (ignoreCase && contract2)
+                collated = true;
+
             // A text operand that is matched as a pattern is escaped and anchored by the
-            // compiler; one the database cannot compile is a caller error, refused here.
-            if (!path.IsRemote && (ignoreCase || op is "contains" or "startsWith" or "endsWith") && TextsOf(operand).Any(text => !RegexGuard.LiteralFits(text)))
+            // compiler; one the database cannot compile is a caller error, refused here. A
+            // contract 1 fold is a pattern always; a comparison that opts out of the fold
+            // becomes one only inside a collated aggregate, which is known once every stage
+            // is bound, so it is checked then.
+            var isPattern = op is "contains" or "startsWith" or "endsWith" || (ignoreCase && !contract2);
+
+            if (isPattern && !TextFits(operand))
             {
-                errors.Add(Error(Codes.InvalidOperand, $"The operand of '{op}' on '{condition.Path}' is too long to be matched as text.", index, condition.Path));
+                errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, condition.Path), index, condition.Path));
                 return null;
             }
+
+            if (caseSensitive is true && path.LeafKind == Kind.String && !TextFits(operand))
+                exactTexts.Add((index, condition.Path, op));
 
             if (op == "regex" && operand is BoundOperand.Single { Value: BsonString pattern } && !RegexGuard.IsAnchored(pattern.Value))
                 diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
-            if (path.IsRemote)
-                hasSemiJoin = true;
+            return new BoundCondition.Leaf(path, op, operand, ignoreCase, IsSemiJoin: false);
+        }
 
-            return new BoundCondition.Leaf(path, op, operand, ignoreCase, path.IsRemote);
+        /// <summary>
+        /// The case option of a condition, as the caller's choice: true to compare exactly,
+        /// false to fold, null when nothing was written. <c>caseSensitive</c> is the option;
+        /// <c>ignoreCase</c> is its alias with the opposite sense, kept for one release. Under
+        /// contract 1 only <c>ignoreCase: true</c> means anything, as it always has.
+        /// <para>
+        /// The option applies to the comparisons a string can opt out of. A member that holds
+        /// no text has nothing to fold; an ordered comparison orders under the collation of the
+        /// whole aggregate and cannot leave it; a pattern is the caller's own. A remote path is
+        /// the owner's to check.
+        /// </para>
+        /// </summary>
+        private bool? BindCaseOption(FilterCondition condition, ResolvedPath path, string op, int index)
+        {
+            if (condition.Options is not { } conditionOptions)
+                return null;
+
+            if (conditionOptions.Unknown is { Count: > 0 } unknown)
+                errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option.", index, condition.Path));
+
+            var applies = path.IsRemote || OperandCoercer.IgnoreCaseApplies(op, path.LeafKind);
+            var why = path.LeafKind == Kind.String && !path.IsRemote && OperandCoercer.FoldsByDefault(op, path)
+                ? $"'{op}' on '{condition.Path}' orders under the collation of the whole request and cannot opt out of it"
+                : $"'{condition.Path}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'";
+            bool? caseSensitive = null;
+
+            if (conditionOptions.CaseSensitive is { } sensitive)
+            {
+                if (!contract2)
+                    errors.Add(Error(Codes.OptionNotApplicable, "'caseSensitive' is not an option.", index, condition.Path));
+                else if (!applies)
+                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
+                else
+                    caseSensitive = sensitive;
+            }
+
+            if (conditionOptions.IgnoreCase is not { } ignore)
+                return caseSensitive;
+
+            // `ignoreCase: false` restates the contract 1 default, and on a member without text
+            // asks for the exact comparison it already makes; neither changes anything and
+            // neither is refused.
+            if (!ignore && (!contract2 || (path.LeafKind != Kind.String && !path.IsRemote)))
+                return caseSensitive;
+
+            if (!applies)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'ignoreCase' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
+                return caseSensitive;
+            }
+
+            if (caseSensitive is { } declared && declared == ignore)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive: {(declared ? "true" : "false")}' and 'ignoreCase: {(ignore ? "true" : "false")}' contradict each other; ignoreCase is the alias of caseSensitive with the opposite sense.", index, condition.Path));
+                return caseSensitive;
+            }
+
+            return caseSensitive ?? !ignore;
         }
 
         /// <summary>
@@ -433,6 +534,11 @@ public sealed class Binder
                 ? (op, new BoundOperand.Single(forms[0]))
                 : (op is "eq" or "in" ? "in" : "nin", new BoundOperand.Set(forms));
         }
+
+        /// <summary>Whether every text of an operand still fits the server's pattern limit once escaped and anchored.</summary>
+        private static bool TextFits(BoundOperand operand) => TextsOf(operand).All(RegexGuard.LiteralFits);
+
+        private static string TooLongToMatch(string op, string path) => $"The operand of '{op}' on '{path}' is too long to be matched as text.";
 
         /// <summary>The text values of an operand: the ones a pattern comparison is built from.</summary>
         private static IEnumerable<string> TextsOf(BoundOperand operand) => operand switch
@@ -806,6 +912,10 @@ public sealed class Binder
                     continue;
                 }
 
+                // Under contract 2 a string key folds its groups the way a sort folds its order.
+                if (contract2 && FoldsAsText(path))
+                    collated = true;
+
                 keys.Add(new GroupKey(by.As, path, null, path.Kind, path.Shape));
             }
 
@@ -864,6 +974,11 @@ public sealed class Binder
                     "push" => (Kind.Array, argumentShape),
                     _ => (kind, argumentShape),
                 };
+
+                // Distinctness and extremes over a string are questions of equality and order,
+                // and fold like a key and a sort do.
+                if (contract2 && function is "countDistinct" or "min" or "max" && argument is BoundExpression.Path { Resolved: var over } && FoldsAsText(over))
+                    collated = true;
 
                 fields.Add(new Aggregate(alias, function, argument, kind, outputKind, outputShape));
             }
@@ -1170,6 +1285,19 @@ public sealed class Binder
                     continue;
                 }
 
+                if (field.Unknown.Count > 0)
+                {
+                    errors.Add(Error(Codes.UnknownStageMember, $"'{string.Join(", ", field.Unknown)}' is not a member of a sort entry; the object form carries direction and caseSensitive.", index, field.Path));
+                    continue;
+                }
+
+                // The object form is contract 2; under contract 1 a direction is a string.
+                if (!contract2 && field.CaseSensitive is not null)
+                {
+                    errors.Add(Error(Codes.InvalidSortDirection, $"A sort entry is a path and a direction, asc or desc; 'caseSensitive' is a contract 2 member.", index, field.Path));
+                    continue;
+                }
+
                 var ascending = field.Direction switch
                 {
                     "asc" => true,
@@ -1206,7 +1334,24 @@ public sealed class Binder
                 if (path.Addon is not null)
                     diagnostics.Add(new Diagnostic { Code = Codes.SortOnAddon, Message = $"The sort on '{field.Path}' orders an addon key; mixed representations group by BSON type.", Stage = index, Path = field.Path });
 
-                bound.Add(new BoundSortField(path, ascending.Value));
+                // A string orders under the collation unless the entry opts out; anything else
+                // orders by value and has nothing to opt out of.
+                var text = FoldsAsText(path);
+
+                if (field.CaseSensitive is not null && !text)
+                {
+                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to a sort on a string member; '{field.Path}' is {Kinds.WithArticle(path.LeafKind)}.", index, field.Path));
+                    continue;
+                }
+
+                var ignoreCase = contract2 && text && field.CaseSensitive is not true;
+
+                if (ignoreCase)
+                    collated = true;
+                else if (field.CaseSensitive is true)
+                    exactSorts.Add((index, field.Path));
+
+                bound.Add(new BoundSortField(path, ascending.Value, ignoreCase));
             }
 
             var stage = new BoundStage.Sort(bound);
@@ -1283,6 +1428,9 @@ public sealed class Binder
         }
 
         // ---- helpers -------------------------------------------------------------------------
+
+        /// <summary>Whether a path holds text the collation folds: a string member that is not a single character stored as its code point.</summary>
+        private static bool FoldsAsText(ResolvedPath path) => path.LeafKind == Kind.String && !OperandCoercer.IsCharRepresented(path);
 
         private bool CheckAlias(string? alias, int index, out string checkedAlias)
         {

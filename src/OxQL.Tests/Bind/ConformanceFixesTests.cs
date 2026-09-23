@@ -196,14 +196,14 @@ public class ConformanceFixesTests
         refusal.Message.Should().Contain("single character");
     }
 
-    /// <summary>F13, the other half: comparing a char by value goes on working.</summary>
+    /// <summary>F13, the other half: comparing a char by its one value goes on working when the comparison is exact.</summary>
     [Fact]
     public async Task F13_a_char_member_still_compares_by_value()
     {
-        Leaf(await Bound("""[{ "match": { "initial": { "eq": "a" } } }]""")).Operand
+        Leaf(await Bound("""[{ "match": { "initial": { "eq": "a", "options": { "caseSensitive": true } } } }]""")).Operand
             .Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonInt32('a'));
 
-        Leaf(await Bound("""[{ "match": { "initial": { "in": ["a", "b"] } } }]""")).Operand
+        Leaf(await Bound("""[{ "match": { "initial": { "in": ["a", "b"], "options": { "caseSensitive": true } } } }]""")).Operand
             .Should().BeOfType<BoundOperand.Set>().Which.Values.Should().Equal(new BsonInt32('a'), new BsonInt32('b'));
     }
 

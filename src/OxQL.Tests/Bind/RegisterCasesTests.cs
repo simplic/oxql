@@ -129,11 +129,11 @@ public class RegisterCasesTests
     }
 
     [Fact]
-    public async Task F12_ignoreCase_applies_to_every_string_operator_it_is_declared_for()
+    public async Task F12_ignoreCase_restates_the_fold_every_string_operator_makes_under_the_collation()
     {
-        (await Filter("""[{ "match": { "number": { "startsWith": "templatename", "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: /^templatename/i }"));
+        (await Filter("""[{ "match": { "number": { "startsWith": "templatename", "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $gte: 'templatename', $lt: 'templatename￿' } }"));
         (await Filter("""[{ "match": { "number": { "endsWith": "NAME 1", "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: /NAME\\ 1$/i }"));
-        (await Filter("""[{ "match": { "number": { "in": ["templatename 1"], "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $in: [ /^templatename\\ 1$/i ] } }"));
+        (await Filter("""[{ "match": { "number": { "in": ["templatename 1"], "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $in: [ 'templatename 1' ] } }"));
         await Error("""[{ "match": { "number": { "regex": "^templatename", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
     }
 

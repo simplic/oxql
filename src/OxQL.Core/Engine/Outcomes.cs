@@ -194,6 +194,11 @@ public sealed record ExplainResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<JsonNode>? Count { get; init; }
 
+    /// <summary>The collation both pipelines run under, when a string comparison, sort or group key folds case.</summary>
+    [JsonPropertyName("collation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonNode? Collation { get; init; }
+
     /// <summary>The index advisory, when the host provides one.</summary>
     [JsonPropertyName("advisory")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

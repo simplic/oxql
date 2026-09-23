@@ -58,8 +58,9 @@ public static class RegexGuard
 
     /// <summary>
     /// Whether a literal still fits the server's pattern limit once it is escaped and anchored:
-    /// <c>contains</c>, <c>startsWith</c>, <c>endsWith</c> and every <c>ignoreCase</c> comparison
-    /// compile their text operand to a pattern.
+    /// <c>contains</c>, <c>startsWith</c>, <c>endsWith</c>, a contract 1 <c>ignoreCase</c>
+    /// comparison and a <c>caseSensitive</c> comparison inside a collated aggregate compile
+    /// their text operand to a pattern.
     /// </summary>
     public static bool LiteralFits(string literal) =>
         Encoding.UTF8.GetByteCount(Escape(literal)) + AnchorBytes <= MaxPatternBytes;

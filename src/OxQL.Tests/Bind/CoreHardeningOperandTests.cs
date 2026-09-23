@@ -48,7 +48,8 @@ public class CoreHardeningOperandTests
     {
         var operand = set ? $"[\"ok\", \"{TooLong}\"]" : $"\"{TooLong}\"";
 
-        await Error($$"""[{ "match": { "number": { "{{op}}": {{operand}}, "options": { "ignoreCase": true } } } }]""", Codes.InvalidOperand);
+        // Under contract 1 the fold is a pattern; under contract 2 it runs under the collation and has no pattern limit.
+        await BindHost.ErrorAsync(Model, Order, $$"""[{ "match": { "number": { "{{op}}": {{operand}}, "options": { "ignoreCase": true } } } }]""", Codes.InvalidOperand, BindHost.Context(contract: 1));
     }
 
     [Fact]

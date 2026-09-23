@@ -109,8 +109,12 @@ public abstract record BoundCondition
 
     public sealed record Not(BoundCondition Condition) : BoundCondition;
 
-    /// <summary>One comparison.</summary>
-    public sealed record Leaf(ResolvedPath Path, string Op, BoundOperand Operand, bool IgnoreCase, bool IsSemiJoin) : BoundCondition;
+    /// <summary>
+    /// One comparison. <paramref name="IgnoreCase"/> is whether it folds case and accents: true
+    /// or false once bound against a member of this host, null only under a remote alias when
+    /// the caller wrote no option, so the owner applies its own default.
+    /// </summary>
+    public sealed record Leaf(ResolvedPath Path, string Op, BoundOperand Operand, bool? IgnoreCase, bool IsSemiJoin) : BoundCondition;
 
     /// <summary>A correlated condition on one element of a collection of objects; inner paths are relative to the element.</summary>
     public sealed record Any(ResolvedPath Path, BoundCondition Inner) : BoundCondition;
@@ -160,8 +164,8 @@ public sealed record DateTrunc(ResolvedPath Path, string Unit, string Timezone, 
 /// <summary>One aggregate: its argument as bound, with the argument's kind, and the kind and shape of what it outputs.</summary>
 public sealed record Aggregate(string As, string Function, BoundExpression? Argument, Kind ArgumentKind, Kind OutputKind, ShapeDef? OutputShape);
 
-/// <summary>One sort field.</summary>
-public sealed record BoundSortField(ResolvedPath Path, bool Ascending);
+/// <summary>One sort field; <paramref name="IgnoreCase"/> when a string member orders under the collation rather than by its exact value.</summary>
+public sealed record BoundSortField(ResolvedPath Path, bool Ascending, bool IgnoreCase = false);
 
 /// <summary>How the next page is addressed.</summary>
 public enum PagingMode
@@ -215,6 +219,12 @@ public sealed record BoundPipeline
 
     /// <summary>Whether any condition is a semi-join on a remote alias.</summary>
     public bool HasSemiJoin { get; init; }
+
+    /// <summary>
+    /// Whether the aggregate runs under the host's collation: some string comparison, sort
+    /// field or group key folds case. A pipeline that folds nothing runs without one.
+    /// </summary>
+    public bool Collated { get; init; }
 }
 
 /// <summary>The outcome of binding: a pipeline, or the errors.</summary>

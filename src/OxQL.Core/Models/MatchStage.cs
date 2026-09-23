@@ -18,8 +18,16 @@ public sealed record MatchStage
 /// <summary>Options that modify a condition.</summary>
 public sealed record FilterConditionOptions
 {
-    /// <summary>Case-insensitive comparison on string members, for <c>eq neq in nin contains startsWith endsWith</c>.</summary>
-    public bool IgnoreCase { get; init; }
+    /// <summary>
+    /// The alias of <see cref="CaseSensitive"/> with the opposite sense, as the caller wrote it;
+    /// null when not written. Under contract 2 a string comparison folds case unless it opts
+    /// out, so <c>true</c> restates the default and <c>false</c> opts out; under contract 1
+    /// <c>true</c> asks for the fold.
+    /// </summary>
+    public bool? IgnoreCase { get; init; }
+
+    /// <summary>Whether a string comparison compares exactly rather than folding case and accents; null when not written.</summary>
+    public bool? CaseSensitive { get; init; }
 
     /// <summary>The option names the caller wrote that the engine does not know.</summary>
     public IReadOnlyList<string>? Unknown { get; init; }
@@ -84,6 +92,8 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
     private const string NotKey = "not";
     private const string OptionsKey = "options";
     private const string AnyKey = "any";
+    private const string IgnoreCaseKey = "ignoreCase";
+    private const string CaseSensitiveKey = "caseSensitive";
 
     public override FilterCondition? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -204,18 +214,23 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
         if (element.ValueKind != JsonValueKind.Object)
             return new FilterConditionOptions { Unknown = ["options"] };
 
-        var ignoreCase = false;
+        bool? ignoreCase = null;
+        bool? caseSensitive = null;
         List<string>? unknown = null;
 
         foreach (var property in element.EnumerateObject())
         {
-            if (property.Name == "ignoreCase" && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                ignoreCase = property.Value.ValueKind == JsonValueKind.True;
+            var flag = property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False ? property.Value.ValueKind == JsonValueKind.True : (bool?)null;
+
+            if (property.Name == IgnoreCaseKey && flag is not null)
+                ignoreCase = flag;
+            else if (property.Name == CaseSensitiveKey && flag is not null)
+                caseSensitive = flag;
             else
                 (unknown ??= []).Add(property.Name);
         }
 
-        return new FilterConditionOptions { IgnoreCase = ignoreCase, Unknown = unknown };
+        return new FilterConditionOptions { IgnoreCase = ignoreCase, CaseSensitive = caseSensitive, Unknown = unknown };
     }
 
     public override void Write(Utf8JsonWriter writer, FilterCondition value, JsonSerializerOptions options)
@@ -262,11 +277,17 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
                     writer.WriteNullValue();
             }
 
-            if (value.Options?.IgnoreCase == true)
+            if (value.Options is { } conditionOptions && (conditionOptions.IgnoreCase is not null || conditionOptions.CaseSensitive is not null))
             {
                 writer.WritePropertyName(OptionsKey);
                 writer.WriteStartObject();
-                writer.WriteBoolean("ignoreCase", true);
+
+                if (conditionOptions.IgnoreCase is { } ignoreCase)
+                    writer.WriteBoolean(IgnoreCaseKey, ignoreCase);
+
+                if (conditionOptions.CaseSensitive is { } caseSensitive)
+                    writer.WriteBoolean(CaseSensitiveKey, caseSensitive);
+
                 writer.WriteEndObject();
             }
 

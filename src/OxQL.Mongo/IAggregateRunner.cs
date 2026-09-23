@@ -4,8 +4,8 @@ using OxQL.Model;
 
 namespace OxQL.Mongo;
 
-/// <summary>The bounds one aggregate runs under.</summary>
-public sealed record AggregateRunOptions(int MaxTimeMs, bool? AllowDiskUse);
+/// <summary>The bounds one aggregate runs under, and the collation it carries when the pipeline folds a string.</summary>
+public sealed record AggregateRunOptions(int MaxTimeMs, bool? AllowDiskUse, BsonDocument? Collation = null);
 
 /// <summary>Runs one aggregate against an entity's collection. The executor's only contact with the database, so tests replace it with fixture rows.</summary>
 public interface IAggregateRunner
@@ -44,6 +44,9 @@ public sealed class MongoAggregateRunner : IAggregateRunner
 
         if (options.AllowDiskUse is { } allowDiskUse)
             aggregateOptions.AllowDiskUse = allowDiskUse;
+
+        if (options.Collation is { } collation)
+            aggregateOptions.Collation = Collation.FromBsonDocument(collation);
 
         using var cursor = await collection.AggregateAsync(definition, aggregateOptions, cancellationToken).ConfigureAwait(false);
 

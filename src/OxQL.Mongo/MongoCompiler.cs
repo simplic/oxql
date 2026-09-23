@@ -52,16 +52,23 @@ public sealed record CompiledQuery
     /// same reason and with the same consequence as <see cref="KeyKeptAgainstProjection"/>.
     /// </summary>
     public IReadOnlyList<string> SortKeptAgainstProjection { get; init; } = [];
+
+    /// <summary>
+    /// The collation both aggregates run under, <c>{ locale, strength }</c>; null when nothing
+    /// in the pipeline folds case, in which case the aggregates run as they always have.
+    /// </summary>
+    public BsonDocument? Collation { get; init; }
 }
 
-/// <summary>What the compiler needs from the host beside the bound pipeline.</summary>
-public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap);
+/// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
+public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null);
 
 /// <summary>
-/// Emits the aggregation pipeline for a bound pipeline: typed <c>$match</c>, per-field
-/// case-insensitive regex, <c>$elemMatch</c>, joins as indexed <c>$lookup</c> with the scope
-/// inside, null-aware keyset cursors merged into the leading scope match, offset paging after
-/// a group, and the count pipeline with its <c>$limit</c> after any <c>$group</c>.
+/// Emits the aggregation pipeline for a bound pipeline: typed <c>$match</c>, string
+/// comparisons under the collation or as patterns, <c>$elemMatch</c>, joins as indexed
+/// <c>$lookup</c> with the scope inside, null-aware keyset cursors merged into the leading scope
+/// match, offset paging after a group, and the count pipeline with its <c>$limit</c> after any
+/// <c>$group</c>.
 /// </summary>
 public static class MongoCompiler
 {
@@ -69,6 +76,32 @@ public static class MongoCompiler
 
     /// <summary>The prefix of an unwind index the compiler adds for paging and removes again; no caller alias starts with it.</summary>
     private const string ReservedIndex = Aliases.ReservedPrefix + "oxIx";
+
+    /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
+    private const string KeyVariable = "oxKey";
+
+    /// <summary>
+    /// The character with the highest primary weight in the root collation; a string is
+    /// below the prefix followed by it exactly when it starts with the prefix under the
+    /// collation.
+    /// </summary>
+    private const char AfterEveryCharacter = '￿';
+
+    /// <summary>How a string comparison is emitted.</summary>
+    private enum Casing
+    {
+        /// <summary>A plain operator: the exact value, or the value under the aggregate's collation.</summary>
+        Value,
+
+        /// <summary>A plain operator under the collation, where a prefix is a range.</summary>
+        Collated,
+
+        /// <summary>An anchored pattern with the <c>i</c> flag: the fold inside an aggregate without a collation.</summary>
+        Fold,
+
+        /// <summary>An anchored pattern without a flag: the exact value inside a collated aggregate, which a plain operator would fold.</summary>
+        Exact,
+    }
 
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
@@ -80,6 +113,7 @@ public static class MongoCompiler
         var remote = new List<BoundStage.Resolve>();
         var semiJoins = new List<SemiJoinSlot>();
         var sortFields = bound.Sort?.Fields ?? [];
+        var collated = bound.Collated;
 
         // Rows of an unwound shape share their parent's key, so the key alone does not order
         // them: the index of every unwind completes it. A group replaces the row, and its keys
@@ -122,11 +156,11 @@ public static class MongoCompiler
             switch (stage)
             {
                 case BoundStage.Match match:
-                    emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins)));
+                    emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins, collated)));
                     break;
 
                 case BoundStage.Lookup lookup:
-                    emitted.Add(Lookup(lookup, semiJoins));
+                    emitted.Add(Lookup(lookup, semiJoins, collated));
                     break;
 
                 case BoundStage.Resolve { IsRemote: true } remoteResolve:
@@ -134,7 +168,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Resolve resolve:
-                    emitted.AddRange(LocalResolve(resolve, semiJoins));
+                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated));
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -248,12 +282,21 @@ public static class MongoCompiler
             CountCap = options.CountCap,
             KeyKeptAgainstProjection = keyKeptAgainstProjection,
             SortKeptAgainstProjection = sortKeptAgainstProjection,
+            Collation = collated ? CollationDocument(options.Collation ?? new CollationOptions()) : null,
         };
     }
 
     /// <summary>The scope equality: one typed comparison on one indexed member.</summary>
     public static BsonDocument ScopeFilter(BoundStage.Scope scope) =>
         new(scope.OrganisationStorage, new BsonBinaryData(scope.Organisation, scope.Representation));
+
+    /// <summary>The collation as the aggregate command carries it.</summary>
+    public static BsonDocument CollationDocument(CollationOptions collation)
+    {
+        ArgumentNullException.ThrowIfNull(collation);
+
+        return new BsonDocument { ["locale"] = collation.Locale, ["strength"] = collation.Strength };
+    }
 
     private static BsonDocument KeysetFrom(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields)
     {
@@ -281,18 +324,18 @@ public static class MongoCompiler
 
     // ---- filters ----------------------------------------------------------------------------
 
-    /// <summary>Compiles a condition tree to a filter document.</summary>
-    public static BsonDocument Filter(BoundCondition condition, List<SemiJoinSlot>? semiJoins = null) => condition switch
+    /// <summary>Compiles a condition tree to a filter document; <paramref name="collated"/> when the aggregate carries the collation.</summary>
+    public static BsonDocument Filter(BoundCondition condition, List<SemiJoinSlot>? semiJoins = null, bool collated = false) => condition switch
     {
-        BoundCondition.And and => new BsonDocument("$and", new BsonArray(and.Conditions.Select(inner => Filter(inner, semiJoins)))),
-        BoundCondition.Or or => new BsonDocument("$or", new BsonArray(or.Conditions.Select(inner => Filter(inner, semiJoins)))),
-        BoundCondition.Not not => new BsonDocument("$nor", new BsonArray { Filter(not.Condition, semiJoins) }),
-        BoundCondition.Any any => new BsonDocument(any.Path.Storage!, new BsonDocument("$elemMatch", Filter(any.Inner, semiJoins))),
-        BoundCondition.Leaf leaf => Leaf(leaf, semiJoins),
+        BoundCondition.And and => new BsonDocument("$and", new BsonArray(and.Conditions.Select(inner => Filter(inner, semiJoins, collated)))),
+        BoundCondition.Or or => new BsonDocument("$or", new BsonArray(or.Conditions.Select(inner => Filter(inner, semiJoins, collated)))),
+        BoundCondition.Not not => new BsonDocument("$nor", new BsonArray { Filter(not.Condition, semiJoins, collated) }),
+        BoundCondition.Any any => new BsonDocument(any.Path.Storage!, new BsonDocument("$elemMatch", Filter(any.Inner, semiJoins, collated))),
+        BoundCondition.Leaf leaf => Leaf(leaf, semiJoins, collated),
         _ => new BsonDocument(),
     };
 
-    private static BsonDocument Leaf(BoundCondition.Leaf leaf, List<SemiJoinSlot>? semiJoins)
+    private static BsonDocument Leaf(BoundCondition.Leaf leaf, List<SemiJoinSlot>? semiJoins, bool collated)
     {
         if (leaf.IsSemiJoin)
         {
@@ -308,14 +351,30 @@ public static class MongoCompiler
 
         // A decimal under the addon bag is written wrapped by the bag serializer: match both places.
         if (leaf.Path.Addon is not null && leaf.Path.Kind == Kind.Decimal)
-            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf), LeafAt(storage + "._v", leaf) });
+            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated), LeafAt(storage + "._v", leaf, collated) });
 
-        return LeafAt(storage, leaf);
+        return LeafAt(storage, leaf, collated);
     }
 
-    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf)
+    /// <summary>
+    /// The form a leaf's string comparison takes. A fold is a plain operator when the aggregate
+    /// is collated and a pattern with the <c>i</c> flag when it is not; an exact comparison of
+    /// a string is a plain operator when the aggregate is not collated and, because a plain
+    /// operator would fold there, an anchored pattern when it is. A pattern is never
+    /// collation-aware. Members of other kinds compare by value either way.
+    /// </summary>
+    private static Casing CasingOf(BoundCondition.Leaf leaf, bool collated) => leaf.IgnoreCase switch
+    {
+        true when collated => Casing.Collated,
+        true => Casing.Fold,
+        _ when collated && leaf.Path.LeafKind == Kind.String => Casing.Exact,
+        _ => Casing.Value,
+    };
+
+    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf, bool collated)
     {
         var op = leaf.Op;
+        var casing = CasingOf(leaf, collated);
 
         switch (leaf.Operand)
         {
@@ -325,8 +384,8 @@ public static class MongoCompiler
                     : new BsonDocument(storage, BsonNull.Value);
 
             case BoundOperand.Set set:
-                var values = leaf.IgnoreCase
-                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)new BsonRegularExpression("^" + RegexGuard.Escape(text.Value) + "$", "i") : value))
+                var values = casing is Casing.Fold or Casing.Exact
+                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)Anchored(text.Value, casing) : value))
                     : new BsonArray(set.Values);
 
                 return new BsonDocument(storage, new BsonDocument(op == "nin" ? "$nin" : "$in", values));
@@ -338,27 +397,34 @@ public static class MongoCompiler
                 // agrees with $and of $ne on a missing member, which is the only case where
                 // the two could differ for a scalar.
                 if (op == "neq")
-                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, leaf.IgnoreCase))));
+                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, casing))));
 
-                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, leaf.IgnoreCase))));
+                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing))));
 
             case BoundOperand.Single single:
-                return Compare(storage, op, single.Value, leaf.IgnoreCase);
+                return Compare(storage, op, single.Value, casing);
 
             default:
                 return new BsonDocument(storage, BsonNull.Value);
         }
     }
 
-    private static BsonDocument Compare(string storage, string op, BsonValue value, bool ignoreCase)
+    /// <summary>The whole-value pattern of a text: escaped and anchored at both ends, folding case only as a fold.</summary>
+    private static BsonRegularExpression Anchored(string text, Casing casing) =>
+        new("^" + RegexGuard.Escape(text) + "$", casing == Casing.Fold ? "i" : "");
+
+    private static BsonDocument Compare(string storage, string op, BsonValue value, Casing casing)
     {
-        var flags = ignoreCase ? "i" : "";
+        // A fold that stays a pattern (contains, endsWith) folds case with the flag, under a
+        // collation or not; an exact comparison and a caller's own pattern carry none.
+        var flags = casing is Casing.Fold or Casing.Collated ? "i" : "";
+        var pattern = casing is Casing.Fold or Casing.Exact && value is BsonString;
 
         return op switch
         {
-            "eq" when ignoreCase && value is BsonString text => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(text.Value) + "$", "i")),
+            "eq" when pattern => new BsonDocument(storage, Anchored(Text(value), casing)),
             "eq" => new BsonDocument(storage, value),
-            "neq" when ignoreCase && value is BsonString text => new BsonDocument(storage, new BsonDocument("$not", new BsonRegularExpression("^" + RegexGuard.Escape(text.Value) + "$", "i"))),
+            "neq" when pattern => new BsonDocument(storage, new BsonDocument("$not", Anchored(Text(value), casing))),
             "neq" => new BsonDocument(storage, new BsonDocument("$ne", value)),
             "gt" => new BsonDocument(storage, new BsonDocument("$gt", value)),
             "gte" => new BsonDocument(storage, new BsonDocument("$gte", value)),
@@ -368,6 +434,12 @@ public static class MongoCompiler
             // is a string by the time it gets here; Text() renders any other type rather than
             // casting it.
             "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
+            // Under the collation a prefix is the range from the prefix up to the prefix
+            // followed by the highest character: every string that starts with it under the
+            // collation, accents and case folded, and nothing else. A pattern cannot fold
+            // accents, so the range is the only form that folds the way the rest of the
+            // aggregate does.
+            "startsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonDocument { ["$gte"] = Text(value), ["$lt"] = Text(value) + AfterEveryCharacter }),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
             "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),
             "regex" => new BsonDocument(storage, new BsonRegularExpression(Text(value), flags)),
@@ -386,33 +458,34 @@ public static class MongoCompiler
 
     // ---- joins ------------------------------------------------------------------------------
 
-    private static BsonDocument Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins)
+    private static BsonDocument Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins, bool collated)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(lookup.ChildScope)) };
+        var exactKey = collated && IsStringStored(lookup.ChildReference);
+
+        if (exactKey)
+            pipeline.Add(ExactKeyMatch(lookup.ChildKeyStorage));
 
         if (lookup.Filter is not null)
-            pipeline.Add(new BsonDocument("$match", Filter(lookup.Filter, semiJoins)));
+            pipeline.Add(new BsonDocument("$match", Filter(lookup.Filter, semiJoins, collated)));
 
         pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
         pipeline.Add(new BsonDocument("$limit", lookup.Limit));
         pipeline.Add(new BsonDocument("$project", Select(lookup.Select)));
 
-        return new BsonDocument("$lookup", new BsonDocument
-        {
-            ["from"] = lookup.From.Collection,
-            ["localField"] = lookup.ParentKeyStorage,
-            ["foreignField"] = lookup.ChildKeyStorage,
-            ["pipeline"] = pipeline,
-            ["as"] = lookup.As,
-        });
+        return new BsonDocument("$lookup", Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As));
     }
 
-    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins)
+    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
+        var exactKey = collated && IsStringStored(resolve.Reference);
+
+        if (exactKey)
+            pipeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
 
         if (resolve.Filter is not null)
-            pipeline.Add(new BsonDocument("$match", Filter(resolve.Filter, semiJoins)));
+            pipeline.Add(new BsonDocument("$match", Filter(resolve.Filter, semiJoins, collated)));
 
         pipeline.Add(new BsonDocument("$limit", 1));
         pipeline.Add(new BsonDocument("$project", Select(resolve.Select!)));
@@ -420,16 +493,65 @@ public static class MongoCompiler
         // No caller alias ends in the suffix, so the temporary field shadows nothing.
         var temporary = resolve.As + Aliases.ReservedSuffix;
 
-        yield return new BsonDocument("$lookup", new BsonDocument
-        {
-            ["from"] = resolve.Target!.Collection,
-            ["localField"] = resolve.Reference.Storage,
-            ["foreignField"] = resolve.TargetFieldStorage,
-            ["pipeline"] = pipeline,
-            ["as"] = temporary,
-        });
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, pipeline, temporary));
         yield return new BsonDocument("$set", new BsonDocument(resolve.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + temporary, 0 })));
         yield return new BsonDocument("$unset", temporary);
+    }
+
+    /// <summary>
+    /// The <c>$lookup</c> document of a join. With <paramref name="exactKey"/> the local key is
+    /// bound to a variable for the sub-pipeline's byte comparison; otherwise the document is
+    /// the indexed join alone.
+    /// </summary>
+    private static BsonDocument Join(string from, string localField, string foreignField, bool exactKey, BsonArray pipeline, string alias)
+    {
+        var join = new BsonDocument
+        {
+            ["from"] = from,
+            ["localField"] = localField,
+            ["foreignField"] = foreignField,
+        };
+
+        if (exactKey)
+            join["let"] = new BsonDocument(KeyVariable, "$" + localField);
+
+        join["pipeline"] = pipeline;
+        join["as"] = alias;
+
+        return join;
+    }
+
+    /// <summary>Whether a reference member is stored as a string, which the aggregate's collation would fold on a join.</summary>
+    private static bool IsStringStored(ResolvedPath reference) =>
+        reference.Leaf?.Representation.BsonType == BsonType.String
+        || (reference.LeafKind == Kind.String && reference.Leaf?.Representation.BsonType != BsonType.Int32);
+
+    /// <summary>
+    /// The match that keeps a join on a string key exact inside a collated aggregate. The
+    /// join itself compares under the collation, so a key that differs only in case or
+    /// accents would join; ids are exact, so the joined rows are compared again byte for
+    /// byte, with the byte functions that a collation does not reach. A key that is not a
+    /// string joins as it always has.
+    /// </summary>
+    private static BsonDocument ExactKeyMatch(string foreignField)
+    {
+        var field = "$" + foreignField;
+        var key = "$$" + KeyVariable;
+
+        return new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$cond", new BsonDocument
+        {
+            ["if"] = new BsonDocument("$and", new BsonArray
+            {
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", key), "string" }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", field), "string" }),
+            }),
+            ["then"] = new BsonDocument("$and", new BsonArray
+            {
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { field, key }), 0 }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", field), new BsonDocument("$strLenBytes", key) }),
+            }),
+            ["else"] = true,
+        })));
     }
 
     private static BsonDocument Select(IReadOnlyList<ResolvedPath> select)

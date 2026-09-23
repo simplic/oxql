@@ -49,8 +49,8 @@ public static class IndexAdvisor
 
     private sealed record LookupFinding(string? Index, string? Strategy, IReadOnlyList<string>? IndexesUsed);
 
-    /// <summary>The advisory for a compiled page pipeline.</summary>
-    public static IReadOnlyList<JsonNode> Advise(IReadOnlyList<BsonDocument> pageStages, IReadOnlyList<BsonDocument> indexes, BsonDocument? explain)
+    /// <summary>The advisory for a compiled page pipeline; <paramref name="collation"/> when the aggregate carries one.</summary>
+    public static IReadOnlyList<JsonNode> Advise(IReadOnlyList<BsonDocument> pageStages, IReadOnlyList<BsonDocument> indexes, BsonDocument? explain, BsonDocument? collation = null)
     {
         ArgumentNullException.ThrowIfNull(pageStages);
         ArgumentNullException.ThrowIfNull(indexes);
@@ -78,6 +78,12 @@ public static class IndexAdvisor
             for (var index = 0; index < lookups.Count; index++)
                 advice.Add(AdviseLookup(lookups[index], index < findings.Count ? findings[index] : null, explain is null));
         }
+
+        // An index serves a collated string comparison only when it was built with the same
+        // collation; the advisory cannot tell a string field from another, so it says so once.
+        if (collation is not null)
+            advice.Add(new IndexAdvice("collation", null, null,
+                $"the aggregate runs under collation {collation.GetValue("locale", "")}/{collation.GetValue("strength", "")}: string comparisons, sorts and group keys fold case, and an index serves them only when it was built with the same collation; other kinds are unaffected"));
 
         return advice.Select(entry => (JsonNode)entry.ToJson()).ToList();
     }

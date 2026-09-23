@@ -129,6 +129,7 @@ public static class BoundCanonical
             {
                 ["path"] = field.Path.Storage,
                 ["direction"] = field.Ascending ? "asc" : "desc",
+                ["caseSensitive"] = !field.IgnoreCase,
             }).ToArray()),
         },
         BoundStage.Page page => new JsonObject
@@ -154,7 +155,9 @@ public static class BoundCanonical
             ["path"] = leaf.Path.Storage ?? leaf.Path.Wire,
             ["op"] = leaf.Op,
             ["operand"] = RenderOperand(leaf.Operand),
-            ["ignoreCase"] = leaf.IgnoreCase,
+            // A remote leaf the caller wrote no option for is the owner's default, which the
+            // owner reports as folding; it renders as the fold.
+            ["caseSensitive"] = leaf.IgnoreCase is false,
             ["semiJoin"] = leaf.IsSemiJoin,
             ["addonDecimal"] = leaf.Path.Addon is not null && leaf.Path.Kind == Model.Kind.Decimal,
         },

@@ -318,7 +318,13 @@ public sealed class RemoteResolver
             Path = relative,
             Op = slot.Leaf.Op,
             Value = operand,
-            Options = slot.Leaf.IgnoreCase ? new FilterConditionOptions { IgnoreCase = true } : null,
+            // The owner binds the comparison under its own default; only what the caller wrote travels.
+            Options = slot.Leaf.IgnoreCase switch
+            {
+                true => new FilterConditionOptions { IgnoreCase = true },
+                false => new FilterConditionOptions { CaseSensitive = true },
+                null => null,
+            },
         };
 
         return new QueryRequest

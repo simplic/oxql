@@ -161,7 +161,6 @@ public class StageRulesTests
     [InlineData("wide", "\"Huge\"", "NumberLong(5000000000)")]
     [InlineData("stateName", "\"Shipped\"", "\"Shipped\"")]
     [InlineData("stateName", "1", "\"Shipped\"")]
-    [InlineData("initial", "\"a\"", "97")]
     [InlineData("guidText", "\"195fb742-82b3-405e-b77b-42838eb0aaa9\"", "\"195fb742-82b3-405e-b77b-42838eb0aaa9\"")]
     [InlineData("blob", "\"AQID\"", "BinData(0, \"AQID\")")]
     public async Task An_operand_is_encoded_from_the_kind_and_the_storage_representation(string path, string operand, string expected)

@@ -43,6 +43,7 @@ public sealed class OperandCoercer
     private static readonly IReadOnlySet<string> SetOperators = new HashSet<string>(StringComparer.Ordinal) { "in", "nin" };
     private static readonly IReadOnlySet<string> ClosedListOperators = new HashSet<string>(StringComparer.Ordinal) { "eq", "neq", "in", "nin" };
     private static readonly IReadOnlySet<string> IgnoreCaseOperators = new HashSet<string>(StringComparer.Ordinal) { "eq", "neq", "in", "nin", "contains", "startsWith", "endsWith" };
+    private static readonly IReadOnlySet<string> FoldingOperators = new HashSet<string>(StringComparer.Ordinal) { "eq", "neq", "in", "nin", "gt", "gte", "lt", "lte", "contains", "startsWith", "endsWith" };
 
     /// <summary>Whether <paramref name="op"/> applies to <paramref name="kind"/>.</summary>
     public static bool Applies(string op, Kind kind)
@@ -56,8 +57,22 @@ public sealed class OperandCoercer
         return true;
     }
 
-    /// <summary>Whether <c>ignoreCase</c> applies to <paramref name="op"/> on <paramref name="kind"/>.</summary>
+    /// <summary>
+    /// Whether the case option (<c>caseSensitive</c>, or its alias <c>ignoreCase</c>) applies
+    /// to <paramref name="op"/> on <paramref name="kind"/>: the comparisons a string can opt
+    /// out of. An ordered comparison orders under the collation of the whole aggregate and
+    /// cannot; a pattern is the caller's own.
+    /// </summary>
     public static bool IgnoreCaseApplies(string op, Kind kind) => kind == Kind.String && IgnoreCaseOperators.Contains(op);
+
+    /// <summary>
+    /// Whether a contract 2 comparison folds case unless it opts out: every comparison of a
+    /// string, the ordered ones included. On a member holding a single character, stored as its
+    /// code point, only the four value comparisons fold, by code point; its order is the code
+    /// point's.
+    /// </summary>
+    public static bool FoldsByDefault(string op, ResolvedPath path) =>
+        path.LeafKind == Kind.String && (IsCharRepresented(path) ? ClosedListOperators.Contains(op) : FoldingOperators.Contains(op));
 
     /// <summary>
     /// A <c>char</c> member: published as a <c>string</c> because that is what it is on the

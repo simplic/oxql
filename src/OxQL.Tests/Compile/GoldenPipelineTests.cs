@@ -115,7 +115,7 @@ public class GoldenPipelineTests
     }
 
     [Fact]
-    public async Task IgnoreCase_compiles_per_field_to_an_anchored_case_insensitive_regex()
+    public async Task A_string_comparison_folds_under_the_collation_and_only_a_pattern_keeps_the_flag()
     {
         var compiled = await Compile("""
             [{ "match": { "or": [
@@ -131,15 +131,16 @@ public class GoldenPipelineTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $or: [
-                { Number: /^a\.b$/i },
-                { Number: { $not: /^a$/i } },
-                { Number: { $in: [ /^a$/i, /^b$/i ] } },
+                { Number: 'a.b' },
+                { Number: { $ne: 'a' } },
+                { Number: { $in: [ 'a', 'b' ] } },
                 { Number: /a/i },
-                { Number: /^a/i },
+                { Number: { $gte: 'a', $lt: 'a￿' } },
                 { Number: /a$/i },
-                { Number: /^a/ },
+                { Number: { $gte: 'a', $lt: 'a￿' } },
                 { Number: /^a/ } ] } }
             """));
+        compiled.Collation.Should().NotBeNull();
     }
 
     [Fact]

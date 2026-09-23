@@ -70,7 +70,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
-        var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse);
+        var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse, compiled.Collation);
         var resolveCalls = 0;
         var cacheHits = 0;
 
@@ -234,6 +234,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Bound = JsonNode.Parse(bound.Canonical)!,
             Stages = compiled.PageStages.Select(Relaxed).ToList(),
             Count = compiled.CountStages?.Select(Relaxed).ToList(),
+            Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
             Advisory = await AdviseAsync(bound.Entity, compiled, cancellationToken).ConfigureAwait(false),
             Diagnostics = bound.Diagnostics.Count > 0 ? bound.Diagnostics : null,
         });
@@ -249,7 +250,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var hasLookup = compiled.PageStages.Any(stage => stage.Contains("$lookup"));
         var explain = hasLookup ? await indexes.ExplainAsync(entity, compiled.PageStages, compiled.MaxTimeMs, cancellationToken).ConfigureAwait(false) : null;
 
-        return IndexAdvisor.Advise(compiled.PageStages, listed, explain);
+        return IndexAdvisor.Advise(compiled.PageStages, listed, explain, compiled.Collation);
     }
 
     private static JsonNode Relaxed(BsonDocument stage) =>
@@ -262,7 +263,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         if (context.MaxTimeMs is { } requested && requested > 0)
             maxTime = Math.Min(maxTime, requested);
 
-        return new CompileOptions(maxTime, options.Execution.AllowDiskUse, options.Limits.CountCap);
+        return new CompileOptions(maxTime, options.Execution.AllowDiskUse, options.Limits.CountCap, options.Representation.Collation);
     }
 
     /// <summary>The cursor for the page after <paramref name="last"/>.</summary>

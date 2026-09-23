@@ -217,7 +217,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
             AddonSource = addons,
             Options = options,
             UserId = scope.UserId(httpContext),
-            CorrelationId = scope.CorrelationId(httpContext),
+            // The scope provider may read the correlation off a caller's header; every log line reads it from here.
+            CorrelationId = LogText.Of(scope.CorrelationId(httpContext)),
             MaxTimeMs = maxTimeMs,
         };
     }

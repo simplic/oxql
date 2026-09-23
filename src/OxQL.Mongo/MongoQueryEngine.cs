@@ -83,7 +83,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             if (refused is not null)
             {
-                Log(bound, timer, 0, false, false, context, refused, resolveCalls, 0);
+                Log(compiled, timer, 0, false, false, context, refused, resolveCalls, 0);
                 return QueryOutcome.Of(refused);
             }
         }
@@ -117,7 +117,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             var refusal = MapDriverError(exception);
 
             timedOut = refusal.Status == 504;
-            Log(bound, timer, 0, timedOut, false, context, refusal, resolveCalls, 0);
+            Log(compiled, timer, 0, timedOut, false, context, refusal, resolveCalls, 0);
 
             return QueryOutcome.Of(refusal);
         }
@@ -137,7 +137,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             if (resolution.Refusal is not null)
             {
-                Log(bound, timer, 0, false, false, context, resolution.Refusal, resolveCalls, cacheHits);
+                Log(compiled, timer, 0, false, false, context, resolution.Refusal, resolveCalls, cacheHits);
                 return QueryOutcome.Of(resolution.Refusal);
             }
 
@@ -202,7 +202,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
         };
 
-        Log(bound, timer, page.Count, timedOut, capped == true, context, null, resolveCalls, cacheHits);
+        Log(compiled, timer, page.Count, timedOut, capped == true, context, null, resolveCalls, cacheHits);
 
         return QueryOutcome.Of(result);
     }
@@ -341,14 +341,19 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         command.Code == 51091
         || (command.Code == 2 && command.ErrorMessage is { } message && message.Contains("egular expression", StringComparison.Ordinal));
 
-    private void Log(BoundPipeline bound, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal, int resolveCalls, int resolveCacheHits)
+    private void Log(CompiledQuery compiled, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal, int resolveCalls, int resolveCacheHits)
     {
+        var bound = compiled.Bound;
+        var stages = string.Join(",", bound.Stages.Select(stage => stage.GetType().Name.ToLowerInvariant()));
+        var elapsed = timer.Elapsed.TotalMilliseconds;
+        var outcome = refusal?.Type ?? "ok";
+
         logger.LogInformation(
             "OxQL {Entity} stages={Stages} rows={Rows} elapsedMs={ElapsedMs} timedOut={TimedOut} countCapped={CountCapped} resolveCalls={ResolveCalls} resolveCacheHits={ResolveCacheHits} compat={Compat} user={UserId} org={OrganisationId} correlation={CorrelationId} outcome={Outcome}",
             bound.Entity.Id,
-            string.Join(",", bound.Stages.Select(stage => stage.GetType().Name.ToLowerInvariant())),
+            stages,
             rows,
-            timer.Elapsed.TotalMilliseconds,
+            elapsed,
             timedOut,
             countCapped,
             resolveCalls,
@@ -357,6 +362,67 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             context.UserId,
             context.Organisation,
             context.CorrelationId,
-            refusal?.Type ?? "ok");
+            outcome);
+
+        // A request over the slow-query threshold is said once more, at warning level, with
+        // what shaped it: the stage kinds and the flags an operator can act on, never an
+        // operand. The time is the whole request's, remote resolves and the count included.
+        var threshold = options.Execution.EffectiveSlowQueryMs;
+
+        if (threshold > 0 && elapsed > threshold)
+            logger.LogWarning(
+                "OxQL slow query {Entity} stages={Stages} elapsedMs={ElapsedMs} thresholdMs={ThresholdMs} rows={Rows} regex={Regex} unboundedSort={UnboundedSort} count={Count} remote={Remote} outcome={Outcome} org={OrganisationId} correlation={CorrelationId}",
+                bound.Entity.Id,
+                stages,
+                elapsed,
+                threshold,
+                rows,
+                HasRegex(compiled.PageStages),
+                HasUnboundedSort(compiled.PageStages),
+                compiled.IncludeTotalCount,
+                compiled.RemoteResolves.Count > 0 || compiled.SemiJoins.Count > 0,
+                outcome,
+                context.Organisation,
+                context.CorrelationId);
+    }
+
+    /// <summary>Whether any stage of the pipeline, a join's inner pipeline included, matches with a regular expression.</summary>
+    private static bool HasRegex(IReadOnlyList<BsonDocument> stages) => stages.Any(HasRegex);
+
+    private static bool HasRegex(BsonValue value) => value switch
+    {
+        BsonRegularExpression => true,
+        BsonDocument document => document.Values.Any(HasRegex),
+        BsonArray array => array.Any(HasRegex),
+        _ => false,
+    };
+
+    /// <summary>
+    /// Whether a sort orders every candidate row rather than the page's: one that is not
+    /// followed by the page's limit, with only a skip or an unset between them. Such a sort
+    /// cannot keep the top rows alone and holds the whole input in memory or on disk.
+    /// </summary>
+    private static bool HasUnboundedSort(IReadOnlyList<BsonDocument> stages)
+    {
+        for (var index = 0; index < stages.Count; index++)
+        {
+            if (!stages[index].Contains("$sort"))
+                continue;
+
+            var bounded = false;
+
+            for (var later = index + 1; later < stages.Count && !bounded; later++)
+            {
+                if (stages[later].Contains("$limit"))
+                    bounded = true;
+                else if (!stages[later].Contains("$skip") && !stages[later].Contains("$unset"))
+                    break;
+            }
+
+            if (!bounded)
+                return true;
+        }
+
+        return false;
     }
 }

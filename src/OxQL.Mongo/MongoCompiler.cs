@@ -60,8 +60,9 @@ public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Count
 /// <summary>
 /// Emits the aggregation pipeline for a bound pipeline: typed <c>$match</c>, per-field
 /// case-insensitive regex, <c>$elemMatch</c>, joins as indexed <c>$lookup</c> with the scope
-/// inside, null-aware keyset cursors merged into the leading scope match, offset paging after
-/// a group, and the count pipeline with its <c>$limit</c> after any <c>$group</c>.
+/// inside and after the page when only the rows' display reads them, null-aware keyset
+/// cursors merged into the leading scope match, offset paging after a group, and the count
+/// pipeline with its <c>$limit</c> after any <c>$group</c>.
 /// </summary>
 public static class MongoCompiler
 {
@@ -114,6 +115,11 @@ public static class MongoCompiler
         var countStages = page.IncludeTotalCount ? new List<BsonDocument> { new("$match", scope) } : null;
         var sortEmitted = false;
 
+        // A join only the rows' display reads runs after the page is taken: the sort stays
+        // next to the limit, which lets the server keep the top rows instead of ordering
+        // every candidate, and the join is paid per page row rather than per candidate row.
+        var lateJoins = new List<BsonDocument>();
+
         for (var index = 0; index < bound.Stages.Count; index++)
         {
             var stage = bound.Stages[index];
@@ -126,7 +132,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Lookup lookup:
-                    emitted.Add(Lookup(lookup, semiJoins));
+                    (JoinsAfterPage(bound.Stages, index, lookup.As) ? lateJoins : emitted).Add(Lookup(lookup, semiJoins));
                     break;
 
                 case BoundStage.Resolve { IsRemote: true } remoteResolve:
@@ -134,7 +140,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Resolve resolve:
-                    emitted.AddRange(LocalResolve(resolve, semiJoins));
+                    (JoinsAfterPage(bound.Stages, index, resolve.As) ? lateJoins : emitted).AddRange(LocalResolve(resolve, semiJoins));
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -184,15 +190,11 @@ public static class MongoCompiler
 
             stages.AddRange(emitted);
 
-            // The count pipeline carries everything up to the sort and the page, lookups
-            // only when a later stage reads their alias.
-            if (countStages is not null && stage is not (BoundStage.Sort or BoundStage.Page))
-            {
-                if (stage is BoundStage.Lookup lookupStage && !UsesAlias(bound.Stages.Skip(index + 1), lookupStage.As))
-                    continue;
-
+            // The count pipeline carries everything up to the sort and the page; a join only
+            // when a later match, unwind, group or resolve reads its alias. What only the
+            // rows' display reads does not change how many rows there are.
+            if (countStages is not null && stage is not (BoundStage.Sort or BoundStage.Page) && (JoinAlias(stage) is not { } alias || CountReads(bound.Stages.Skip(index + 1), alias)))
                 countStages.AddRange(emitted);
-            }
         }
 
         if (pagingSort is not null)
@@ -224,6 +226,7 @@ public static class MongoCompiler
             stages.Add(new BsonDocument("$skip", offset));
 
         stages.Add(new BsonDocument("$limit", page.Limit + 1));
+        stages.AddRange(lateJoins);
 
         if (countStages is not null)
         {
@@ -686,29 +689,73 @@ public static class MongoCompiler
 
     // ---- helpers ----------------------------------------------------------------------------
 
-    private static bool UsesAlias(IEnumerable<BoundStage> later, string alias)
+    /// <summary>The alias a lookup or a local resolve joins under; null for every other stage.</summary>
+    private static string? JoinAlias(BoundStage stage) => stage switch
     {
-        foreach (var stage in later)
-        {
-            var uses = stage switch
-            {
-                BoundStage.Match match => Paths(match.Condition).Any(path => RootIs(path, alias)),
-                BoundStage.Unwind unwind => RootIs(unwind.Path, alias),
-                BoundStage.Group group => group.Keys.Any(key => (key.Path is not null && RootIs(key.Path, alias)) || (key.Trunc is not null && RootIs(key.Trunc.Path, alias)))
-                    || group.Fields.Any(field => field.Argument is not null && Paths(field.Argument).Any(path => RootIs(path, alias))),
-                BoundStage.Project project => project.Paths.Any(path => RootIs(path, alias)),
-                BoundStage.Resolve resolve => RootIs(resolve.Reference, alias),
-                _ => false,
-            };
+        BoundStage.Lookup lookup => lookup.As,
+        BoundStage.Resolve { IsRemote: false } resolve => resolve.As,
+        _ => null,
+    };
 
-            if (uses)
-                return true;
+    /// <summary>
+    /// Whether a join can run after the page is taken. It can when no later stage filters,
+    /// orders, unwinds, groups or resolves through its alias, no group replaces the row, and
+    /// every later projection passes the alias whole: the page then holds the same rows, and
+    /// the join adds the same value to each of them, whether it runs before the sort or
+    /// after the limit.
+    /// </summary>
+    private static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, string alias)
+    {
+        for (var later = index + 1; later < stages.Count; later++)
+        {
+            switch (stages[later])
+            {
+                case BoundStage.Group:
+                    return false;
+
+                case BoundStage.Project project:
+                    if (!PassesWhole(project, alias))
+                        return false;
+                    break;
+
+                case var stage when Reads(stage, alias):
+                    return false;
+            }
         }
 
-        return false;
+        return true;
     }
 
-    private static bool RootIs(ResolvedPath path, string alias) => path.Root.StoragePrefix == alias || path.Wire == alias || path.Wire.StartsWith(alias + ".", StringComparison.Ordinal);
+    /// <summary>
+    /// Whether a projection leaves the alias as the join produces it: an inclusion that names
+    /// the alias itself and nothing below it, or an exclusion that names nothing under it. An
+    /// inclusion that drops the alias or keeps a member below it changes what the alias holds,
+    /// and the join stays before it.
+    /// </summary>
+    private static bool PassesWhole(BoundStage.Project project, string alias) => project.Inclusion
+        ? project.Paths.Any(path => RootIs(path, alias) && !Under(path, alias)) && !project.Paths.Any(path => Under(path, alias))
+        : !project.Paths.Any(path => RootIs(path, alias));
+
+    /// <summary>Whether a later stage the count pipeline carries reads the alias; a sort or a projection is not in the count.</summary>
+    private static bool CountReads(IEnumerable<BoundStage> later, string alias) =>
+        later.Any(stage => stage is not (BoundStage.Sort or BoundStage.Project) && Reads(stage, alias));
+
+    /// <summary>Whether a stage reads a path at or under the alias.</summary>
+    private static bool Reads(BoundStage stage, string alias) => stage switch
+    {
+        BoundStage.Match match => Paths(match.Condition).Any(path => RootIs(path, alias)),
+        BoundStage.Sort sort => sort.Fields.Any(field => RootIs(field.Path, alias)),
+        BoundStage.Unwind unwind => RootIs(unwind.Path, alias),
+        BoundStage.Group group => group.Keys.Any(key => (key.Path is not null && RootIs(key.Path, alias)) || (key.Trunc is not null && RootIs(key.Trunc.Path, alias)))
+            || group.Fields.Any(field => field.Argument is not null && Paths(field.Argument).Any(path => RootIs(path, alias))),
+        BoundStage.Project project => project.Paths.Any(path => RootIs(path, alias)),
+        BoundStage.Resolve resolve => RootIs(resolve.Reference, alias),
+        _ => false,
+    };
+
+    private static bool RootIs(ResolvedPath path, string alias) => path.Root.StoragePrefix == alias || path.Wire == alias || Under(path, alias);
+
+    private static bool Under(ResolvedPath path, string alias) => path.Wire.StartsWith(alias + ".", StringComparison.Ordinal);
 
     private static IEnumerable<ResolvedPath> Paths(BoundCondition condition) => condition switch
     {

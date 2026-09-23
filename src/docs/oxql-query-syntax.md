@@ -233,7 +233,8 @@ Paths must be scalar and sortable in the current shape (not under a collection);
 ## Stage: `page`
 
 ```jsonc
-{ "page": { "limit": 50, "includeTotalCount": true } }        // first page
+{ "page": { "limit": 50, "includeTotalCount": true } }        // first page, counted up to the host's CountCap
+{ "page": { "limit": 50, "includeTotalCount": 10000 } }       // first page, counted up to 10 000
 { "page": { "limit": 50, "cursor": "<nextCursor>" } }           // next page
 { "page": { "limit": 50, "offset": 200 } }                      // a jump, up to Limits:MaxOffset
 ```
@@ -244,9 +245,17 @@ stage at all, `DefaultPageSize`. `offset` above `MaxOffset` is `MAX_OFFSET_EXCEE
 
 Cursors are opaque, signed, and bound to the query: a cursor from another pipeline, another
 sort or a tampered one is `CURSOR_INVALID`. Keyset paging is null-aware on the root shape;
-after `group` the cursor carries an offset. `includeTotalCount` runs a count concurrently
-with the page (lookups included only when a later stage reads them); above `CountCap` the
-count is the cap and `totalCountCapped` is true with a `TOTAL_COUNT_CAPPED` diagnostic.
+after `group` the cursor carries an offset.
+
+`includeTotalCount` is `true`, `false` (the default) or a positive integer. `true` runs a count
+concurrently with the page, up to the host's `CountCap`; a positive integer is the request's own
+cap, clamped to the host's (`0`, a negative number or a fraction is `INVALID_PAGE_LIMIT`).
+Above the cap in force the count is that cap and `totalCountCapped` is true with a
+`TOTAL_COUNT_CAPPED` diagnostic whose `params.cap` names it. The count pipeline carries a
+`lookup` or a local `resolve` only when a later `match`, `unwind`, `group` or `resolve` reads its
+alias. A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or
+`resolve` reads, that no `group` follows and whose alias every later `project` passes whole runs
+after the page is taken, on the page's rows alone; the rows are the same either way.
 
 ## Response
 
@@ -320,5 +329,6 @@ by the compatibility binder: the entity id is matched case-insensitively (retire
 paths may be spelled as stored (`MatchCode`, `Department._id`) and are resolved against the
 same folded shape, wire spellings work too, the v1 type-hint operands are accepted, operators
 and sort directions are read case-insensitively, and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
-stages are refused with `LEGACY_STAGE_UNSUPPORTED`. Every such request is logged under
+stages are refused with `LEGACY_STAGE_UNSUPPORTED`, and so is the number form of
+`page.includeTotalCount`: contract 1 keeps the boolean. Every such request is logged under
 `OxQL.Compat`. When compatibility is switched off, every request is contract 2.

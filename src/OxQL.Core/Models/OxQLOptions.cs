@@ -111,6 +111,22 @@ public sealed class OxQLOptions
             Limits.DefaultPageSize = Limits.MaxPageSize;
         }
 
+        var collation = Representation.Collation;
+
+        if (string.IsNullOrWhiteSpace(collation.Locale))
+        {
+            adjustments.Add($"OxQL:Representation:Collation:Locale was empty; it is set to '{CollationOptions.DefaultLocale}', because the database refuses a collation without a locale.");
+            collation.Locale = CollationOptions.DefaultLocale;
+        }
+
+        if (collation.Strength is < CollationOptions.MinStrength or > CollationOptions.MaxStrength)
+        {
+            var clamped = Math.Clamp(collation.Strength, CollationOptions.MinStrength, CollationOptions.MaxStrength);
+
+            adjustments.Add($"OxQL:Representation:Collation:Strength was {collation.Strength}; it is clamped to {clamped}, because the database accepts {CollationOptions.MinStrength} to {CollationOptions.MaxStrength}.");
+            collation.Strength = clamped;
+        }
+
         return adjustments;
     }
 
@@ -249,6 +265,33 @@ public sealed class RepresentationOptions
 
     /// <summary>Whether decimal operands are matched in both storage forms.</summary>
     public bool DecimalTolerant => !string.Equals(DecimalMode, "typed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The collation a contract 2 aggregate runs under when a string comparison, sort or group key folds case.</summary>
+    public CollationOptions Collation { get; set; } = new();
+}
+
+/// <summary>
+/// The collation string comparisons, sorts and group keys fold under. The aggregate carries it
+/// only when the pipeline folds at least one string; a pipeline that compares no string runs
+/// without one, as before. A comparison that opts out with <c>caseSensitive</c> is compiled to
+/// a form the collation does not reach.
+/// </summary>
+public sealed class CollationOptions
+{
+    /// <summary>The locale used when none is configured.</summary>
+    public const string DefaultLocale = "de";
+
+    /// <summary>The least strength the database accepts: primary, which folds case and accents.</summary>
+    public const int MinStrength = 1;
+
+    /// <summary>The greatest strength the database accepts: identical.</summary>
+    public const int MaxStrength = 5;
+
+    /// <summary>The ICU locale of the collation.</summary>
+    public string Locale { get; set; } = DefaultLocale;
+
+    /// <summary>The comparison strength: 1 folds case and accents, 2 folds case only, 3 and above tell both apart.</summary>
+    public int Strength { get; set; } = MinStrength;
 }
 
 /// <summary>In-process caches.</summary>

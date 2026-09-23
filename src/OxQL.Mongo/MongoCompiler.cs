@@ -38,6 +38,7 @@ public sealed record CompiledQuery
 
     public bool? AllowDiskUse { get; init; }
 
+    /// <summary>The cap the count stops at: the request's own when it gave one, otherwise the host's.</summary>
     public required int CountCap { get; init; }
 
     /// <summary>
@@ -228,9 +229,12 @@ public static class MongoCompiler
         stages.Add(new BsonDocument("$limit", page.Limit + 1));
         stages.AddRange(lateJoins);
 
+        // The request's own count cap, when it gave one, is already under the host's.
+        var countCap = page.CountCap ?? options.CountCap;
+
         if (countStages is not null)
         {
-            countStages.Add(new BsonDocument("$limit", options.CountCap + 1));
+            countStages.Add(new BsonDocument("$limit", countCap + 1));
             countStages.Add(new BsonDocument("$count", "n"));
         }
 
@@ -248,7 +252,7 @@ public static class MongoCompiler
             SemiJoins = semiJoins,
             MaxTimeMs = options.MaxTimeMs,
             AllowDiskUse = options.AllowDiskUse,
-            CountCap = options.CountCap,
+            CountCap = countCap,
             KeyKeptAgainstProjection = keyKeptAgainstProjection,
             SortKeptAgainstProjection = sortKeptAgainstProjection,
         };

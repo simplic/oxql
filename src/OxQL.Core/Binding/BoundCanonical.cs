@@ -33,7 +33,7 @@ public static class BoundCanonical
                 ["limit"] = page.Limit,
                 ["offset"] = page.Offset,
                 ["cursor"] = page.Cursor is null ? null : "…",
-                ["includeTotalCount"] = page.IncludeTotalCount,
+                ["includeTotalCount"] = IncludeTotalCount(page),
             };
 
         return node;
@@ -133,11 +133,15 @@ public static class BoundCanonical
         },
         BoundStage.Page page => new JsonObject
         {
-            ["page"] = new JsonObject { ["limit"] = page.Limit, ["offset"] = page.Offset, ["includeTotalCount"] = page.IncludeTotalCount },
+            ["page"] = new JsonObject { ["limit"] = page.Limit, ["offset"] = page.Offset, ["includeTotalCount"] = IncludeTotalCount(page) },
         },
         BoundStage.Scope scope => new JsonObject { ["scope"] = scope.OrganisationStorage },
         _ => new JsonObject { ["unknown"] = stage.GetType().Name },
     };
+
+    /// <summary>The count request as the caller wrote it: the request's own cap as a number, otherwise the boolean.</summary>
+    private static JsonNode IncludeTotalCount(BoundStage.Page page) =>
+        page.CountCap is { } cap ? JsonValue.Create(cap) : JsonValue.Create(page.IncludeTotalCount);
 
     /// <summary>
     /// One condition in its canonical form. Public so a caller can key a cache by the condition

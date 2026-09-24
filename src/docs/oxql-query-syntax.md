@@ -2,7 +2,9 @@
 
 The request shape accepted by `POST /oxql/query` and, per entry, by `POST /oxql/batch`.
 Clients send `X-OxQL-Contract: 2`; a request without the header is served as contract 1 while
-the host's `Compat:Enabled` is true (see the last section).
+the host's `Compat:Enabled` is true (see the last section). What a bound request means is in
+[`oxql-semantics.md`](oxql-semantics.md); statuses, limits and the operational endpoints are in
+[`oxql-operations.md`](oxql-operations.md).
 
 ## Top-level structure
 
@@ -19,7 +21,8 @@ the host's `Compat:Enabled` is true (see the last section).
 
 - `entityType` is matched exactly and case-sensitively. An unknown id is `UNKNOWN_ENTITY`; a
   retired id the host declared is answered as the current entity with an `ENTITY_ID_RETIRED`
-  diagnostic whose `params.currentId` names it.
+  diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
+  entity and carries the same diagnostic, with the lookup's `stage`.
 - Each pipeline element is an object with exactly one stage key: `match`, `lookup`, `resolve`,
   `unwind`, `group`, `project`, `sort`, `page`. Two keys in one element is `UNKNOWN_STAGE`.
 - The organisation scope (`organizationId eq <caller's organisation>`) is applied by the engine
@@ -167,8 +170,10 @@ it names, one object under the alias, `null` when the target does not exist or f
 
 `path` must carry a declared reference (`RESOLVE_NOT_DECLARED`). A local target compiles to an
 indexed `$lookup`; a remote target (an entity of another service) is fetched from its owner
-after the page is fixed. Under a remote alias, a `match` is a semi-join (the owner supplies the
-matching ids; more than `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`) and a `sort` is refused
+after the page is fixed. Under a remote alias, a `match` on a member of the alias is a semi-join
+(the owner supplies the matching ids; more than `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`), a
+`match` on the alias itself (`{ "veh": { "eq": null } }`, `{ "veh": { "exists": true } }`) is
+refused before the owner is called (`RESOLVE_NOT_FILTERABLE`), and a `sort` is refused
 (`RESOLVE_NOT_SORTABLE`). The owner binds a semi-join condition under its own default;
 `caseSensitive` or `ignoreCase` travel to it as written. At most `MaxResolveStages` per
 request. A join compares its id exactly, whatever the id's kind: a string id never folds.
@@ -232,7 +237,10 @@ documents whose collection is empty or absent.
 ```
 
 All `1` or all `0` (`MIXED_PROJECTION`). `id` is kept in an inclusion unless excluded
-explicitly; at most `MaxProjectionFields` paths.
+explicitly; at most `MaxProjectionFields` paths. The reserved key `"$default": 1` includes the
+entity's key and display members; it applies to the entity's own shape, not after a `group` or
+`unwind`. How projections interact with join aliases, sorts and cursors:
+[`oxql-semantics.md`](oxql-semantics.md#projections).
 
 ## Stage: `sort`
 
@@ -245,7 +253,7 @@ Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SO
 or the object form with `direction` and `caseSensitive` (any other member is
 `UNKNOWN_STAGE_MEMBER`, a missing `direction` `INVALID_SORT_DIRECTION`). Paths must be scalar and sortable in the current shape (not under a
 collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
-as the tie-breaker.
+as the tie-breaker; after `group` it appends every group key the sort does not name, ascending.
 
 A string orders under the collation, case and accents folded, unless the entry says
 `caseSensitive: true`. An exact sort runs in a request where every string comparison and key is
@@ -319,10 +327,10 @@ when a count was requested; `diagnostics` only when there are any.
 |---|---|
 | entity | `UNKNOWN_ENTITY` |
 | path | `INVALID_PATH`, `UNKNOWN_PATH`, `NOT_STORED`, `NOT_FILTERABLE`, `NOT_SORTABLE`, `NOT_A_COLLECTION`, `UNWIND_ORDER`, `ALIAS_COLLISION`, `INVALID_ALIAS` |
-| operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
+| operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE`, `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE` |
 | stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `LOOKUP_NOT_DECLARED`, `RESOLVE_NOT_DECLARED`, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
-| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
+| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
 | cursor | `CURSOR_INVALID` |
 | access | `ACCESS_DENIED` (403) |
 | execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500) |
@@ -333,7 +341,9 @@ when a count was requested; `diagnostics` only when there are any.
 Never a refusal; carried in `diagnostics` with machine-readable `params` where useful:
 `ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`),
 `RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`, `RESOLVE_PARTIAL` (a chunk beyond `MaxResolveKeys`
-was not fetched), `SORT_ON_ADDON`, `REGEX_UNANCHORED`.
+was not fetched), `SORT_ON_ADDON`, `REGEX_UNANCHORED`, `DECIMAL_TEXT_EXCLUDED` (an ordered
+comparison on a decimal covered the Decimal128 rows only). The HTTP status and a typical cause of
+every code: [`oxql-operations.md`](oxql-operations.md#codes).
 
 ## Batch
 

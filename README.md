@@ -10,6 +10,11 @@ breaking package upgrade for hosts; see *Upgrading from 1.x*.
 
 The full request syntax, the operand rules per kind, and the closed lists of error and
 diagnostic codes are in [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md).
+What a request means (null and absent values, storage representations, case and accent
+folding, default order and cursors, projections, group typing) is in
+[`src/docs/oxql-semantics.md`](src/docs/oxql-semantics.md); the HTTP status of every code,
+every limit with its cross-service reach, the health and explain answers and a smoke checklist
+are in [`src/docs/oxql-operations.md`](src/docs/oxql-operations.md).
 
 ## Packages
 
@@ -73,7 +78,7 @@ One immutable model per host, built once from every class carrying `[OxQLType("<
 - **Entity ids** are matched exactly and case-sensitively (`UNKNOWN_ENTITY` otherwise). A retired id declared by the host (`ClrModelBuilder.Build(assemblies, retiredIds)`) is answered as the current entity with an `ENTITY_ID_RETIRED` diagnostic carrying `params.currentId`.
 - **Two views.** The wire view is every public readable property, camelCase, `id` at every depth. The storage view comes from the MongoDB driver's serializer registry, so `[BsonElement]`, `[BsonId]`, `[BsonIgnore]`, `[BsonRepresentation]` and the `Id → _id` convention are observed, not inferred. A member the driver does not store is refused with `NOT_STORED`; a member whose serializer is not a document serializer (a GeoJSON point, an interface) is `unknown`: projectable, not filterable or sortable.
 - **Kinds:** `string int long double decimal bool guid date dateTime timeSpan enum binary object array dictionary unknown`.
-- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property. A target on another host is a remote reference; the model marks it and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs an error and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`).
+- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property, at any depth (a nested object or a collection element counts as much as a root member). A target on another host is a remote reference; the model marks it and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs an error and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`).
 - **Addon bags.** An extendable entity carries an `addon` dictionary. A key the organisation has defined binds with the definition's kind and matches tolerantly across storage representations; an undefined, retired or `object` key is `unknown`.
 
 ## A request in one look
@@ -134,8 +139,10 @@ contract 2, header or not.
 
 ## Configuration (`OxQL` section)
 
-Every `Limits` value is what a host publishes to its clients (the Simplic base package puts
-them into the schema document's `limits`).
+Every `Limits` value is published on `GET /oxql/health`; the Simplic base package also puts the
+twelve a caller checks a request against before sending it into the schema document's `limits`.
+Where each limit is enforced, and how it reaches calls between services, is in
+[`src/docs/oxql-operations.md`](src/docs/oxql-operations.md#limits).
 
 | key | default | notes |
 |---|---|---|
@@ -246,6 +253,11 @@ schema documents in `src/OxQL.Tests/Fixtures/schemas`), generated binding cases 
 entity, path, kind and operator, golden compiled pipelines, the executor and remote resolver
 against fakes, and the host surface over `WebApplicationFactory`.
 
+`src/OxQL.IntegrationTests` runs the engine against a real MongoDB, which the tests start
+themselves (no Docker, no installation). It uses a simulated fleet of in-process services over
+a designed fixture corpus. How it works, how to run parts of it and how to add a case is in
+[`src/docs/oxql-conformance.md`](src/docs/oxql-conformance.md).
+
 ## Upgrading from 1.x
 
 Version 2.0 is a new engine behind the same routes. The wire contract is kept for one release
@@ -345,9 +357,10 @@ at warning level, with what shaped it. Set it to `0` to turn the line off.
 - A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or `resolve`
   reads runs after the page is taken, on the page's rows alone; the rows are the same, the
   join is paid per page row, and the sort stays next to the limit. A join a later stage reads,
-  a join before a `group`, and a join whose alias a projection narrows or drops stay where they
-  were written. The count pipeline never carries a join only the rows' display reads; explain
-  shows the order the server runs.
+  a join before a `group` that reads it, and a join whose alias a projection narrows stay where
+  they were written. A join, local or remote, whose alias a projection drops and no later stage
+  reads is not run, and the row does not carry the alias. The count pipeline never carries a
+  join only the rows' display reads; explain shows the order the server runs.
 - `page.includeTotalCount` also takes a positive integer: the request's own count cap, under
   the host's `CountCap`; `totalCount` and `totalCountCapped` then read against it. Contract 1
   keeps the boolean form only.

@@ -39,15 +39,4 @@ public sealed record QueryVariables
         get => _values;
         init => _values = value ?? new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
     }
-
-    /// <summary>
-    /// Gets a variable value by name.
-    /// </summary>
-    public object? GetValue(string name) =>
-        _values.TryGetValue(name, out var value) ? value : null;
-
-    /// <summary>
-    /// Checks if a variable exists.
-    /// </summary>
-    public bool HasVariable(string name) => _values.ContainsKey(name);
 }

@@ -37,11 +37,13 @@ public class QueryRequestDeserializationTests
         request!.EntityType.Should().Be("invoice");
         request.Pipeline.Should().HaveCount(1);
         request.Pipeline[0].Match.Should().NotBeNull();
-        request.Pipeline[0].Match!.And.Should().HaveCount(2);
-        request.Pipeline[0].Match.And![0].Path.Should().Be("attributes.amount");
-        request.Pipeline[0].Match.And[0].Op.Should().Be("gte");
-        request.Pipeline[0].Match.And[1].Path.Should().Be("attributes.status");
-        request.Pipeline[0].Match.And[1].Op.Should().Be("eq");
+        var and = request.Pipeline[0].Match!.Condition!.And!;
+
+        and.Should().HaveCount(2);
+        and[0].Path.Should().Be("attributes.amount");
+        and[0].Op.Should().Be("gte");
+        and[1].Path.Should().Be("attributes.status");
+        and[1].Op.Should().Be("eq");
     }
 
     [Fact]
@@ -70,7 +72,7 @@ public class QueryRequestDeserializationTests
 
         request.Should().NotBeNull();
         request!.Variables.Should().NotBeNull();
-        request.Variables!.HasVariable("minAmount").Should().BeTrue();
+        request.Variables!.Values.Should().ContainKey("minAmount");
     }
 
     [Fact]
@@ -82,10 +84,11 @@ public class QueryRequestDeserializationTests
           "pipeline": [
             {
               "lookup": {
-                "from": "customers",
-                "localPath": "attributes.customerId",
-                "foreignPath": "id",
-                "as": "customer"
+                "from": "crm.customer",
+                "path": "invoiceId",
+                "as": "customers",
+                "select": ["id", "name"],
+                "limit": 10
               }
             }
           ]
@@ -96,10 +99,12 @@ public class QueryRequestDeserializationTests
 
         request.Should().NotBeNull();
         request!.Pipeline[0].Lookup.Should().NotBeNull();
-        request.Pipeline[0].Lookup!.From.Should().Be("customers");
-        request.Pipeline[0].Lookup.LocalPath.Should().Be("attributes.customerId");
-        request.Pipeline[0].Lookup.ForeignPath.Should().Be("id");
-        request.Pipeline[0].Lookup.As.Should().Be("customer");
+        request.Pipeline[0].Lookup!.From.Should().Be("crm.customer");
+        request.Pipeline[0].Lookup.Path.Should().Be("invoiceId");
+        request.Pipeline[0].Lookup.As.Should().Be("customers");
+        request.Pipeline[0].Lookup.Select.Should().Equal("id", "name");
+        request.Pipeline[0].Lookup.Limit.Should().Be(10);
+        request.Pipeline[0].Lookup.Unknown.Should().BeEmpty();
     }
 
     [Fact]
@@ -239,7 +244,7 @@ public class QueryRequestDeserializationTests
 
         request.Should().NotBeNull();
         request!.Pipeline[0].Project.Should().NotBeNull();
-        request.Pipeline[0].Project!.Include.Should().Contain("attributes.amount");
+        request.Pipeline[0].Project!.Fields.Should().Contain("attributes.amount", 1);
     }
 
     [Fact]
@@ -263,10 +268,11 @@ public class QueryRequestDeserializationTests
             },
             {
               "lookup": {
-                "from": "customers",
-                "localPath": "attributes.customerId",
-                "foreignPath": "id",
-                "as": "customer"
+                "from": "crm.customer",
+                "path": "invoiceId",
+                "as": "customers",
+                "select": ["id", "name"],
+                "limit": 10
               }
             },
             {

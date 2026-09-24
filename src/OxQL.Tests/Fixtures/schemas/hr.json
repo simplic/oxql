@@ -1,0 +1,424 @@
+{
+  "schemaVersion": "1.0",
+  "service": "hr",
+  "api": {
+    "name": "hr-api",
+    "version": "v1"
+  },
+  "revision": "sha256:8932a1dc143f6d431add9900e73f752951e70b242ee746c44e16c518885fa994",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200
+  },
+  "types": {
+    "hr.employee": {
+      "displayName": "Employee",
+      "entity": true,
+      "aliases": [
+        "$EmployeeModel"
+      ],
+      "key": [
+        "id"
+      ],
+      "display": "matchCode",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "operations": {
+        "create": {
+          "method": "POST",
+          "route": "/Employee"
+        },
+        "delete": {
+          "method": "DELETE",
+          "route": "/Employee/{id}"
+        },
+        "get": {
+          "method": "GET",
+          "route": "/Employee/{id}"
+        },
+        "update": {
+          "method": "PATCH",
+          "route": "/Employee/{id}"
+        }
+      },
+      "items": [],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_address",
+          "nullable": false
+        },
+        {
+          "name": "birthday",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "placeOfBirth",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "religion",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "children",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "citizenship",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "severelyDisabled",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "disabilityLevel",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "taxOffice",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "socialSecurityNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "healthInsurance",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "identityCardNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "taxIdentificationNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "healthInsuranceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "handicappedIdNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "issuingAuthority",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "validUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "employment",
+          "kind": "object",
+          "type": "#/types/t_employment",
+          "nullable": false
+        },
+        {
+          "name": "group",
+          "kind": "object",
+          "type": "#/types/t_employeeGroupSubset",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "functions",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "externalReference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "primaryEmailAddress",
+          "kind": "object",
+          "type": "#/types/t_emailAddress",
+          "nullable": true
+        },
+        {
+          "name": "primaryPhoneNumber",
+          "kind": "object",
+          "type": "#/types/t_phoneNumber",
+          "nullable": true
+        },
+        {
+          "name": "emailAddresses",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_emailAddress"
+          },
+          "nullable": false
+        },
+        {
+          "name": "phoneNumbers",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_phoneNumber"
+          },
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_address": {
+      "properties": [
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional01",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional02",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": false
+        }
+      ]
+    },
+    "t_emailAddress": {
+      "properties": [
+        {
+          "name": "email",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    },
+    "t_employeeGroupSubset": {
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "internalName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "defaultFunctions",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        }
+      ]
+    },
+    "t_employment": {
+      "properties": [
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isActive",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "entryDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "exitDate",
+          "kind": "dateTime",
+          "nullable": true
+        }
+      ]
+    },
+    "t_phoneNumber": {
+      "properties": [
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false
+        }
+      ]
+    }
+  }
+}

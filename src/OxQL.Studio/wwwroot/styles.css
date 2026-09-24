@@ -952,3 +952,95 @@ button:disabled {
 .status.explain {
     color: var(--yellow);
 }
+
+/* ── Contract selector, engine badge ───────────────────────── */
+.toolbar .contract-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-2);
+    font-size: 11px;
+}
+
+.toolbar .contract-field select {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-0);
+    padding: 4px 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.topbar .engine-badge {
+    margin-left: 14px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-2);
+    font-family: var(--mono);
+    font-size: 11px;
+}
+
+.topbar .engine-badge.ok {
+    color: var(--green);
+}
+
+.topbar .engine-badge.err {
+    color: var(--red);
+}
+
+/* ── Explorer: entity facts and addon keys ─────────────────── */
+.type-node .type-facts {
+    padding: 0 12px 6px 30px;
+    color: var(--text-2);
+    font-size: 11px;
+}
+
+.type-node .prop .pname.addon {
+    color: var(--yellow);
+}
+
+.type-node .prop .pref {
+    color: var(--text-2);
+    font-size: 11px;
+}
+
+/* ── Explain: advisory table, bound form ───────────────────── */
+.explain-advisory {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-1);
+}
+
+.explain-advisory th,
+.explain-advisory td {
+    text-align: left;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-muted);
+    vertical-align: top;
+}
+
+.explain-advisory th {
+    color: var(--text-2);
+    font-weight: 600;
+    background: var(--bg-1);
+}
+
+.explain-advisory td.used-true {
+    color: var(--green);
+}
+
+.explain-advisory td.used-false {
+    color: var(--red);
+}
+
+.explain-advisory td.used-null {
+    color: var(--text-2);
+}
+
+.explain-advisory td.note {
+    white-space: normal;
+}

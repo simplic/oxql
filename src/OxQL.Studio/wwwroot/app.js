@@ -4,20 +4,23 @@
     // ── Config ───────────────────────────────────────────────────────────
     const cfg = JSON.parse(document.getElementById("oxql-config").textContent);
     const API = cfg.apiBasePath.replace(/\/$/, "");
+    const SCHEMA = (cfg.schemaBasePath || "").replace(/\/$/, "");
     const MONACO_BASE = cfg.monacoCdnBase.replace(/\/$/, "");
+    const CONTRACT_HEADER = "X-OxQL-Contract";
 
     // Namespace localStorage keys per API endpoint so that multiple microservices
     // (e.g. logistics-api, erp-api) each maintain their own isolated cache.
     const LS_NS = "oxql.studio." + API.replace(/[^a-z0-9]/gi, "_").toLowerCase();
-    const LS_TABS = LS_NS + ".tabs.v1";
-    const LS_ACTIVE = LS_NS + ".activeTab.v1";
+    const LS_TABS = LS_NS + ".tabs.v2";
+    const LS_ACTIVE = LS_NS + ".activeTab.v2";
     const LS_TOKEN = LS_NS + ".bearer.v1";
+    const LS_CONTRACT = LS_NS + ".contract.v2";
 
     const DEFAULT_QUERY = {
         entityType: "vehicle.vehicle",
         pipeline: [
-            { match: { MatchCode: { neq: null } } },
-            { sort: { createdAt: "desc" } },
+            { match: { matchCode: { neq: null } } },
+            { sort: [{ id: "asc" }] },
             { page: { limit: 25 } }
         ]
     };
@@ -27,7 +30,7 @@
     let activeId = null;
     let editor = null;
     let monacoModelsByTab = {};   // id -> monaco model
-    let typesCache = [];          // last-loaded type descriptors (for the wizard)
+    let typesCache = [];          // entities from /schema (+ addon definitions), for the explorer and the wizard
 
     // ── DOM ──────────────────────────────────────────────────────────────
     const $ = (sel) => document.querySelector(sel);
@@ -36,6 +39,7 @@
     const tokenInput = $("#token-input");
     const tokenDot = $("#token-dot");
     const entityInput = $("#entity-input");
+    const contractSelect = $("#contract-select");
     const statusEl = $("#status");
     const resultsEl = $("#results");
 
@@ -69,7 +73,7 @@
         };
     }
 
-    // ── Token ────────────────────────────────────────────────────────────
+    // ── Token, contract ──────────────────────────────────────────────────
     function loadToken() {
         const t = localStorage.getItem(LS_TOKEN) || "";
         tokenInput.value = t;
@@ -81,6 +85,23 @@
     }
     function reflectTokenDot() {
         tokenDot.classList.toggle("set", !!tokenInput.value.trim());
+    }
+
+    function loadContract() {
+        const c = localStorage.getItem(LS_CONTRACT);
+        contractSelect.value = c === "1" ? "1" : "2";
+    }
+    function saveContract() {
+        localStorage.setItem(LS_CONTRACT, contractSelect.value);
+    }
+
+    /** The headers every request carries: the contract, the bearer token, and the body type when there is one. */
+    function apiHeaders(withBody) {
+        const headers = { [CONTRACT_HEADER]: contractSelect.value || "2" };
+        if (withBody) headers["Content-Type"] = "application/json";
+        const token = tokenInput.value.trim();
+        if (token) headers["Authorization"] = "Bearer " + token;
+        return headers;
     }
 
     // ── Tab rendering ────────────────────────────────────────────────────
@@ -289,7 +310,7 @@
             stage:    { icon: () => monaco.languages.CompletionItemKind.Class,         sort: "1", tag: "stage" },
             logical:  { icon: () => monaco.languages.CompletionItemKind.Keyword,       sort: "2", tag: "logical" },
             operator: { icon: () => monaco.languages.CompletionItemKind.Operator,      sort: "3", tag: "operator" },
-            typehint: { icon: () => monaco.languages.CompletionItemKind.TypeParameter, sort: "4", tag: "type hint" },
+            operand:  { icon: () => monaco.languages.CompletionItemKind.TypeParameter, sort: "4", tag: "operand" },
             value:    { icon: () => monaco.languages.CompletionItemKind.Variable,      sort: "5", tag: "variable" },
             function: { icon: () => monaco.languages.CompletionItemKind.Function,      sort: "6", tag: "aggregation" }
         };
@@ -467,11 +488,12 @@
         }
     }
 
-    // ── Execute query ────────────────────────────────────────────────────
-    async function runQuery() {
+    // ── Execute ──────────────────────────────────────────────────────────
+    /** The active tab's document, with the entity input applied; null (with the status set) when it is not JSON. */
+    function activeDocument() {
         syncActiveFromEditor();
         const tab = tabs.find(t => t.id === activeId);
-        if (!tab) return;
+        if (!tab) return null;
 
         let body;
         try {
@@ -479,42 +501,72 @@
         } catch (e) {
             setStatus("Invalid JSON: " + e.message, "err");
             renderResult({ error: "Invalid JSON", detail: e.message });
-            return;
+            return null;
         }
 
-        // Allow the entity input to override / supply entityType
-        if (entityInput.value.trim()) {
-            body.entityType = entityInput.value.trim();
-        } else if (body.entityType) {
-            entityInput.value = body.entityType;
+        // A batch document carries its own entity types.
+        if (!Array.isArray(body?.queries)) {
+            // Allow the entity input to override / supply entityType
+            if (entityInput.value.trim()) {
+                body.entityType = entityInput.value.trim();
+            } else if (body.entityType) {
+                entityInput.value = body.entityType;
+            }
+            tab.entityType = body.entityType || "";
         }
-        tab.entityType = body.entityType || "";
         saveTabs();
+        return body;
+    }
 
-        setStatus("Running…", "");
+    async function post(path, body) {
         const started = performance.now();
+        const res = await fetch(API + path, {
+            method: "POST",
+            headers: apiHeaders(true),
+            body: JSON.stringify(body)
+        });
+        const elapsed = Math.round(performance.now() - started);
+        const text = await res.text();
+        let json;
+        try { json = JSON.parse(text); } catch { json = text; }
+        return { res, json, elapsed };
+    }
+
+    function describeOutcome(json) {
+        if (json && Array.isArray(json.items)) {
+            const info = json.pageInfo || {};
+            let s = `${json.items.length} item(s)`;
+            if (info.totalCount !== undefined && info.totalCount !== null) s += ` · total ${info.totalCount}${info.totalCountCapped ? "+ (capped)" : ""}`;
+            if (info.hasNextPage) s += " · more";
+            if (Array.isArray(json.diagnostics) && json.diagnostics.length) s += ` · ${json.diagnostics.length} diagnostic(s)`;
+            return s;
+        }
+        if (json && json.type && Array.isArray(json.errors)) {
+            return `${json.type}: ${json.errors.map(e => e.code).join(", ")}`;
+        }
+        return "";
+    }
+
+    async function runQuery() {
+        const body = activeDocument();
+        if (!body) return;
+
+        const isBatch = Array.isArray(body.queries);
+        setStatus(isBatch ? "Running batch…" : "Running…", "");
 
         try {
-            const headers = { "Content-Type": "application/json" };
-            const token = tokenInput.value.trim();
-            if (token) headers["Authorization"] = "Bearer " + token;
-
-            const res = await fetch(API + "/query", {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body)
-            });
-
-            const elapsed = Math.round(performance.now() - started);
-            const text = await res.text();
-            let json;
-            try { json = JSON.parse(text); } catch { json = text; }
+            const { res, json, elapsed } = await post(isBatch ? "/batch" : "/query", body);
 
             if (res.ok) {
-                const count = json?.items?.length ?? json?.data?.length ?? null;
-                setStatus(`200 OK · ${elapsed} ms` + (count !== null ? ` · ${count} item(s)` : ""), "ok");
+                if (isBatch) {
+                    const results = Array.isArray(json?.results) ? json.results : [];
+                    const refused = results.filter(r => r && r.type && !Array.isArray(r.items)).length;
+                    setStatus(`200 OK · ${elapsed} ms · batch of ${results.length}` + (refused ? ` · ${refused} refused` : ""), refused ? "err" : "ok");
+                } else {
+                    setStatus(`200 OK · ${elapsed} ms · ` + describeOutcome(json), "ok");
+                }
             } else {
-                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms`, "err");
+                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms · ` + describeOutcome(json), "err");
             }
             renderResult(json);
         } catch (e) {
@@ -523,53 +575,42 @@
         }
     }
 
-    // ── Explain query ────────────────────────────────────────────────────
-    async function explainQuery() {
+    /** Sends every tab's query in one batch and shows the results labelled by tab. */
+    async function batchTabs() {
         syncActiveFromEditor();
-        const tab = tabs.find(t => t.id === activeId);
-        if (!tab) return;
+        const queries = [];
+        const labels = [];
+        const skipped = [];
 
-        let body;
-        try {
-            body = JSON.parse(tab.content);
-        } catch (e) {
-            setStatus("Invalid JSON: " + e.message, "err");
-            renderResult({ error: "Invalid JSON", detail: e.message });
+        for (const tab of tabs) {
+            let body;
+            try { body = JSON.parse(tab.content); } catch { skipped.push(tab.name); continue; }
+            if (Array.isArray(body?.queries)) {
+                // A batch tab contributes its queries.
+                body.queries.forEach((q, i) => { queries.push(q); labels.push(`${tab.name} #${i + 1}`); });
+            } else if (body && body.entityType) {
+                queries.push(body);
+                labels.push(tab.name);
+            } else {
+                skipped.push(tab.name);
+            }
+        }
+
+        if (!queries.length) {
+            setStatus("No runnable tab (each needs an entityType).", "err");
             return;
         }
 
-        if (entityInput.value.trim()) {
-            body.entityType = entityInput.value.trim();
-        } else if (body.entityType) {
-            entityInput.value = body.entityType;
-        }
-
-        setStatus("Explaining…", "");
-        const started = performance.now();
-
+        setStatus(`Running ${queries.length} tab(s) as one batch…`, "");
         try {
-            const headers = { "Content-Type": "application/json" };
-            const token = tokenInput.value.trim();
-            if (token) headers["Authorization"] = "Bearer " + token;
-
-            const res = await fetch(API + "/explain", {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body)
-            });
-
-            const elapsed = Math.round(performance.now() - started);
-            const text = await res.text();
-            let json;
-            try { json = JSON.parse(text); } catch { json = text; }
-
-            if (res.ok) {
-                const stages = json?.pipeline;
-                const count = Array.isArray(stages) ? stages.length : null;
-                setStatus(`Explain · ${elapsed} ms` + (count !== null ? ` · ${count} stage(s)` : ""), "explain");
-                renderExplain(stages ?? json);
+            const { res, json, elapsed } = await post("/batch", { queries });
+            if (res.ok && Array.isArray(json?.results)) {
+                const labelled = json.results.map((result, i) => ({ tab: labels[i], result }));
+                const refused = json.results.filter(r => r && r.type && !Array.isArray(r.items)).length;
+                setStatus(`200 OK · ${elapsed} ms · ${queries.length} in one round trip` + (refused ? ` · ${refused} refused` : "") + (skipped.length ? ` · skipped: ${skipped.join(", ")}` : ""), refused ? "err" : "ok");
+                renderResult({ results: labelled });
             } else {
-                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms`, "err");
+                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms · ` + describeOutcome(json), "err");
                 renderResult(json);
             }
         } catch (e) {
@@ -578,60 +619,124 @@
         }
     }
 
-    function renderExplain(stages) {
-        const container = resultsEl;
-        if (!Array.isArray(stages)) {
-            renderResult(stages);
+    // ── Explain ──────────────────────────────────────────────────────────
+    async function explainQuery() {
+        const body = activeDocument();
+        if (!body) return;
+        if (Array.isArray(body.queries)) {
+            setStatus("Explain takes one query, not a batch.", "err");
             return;
         }
 
-        container.innerHTML = "";
+        setStatus("Explaining…", "");
 
+        try {
+            const { res, json, elapsed } = await post("/explain", body);
+
+            if (res.ok && json && Array.isArray(json.stages)) {
+                setStatus(`Explain · ${elapsed} ms · ${json.stages.length} stage(s)` + (json.count ? " · count" : "") + (Array.isArray(json.advisory) ? ` · ${json.advisory.length} advisory line(s)` : ""), "explain");
+                renderExplain(json);
+            } else if (res.status === 404) {
+                setStatus("404 · explain is not enabled on this host (OxQL:Explain:Enabled)", "err");
+                renderResult(json);
+            } else {
+                setStatus(`${res.status} ${res.statusText} · ${elapsed} ms · ` + describeOutcome(json), "err");
+                renderResult(json);
+            }
+        } catch (e) {
+            setStatus("Request failed: " + e.message, "err");
+            renderResult({ error: "Request failed", detail: e.message });
+        }
+    }
+
+    function explainHeader(text) {
         const header = document.createElement("div");
         header.className = "explain-header";
-        header.textContent = `Pipeline · ${stages.length} stage${stages.length !== 1 ? "s" : ""}`;
-        container.appendChild(header);
+        header.textContent = text;
+        return header;
+    }
 
-        stages.forEach((stage, i) => {
-            const wrap = document.createElement("div");
-            wrap.className = "explain-stage";
+    function explainStage(label, value, index, collapsed) {
+        const wrap = document.createElement("div");
+        wrap.className = "explain-stage" + (collapsed ? " collapsed" : "");
 
-            // Detect the operator key (first key, e.g. "$match", "$lookup")
-            const opKey = (typeof stage === "object" && stage !== null)
-                ? Object.keys(stage)[0]
-                : null;
+        const stageHeader = document.createElement("div");
+        stageHeader.className = "explain-stage-header";
 
-            const stageHeader = document.createElement("div");
-            stageHeader.className = "explain-stage-header";
+        const num = document.createElement("span");
+        num.className = "explain-stage-num";
+        num.textContent = index === null ? "·" : String(index + 1);
 
-            const num = document.createElement("span");
-            num.className = "explain-stage-num";
-            num.textContent = String(i + 1);
+        const op = document.createElement("span");
+        op.className = "explain-stage-op";
+        op.textContent = label;
 
-            const op = document.createElement("span");
-            op.className = "explain-stage-op";
-            op.textContent = opKey || "stage";
+        const toggle = document.createElement("span");
+        toggle.className = "explain-stage-toggle";
+        toggle.textContent = collapsed ? "▸" : "▾";
 
-            const toggle = document.createElement("span");
-            toggle.className = "explain-stage-toggle";
-            toggle.textContent = "▾";
+        stageHeader.append(num, op, toggle);
+        wrap.appendChild(stageHeader);
 
-            stageHeader.append(num, op, toggle);
-            wrap.appendChild(stageHeader);
+        const body = document.createElement("pre");
+        body.className = "explain-stage-body";
+        body.innerHTML = highlightJson(JSON.stringify(value, null, 2));
+        wrap.appendChild(body);
 
-            const body = document.createElement("pre");
-            body.className = "explain-stage-body";
-            body.innerHTML = highlightJson(JSON.stringify(stage, null, 2));
-            wrap.appendChild(body);
-
-            // Collapse/expand on header click
-            stageHeader.addEventListener("click", () => {
-                const collapsed = wrap.classList.toggle("collapsed");
-                toggle.textContent = collapsed ? "▸" : "▾";
-            });
-
-            container.appendChild(wrap);
+        stageHeader.addEventListener("click", () => {
+            const isCollapsed = wrap.classList.toggle("collapsed");
+            toggle.textContent = isCollapsed ? "▸" : "▾";
         });
+
+        return wrap;
+    }
+
+    function stageLabel(stage) {
+        return (typeof stage === "object" && stage !== null) ? (Object.keys(stage)[0] || "stage") : "stage";
+    }
+
+    /** The v2 explain: the emitted stages, the count pipeline, the index advisory, the bound form and the diagnostics. */
+    function renderExplain(explain) {
+        const container = resultsEl;
+        container.innerHTML = "";
+
+        container.appendChild(explainHeader(`Page pipeline · ${explain.stages.length} stage${explain.stages.length !== 1 ? "s" : ""}`));
+        explain.stages.forEach((stage, i) => container.appendChild(explainStage(stageLabel(stage), stage, i, false)));
+
+        if (Array.isArray(explain.count)) {
+            container.appendChild(explainHeader(`Count pipeline · ${explain.count.length} stage${explain.count.length !== 1 ? "s" : ""}`));
+            explain.count.forEach((stage, i) => container.appendChild(explainStage(stageLabel(stage), stage, i, true)));
+        }
+
+        if (Array.isArray(explain.advisory)) {
+            container.appendChild(explainHeader("Index advisory"));
+            const table = document.createElement("table");
+            table.className = "explain-advisory";
+            table.innerHTML = "<thead><tr><th>field</th><th>used</th><th>index</th><th>note</th></tr></thead>";
+            const tbody = document.createElement("tbody");
+            for (const entry of explain.advisory) {
+                const tr = document.createElement("tr");
+                const used = entry.used === true ? "yes" : entry.used === false ? "no" : "?";
+                tr.innerHTML =
+                    `<td>${escHtml(entry.field ?? "")}</td>` +
+                    `<td class="used-${entry.used === true ? "true" : entry.used === false ? "false" : "null"}">${used}</td>` +
+                    `<td>${escHtml(entry.index ?? "")}</td>` +
+                    `<td class="note">${escHtml(entry.note ?? "")}</td>`;
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            container.appendChild(table);
+        } else {
+            container.appendChild(explainHeader("Index advisory · not available on this host"));
+        }
+
+        if (Array.isArray(explain.diagnostics) && explain.diagnostics.length) {
+            container.appendChild(explainHeader("Diagnostics"));
+            container.appendChild(explainStage("diagnostics", explain.diagnostics, null, false));
+        }
+
+        container.appendChild(explainHeader("Bound pipeline"));
+        container.appendChild(explainStage("bound", explain.bound, null, true));
     }
 
     function setStatus(text, cls) {
@@ -666,30 +771,146 @@
         );
     }
 
-    // ── Type explorer ────────────────────────────────────────────────────
+    // ── Engine badge (GET /health) ───────────────────────────────────────
+    async function loadHealth() {
+        const badge = $("#engine-badge");
+        if (!badge) return;
+        try {
+            const res = await fetch(API + "/health", { headers: apiHeaders(false) });
+            const json = await res.json();
+            const caps = Array.isArray(json?.capabilities) ? json.capabilities : [];
+            badge.textContent = `engine ${json?.engine?.version || "?"} · contract ${json?.engine?.contract ?? "?"}`;
+            badge.title = "capabilities: " + (caps.join(", ") || "none");
+            badge.className = "engine-badge " + (res.ok ? "ok" : "err");
+        } catch {
+            badge.textContent = "engine unreachable";
+            badge.className = "engine-badge err";
+        }
+    }
+
+    // ── Entity explorer (GET /schema, GET /schema/addons) ────────────────
+    /**
+     * Resolves one schema descriptor into an explorer node. Objects and enums point into the
+     * document's type pool by "#/types/<id>"; arrays carry `of`, dictionaries `value`.
+     * Depth is bounded because the pool has cycles.
+     */
+    function resolveDescriptor(descriptor, pool, depth, seen) {
+        const node = {
+            name: descriptor.name,
+            kind: descriptor.kind || "unknown",
+            nullable: !!descriptor.nullable,
+            displayName: descriptor.displayName,
+            references: descriptor.references,
+            typeId: descriptor.type ? String(descriptor.type).replace(/^#\/types\//, "") : null,
+            isAddon: !!descriptor.__addon,
+            properties: null,
+            items: null,
+            enumValues: Array.isArray(descriptor.values) ? descriptor.values.map(v => ({ name: v.label ?? v.name ?? v.value, value: v.value })) : null
+        };
+
+        if (node.kind === "object" && node.typeId && pool[node.typeId]) {
+            if (depth < 4 && !seen.has(node.typeId)) {
+                const next = new Set(seen); next.add(node.typeId);
+                node.properties = (pool[node.typeId].properties || []).map(p => resolveDescriptor(p, pool, depth + 1, next));
+            }
+        } else if (node.kind === "enum" && node.typeId && pool[node.typeId]) {
+            node.enumValues = pool[node.typeId].values || [];
+        } else if (node.kind === "array" && descriptor.of) {
+            node.items = resolveDescriptor({ name: "[]", ...descriptor.of }, pool, depth, seen);
+        } else if (node.kind === "dictionary" && descriptor.value) {
+            node.items = resolveDescriptor({ name: "*", ...descriptor.value }, pool, depth, seen);
+        }
+        return node;
+    }
+
+    /** The entities of a schema document as explorer entries. */
+    function entitiesOf(doc) {
+        const pool = doc?.types || {};
+        const out = [];
+        for (const [id, type] of Object.entries(pool)) {
+            if (!type || !type.entity) continue;
+            const seen = new Set([id]);
+            out.push({
+                typeName: id,
+                displayName: type.displayName,
+                extendable: !!type.extendable,
+                key: Array.isArray(type.key) ? type.key : [],
+                display: type.display,
+                aliases: (type.aliases || []).filter(a => !String(a).startsWith("$")),
+                properties: (type.properties || []).map(p => resolveDescriptor(p, pool, 0, seen))
+            });
+        }
+        out.sort((a, b) => a.typeName.localeCompare(b.typeName));
+        return out;
+    }
+
+    /**
+     * Slots the organisation's addon definitions (GET /schema/addons) into the schema document
+     * itself, so every consumer of the document sees them as ordinary members. The endpoint
+     * answers { "<entityId>": [ <property descriptor>, … ] }: each entry is a schema property
+     * descriptor exactly as the document's `properties` carry them (name = the definition path,
+     * kind, nullable, displayName, description; a closed value list inline as `values`), and
+     * the list is the set of properties of the entity's `addon` member. Here the entity's
+     * `addon` descriptor is retargeted from an untyped dictionary to an object whose pooled
+     * type "<entityId>.addon" holds the descriptors, and paths read `addon.<name>` like any
+     * nested member. A host without the endpoint keeps the document as is.
+     */
+    function applyAddons(doc, addons) {
+        if (!doc?.types || !addons || typeof addons !== "object" || Array.isArray(addons)) return;
+        for (const [entityId, list] of Object.entries(addons)) {
+            const entity = doc.types[entityId];
+            if (!entity || !Array.isArray(entity.properties) || !Array.isArray(list)) continue;
+            const bag = entity.properties.find(p => p && p.name === "addon");
+            if (!bag) continue;
+            const poolId = entityId + ".addon";
+            doc.types[poolId] = {
+                properties: list
+                    .filter(d => d && d.name && !d.retired)
+                    .map(d => ({ nullable: true, ...d, __addon: true }))
+            };
+            bag.kind = "object";
+            bag.type = "#/types/" + poolId;
+            delete bag.value;
+        }
+    }
+
     async function loadTypes() {
         const list = $("#types-list");
-        list.innerHTML = `<div class="empty">Loading types…</div>`;
-        try {
-            const headers = {};
-            const token = tokenInput.value.trim();
-            if (token) headers["Authorization"] = "Bearer " + token;
+        list.innerHTML = `<div class="empty">Loading entities…</div>`;
+        typesCache = [];
 
-            const res = await fetch(API + "/types", { headers });
+        if (!SCHEMA) {
+            list.innerHTML = `<div class="empty">No schema endpoint configured.</div>`;
+            return;
+        }
+
+        try {
+            const headers = apiHeaders(false);
+            const res = await fetch(SCHEMA, { headers });
             if (!res.ok) {
-                list.innerHTML = `<div class="empty">Failed to load types (${res.status}).</div>`;
+                list.innerHTML = `<div class="empty">No schema on this host (GET ${escHtml(SCHEMA)} → ${res.status}). Type the entityType by hand.</div>`;
                 return;
             }
-            const types = await res.json();
-            if (!Array.isArray(types) || types.length === 0) {
-                list.innerHTML = `<div class="empty">No registered types.</div>`;
+            const doc = await res.json();
+
+            // Addon definitions are per organisation and live beside the schema; they slot
+            // into the document before it is read, so nothing below knows they were separate.
+            try {
+                const addonRes = await fetch(SCHEMA + "/addons", { headers });
+                if (addonRes.ok) applyAddons(doc, await addonRes.json());
+            } catch { /* no addon endpoint on this host */ }
+
+            const entities = entitiesOf(doc);
+
+            if (!entities.length) {
+                list.innerHTML = `<div class="empty">The schema declares no entities.</div>`;
                 return;
             }
-            typesCache = types;
+            typesCache = entities;
             list.innerHTML = "";
-            for (const t of types) list.appendChild(renderType(t));
+            for (const t of entities) list.appendChild(renderType(t));
         } catch (e) {
-            list.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+            list.innerHTML = `<div class="empty">Error: ${escHtml(e.message)}</div>`;
         }
     }
 
@@ -707,22 +928,34 @@
         const name = document.createElement("span");
         name.className = "type-name";
         name.textContent = t.typeName;
+        name.title = "Click to start a query on this entity";
 
         const coll = document.createElement("span");
         coll.className = "collection";
-        coll.textContent = t.collectionName ? "→ " + t.collectionName : "";
+        coll.textContent = t.displayName ? "· " + t.displayName : "";
 
         header.append(caret, name, coll);
         node.appendChild(header);
 
+        const facts = document.createElement("div");
+        facts.className = "type-facts";
+        const bits = [];
+        if (t.key.length) bits.push("key " + t.key.join(", "));
+        if (t.display) bits.push("display " + t.display);
+        if (t.extendable) bits.push("extendable");
+        if (t.aliases.length) bits.push("retired ids " + t.aliases.join(", "));
+        facts.textContent = bits.join(" · ");
+        node.appendChild(facts);
+
         const children = document.createElement("div");
         children.className = "prop-children";
-        (t.properties || []).forEach(p => children.appendChild(renderProp(p)));
+        (t.properties || []).forEach(p => children.appendChild(renderProp(p, "")));
         node.appendChild(children);
 
         header.addEventListener("click", () => {
             const open = children.style.display !== "none";
             children.style.display = open ? "none" : "";
+            facts.style.display = open ? "none" : "";
             caret.classList.toggle("open", !open);
         });
 
@@ -735,38 +968,53 @@
         return node;
     }
 
-    function renderProp(p) {
+    function renderProp(p, prefix) {
         const wrap = document.createElement("div");
 
         const row = document.createElement("div");
         row.className = "prop";
 
-        const hasChildren = (p.kind === "object" && p.properties?.length)
-            || ((p.kind === "array" || p.kind === "dictionary") && p.items);
+        const path = prefix ? `${prefix}.${p.name}` : p.name;
+        const childProps = p.kind === "object"
+            ? (p.properties || [])
+            : (p.items?.properties || (p.items ? [p.items] : []));
+        const hasChildren = childProps.length > 0;
 
         const toggle = document.createElement("span");
         toggle.className = "toggle";
         toggle.textContent = hasChildren ? "▶" : "";
 
         const pname = document.createElement("span");
-        pname.className = "pname";
+        pname.className = "pname" + (p.isAddon ? " addon" : "");
         pname.textContent = p.name;
 
         const pkind = document.createElement("span");
         pkind.className = "pkind" + (p.kind === "array" ? " array" : "");
         pkind.textContent = ":" + kindLabel(p);
+        if (p.enumValues && p.enumValues.length) {
+            pkind.title = p.enumValues.map(v => `${v.name} = ${v.value}`).join("\n");
+        }
 
         const nullable = document.createElement("span");
         nullable.className = "nullable";
         nullable.textContent = p.nullable ? "?" : "";
 
         row.append(toggle, pname, pkind, nullable);
+
+        if (p.references && p.references.entity) {
+            const ref = document.createElement("span");
+            ref.className = "pref";
+            ref.textContent = "→ " + p.references.entity;
+            ref.title = "declared reference: resolve / lookup follow it";
+            row.appendChild(ref);
+        }
+
         wrap.appendChild(row);
 
-        // Insert the field path into the editor on click
+        // Insert the wire path into the editor on click
         row.addEventListener("click", (e) => {
             e.stopPropagation();
-            insertAtCursor(`"${p.name}"`);
+            insertAtCursor(`"${path}"`);
         });
 
         if (hasChildren) {
@@ -774,25 +1022,19 @@
             kids.className = "prop-children";
             kids.style.display = "none";
 
-            const childProps = p.kind === "object"
-                ? p.properties
-                : (p.items?.properties || (p.items ? [p.items] : []));
-            childProps.forEach(cp => kids.appendChild(renderProp(cp)));
+            const childPrefix = p.kind === "object" ? path : path;
+            childProps.forEach(cp => kids.appendChild(renderProp(cp, cp.name === "[]" || cp.name === "*" ? path : childPrefix)));
             wrap.appendChild(kids);
 
             toggle.style.cursor = "pointer";
-            row.addEventListener("dblclick", (e) => {
+            const flip = (e) => {
                 e.stopPropagation();
                 const open = kids.style.display !== "none";
                 kids.style.display = open ? "none" : "";
                 toggle.textContent = open ? "▶" : "▼";
-            });
-            toggle.addEventListener("click", (e) => {
-                e.stopPropagation();
-                const open = kids.style.display !== "none";
-                kids.style.display = open ? "none" : "";
-                toggle.textContent = open ? "▶" : "▼";
-            });
+            };
+            row.addEventListener("dblclick", flip);
+            toggle.addEventListener("click", flip);
         }
 
         return wrap;
@@ -800,13 +1042,15 @@
 
     function kindLabel(p) {
         if (p.kind === "array") {
-            const inner = p.items ? kindLabel(p.items) : "any";
+            const inner = p.items ? kindLabel(p.items) : "unknown";
             return inner + "[]";
         }
         if (p.kind === "dictionary") {
-            const v = p.items ? kindLabel(p.items) : "any";
-            return `map<${p.keyKind || "string"},${v}>`;
+            const v = p.items ? kindLabel(p.items) : "unknown";
+            return `map<${v}>`;
         }
+        if (p.kind === "enum" && p.typeId) return "enum " + p.typeId;
+        if (p.kind === "object" && p.typeId) return p.typeId;
         return p.kind;
     }
 
@@ -848,16 +1092,15 @@
         { key: "review",  title: "Review",     label: "Review" }
     ];
 
-    const OPERATORS = (window.OxQLLang?.operatorSnippets || []).map(o => ({ value: o.label, detail: o.detail }));
+    const OPERATORS = (window.OxQLLang?.operatorSnippets || [])
+        .filter(o => o.label !== "ignoreCase")
+        .map(o => ({ value: o.label, detail: o.detail }));
     const VALUE_TYPES = [
         { value: "auto",    label: "auto" },
         { value: "string",  label: "string" },
         { value: "number",  label: "number" },
         { value: "bool",    label: "bool" },
         { value: "null",    label: "null" },
-        { value: "$uuid",   label: "uuid" },
-        { value: "$date",   label: "date" },
-        { value: "$oid",    label: "objectId" },
         { value: "$var",    label: "$var" }
     ];
 
@@ -876,7 +1119,7 @@
         };
     }
 
-    // Flatten an entity's property tree into dot-notation paths (bounded depth).
+    // Flatten an entity's property tree into dot-notation wire paths (bounded depth).
     function entityFieldPaths(typeName) {
         const t = typesCache.find(x => x.typeName === typeName);
         if (!t) return [];
@@ -987,21 +1230,21 @@
     // ── Step 1: Entity ───────────────────────────────────────────────────
     function renderStepEntity(body) {
         const options = typesCache.map(t =>
-            `<option value="${escAttr(t.typeName)}">${escHtml(t.typeName)}${t.collectionName ? " → " + escHtml(t.collectionName) : ""}</option>`
+            `<option value="${escAttr(t.typeName)}">${escHtml(t.typeName)}${t.displayName ? " · " + escHtml(t.displayName) : ""}</option>`
         ).join("");
 
         body.innerHTML = `
             <h3>Choose an entity</h3>
-            <div class="step-desc">Select the collection / entity to query. This becomes the query's <code>entityType</code>.</div>
+            <div class="step-desc">Select the entity to query. Its id becomes the query's <code>entityType</code>, matched exactly.</div>
             <div class="wizard-field">
-                <label for="wiz-entity-select">Registered entities</label>
+                <label for="wiz-entity-select">Entities of this host</label>
                 <select id="wiz-entity-select">
                     <option value="">— select an entity —</option>
                     ${options}
                 </select>
             </div>
             <div class="wizard-field">
-                <label for="wiz-entity-text">Or type an entity name</label>
+                <label for="wiz-entity-text">Or type an entity id</label>
                 <input type="text" id="wiz-entity-text" placeholder="vehicle.vehicle" spellcheck="false" value="${escAttr(wiz.entityType)}" />
             </div>`;
 
@@ -1023,8 +1266,8 @@
     function renderStepFilter(body) {
         const dl = fieldDatalist();
         body.innerHTML = `
-            <h3>Filter documents</h3>
-            <div class="step-desc">Add field conditions. All rows are combined with logical <strong>AND</strong>. Leave empty to match everything.</div>
+            <h3>Filter rows</h3>
+            <div class="step-desc">Add field conditions on wire paths. All rows are combined with logical <strong>AND</strong>. Leave empty to match everything.</div>
             <div id="wiz-filter-rows"></div>
             <button class="wizard-add-row" id="wiz-add-filter">＋ Add condition</button>
             ${dl.html}`;
@@ -1033,7 +1276,7 @@
         const draw = () => {
             rows.innerHTML = "";
             if (!wiz.filters.length) {
-                rows.innerHTML = `<div class="wizard-empty">No conditions — the query will match all documents.</div>`;
+                rows.innerHTML = `<div class="wizard-empty">No conditions — the query will match every row of the organisation.</div>`;
             }
             wiz.filters.forEach((f, i) => rows.appendChild(filterRow(f, i, dl.listId)));
         };
@@ -1051,7 +1294,7 @@
 
         const path = document.createElement("input");
         path.type = "text";
-        path.placeholder = "Field.Path";
+        path.placeholder = "field.path";
         path.value = f.path;
         if (listId) path.setAttribute("list", listId);
         path.addEventListener("input", () => { f.path = path.value.trim(); });
@@ -1072,7 +1315,7 @@
         type.innerHTML = VALUE_TYPES.map(v =>
             `<option value="${v.value}"${v.value === f.type ? " selected" : ""}>${v.label}</option>`
         ).join("");
-        type.title = "Value type / hint";
+        type.title = "Value type";
         type.addEventListener("change", () => { f.type = type.value; });
 
         const remove = document.createElement("button");
@@ -1098,12 +1341,12 @@
         const paths = entityFieldPaths(wiz.entityType);
         body.innerHTML = `
             <h3>Choose output fields</h3>
-            <div class="step-desc">Select the fields to include. Selecting none returns the full document.</div>`;
+            <div class="step-desc">Select the fields to include (<code>id</code> is always kept). Selecting none returns the full row.</div>`;
 
         if (!paths.length) {
             const note = document.createElement("div");
             note.className = "wizard-empty";
-            note.textContent = "No field metadata for this entity — projection will be skipped (full document returned).";
+            note.textContent = "No field metadata for this entity — projection will be skipped (full row returned).";
             body.appendChild(note);
             return;
         }
@@ -1149,8 +1392,8 @@
     function renderStepSort(body) {
         const dl = fieldDatalist();
         body.innerHTML = `
-            <h3>Order results</h3>
-            <div class="step-desc">Sort by one or more fields. A tie-breaker on <code>id</code> is applied by the server automatically.</div>
+            <h3>Order rows</h3>
+            <div class="step-desc">Sort by one or more scalar fields. The engine appends the <code>id</code> tie-breaker on a root shape.</div>
             <div id="wiz-sort-rows"></div>
             <button class="wizard-add-row" id="wiz-add-sort">＋ Add sort field</button>
             ${dl.html}`;
@@ -1159,7 +1402,7 @@
         const draw = () => {
             rows.innerHTML = "";
             if (!wiz.sort.length) {
-                rows.innerHTML = `<div class="wizard-empty">No sort — results use the server's default order.</div>`;
+                rows.innerHTML = `<div class="wizard-empty">No sort — rows come in key order.</div>`;
             }
             wiz.sort.forEach((s, i) => rows.appendChild(sortRow(s, i, dl.listId)));
         };
@@ -1176,7 +1419,7 @@
 
         const path = document.createElement("input");
         path.type = "text";
-        path.placeholder = "Field.Path";
+        path.placeholder = "field.path";
         path.value = s.path;
         if (listId) path.setAttribute("list", listId);
         path.addEventListener("input", () => { s.path = path.value.trim(); });
@@ -1204,10 +1447,10 @@
     function renderStepPage(body) {
         body.innerHTML = `
             <h3>Pagination</h3>
-            <div class="step-desc">Control the page size and whether the server returns a total count.</div>
+            <div class="step-desc">Control the page size and whether the server counts the matching rows (up to its cap).</div>
             <div class="wizard-field">
                 <label for="wiz-limit">Page size (limit)</label>
-                <input type="number" id="wiz-limit" min="1" max="1000" value="${Number(wiz.limit) || 25}" />
+                <input type="number" id="wiz-limit" min="1" max="500" value="${Number(wiz.limit) || 25}" />
             </div>
             <div class="wizard-field">
                 <label class="wizard-check">
@@ -1243,9 +1486,6 @@
             case "number": { const n = Number(s); return Number.isFinite(n) ? n : s; }
             case "bool":   return /^(true|1|yes)$/i.test(s.trim());
             case "null":   return null;
-            case "$uuid":  return { $uuid: s };
-            case "$date":  return { $date: s };
-            case "$oid":   return { $oid: s };
             case "$var":   return { $var: s };
             case "auto":
             default: {
@@ -1280,7 +1520,10 @@
         if (conditions.length) {
             const match = {};
             for (const f of conditions) {
-                match[f.path.trim()] = { [f.op]: coerceValue(f.value, f.type) };
+                const operand = (f.op === "in" || f.op === "nin")
+                    ? String(f.value).split(",").map(v => coerceValue(v.trim(), f.type))
+                    : coerceValue(f.value, f.type);
+                match[f.path.trim()] = Object.assign(match[f.path.trim()] || {}, { [f.op]: operand });
             }
             pipeline.push({ match });
         }
@@ -1325,7 +1568,7 @@
         setStatus("Query created from wizard", "");
     }
 
-    // Small HTML-escaping helpers for wizard markup.
+    // Small HTML-escaping helpers for markup.
     function escHtml(s) {
         return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     }
@@ -1337,9 +1580,10 @@
     function bindEvents() {
         tabAdd.addEventListener("click", addTab);
         $("#run-btn").addEventListener("click", runQuery);
+        $("#batch-btn").addEventListener("click", batchTabs);
         $("#format-btn").addEventListener("click", formatDocument);
 
-        // Explain button — only shown when the server has EnableExplain = true
+        // Explain button — only shown when the host has OxQL:Explain:Enabled = true
         const explainBtn = $("#explain-btn");
         if (cfg.enableExplain) {
             explainBtn.hidden = false;
@@ -1349,6 +1593,11 @@
         entityInput.addEventListener("change", () => {
             const tab = tabs.find(t => t.id === activeId);
             if (tab) { tab.entityType = entityInput.value.trim(); saveTabs(); }
+        });
+
+        contractSelect.addEventListener("change", () => {
+            saveContract();
+            setStatus(`Contract ${contractSelect.value} on every request` + (contractSelect.value === "1" ? " (storage spelling, v1 type hints; refused once the host switches compat off)" : ""), "");
         });
 
         tokenInput.addEventListener("input", saveToken);
@@ -1391,6 +1640,7 @@
     async function boot() {
         loadTabs();
         loadToken();
+        loadContract();
         renderTabs();
         const active = tabs.find(t => t.id === activeId);
         entityInput.value = active?.entityType || "";
@@ -1404,6 +1654,7 @@
 
         await initMonaco();
         setStatus("Ready", "");
+        loadHealth();
         loadTypes();
     }
 

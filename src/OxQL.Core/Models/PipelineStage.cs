@@ -4,7 +4,9 @@ using System.Text.Json.Serialization;
 namespace OxQL.Core.Models;
 
 /// <summary>
-/// Represents a single stage in the query pipeline.
+/// One stage of the pipeline: exactly one of the stage members is set. A stage object with
+/// a key the engine does not know, or with more than one key, is carried through in
+/// <see cref="Keys"/> so the binder can refuse it with a code.
 /// </summary>
 [JsonConverter(typeof(PipelineStageConverter))]
 public sealed record PipelineStage
@@ -17,6 +19,18 @@ public sealed record PipelineStage
     public ProjectStage? Project { get; init; }
     public IReadOnlyList<SortField>? Sort { get; init; }
     public PageStage? Page { get; init; }
+
+    /// <summary>Every key the stage object carried, as written.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Keys { get; init; } = [];
+
+    /// <summary>The stage's kind, when it carries exactly one known key; null otherwise.</summary>
+    [JsonIgnore]
+    public string? Kind => Keys.Count == 1 && KnownKeys.Contains(Keys[0]) ? Keys[0] : null;
+
+    /// <summary>The keys a stage may carry.</summary>
+    public static readonly IReadOnlySet<string> KnownKeys =
+        new HashSet<string>(StringComparer.Ordinal) { "match", "lookup", "resolve", "unwind", "group", "project", "sort", "page" };
 }
 
 internal sealed class PipelineStageConverter : JsonConverter<PipelineStage>
@@ -28,34 +42,43 @@ internal sealed class PipelineStageConverter : JsonConverter<PipelineStage>
 
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
-
+        var keys = new List<string>();
         var stage = new PipelineStage();
 
-        if (root.TryGetProperty("match", out var matchEl))
-            stage = stage with { Match = JsonSerializer.Deserialize<MatchStage>(matchEl.GetRawText(), options) };
+        foreach (var property in root.EnumerateObject())
+        {
+            keys.Add(property.Name);
 
-        if (root.TryGetProperty("lookup", out var lookupEl))
-            stage = stage with { Lookup = JsonSerializer.Deserialize<LookupStage>(lookupEl.GetRawText(), options) };
+            switch (property.Name)
+            {
+                case "match":
+                    stage = stage with { Match = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "lookup":
+                    stage = stage with { Lookup = JsonSerializer.Deserialize<LookupStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "resolve":
+                    stage = stage with { Resolve = JsonSerializer.Deserialize<ResolveStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "unwind":
+                    stage = stage with { Unwind = JsonSerializer.Deserialize<UnwindStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "group":
+                    stage = stage with { Group = JsonSerializer.Deserialize<GroupStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "project":
+                    stage = stage with { Project = JsonSerializer.Deserialize<ProjectStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "sort":
+                    stage = stage with { Sort = JsonSerializer.Deserialize<IReadOnlyList<SortField>>(property.Value.GetRawText(), options) };
+                    break;
+                case "page":
+                    stage = stage with { Page = JsonSerializer.Deserialize<PageStage>(property.Value.GetRawText(), options) };
+                    break;
+            }
+        }
 
-        if (root.TryGetProperty("resolve", out var resolveEl))
-            stage = stage with { Resolve = JsonSerializer.Deserialize<ResolveStage>(resolveEl.GetRawText(), options) };
-
-        if (root.TryGetProperty("unwind", out var unwindEl))
-            stage = stage with { Unwind = JsonSerializer.Deserialize<UnwindStage>(unwindEl.GetRawText(), options) };
-
-        if (root.TryGetProperty("group", out var groupEl))
-            stage = stage with { Group = JsonSerializer.Deserialize<GroupStage>(groupEl.GetRawText(), options) };
-
-        if (root.TryGetProperty("project", out var projectEl))
-            stage = stage with { Project = JsonSerializer.Deserialize<ProjectStage>(projectEl.GetRawText(), options) };
-
-        if (root.TryGetProperty("sort", out var sortEl))
-            stage = stage with { Sort = JsonSerializer.Deserialize<IReadOnlyList<SortField>>(sortEl.GetRawText(), options) };
-
-        if (root.TryGetProperty("page", out var pageEl))
-            stage = stage with { Page = JsonSerializer.Deserialize<PageStage>(pageEl.GetRawText(), options) };
-
-        return stage;
+        return stage with { Keys = keys };
     }
 
     public override void Write(Utf8JsonWriter writer, PipelineStage value, JsonSerializerOptions options)

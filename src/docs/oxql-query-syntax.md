@@ -1,534 +1,371 @@
-# OxQL Query Syntax Reference
+# OxQL query syntax (contract 2)
 
-OxQL is a JSON-based document query language. A query is a JSON object with an `entityType` and an ordered `pipeline` of stages. Each stage transforms or filters the result set.
-
----
+The request shape accepted by `POST /oxql/query` and, per entry, by `POST /oxql/batch`.
+Clients send `X-OxQL-Contract: 2`; a request without the header is served as contract 1 while
+the host's `Compat:Enabled` is true (see the last section). What a bound request means is in
+[`oxql-semantics.md`](oxql-semantics.md); statuses, limits and the operational endpoints are in
+[`oxql-operations.md`](oxql-operations.md).
 
 ## Top-level structure
 
-```json
+```jsonc
 {
-  "entityType": "string",
-  "variables": { "name": value },
-  "pipeline": [ ...stages ]
+  "entityType": "logistics.shipment",         // the entity id, exactly as the schema publishes it
+  "variables": { "from": "2026-01-01T00:00:00Z" },   // optional, bound by { "$var": "from" }
+  "pipeline": [                                // stages, executed as written
+    { "match": { … } },
+    { "page": { "limit": 50 } }
+  ]
 }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `entityType` | ✅ | The collection / entity to query (e.g. `"vehicle"`). |
-| `variables` | ❌ | Named variables referenced in filters as `{ "$var": "name" }`. |
-| `pipeline` | ✅ | Ordered array of stage objects. Executed top to bottom. |
+- `entityType` is matched exactly and case-sensitively. An unknown id is `UNKNOWN_ENTITY`; a
+  retired id the host declared is answered as the current entity with an `ENTITY_ID_RETIRED`
+  diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
+  entity and carries the same diagnostic, with the lookup's `stage`.
+- Each pipeline element is an object with exactly one stage key: `match`, `lookup`, `resolve`,
+  `unwind`, `group`, `project`, `sort`, `page`. Two keys in one element is `UNKNOWN_STAGE`.
+- The organisation scope (`organizationId eq <caller's organisation>`) is applied by the engine
+  at every entry into an entity. It is not a stage a caller can write, place or project away,
+  and it does not count toward `MaxPipelineStages`. A request whose context has no
+  organisation is refused with 403 `ACCESS_DENIED` before binding.
 
----
+## Paths
 
-## Pipeline stages
+Dot-separated wire names, camelCase, `id` at every depth: `number`, `department.name`,
+`items.quantity`. No `$`, no empty segment, no `..` (`INVALID_PATH`). A path that is not in
+the entity's shape at the stage where it appears is `UNKNOWN_PATH`; a member the driver does
+not store is `NOT_STORED`; an `unknown` member is projectable but `NOT_FILTERABLE` /
+`NOT_SORTABLE`.
 
-Each element in `pipeline` is an object with **one** of the following keys:
+- A path through a collection in `match` means "some element" (`items.quantity eq 5` matches a
+  document with any such item); it is refused in `sort` (`NOT_SORTABLE`). After an `unwind`
+  the path means the element. An inner collection needs its outer one unwound first
+  (`UNWIND_ORDER`).
+- A dictionary member takes any key verbatim: `pricing.EUR.singlePriceNet`.
+- The `addon` bag of an extendable entity: `addon.<definition path>`, the definition path
+  verbatim (segments may contain spaces). A key the organisation has defined is typed and
+  filterable; an undefined, retired or `object` key is `unknown`.
+- Aliases from `unwind … as`, `lookup … as` and `resolve … as` are new roots, plain
+  identifiers, and must not collide with a member of the current shape (`ALIAS_COLLISION`,
+  `INVALID_ALIAS`). `group` aliases replace the shape.
 
-| Key | Purpose |
-|---|---|
-| `match` | Filter documents |
-| `lookup` | Join a related collection |
-| `resolve` | Fetch from an external source |
-| `unwind` | Deconstruct an array field |
-| `group` | Aggregate / group results |
-| `project` | Select / exclude output fields |
-| `sort` | Order results |
-| `page` | Cursor-based pagination |
-
-Recommended stage order: `match → lookup → resolve → unwind → group → project → sort → page`
-
----
+Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 
 ## Stage: `match`
 
-Filters documents. Supports single conditions, logical groups, and nesting.
-
-### Single condition
-
-```json
-{ "match": { "FieldPath": { "op": value } } }
-```
-
-### Logical AND
-
-```json
-{
-  "match": {
-    "and": [
-      { "Status.Name": { "eq": "active" } },
-      { "OrganizationId": { "eq": "7feec12f-870f-4087-a676-27e411d570a8" } }
-    ]
-  }
-}
-```
-
-### Logical OR
-
-```json
-{
-  "match": {
+```jsonc
+{ "match": {
+    "number": { "startsWith": "s-" },
+    "reference": { "eq": "ABC-1", "options": { "caseSensitive": true } },
+    "createdAt": { "gte": "2026-01-01T00:00:00Z", "lt": { "$var": "until" } },
     "or": [
-      { "Status.Name": { "eq": "active" } },
-      { "Status.Name": { "eq": "pending" } }
-    ]
-  }
-}
+      { "status": { "in": ["Open", 2] } },
+      { "not": { "isDeleted": { "eq": true } } }
+    ],
+    "items": { "any": { "quantity": { "gt": 0 }, "article.number": { "eq": "A-1" } } }
+} }
 ```
 
-### Logical NOT
+- Every property that is not `and`, `or`, `not` is a condition on that path; every operator key
+  inside the operand object is a condition; several paths and several operators are `and`.
+- `and` / `or` take arrays of condition objects, `not` one condition object; they nest freely.
+  An empty group is `EMPTY_LOGICAL_GROUP`.
+- `any` evaluates the nested condition against one element of a collection of objects, inner
+  paths relative to the element (compiled to `$elemMatch`). It is refused on a collection already
+  unwound, on a collection reached through another collection, and on collections of scalars,
+  where the default "some element" form applies (`ANY_NOT_APPLICABLE`).
+- A comparison on a `string` member folds case and accents: `muller` matches `Müller` and
+  `MÜLLER`. The request then runs under the host's collation (German, primary strength, unless
+  configured otherwise), `eq neq in nin gt gte lt lte` compare under it, `startsWith` is a
+  range under it, and `contains` and `endsWith` are patterns, which fold case but not accents.
+  A request that compares, sorts and groups no string runs without a collation.
+- `options.caseSensitive: true` compares exactly. It applies to `eq neq in nin contains
+  startsWith endsWith` on `string` members (`OPTION_NOT_APPLICABLE` elsewhere: an ordered
+  comparison orders under the collation of the whole request and cannot leave it, a `regex` is
+  the caller's own pattern, and a member without text has nothing to fold). `options.ignoreCase`
+  is accepted for one release as the alias with the opposite sense — `ignoreCase: false` is
+  `caseSensitive: true`, `ignoreCase: true` restates the default — and the two must not
+  disagree. On a member holding a single character, published as `string` and stored as its
+  code point, `eq neq in nin` fold the operand's case by code point instead; the three text
+  operators have no text to match there and are refused with `INVALID_OPERAND`.
 
-```json
-{
-  "match": {
-    "not": { "Status.Name": { "eq": "deleted" } }
-  }
-}
-```
+### Operators
 
-### Nested logical groups
+Case-sensitive: `eq neq gt gte lt lte in nin contains startsWith endsWith exists regex`.
+Anything else is `UNKNOWN_OPERATOR`.
 
-`and` / `or` / `not` can be nested arbitrarily.
-
-```json
-{
-  "match": {
-    "and": [
-      { "OrganizationId": { "eq": "7feec12f-..." } },
-      {
-        "or": [
-          { "Status.Name": { "eq": "active" } },
-          { "Status.Name": { "eq": "pending" } }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Filter operators
-
-| Operator | Description | Example value |
+| operator | applies to | operand |
 |---|---|---|
-| `eq` | Equal ¹ | `"active"` |
-| `neq` | Not equal ¹ | `"deleted"` |
-| `gt` | Greater than | `100` |
-| `gte` | Greater than or equal | `100` |
-| `lt` | Less than | `100` |
-| `lte` | Less than or equal | `100` |
-| `in` | Value in array | `["a", "b"]` |
-| `nin` | Value not in array | `["x", "y"]` |
-| `contains` | String contains substring ¹ | `"abc"` |
-| `startsWith` | String starts with | `"pre"` |
-| `endsWith` | String ends with | `"fix"` |
-| `exists` | Field exists | `true` / `false` |
-| `regex` | Regular expression match | `"^ABC.*"` |
+| `eq`, `neq` | every kind | one value, or `null` (`eq null` = absent or null; `neq null` = present and non-null) |
+| `gt`, `gte`, `lt`, `lte` | `int long double decimal date dateTime timeSpan string enum` | one value |
+| `in`, `nin` | every scalar kind | an array of values (`OPERAND_NOT_ARRAY` otherwise); `in []` matches nothing, `nin []` everything |
+| `contains`, `startsWith`, `endsWith` | `string` | a string; `startsWith` is a range under the collation, the others a pattern escaped and anchored by the engine |
+| `regex` | `string` | a pattern up to `RegexMaxLength` (`REGEX_TOO_LONG`); nested quantifiers and backreferences are `INVALID_REGEX`; an unanchored pattern is diagnosed `REGEX_UNANCHORED` |
+| `exists` | every kind | a boolean |
 
-¹ Supports [filter condition options](#filter-condition-options) (`ignoreCase`).
+`neq` and `nin` match documents where the member is absent, as Mongo does, except for `null`.
 
-### Filter condition options
+### Operands per kind
 
-The operators `eq`, `neq`, and `contains` accept an optional `"options"` key alongside the operator value to modify comparison behaviour.
+An operand is written exactly as the service returns the member; the engine encodes it for
+storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `ignoreCase` | `boolean` | `false` | Makes string comparisons case-insensitive. |
+| kind | operand |
+|---|---|
+| `string` | JSON string |
+| `int`, `long` | JSON number (integral) or a string of digits |
+| `double` | JSON number or numeric string |
+| `decimal` | JSON number or string; matched as Decimal128 and as its canonical string while `DecimalMode` is `tolerant` |
+| `bool` | `true`/`false` or the strings `"true"`/`"false"` |
+| `guid` | a GUID string |
+| `date` | `YYYY-MM-DD` |
+| `dateTime` | ISO-8601 with `Z` or an offset; a bare local time is refused |
+| `timeSpan` | ISO-8601 duration (`PT1H30M`) |
+| `enum` | the member name or its number; an unknown name or number is `UNKNOWN_ENUM_MEMBER` |
+| `binary` | base64 |
 
-```json
-{ "Status.Name": { "eq": "Active", "options": { "ignoreCase": true } } }
-{ "Status.Name": { "neq": "deleted", "options": { "ignoreCase": true } } }
-{ "attributes.description": { "contains": "urgent", "options": { "ignoreCase": true } } }
-```
+`{ "$var": "name" }` is the only wrapper: the value comes from `variables` in the same
+encoding and is checked at the place of use (`UNBOUND_VARIABLE` when missing;
+`INVALID_VARIABLE` when it holds an object). The v1 type hints (`$date`, `$uuid`, `$decimal`,
+…) are contract 1 only.
 
-> **Note:** When `ignoreCase` is `true`, `eq` and `neq` use a case-insensitive regex anchored at both ends (`^value$` with the `i` flag). `contains` uses an unanchored regex with the `i` flag.
-
-### Variable references
-
-Variables declared in the top-level `variables` object can be injected into filter values:
-
-```json
-{
-  "variables": { "orgId": "7feec12f-..." },
-  "pipeline": [
-    { "match": { "OrganizationId": { "eq": { "$var": "orgId" } } } }
-  ]
-}
-```
-
-### Type hints
-
-By default string values are matched as strings. To force an exact BSON type, wrap the value in a type hint object:
-
-| Hint | Example | BSON type produced |
-|---|---|---|
-| *(plain string)* | `"abc"` | `String` (auto-detects GUID, tries all UUID subtypes) |
-| `{ "$uuid": "..." }` | `{ "$uuid": "7feec12f-..." }` | `Binary` subtype 4 — RFC standard UUID |
-| `{ "$uuid3": "..." }` | `{ "$uuid3": "7feec12f-..." }` | `Binary` subtype 3 — C# legacy UUID |
-| `{ "$date": "..." }` | `{ "$date": "2024-01-15T10:30:00Z" }` | `DateTime` UTC |
-| `{ "$oid": "..." }` | `{ "$oid": "507f1f77bcf86cd799439011" }` | `ObjectId` |
-| `{ "$long": "..." }` | `{ "$long": "9007199254740993" }` | `Int64` |
-| `{ "$decimal": "..." }` | `{ "$decimal": "19.99" }` | `Decimal128` |
-| `{ "$regex": "..." }` | `{ "$regex": "^abc" }` | `RegularExpression` |
-| `{ "$null": true }` | `{ "$null": true }` | `Null` |
-
-> **GUID tip:** Passing a plain GUID string automatically emits an `$or` that matches binary subtype 3, subtype 4, and plain string — covering any storage format. Use `$uuid` / `$uuid3` only when you need to target one specific binary subtype.
-
-```json
-{ "CreatedAt": { "gte": { "$date": "2024-01-01T00:00:00Z" } } }
-{ "Price":     { "eq":  { "$decimal": "19.99" } } }
-{ "LegacyId":  { "eq":  { "$uuid3": "7feec12f-..." } } }
-```
-
----
+A defined addon key coerces the same way and always matches tolerantly across the
+representations the bag may hold; a definition with a closed `values` list admits only its
+values on `eq neq in nin` (`UNKNOWN_ENUM_MEMBER` otherwise).
 
 ## Stage: `lookup`
 
-Joins a related collection (left join). The joined documents are embedded as an array under the alias.
+A backward join along a declared reference: the child entity's member that references the
+current entity.
 
-```json
-{
-  "lookup": {
-    "from": "customers",
-    "localPath": "attributes.customerId",
-    "foreignPath": "id",
-    "as": "customer"
-  }
-}
+```jsonc
+{ "lookup": {
+    "from": "logistics.shipment_document",   // the child entity id (local to this host)
+    "path": "shipmentId",                     // the child's member declared to reference this entity
+    "as": "documents",                        // alias: an array of the child entity
+    "select": ["id", "name", "createdAt"],   // optional wire paths on the child; id is always kept
+    "filter": { "isDeleted": { "eq": false } },  // optional condition on the child
+    "limit": 20                               // optional, at most Limits:MaxLookupLimit
+} }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `from` | ✅ | Target collection name. Must be in the server's allowed list. |
-| `localPath` | ✅ | Field in the current document containing the foreign key. |
-| `foreignPath` | ✅ | Field in the target collection to match against (usually `"id"`). |
-| `as` | ✅ | Alias under which the joined result is embedded. |
-| `convert` | | Key-type conversion applied when the local and foreign keys use different GUID representations (string vs. binary UUID). Allowed values: `"stringToUuid"` (local string ↔ foreign binary UUID) and `"uuidToString"` (local binary UUID ↔ foreign string). |
-
-### Converting the join key (`convert`)
-
-When one side stores a GUID as a **string** and the other as a **binary UUID** (BSON subtype 4),
-a plain field-to-field join produces no matches. Set `convert` so the **string** side is coerced to
-a binary UUID before comparing:
-
-```json
-{
-  "lookup": {
-    "from": "customers",
-    "localPath": "attributes.customerId",
-    "foreignPath": "id",
-    "as": "customer",
-    "convert": "stringToUuid"
-  }
-}
-```
-
-- `"stringToUuid"` — the local key is a string, the foreign key is a binary UUID.
-- `"uuidToString"` — the local key is a binary UUID, the foreign key is a string.
-
-The conversion is **non-throwing**: values that are not valid GUID strings are left unchanged (they
-simply won't match). Internally this emits a pipelined `$lookup` that coerces the string side to a
-UUID via the `$function` operator.
-
-> **Compatibility:** This uses server-side JavaScript (`$function`) so it works on **MongoDB 7.0+**.
-> Server-side scripting must be enabled (`security.javascriptEnabled`, on by default but disabled on
-> some hosted tiers), the per-document JavaScript call is slower than a native operator, and only the
-> standard UUID representation (BSON subtype 4) is matched.
-
----
+The child must declare the reference (`LOOKUP_NOT_DECLARED`), the result is ordered by the
+child's key and scoped to the caller's organisation inside the sub-pipeline. Any other member
+(`localPath`, `foreignPath`, `convert`) is `UNKNOWN_STAGE_MEMBER`.
 
 ## Stage: `resolve`
 
-Fetches a related document from a configured external source (e.g. a CRM, external API).
+A forward join along a declared reference: the id member on the current shape to the entity
+it names, one object under the alias, `null` when the target does not exist or fails `filter`.
 
-```json
-{
-  "resolve": {
-    "source": "crm.customer",
-    "localPath": "attributes.customerId",
-    "as": "crmCustomer"
-  }
-}
+```jsonc
+{ "resolve": {
+    "path": "vehicleId",
+    "as": "vehicle",
+    "select": ["id", "matchCode", "name"],    // optional; default: the target's key and display members
+    "filter": { "isDeleted": { "eq": false } }  // optional condition on the target, executed by its owner
+} }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `source` | ✅ | External source identifier. Must be in the server's allowed list. |
-| `localPath` | ✅ | Local field containing the lookup key. |
-| `as` | ✅ | Alias for the resolved result. |
-
----
+`path` must carry a declared reference (`RESOLVE_NOT_DECLARED`). A local target compiles to an
+indexed `$lookup`; a remote target (an entity of another service) is fetched from its owner
+after the page is fixed. Under a remote alias, a `match` on a member of the alias is a semi-join
+(the owner supplies the matching ids; more than `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`), a
+`match` on the alias itself (`{ "veh": { "eq": null } }`, `{ "veh": { "exists": true } }`) is
+refused before the owner is called (`RESOLVE_NOT_FILTERABLE`), and a `sort` is refused
+(`RESOLVE_NOT_SORTABLE`). The owner binds a semi-join condition under its own default;
+`caseSensitive` or `ignoreCase` travel to it as written. At most `MaxResolveStages` per
+request. A join compares its id exactly, whatever the id's kind: a string id never folds.
 
 ## Stage: `unwind`
 
-Deconstructs an array field into one document per element.
-
-```json
-{
-  "unwind": {
-    "path": "Appointments",
-    "as": "appointment",
-    "preserveNull": false,
-    "includeIndex": "appointmentIndex"
-  }
-}
+```jsonc
+{ "unwind": { "path": "items", "as": "item", "includeIndex": "itemIndex", "preserveNull": true } }
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `path` | ✅ | Dot-notation path to the array field. |
-| `as` | ❌ | Alias for the unwound element. |
-| `preserveNull` | ❌ | Keep documents where the array is `null` or empty. Default: `false`. |
-| `includeIndex` | ❌ | Output field name to store the array element index. |
-
----
+`path` must be a collection at the current shape (`NOT_A_COLLECTION`). Afterwards `path`
+means the element, `as` is a copy of it and `includeIndex` an `int`. `preserveNull` keeps
+documents whose collection is empty or absent.
 
 ## Stage: `group`
 
-Aggregates documents into groups and computes aggregate values.
-
-```json
-{
-  "group": {
+```jsonc
+{ "group": {
     "by": [
-      { "path": "Status.Name", "as": "status" }
+      { "path": "status", "as": "status" },
+      { "dateTrunc": { "path": "createdAt", "unit": "week", "timezone": "Europe/Berlin", "weekStart": "monday" }, "as": "week" }
     ],
     "fields": {
-      "total":   { "count": true },
-      "revenue": { "sum": { "path": "attributes.amount" } },
-      "average": { "avg": { "path": "attributes.amount" } }
+      "count": { "count": true },
+      "total": { "sum": "amount" },
+      "avgNet": { "avg": { "multiply": [ { "path": "quantity" }, { "path": "price" } ] } },
+      "articles": { "countDistinct": "articleId" }
     }
-  }
-}
+} }
 ```
 
-### `by` — group-by fields
-
-Each entry is either a **path** or a **dateTrunc**:
-
-```json
-{ "path": "Status.Name", "as": "status" }
-```
-
-```json
-{
-  "dateTrunc": { "path": "CreatedAt", "unit": "month" },
-  "as": "createdMonth"
-}
-```
-
-Date truncation units: `year` `quarter` `month` `week` `day` `hour` `minute` `second`
-
-### `fields` — aggregation expressions
-
-| Function | Description | Argument |
-|---|---|---|
-| `count` | Count of documents in group | `true` |
-| `countDistinct` | Count of distinct values | field path |
-| `sum` | Sum of a numeric field | field path |
-| `avg` | Average of a numeric field | field path |
-| `min` | Minimum value | field path |
-| `max` | Maximum value | field path |
-| `first` | First value in group | field path |
-| `last` | Last value in group | field path |
-| `push` | Array of all values in group | field path |
-
-#### Argument types
-
-```json
-{ "sum": { "path": "attributes.amount" } }
-{ "sum": { "literal": 1 } }
-{ "sum": { "$var": "multiplier" } }
-{ "sum": { "multiply": [ { "path": "qty" }, { "path": "price" } ] } }
-```
-
-Arithmetic operators in expressions: `add` `subtract` `multiply` `divide` `coalesce`
-
----
+- Keys are scalar paths (not under a collection that is not unwound: `GROUP_ON_COLLECTION`) or
+  a `dateTrunc` with `unit` in `year quarter month week day hour minute second`
+  (`INVALID_DATE_TRUNC_UNIT`), an optional IANA `timezone` (default UTC, `INVALID_TIMEZONE`)
+  and, for `week`, `weekStart` (default `monday`). A truncated key is emitted as the UTC
+  instant of the local boundary. A `date` has no time of day and truncates on its calendar day
+  in that zone, so the bucket is local midnight of the row's own day; a `dateTime` truncates as
+  the instant it holds.
+- Aggregates: `count` (`{ "count": true }`), `countDistinct`, `sum`, `avg`, `min`, `max`,
+  `first`, `last`, `push` (`UNKNOWN_AGG_FUNCTION`). `sum` and `avg` need a numeric argument
+  (`INVALID_AGGREGATE_ARGUMENT`).
+- `avg` over a `long` is taken in decimal and comes back as a decimal string, the way a `sum`
+  over a long does; over an `int` or a `double` it is a JSON number. A `push` alias carries the
+  argument's value per row, each element in the member's wire encoding: a `long` as a string, a
+  `date` as `YYYY-MM-DD`, a single character as that character, an object by its members.
+- An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`,
+  or an arithmetic expression `add subtract multiply divide coalesce` over an array of
+  arguments.
+- A string key folds case and accents under the collation: `Open` and `OPEN` are one group,
+  reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
+  same way.
+- After `group` the shape is only the `by` and `fields` aliases (unique among each other, at
+  most `MaxGroupFields`); rows carry those names only. Paging after `group` is by offset
+  behind the cursor.
 
 ## Stage: `project`
 
-Selects which fields to include or exclude in the output.
-
-```json
-{
-  "project": {
-    "id": 1,
-    "MatchCode": 1,
-    "RegistrationPlate": { "RegistrationIdentifier": 1 },
-    "Status": { "Name": 1 },
-    "Appointments": { "NextDate": 1 }
-  }
-}
+```jsonc
+{ "project": { "id": 1, "number": 1, "department.name": 1 } }   // inclusion: only these
+{ "project": { "internalNotes": 0 } }                             // exclusion: everything else
 ```
 
-| Value | Meaning |
-|---|---|
-| `1` | Include this field |
-| `0` | Exclude this field |
-
-Both flat dot-notation and nested object syntax are accepted and are equivalent:
-
-```json
-{ "RegistrationPlate.RegistrationIdentifier": 1 }
-{ "RegistrationPlate": { "RegistrationIdentifier": 1 } }
-```
-
-For arrays, projecting a sub-field returns that sub-field from every element:
-
-```json
-{ "Appointments": { "NextDate": 1, "Location": 1 } }
-```
-
----
+All `1` or all `0` (`MIXED_PROJECTION`). `id` is kept in an inclusion unless excluded
+explicitly; at most `MaxProjectionFields` paths. The reserved key `"$default": 1` includes the
+entity's key and display members; it applies to the entity's own shape, not after a `group` or
+`unwind`. How projections interact with join aliases, sorts and cursors:
+[`oxql-semantics.md`](oxql-semantics.md#projections).
 
 ## Stage: `sort`
 
-Orders the result set. Array of one-property objects — field name to direction.
-
-```json
-{
-  "sort": [
-    { "MatchCode": "asc" },
-    { "CreatedAt": "desc" }
-  ]
-}
+```jsonc
+{ "sort": [ { "createdAt": "desc" }, { "number": "asc" } ] }
+{ "sort": [ { "number": { "direction": "asc", "caseSensitive": true } } ] }   // exact order
 ```
 
-| Direction | Meaning |
-|---|---|
-| `"asc"` | Ascending (A→Z, 0→9, oldest→newest) |
-| `"desc"` | Descending (Z→A, 9→0, newest→oldest) |
+Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SORT_DIRECTION`),
+or the object form with `direction` and `caseSensitive` (any other member is
+`UNKNOWN_STAGE_MEMBER`, a missing `direction` `INVALID_SORT_DIRECTION`). Paths must be scalar and sortable in the current shape (not under a
+collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
+as the tie-breaker; after `group` it appends every group key the sort does not name, ascending.
 
-A deterministic tie-breaker sort on `id` is automatically appended by the server if `id` is not already present in the sort.
-
----
+A string orders under the collation, case and accents folded, unless the entry says
+`caseSensitive: true`. An exact sort runs in a request where every string comparison and key is
+exact too; when another comparison, sort or group key of the request folds, it is refused with
+`OPTION_NOT_APPLICABLE`, as is `caseSensitive` on a member that is not a string.
 
 ## Stage: `page`
 
-Controls result size and cursor-based forward pagination.
+```jsonc
+{ "page": { "limit": 50, "includeTotalCount": true } }        // first page, counted up to the host's CountCap
+{ "page": { "limit": 50, "includeTotalCount": 10000 } }       // first page, counted up to 10 000
+{ "page": { "limit": 50, "cursor": "<nextCursor>" } }           // next page
+{ "page": { "limit": 50, "offset": 200 } }                      // a jump, up to Limits:MaxOffset
+```
 
-```json
+Once and last (`STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`). `limit` between 1 and
+`MaxPageSize` (`INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`); without a limit, or without a page
+stage at all, `DefaultPageSize`. `offset` above `MaxOffset` is `MAX_OFFSET_EXCEEDED`.
+
+Cursors are opaque, signed, and bound to the query: a cursor from another pipeline, another
+sort or a tampered one is `CURSOR_INVALID`. Keyset paging is null-aware on the root shape;
+after `group` the cursor carries an offset.
+
+`includeTotalCount` is `true`, `false` (the default) or a positive integer. `true` runs a count
+concurrently with the page, up to the host's `CountCap`; a positive integer is the request's own
+cap, clamped to the host's (`0`, a negative number or a fraction is `INVALID_PAGE_LIMIT`).
+Above the cap in force the count is that cap and `totalCountCapped` is true with a
+`TOTAL_COUNT_CAPPED` diagnostic whose `params.cap` names it. The count pipeline carries a
+`lookup` or a local `resolve` only when a later `match`, `unwind`, `group` or `resolve` reads its
+alias. A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or
+`resolve` reads, that no `group` follows and whose alias every later `project` passes whole runs
+after the page is taken, on the page's rows alone; a `project` in between keeps the join's
+local key in storage for it and the row leaves the key out when it was not asked for, so the
+rows are the same either way.
+
+## Response
+
+```jsonc
 {
-  "page": {
-    "limit": 50,
-    "cursor": null,
-    "includeTotalCount": false
-  }
+  "items": [ … ],
+  "pageInfo": { "hasNextPage": true, "nextCursor": "…", "totalCount": 1234, "totalCountCapped": false },
+  "diagnostics": [ { "code": "ENTITY_ID_RETIRED", "message": "…", "stage": null, "path": null, "params": { "currentId": "logistics.shipment" } } ]
 }
 ```
 
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `limit` | ❌ | `50` | Maximum documents to return. Server enforces a maximum. |
-| `cursor` | ❌ | `null` | Opaque pagination token from a previous response's `nextCursor`. |
-| `includeTotalCount` | ❌ | `false` | When `true`, the response includes the total matching document count. |
+Rows are in the wire encoding at every depth: `id`, camelCase, `long` and `decimal` as
+strings, `dateTime` ISO UTC, `guid` string, enum as number, `date` as `YYYY-MM-DD`,
+`timeSpan` as an ISO duration, binary as base64. Grouped rows carry the aliases only; unwound
+rows the element under the path plus alias and index; resolved rows the object or `null`
+under the alias; looked-up rows the array. `totalCount` and `totalCountCapped` appear only
+when a count was requested; `diagnostics` only when there are any.
 
-### Pagination response shape
+## Refusal
 
-```json
-{
-  "items": [ ...documents ],
-  "pageInfo": {
-    "hasNextPage": true,
-    "nextCursor": "eyJNYXRjaENvZGUiOiJBQkMifQ",
-    "totalCount": null
-  }
-}
+```jsonc
+{ "type": "validation_error", "title": "The request could not be bound.",
+  "errors": [ { "code": "UNKNOWN_PATH", "message": "…", "stage": 2, "path": "items.quantity" } ] }
 ```
 
-To fetch the next page, pass `nextCursor` as `cursor` in the next request. When `hasNextPage` is `false`, you have reached the last page.
+| `type` | HTTP | when |
+|---|---|---|
+| `validation_error` | 400 (413 for `REQUEST_TOO_LARGE`) | a caller error; every binding error at once |
+| `access_denied` | 403 | no organisation in the context |
+| `not_executable` | 422 | well-formed but not executable on this host |
+| `timeout` | 504 | the aggregate exceeded `Execution:MaxTimeMs` |
+| `internal_error` | 500 | an engine fault; details only when the host allows them |
 
----
+### Error codes
 
-## Full example
-
-```json
-{
-  "entityType": "vehicle",
-  "variables": {
-    "orgId": "7feec12f-870f-4087-a676-27e411d570a8"
-  },
-  "pipeline": [
-    {
-      "match": {
-        "and": [
-          { "OrganizationId": { "eq": { "$var": "orgId" } } },
-          { "Status.Name":    { "eq": "active" } },
-          { "CreatedAt":      { "gte": { "$date": "2024-01-01T00:00:00Z" } } }
-        ]
-      }
-    },
-    {
-      "lookup": {
-        "from": "customers",
-        "localPath": "CustomerId",
-        "foreignPath": "id",
-        "as": "customer"
-      }
-    },
-    {
-      "project": {
-        "id": 1,
-        "MatchCode": 1,
-        "RegistrationPlate": { "RegistrationIdentifier": 1 },
-        "Status": { "Name": 1 },
-        "Appointments": { "NextDate": 1 },
-        "customer": { "Name": 1 }
-      }
-    },
-    {
-      "sort": [{ "MatchCode": "asc" }]
-    },
-    {
-      "page": { "limit": 50, "cursor": null }
-    }
-  ]
-}
-```
-
----
-
-## Error response
-
-Validation errors return HTTP 400 with the following shape:
-
-```json
-{
-  "type": "validation_error",
-  "title": "Query validation failed.",
-  "status": 400,
-  "errors": [
-    { "code": "UNKNOWN_OPERATOR", "message": "Unknown operator 'eval'.", "path": "amount" }
-  ]
-}
-```
-
-### Validation error codes
-
-| Code | Cause |
+| area | codes |
 |---|---|
-| `INVALID_ENTITY_TYPE` | `entityType` is missing or empty |
-| `MAX_PIPELINE_STAGES_EXCEEDED` | Too many stages in the pipeline |
-| `MAX_LOOKUP_STAGES_EXCEEDED` | Too many `lookup` stages |
-| `MAX_UNWIND_STAGES_EXCEEDED` | Too many `unwind` stages |
-| `INVALID_FILTER_PATH` | Filter condition has no field path |
-| `MISSING_OPERATOR` | Filter condition has no operator |
-| `UNKNOWN_OPERATOR` | Operator not in the allowed list |
-| `REGEX_TOO_LONG` | Regex pattern exceeds maximum length |
-| `INVALID_LOOKUP_SOURCE` | `lookup.from` is missing |
-| `DISALLOWED_LOOKUP_SOURCE` | `lookup.from` not in the server allowlist |
-| `INVALID_LOOKUP_ALIAS` | `lookup.as` is missing |
-| `INVALID_LOOKUP_CONVERT` | `lookup.convert` is not `"stringToUuid"` or `"uuidToString"` |
-| `INVALID_RESOLVE_SOURCE` | `resolve.source` is missing or disallowed |
-| `INVALID_RESOLVE_ALIAS` | `resolve.as` is missing |
-| `MAX_GROUP_FIELDS_EXCEEDED` | Too many fields in `group.fields` |
-| `INVALID_DATE_TRUNC_UNIT` | Unknown `dateTrunc` unit |
-| `UNKNOWN_AGG_FUNCTION` | Aggregation function not in the allowed list |
-| `MAX_PROJECTION_FIELDS_EXCEEDED` | Too many fields in `project` |
-| `INVALID_SORT_DIRECTION` | Sort direction not `"asc"` or `"desc"` |
-| `INVALID_PAGE_LIMIT` | `page.limit` is zero or negative |
-| `PAGE_SIZE_EXCEEDED` | `page.limit` exceeds the server maximum |
-| `INVALID_PATH_DOLLAR` | A field path contains `$` |
-| `INVALID_PATH_TRAVERSAL` | A field path contains `..` |
-| `EMPTY_PATH_SEGMENT` | A field path has an empty segment |
+| entity | `UNKNOWN_ENTITY` |
+| path | `INVALID_PATH`, `UNKNOWN_PATH`, `NOT_STORED`, `NOT_FILTERABLE`, `NOT_SORTABLE`, `NOT_A_COLLECTION`, `UNWIND_ORDER`, `ALIAS_COLLISION`, `INVALID_ALIAS` |
+| operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
+| condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE`, `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE` |
+| stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `LOOKUP_NOT_DECLARED`, `RESOLVE_NOT_DECLARED`, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
+| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
+| cursor | `CURSOR_INVALID` |
+| access | `ACCESS_DENIED` (403) |
+| execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500) |
+| compat | `LEGACY_STAGE_UNSUPPORTED` (a v1 `lookup` or `resolve` under contract 1) |
+
+### Diagnostic codes
+
+Never a refusal; carried in `diagnostics` with machine-readable `params` where useful:
+`ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`),
+`RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`, `RESOLVE_PARTIAL` (a chunk beyond `MaxResolveKeys`
+was not fetched), `SORT_ON_ADDON`, `REGEX_UNANCHORED`, `DECIMAL_TEXT_EXCLUDED` (an ordered
+comparison on a decimal covered the Decimal128 rows only). The HTTP status and a typical cause of
+every code: [`oxql-operations.md`](oxql-operations.md#codes).
+
+## Batch
+
+```jsonc
+POST /oxql/batch
+{ "queries": [ <request>, <request> ], "maxTimeMs": 2000 }
+```
+
+Always HTTP 200 with `{ "results": [ … ] }` in order; each entry is a full success body or a
+refusal envelope. `maxTimeMs` caps every query's aggregate under the host's ceiling. More than
+`MaxBatchQueries` is a 400 `BATCH_TOO_LARGE` refusal of the whole batch.
+
+## Contract 1 (compatibility mode)
+
+While the host's `Compat:Enabled` is true, a request without `X-OxQL-Contract: 2` is bound
+by the compatibility binder: the entity id is matched case-insensitively (retired ids too),
+paths may be spelled as stored (`MatchCode`, `Department._id`) and are resolved against the
+same folded shape, wire spellings work too, the v1 type-hint operands are accepted, operators
+and sort directions are read case-insensitively, a string comparison is exact unless it says
+`ignoreCase: true` (a pattern; `caseSensitive` is not an option there), sorts and group keys
+are exact, a sort entry's direction is a string (the object form is `INVALID_SORT_DIRECTION`),
+and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
+stages are refused with `LEGACY_STAGE_UNSUPPORTED`, and so is the number form of
+`page.includeTotalCount`: contract 1 keeps the boolean. Every such request is logged under
+`OxQL.Compat`. When compatibility is switched off, every request is contract 2.

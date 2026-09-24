@@ -1,8 +1,6 @@
-using MongoDB.Bson;
 using OxQL.AspNetCore;
 using OxQL.Core;
-using OxQL.Core.Filtering;
-using OxQL.Core.Interfaces;
+using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Mongo;
 using OxQL.Sample.Models;
@@ -10,57 +8,34 @@ using OxQL.Studio;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── OxQL Core ──────────────────────────────────────────────────────────
-// Reads AllowedLookupSources etc. from configuration section "OxQL".
-var oxqlSection = builder.Configuration.GetSection("OxQL");
+// ── OxQL Core: every option of the OxQL section (limits, execution, cursor signing, …) ──
+builder.Services.AddOxQLCore(builder.Configuration.GetSection("OxQL"));
 
-builder.Services.AddOxQLCore(options =>
-{
-    options.MaxPageSize = oxqlSection.GetValue("MaxPageSize", 500);
-    options.DefaultPageSize = oxqlSection.GetValue("DefaultPageSize", 50);
-
-    var allowedSources = oxqlSection.GetSection("AllowedLookupSources").Get<string[]>() ?? [];
-    foreach (var source in allowedSources)
-        options.AllowedLookupSources.Add(source);
-});
-
-// ── OxQL MongoDB adapter ────────────────────────────────────────────────
+// ── OxQL MongoDB engine ────────────────────────────────────────────────
 // Change the connection string in appsettings.json (or via environment variable
-// ConnectionStrings__MongoDB) before running against a real database.
+// ConnectionStrings__MongoDB) before running against a real database. The entity model is
+// built from the scanned assemblies on the first request, after every registration.
 builder.Services.AddOxQLMongo(options =>
 {
-    options.ConnectionString = "";
-    options.DatabaseName = "database";
+    options.ConnectionString = builder.Configuration.GetConnectionString("MongoDB");
+    options.DatabaseName = builder.Configuration["OxQL:DatabaseName"];
+    options.IncludeErrorDetails = builder.Environment.IsDevelopment();
     options.ScanAssemblies(typeof(VehicleBase).Assembly);
 });
 
 // ── OxQL ASP.NET Core controller ────────────────────────────────────────
-// BsonDocument is the MongoDB document type; swap for your own type if needed.
-builder.Services.AddOxQLAspNetCore<BsonDocument>(options =>
-{
-    options.RoutePrefix = "api/oxql";
-    options.IncludeErrorDetails = builder.Environment.IsDevelopment();
-    options.EnableExplain = builder.Environment.IsDevelopment();
+// Routes: POST /OxQL/query, POST /OxQL/batch, GET /OxQL/health, POST /OxQL/explain (the last
+// one answers only while OxQL:Explain:Enabled is true in the configuration section above).
+builder.Services.AddOxQLAspNetCore();
 
-    // ── Optional endpoint protection ────────────────────────────────────
-    // Set RequireAuthorization = true to force authentication on the query/types
-    // endpoints (the /health probe always stays anonymous). Optionally set a named
-    // policy via AuthorizationPolicy. Authentication/authorization middleware must be
-    // configured separately (AddAuthentication/AddAuthorization + UseAuthentication/UseAuthorization).
-    // options.RequireAuthorization = true;
-    // options.AuthorizationPolicy = "OxQLReader";
-});
-
-// ── Multi-tenant query injection (example) ──────────────────────────────
-// Forces an OrganizationId filter onto every OxQL query using a root-level AND.
-// The value is passed as a query variable ($var) so cached query plans stay
-// tenant-safe. Here we read the tenant from a request header for demonstration;
-// a real app would resolve it from the authenticated user's claims, e.g.
-//   ctx.User?.FindFirst("organizationId")?.Value
-builder.Services.AddOxQLQueryFilter(_ =>
-    [InjectedFilter.Create("OrganizationId", "7feec12f-870f-4087-a676-27e411d570a8")]);
-
-
+// ── The organisation scope (mandatory) ──────────────────────────────────
+// The engine applies `organizationId eq <this>` at every entry into an entity and refuses to
+// start without a provider. Here the organisation comes from a header for demonstration; a
+// real host resolves it from the authenticated user's claims.
+builder.Services.AddOxQLScope(httpContext =>
+    httpContext is not null && Guid.TryParse(httpContext.Request.Headers["OrganizationId"].FirstOrDefault(), out var organisation)
+        ? organisation
+        : Guid.Parse("7feec12f-870f-4087-a676-27e411d570a8"));
 
 // ── OxQL Studio (dark-mode Monaco query builder at /oxql) ───────────────
 builder.Services.AddOxQLStudio(options =>
@@ -68,7 +43,7 @@ builder.Services.AddOxQLStudio(options =>
     options.RoutePath = "/oxql";
     options.ApiBasePath = "/OxQL";   // matches the OxQLController route
     options.Title = "OxQL Studio";
-    options.EnableExplain = builder.Environment.IsDevelopment();
+    options.EnableExplain = builder.Configuration.GetValue<bool>("OxQL:Explain:Enabled");
 });
 
 // ── Standard ASP.NET Core services ─────────────────────────────────────
@@ -97,18 +72,14 @@ app.UseHttpsRedirection();
 app.MapControllers();
 
 // ── OxQL Studio UI ──────────────────────────────────────────────────────
-// Dark-mode Monaco query builder available at /oxql
 app.MapOxQLStudio();
 
-// ── Example minimal-API endpoints ──────────────────────────────────────
-// These show what a real application might expose alongside OxQL.
-
-// Convenience GET that builds an OxQL query for a single entity type
+// ── Example minimal-API endpoint: a page of one entity, newest first ───
 app.MapGet("/api/{entityType}", async (
     string entityType,
     int limit,
     string? cursor,
-    IQueryExecutor<BsonDocument> executor,
+    IOxQLQueryService queries,
     CancellationToken ct) =>
 {
     limit = Math.Clamp(limit == 0 ? 50 : limit, 1, 500);
@@ -118,29 +89,23 @@ app.MapGet("/api/{entityType}", async (
         EntityType = entityType,
         Pipeline =
         [
-            new PipelineStage
-            {
-                Sort = [new SortField { Path = "createdAt", Direction = "desc" }]
-            },
-            new PipelineStage
-            {
-                Page = new PageStage { Limit = limit, Cursor = string.IsNullOrEmpty(cursor) ? null : cursor }
-            }
+            new PipelineStage { Sort = [new SortField { Path = "createdAt", Direction = "desc" }], Keys = ["sort"] },
+            new PipelineStage { Page = new PageStage { Limit = limit, Cursor = string.IsNullOrEmpty(cursor) ? null : cursor }, Keys = ["page"] },
         ]
     };
 
-    try
+    return await queries.ExecuteAsync(request, ct) switch
     {
-        var response = await executor.ExecuteAsync(request, ct);
-        return Results.Ok(response);
-    }
-    catch (QueryValidationException ex)
-    {
-        return Results.BadRequest(new { errors = ex.Errors });
-    }
+        QueryOutcome.Success success => Results.Ok(success.Result),
+        QueryOutcome.Refused refused => Results.Json(refused.Refusal, statusCode: refused.Refusal.Status),
+        _ => Results.StatusCode(500),
+    };
 })
 .WithName("ListEntities")
 .WithSummary("List documents of a given entity type with cursor paging")
 .WithTags("Documents");
 
 app.Run();
+
+/// <summary>Exposes the entry point to the host tests (<c>WebApplicationFactory&lt;Program&gt;</c>).</summary>
+public partial class Program;

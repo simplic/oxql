@@ -154,6 +154,11 @@ public static class MongoCompiler
         // every candidate, and the join is paid per page row rather than per candidate row.
         var lateJoins = new List<BsonDocument>();
 
+        // The local key each of those joins matches on. It is read only after the page, so it
+        // survives every projection in between in storage, as a remote resolve's reference
+        // does; the wire row follows the shape and leaves it out when it was not asked for.
+        var lateJoinKeys = new List<string>();
+
         for (var index = 0; index < bound.Stages.Count; index++)
         {
             var stage = bound.Stages[index];
@@ -165,16 +170,26 @@ public static class MongoCompiler
                     emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins, collated)));
                     break;
 
+                case BoundStage.Lookup lookup when JoinsAfterPage(bound.Stages, index, lookup.As):
+                    lateJoins.Add(Lookup(lookup, semiJoins, collated));
+                    lateJoinKeys.Add(lookup.ParentKeyStorage);
+                    break;
+
                 case BoundStage.Lookup lookup:
-                    (JoinsAfterPage(bound.Stages, index, lookup.As) ? lateJoins : emitted).Add(Lookup(lookup, semiJoins, collated));
+                    emitted.Add(Lookup(lookup, semiJoins, collated));
                     break;
 
                 case BoundStage.Resolve { IsRemote: true } remoteResolve:
                     remote.Add(remoteResolve);
                     break;
 
+                case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
+                    lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated));
+                    lateJoinKeys.Add(resolve.Reference.Storage!);
+                    break;
+
                 case BoundStage.Resolve resolve:
-                    (JoinsAfterPage(bound.Stages, index, resolve.As) ? lateJoins : emitted).AddRange(LocalResolve(resolve, semiJoins, collated));
+                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated));
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -202,7 +217,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote, keepKey, reservedIndexes, sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, remote, lateJoinKeys, keepKey, reservedIndexes, sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -240,7 +255,9 @@ public static class MongoCompiler
             // reads it off the last row and keeps it (stripped from a contract 1 row instead).
             var drop = reservedIndexes.Where(name => name.StartsWith(ReservedIndex, StringComparison.Ordinal)).ToList();
 
-            if (keyKeptAgainstProjection)
+            // A join after the page that matches on the key still needs it; the wire row leaves
+            // it out by the shape.
+            if (keyKeptAgainstProjection && !lateJoinKeys.Contains(KeyStorage, StringComparer.Ordinal))
             {
                 drop.Add(KeyStorage);
                 keyKeptAgainstProjection = false;
@@ -709,12 +726,14 @@ public static class MongoCompiler
 
     /// <summary>
     /// The projection. A remote resolve reads its reference member off the page rows after the
-    /// aggregate, so the member survives every projection in storage; the wire output follows
-    /// the shape and drops it again when it was not kept. Null when nothing is left to emit.
+    /// aggregate, and a join that runs after the page reads its local key there, so both
+    /// survive every projection in storage; the wire output follows the shape and drops them
+    /// again when they were not kept. Null when nothing is left to emit.
     /// </summary>
     private static BsonDocument? Project(
         BoundStage.Project project,
         IReadOnlyList<BoundStage.Resolve> remoteResolves,
+        IReadOnlyList<string> lateJoinKeys,
         bool keepKey,
         IReadOnlyList<string> reservedIndexes,
         IReadOnlyList<string> sortStorages,
@@ -723,6 +742,10 @@ public static class MongoCompiler
     {
         var projection = new BsonDocument();
         var kept = remoteResolves.Select(resolve => resolve.Reference.Storage).Where(storage => storage is not null).Select(storage => storage!).ToList();
+
+        foreach (var storage in lateJoinKeys)
+            if (!kept.Contains(storage, StringComparer.Ordinal))
+                kept.Add(storage);
 
         // An index the paging sort still has to read survives the projection like a reference does.
         kept.AddRange(reservedIndexes);
@@ -771,7 +794,7 @@ public static class MongoCompiler
         // Excluding the key leaves the sort and the cursor reading a member that is not there,
         // which pages an order Mongo never produced; keep it and record that the caller did not
         // ask for it, so the row loses it again.
-        if (!project.IncludeId && !projection.Contains(KeyStorage))
+        if (!project.IncludeId && !projection.Contains(KeyStorage) && !kept.Contains(KeyStorage, StringComparer.Ordinal))
         {
             if (keepKey)
                 keyKeptAgainstProjection = true;

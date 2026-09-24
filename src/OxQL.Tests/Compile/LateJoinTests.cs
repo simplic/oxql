@@ -116,6 +116,20 @@ public class LateJoinTests
         compiled.PageStages[7]["$lookup"]["as"].AsString.Should().Be("cust__arr");
     }
 
+    [Fact]
+    public async Task A_projection_between_a_moved_resolve_and_the_page_keeps_the_resolve_key()
+    {
+        var included = await Compile($$"""[{{CustomerResolve}}, { "project": { "id": 1, "cust": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
+        included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { cust: 1, _id: 1, CustomerId: 1 } }"), "the join after the page reads the key off the row");
+
+        var excluded = await Compile($$"""[{{CustomerResolve}}, { "project": { "customerId": 0, "number": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        Kinds(excluded.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
+        excluded.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 0 } }"), "an exclusion of the key is not emitted while a later join reads it");
+    }
+
     // ---- not moved -------------------------------------------------------------------------
 
     [Fact]

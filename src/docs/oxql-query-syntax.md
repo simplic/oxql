@@ -243,7 +243,7 @@ explicitly; at most `MaxProjectionFields` paths.
 
 Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SORT_DIRECTION`),
 or the object form with `direction` and `caseSensitive` (any other member is
-`UNKNOWN_STAGE_MEMBER`). Paths must be scalar and sortable in the current shape (not under a
+`UNKNOWN_STAGE_MEMBER`, a missing `direction` `INVALID_SORT_DIRECTION`). Paths must be scalar and sortable in the current shape (not under a
 collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
 as the tie-breaker.
 
@@ -277,7 +277,9 @@ Above the cap in force the count is that cap and `totalCountCapped` is true with
 `lookup` or a local `resolve` only when a later `match`, `unwind`, `group` or `resolve` reads its
 alias. A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or
 `resolve` reads, that no `group` follows and whose alias every later `project` passes whole runs
-after the page is taken, on the page's rows alone; the rows are the same either way.
+after the page is taken, on the page's rows alone; a `project` in between keeps the join's
+local key in storage for it and the row leaves the key out when it was not asked for, so the
+rows are the same either way.
 
 ## Response
 
@@ -352,7 +354,8 @@ paths may be spelled as stored (`MatchCode`, `Department._id`) and are resolved 
 same folded shape, wire spellings work too, the v1 type-hint operands are accepted, operators
 and sort directions are read case-insensitively, a string comparison is exact unless it says
 `ignoreCase: true` (a pattern; `caseSensitive` is not an option there), sorts and group keys
-are exact, and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
+are exact, a sort entry's direction is a string (the object form is `INVALID_SORT_DIRECTION`),
+and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
 stages are refused with `LEGACY_STAGE_UNSUPPORTED`, and so is the number form of
 `page.includeTotalCount`: contract 1 keeps the boolean. Every such request is logged under
 `OxQL.Compat`. When compatibility is switched off, every request is contract 2.

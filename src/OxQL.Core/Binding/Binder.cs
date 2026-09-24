@@ -222,11 +222,8 @@ public sealed class Binder
 
             if (shape.Grouped)
             {
-                // The keys only: an aggregate is not unique per group and adds nothing to the
-                // order. A string key folded into its group, so its order folds the same way.
-                foreach (var key in stages.OfType<BoundStage.Group>().LastOrDefault()?.Keys ?? [])
-                    if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
-                        fields.Add(new BoundSortField(resolved.Path!, true, contract2 && key.OutputKind == Kind.String));
+                // The keys only: an aggregate is not unique per group and adds nothing to the order.
+                fields.AddRange(GroupKeyOrder());
             }
             else if (shape.Resolve(WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
             {
@@ -246,6 +243,23 @@ public sealed class Binder
                 stages.Add(stage);
 
             sort = stage;
+        }
+
+        /// <summary>
+        /// The keys of the last group, ascending, as far as the shape here still carries them.
+        /// They are unique per group under the comparison the group ran with: a string key
+        /// folded into its group under the collation, and its order folds the same way, so two
+        /// groups never compare equal on all of them and an order ending in them is total.
+        /// </summary>
+        private List<BoundSortField> GroupKeyOrder()
+        {
+            var fields = new List<BoundSortField>();
+
+            foreach (var key in stages.OfType<BoundStage.Group>().LastOrDefault()?.Keys ?? [])
+                if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
+                    fields.Add(new BoundSortField(resolved.Path!, true, contract2 && key.OutputKind == Kind.String));
+
+            return fields;
         }
 
         public BoundPipeline Result(BoundStage.Scope scope)
@@ -1369,6 +1383,15 @@ public sealed class Binder
 
                 bound.Add(new BoundSortField(path, ascending.Value, ignoreCase));
             }
+
+            // A grouped shape pages by offset, and $skip over rows that tie on every sort field
+            // repeats and drops groups between pages: $group emits no stable order and a top-k
+            // sort answers any members of a tie. The group keys complete the order, as the key
+            // completes it on a root shape; a key the caller sorts on already keeps its place.
+            if (shape.Grouped && bound.Count == fields.Count)
+                foreach (var key in GroupKeyOrder())
+                    if (!bound.Any(field => field.Path.Storage == key.Path.Storage))
+                        bound.Add(key);
 
             var stage = new BoundStage.Sort(bound);
 

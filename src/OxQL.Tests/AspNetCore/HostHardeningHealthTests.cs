@@ -123,11 +123,13 @@ public class HostHardeningHealthTests
         for (var call = 0; call < 5; call++)
             probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Reachable == true, "the last measurement answers while the next one is taken");
 
-        client.Probes.Should().Be(probesBefore * 2, "five callers past the interval share one refresh");
+        // The refresh runs on the thread pool, so its probes arrive after the callers return.
+        SpinWait.SpinUntil(() => client.Probes >= probesBefore * 2, TimeSpan.FromSeconds(10)).Should().BeTrue("the callers past the interval start a refresh");
 
         client.Answer.SetResult(false);
         await probe.Refreshing;
 
+        client.Probes.Should().Be(probesBefore * 2, "five callers past the interval share one refresh");
         probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Reachable == false);
     }
 

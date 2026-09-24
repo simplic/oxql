@@ -367,6 +367,16 @@ public sealed class Binder
                 return null;
             }
 
+            // The alias of a remote resolve is the owner's row, not a path of the owner: only a
+            // member of it travels as a semi-join, so a condition on the alias itself stops here
+            // instead of reaching the owner as a match on a name it does not have.
+            if (path.IsRemote && !path.Filterable)
+            {
+                errors.Add(Error(Codes.ResolveNotFilterable,
+                    $"'{condition.Path}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
+                return null;
+            }
+
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
                 errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown

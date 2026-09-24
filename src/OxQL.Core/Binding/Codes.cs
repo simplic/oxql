@@ -54,11 +54,10 @@ public static class Codes
     public const string LookupNotDeclared = "LOOKUP_NOT_DECLARED";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
     /// <summary>
-    /// Reserved and currently unreachable: the shape it was written for — a condition on a
-    /// remote resolve's alias — is accepted and pushed down to the owner as a semi-join, which
-    /// answers 200 with the right rows. It stays in the closed list because the client
-    /// declares and translates it too, and the two lists are one contract; removing it is a
-    /// coordinated change on both sides, not a tidy-up here.
+    /// A condition on the alias of a remote resolve itself (<c>{"veh":{"eq":null}}</c>,
+    /// <c>{"veh":{"exists":true}}</c>): the alias is the owner's row, not a path of the owner, so
+    /// no semi-join can express it and it is refused at bind time, before any owner call. A
+    /// condition on a member of the alias (<c>veh.matchCode</c>) is a semi-join and is admitted.
     /// </summary>
     public const string ResolveNotFilterable = "RESOLVE_NOT_FILTERABLE";
     public const string ResolveNotSortable = "RESOLVE_NOT_SORTABLE";

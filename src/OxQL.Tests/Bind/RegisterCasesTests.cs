@@ -191,6 +191,20 @@ public class RegisterCasesTests
     }
 
     [Fact]
+    public async Task T6b_a_retired_id_in_lookup_from_joins_the_current_entity_with_the_same_notice()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, "probe.customer", """[{ "lookup": { "from": "probe.orders_old", "path": "customerId", "as": "orders" } }]""");
+
+        ((BoundStage.Lookup)bound.Stages[0]).From.Id.Should().Be(Order);
+        var notice = bound.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == Codes.EntityIdRetired).Subject;
+        notice.Stage.Should().Be(0);
+        notice.Params!["currentId"].Should().Be(Order);
+
+        (await BindHost.BoundAsync(BindHost.Probe, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }]"""))
+            .Diagnostics.Should().BeEmpty("the current id carries no notice");
+    }
+
+    [Fact]
     public async Task T7_joins_name_entities_and_follow_declared_references()
     {
         var bound = await BindHost.BoundAsync(BindHost.Probe, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }]""");

@@ -617,11 +617,21 @@ public sealed class Binder
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(lookup.From) || !binder.model.TryResolve(lookup.From, out var child, out _))
+            if (string.IsNullOrWhiteSpace(lookup.From) || !binder.model.TryResolve(lookup.From, out var child, out var retired))
             {
                 errors.Add(Error(Codes.UnknownEntity, $"'{lookup.From}' is not an entity of this host.", index, null));
                 return;
             }
+
+            // A retired id is announced wherever the caller wrote it, as at the root.
+            if (retired)
+                diagnostics.Add(new Diagnostic
+                {
+                    Code = Codes.EntityIdRetired,
+                    Message = $"'{lookup.From}' was retired; the entity is '{child.Id}'.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["currentId"] = child.Id },
+                });
 
             if (!CheckAlias(lookup.As, index, out var alias))
                 return;

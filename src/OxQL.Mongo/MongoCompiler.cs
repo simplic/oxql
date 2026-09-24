@@ -144,6 +144,16 @@ public static class MongoCompiler
         var scope = ScopeFilter(bound.Scope);
         var keyset = page.Cursor is { Mode: PagingMode.Keyset } cursor ? KeysetFrom(cursor, sortFields) : null;
 
+        // A sort path under a local resolve alias has no value before the join writes it, so
+        // the keyset condition on it is evaluated right before the paging sort instead, where
+        // every sort path holds the value the cursor was minted from.
+        var joinedKeyset = keyset is not null && bound.Sort is not null && sortFields.Any(field => field.Path.Root.StoragePrefix.Length > 0)
+            ? keyset
+            : null;
+
+        if (joinedKeyset is not null)
+            keyset = null;
+
         stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope, keyset })));
 
         var countStages = page.IncludeTotalCount ? new List<BsonDocument> { new("$match", scope) } : null;
@@ -240,6 +250,9 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Sort sort:
+                    if (joinedKeyset is not null && ReferenceEquals(sort, bound.Sort))
+                        emitted.Add(new BsonDocument("$match", joinedKeyset));
+
                     emitted.Add(Sort(sort.Fields, bound.PagingMode == PagingMode.Keyset));
                     sortEmitted = true;
                     break;

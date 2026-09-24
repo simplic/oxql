@@ -1,6 +1,7 @@
 using FluentAssertions;
 using MongoDB.Bson;
 using OxQL.Core.Binding;
+using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
 using OxQL.Mongo;
 using OxQL.Tests.Bind;
@@ -139,6 +140,27 @@ public class LateJoinTests
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$match", "$sort", "$limit");
         Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$match", "$limit", "$count");
+    }
+
+    [Fact]
+    public async Task A_keyset_cursor_on_a_resolve_alias_is_evaluated_after_the_join_and_before_the_sort()
+    {
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 2 } }]""";
+        var first = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
+        var id = new BsonBinaryData(Id1, GuidRepresentation.Standard);
+        var cursor = BindHost.Cursors.Encode(new CursorPayload(first.Fingerprint, PagingMode.Keyset, [new CursorValue("cust.name", true, new BsonString("abc")), new CursorValue("_id", true, id)], 0));
+        var compiled = await Compile(pipeline.Replace("""{ "limit": 2 }""", $$"""{ "limit": 2, "cursor": "{{cursor}}" }"""));
+
+        // Before the join the alias holds nothing, and a condition on it there drops every row
+        // (ascending) or none (descending); after the join it reads what the cursor was minted from.
+        ShouldBe(compiled.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            CustomerLookupJson,
+            """{ $set: { cust: { $arrayElemAt: ["$cust__arr", 0] } } }""",
+            """{ $unset: "cust__arr" }""",
+            $$"""{ $match: { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } }""",
+            """{ $sort: { "cust.Name": 1, _id: 1 } }""",
+            "{ $limit: 3 }");
     }
 
     [Fact]

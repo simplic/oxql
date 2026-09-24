@@ -5,6 +5,8 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Options;
 using OxQL.Core.Binding;
 using OxQL.Model;
+using OxQL.Model.Addon;
+using OxQL.Model.Build;
 
 namespace OxQL.Mongo;
 
@@ -44,12 +46,12 @@ public static class WireEncoder
             switch (node)
             {
                 case ShapeNode.Entity entity when name == Shape.ImplicitRoot:
-                    EncodeMembers(row, entity.Def.Root, result, "", shape, Shape.ImplicitRoot, unfit);
+                    EncodeMembers(row, entity.Def.Root, result, "", shape, Shape.ImplicitRoot, unfit, entity.Def);
                     break;
 
                 case ShapeNode.Entity entity:
                     result[name] = row.TryGetValue(name, out var resolved) && resolved is BsonDocument resolvedDocument
-                        ? EncodeObject(resolvedDocument, entity.Def.Root, name + ".", shape, name, unfit)
+                        ? EncodeObject(resolvedDocument, entity.Def.Root, name + ".", shape, name, unfit, entity.Def)
                         : null;
                     break;
 
@@ -61,7 +63,7 @@ public static class WireEncoder
                 case ShapeNode.Array array:
                     if (row.TryGetValue(name, out var arrayValue) && arrayValue is BsonArray items)
                         result[name] = new JsonArray(items.Select(item => item is BsonDocument document
-                            ? (JsonNode?)EncodeObject(document, array.Target.Root, name + ".", shape, name, unfit)
+                            ? (JsonNode?)EncodeObject(document, array.Target.Root, name + ".", shape, name, unfit, array.Target)
                             : Verbatim(item)).ToArray());
                     else
                         result[name] = new JsonArray();
@@ -111,16 +113,20 @@ public static class WireEncoder
         };
     }
 
-    private static JsonObject EncodeObject(BsonDocument document, TypeDef type, string wirePrefix, Shape shape, string root, ICollection<string>? unfit)
+    /// <summary>
+    /// An object's members. <paramref name="entity"/> is the entity whose root row this is, the
+    /// one place an addon bag lives; a nested object has none.
+    /// </summary>
+    private static JsonObject EncodeObject(BsonDocument document, TypeDef type, string wirePrefix, Shape shape, string root, ICollection<string>? unfit, EntityDef? entity = null)
     {
         var result = new JsonObject();
 
-        EncodeMembers(document, type, result, wirePrefix, shape, root, unfit);
+        EncodeMembers(document, type, result, wirePrefix, shape, root, unfit, entity);
 
         return result;
     }
 
-    private static void EncodeMembers(BsonDocument document, TypeDef type, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit)
+    private static void EncodeMembers(BsonDocument document, TypeDef type, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit, EntityDef? entity = null)
     {
         foreach (var member in type.Members)
         {
@@ -137,6 +143,42 @@ public static class WireEncoder
                 : member;
 
             into[member.WireName] = EncodeValue(value, memberShape, wire, shape, root, unfit);
+
+            if (entity is not null && member.WireName == WireNames.AddonWire && entity.Path(WireNames.AddonWire) is { IsAddonRoot: true }
+                && value is BsonDocument bag && into[member.WireName] is JsonObject encodedBag)
+                EncodeDefinedDates(bag, encodedBag, entity, wire, shape, unfit);
+        }
+    }
+
+    /// <summary>
+    /// The bag is untyped storage and renders by BSON type, except where the organisation
+    /// defined a key as a <c>date</c>: the bag holds it as the midnight-UTC instant the driver
+    /// writes for a date, and it travels as <c>YYYY-MM-DD</c> like every other date, which is
+    /// also the only operand a date key accepts. A live definition decides; a retired, an
+    /// undefined or an otherwise kinded key stays what the bag holds.
+    /// </summary>
+    private static void EncodeDefinedDates(BsonDocument bag, JsonObject encoded, EntityDef entity, string bagWire, Shape shape, ICollection<string>? unfit)
+    {
+        if (!shape.Addons.TryGetValue(entity.Id, out var definitions))
+            return;
+
+        foreach (var definition in definitions)
+        {
+            if (definition.Retired || definition.Kind != AddonKind.Date)
+                continue;
+
+            var segments = definition.Path.Split('.');
+            BsonValue? stored = bag;
+            JsonNode? target = encoded;
+
+            for (var index = 0; index < segments.Length - 1 && stored is BsonDocument storedParent && target is JsonObject; index++)
+            {
+                stored = storedParent.TryGetValue(segments[index], out var inner) ? inner : null;
+                target = target[segments[index]];
+            }
+
+            if (stored is BsonDocument parent && target is JsonObject into && parent.TryGetValue(segments[^1], out var value) && into.ContainsKey(segments[^1]))
+                into[segments[^1]] = EncodeScalar(value, Kind.Date, null, bagWire + "." + definition.Path, unfit);
         }
     }
 

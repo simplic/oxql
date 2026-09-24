@@ -141,4 +141,48 @@ public class CoreHardeningWireEncoderTests
                 Entries.Add((logLevel, formatter(state, exception)));
         }
     }
+
+    // ---- a defined date addon key ----------------------------------------------------------
+
+    private sealed class DateDefinitions : OxQL.Model.Addon.IAddonDefinitionSource
+    {
+        public ValueTask<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>>(entity == Order
+                ? [
+                    new() { Id = Guid.NewGuid(), Entity = Order, Path = "due", Kind = OxQL.Model.Addon.AddonKind.Date },
+                    new() { Id = Guid.NewGuid(), Entity = Order, Path = "trip.start", Kind = OxQL.Model.Addon.AddonKind.Date },
+                    new() { Id = Guid.NewGuid(), Entity = Order, Path = "stamp", Kind = OxQL.Model.Addon.AddonKind.DateTime },
+                    new() { Id = Guid.NewGuid(), Entity = Order, Path = "old", Kind = OxQL.Model.Addon.AddonKind.Date, Retired = true },
+                  ]
+                : []);
+    }
+
+    [Fact]
+    public async Task A_defined_date_addon_key_is_written_as_a_date_and_every_other_bag_value_as_the_bag_holds_it()
+    {
+        var midnight = new BsonDateTime(new DateTime(2026, 6, 16, 0, 0, 0, DateTimeKind.Utc));
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "project": { "id": 1, "addon": 1 } }]""", BindHost.Context(addons: new DateDefinitions()));
+        var row = WireEncoder.Encode(new BsonDocument
+        {
+            ["_id"] = new BsonBinaryData(Guid.Parse("11111111-1111-1111-1111-111111111111"), GuidRepresentation.Standard),
+            ["Addon"] = new BsonDocument
+            {
+                ["due"] = midnight,
+                ["trip"] = new BsonDocument("start", midnight),
+                ["stamp"] = midnight,
+                ["old"] = midnight,
+                ["plain"] = midnight,
+                ["text"] = "2026-06-16",
+            },
+        }, bound);
+
+        var bag = row["addon"]!;
+
+        bag["due"]!.GetValue<string>().Should().Be("2026-06-16", "a defined date travels as YYYY-MM-DD, the form its operand takes");
+        bag["trip"]!["start"]!.GetValue<string>().Should().Be("2026-06-16", "a definition path may point inside a subobject");
+        bag["stamp"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a dateTime key is an instant");
+        bag["old"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a retired key is unknown and stays what the bag holds");
+        bag["plain"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "an undefined key has no kind to encode by");
+        bag["text"]!.GetValue<string>().Should().Be("2026-06-16");
+    }
 }

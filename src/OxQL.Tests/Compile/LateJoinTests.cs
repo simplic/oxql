@@ -191,6 +191,28 @@ public class LateJoinTests
     }
 
     [Fact]
+    public async Task An_unwind_of_a_lookup_alias_under_its_own_as_addresses_the_child_under_that_name()
+    {
+        var pipeline = $$"""[{{OrdersLookup}}, { "unwind": { "path": "orders", "as": "order" } }, { "match": { "order.number": { "eq": "n-1" } } }, { "project": { "id": 1, "order.number": 1 } }, { "page": { "limit": 5 } }]""";
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
+        var compiled = MongoCompiler.Compile(bound, Options);
+
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$unwind", "$set", "$match", "$project", "$sort", "$limit");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
+        compiled.PageStages[4]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
+
+        var row = WireEncoder.Encode(new BsonDocument
+        {
+            ["_id"] = new BsonBinaryData(Id1, GuidRepresentation.Standard),
+            ["orders"] = new BsonDocument("Number", "n-1"),
+            ["order"] = new BsonDocument("Number", "n-1"),
+        }, bound);
+
+        row.Select(pair => pair.Key).Should().Equal(["id", "order"], "the projection kept the element under its as and dropped the lookup alias");
+        row["order"]!["number"]!.GetValue<string>().Should().Be("n-1");
+    }
+
+    [Fact]
     public async Task A_lookup_a_later_unwind_reads_stays_before_the_unwind()
     {
         var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);

@@ -167,8 +167,12 @@ public sealed class Shape
 
         if (path.Root is ShapeNode.Array array && path.Path is null)
         {
-            // Unwinding a lookup alias: the alias becomes one target row.
+            // Unwinding a lookup alias: the alias becomes one target row, and so does the name
+            // the unwind writes it under.
             roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix);
+
+            if (alias is not null)
+                roots[alias] = new ShapeNode.Entity(array.Target, alias);
         }
         else
         {

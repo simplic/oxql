@@ -164,6 +164,20 @@ public class LateJoinTests
     }
 
     [Fact]
+    public async Task A_resolve_alias_sorted_on_and_dropped_by_the_projection_stays_in_storage_and_out_of_the_row()
+    {
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2 } }]""";
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
+        var compiled = MongoCompiler.Compile(bound, Options);
+
+        compiled.PageStages.Should().Contain(stage => stage.Contains("$project") && stage["$project"].AsBsonDocument.Contains("cust.Name"), "the cursor reads the sort path off the last row");
+
+        var row = WireEncoder.Encode(new BsonDocument { ["_id"] = new BsonBinaryData(Id1, GuidRepresentation.Standard), ["cust"] = new BsonDocument("Name", "Alice") }, bound);
+
+        row.Select(pair => pair.Key).Should().Equal(["id"], "the projection is the caller's; the sort path it kept is paging's");
+    }
+
+    [Fact]
     public async Task A_resolve_a_later_sort_reads_stays_before_the_sort()
     {
         var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");

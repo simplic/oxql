@@ -290,7 +290,8 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
 
 - `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`. The service also
   accepts a Windows zone id and sends the IANA id it maps to; a zone neither resolves is
-  `INVALID_TIMEZONE`.
+  `INVALID_TIMEZONE`. An IANA id must also map to a Windows zone, so the answer is the same
+  on every host platform: `CET` and `Europe//Berlin` are refused on Windows and Linux alike.
 - The boundary is computed in local time, so a bucket follows daylight saving: the Berlin day
   bucket of 29 March is `2026-03-28T23:00:00Z`, that of 25 October `2026-10-24T22:00:00Z`. The key
   is emitted as the UTC instant of the local boundary and is not a UTC midnight; compare it as an

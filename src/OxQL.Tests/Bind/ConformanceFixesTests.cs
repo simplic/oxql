@@ -256,6 +256,7 @@ public class ConformanceFixesTests
     [Theory]
     [InlineData("Mars/Olympus")]
     [InlineData("CET")]
+    [InlineData("Europe//Berlin")]
     public async Task G6_an_unknown_timezone_is_still_refused(string timezone) =>
         (await Error($$"""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "day", "timezone": "{{timezone}}" }, "as": "d" }], "fields": {} } }]""", Codes.InvalidTimezone))
             .Message.Should().Contain("is not an IANA timezone");

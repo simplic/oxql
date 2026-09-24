@@ -1089,8 +1089,12 @@ public sealed class Binder
             if (!zone.HasIanaId)
                 return TimeZoneInfo.TryConvertWindowsIdToIanaId(zone.Id, out iana);
 
+            // On Linux the runtime finds a zone by its file under the zoneinfo directory, so it
+            // also accepts ids Mongo refuses ("Europe//Berlin") and names Windows cannot find
+            // ("CET"). Requiring the id to be one the runtime maps to a Windows zone is the rule
+            // Windows applies anyway, so an id binds or is refused the same on every platform.
             iana = zone.Id;
-            return true;
+            return TimeZoneInfo.TryConvertIanaIdToWindowsId(iana, out _);
         }
 
         private BoundExpression? BindExpression(QueryExpression expression, int index, string function, out Kind kind, out ShapeDef? shapeDef)

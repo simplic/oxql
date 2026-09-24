@@ -29,7 +29,8 @@ public sealed record FilterConditionOptions
     /// <summary>Whether a string comparison compares exactly rather than folding case and accents; null when not written.</summary>
     public bool? CaseSensitive { get; init; }
 
-    /// <summary>The option names the caller wrote that the engine does not know.</summary>
+    /// <summary>The option names the caller wrote that the engine does not know; read by the binder, never part of the wire form.</summary>
+    [JsonIgnore]
     public IReadOnlyList<string>? Unknown { get; init; }
 }
 

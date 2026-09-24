@@ -1285,16 +1285,22 @@ public sealed class Binder
                     continue;
                 }
 
+                // The object form is contract 2; under contract 1 a direction is a string.
+                if (!contract2 && field.ObjectForm)
+                {
+                    errors.Add(Error(Codes.InvalidSortDirection, "A sort entry is a path and a direction string, asc or desc; the object form is a contract 2 form.", index, field.Path));
+                    continue;
+                }
+
                 if (field.Unknown.Count > 0)
                 {
                     errors.Add(Error(Codes.UnknownStageMember, $"'{string.Join(", ", field.Unknown)}' is not a member of a sort entry; the object form carries direction and caseSensitive.", index, field.Path));
                     continue;
                 }
 
-                // The object form is contract 2; under contract 1 a direction is a string.
-                if (!contract2 && field.CaseSensitive is not null)
+                if (field.ObjectForm && field.Direction.Length == 0)
                 {
-                    errors.Add(Error(Codes.InvalidSortDirection, $"A sort entry is a path and a direction, asc or desc; 'caseSensitive' is a contract 2 member.", index, field.Path));
+                    errors.Add(Error(Codes.InvalidSortDirection, "The object form of a sort entry needs a direction, asc or desc.", index, field.Path));
                     continue;
                 }
 

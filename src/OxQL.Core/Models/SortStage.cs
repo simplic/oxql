@@ -20,6 +20,10 @@ public sealed record SortField
     /// <summary>Whether a string member orders by its exact value; null when the entry does not say.</summary>
     public bool? CaseSensitive { get; init; }
 
+    /// <summary>Whether the entry was written in the object form, which contract 1 does not accept.</summary>
+    [JsonIgnore]
+    public bool ObjectForm { get; init; }
+
     /// <summary>The members of the object form the engine does not know, for the binder to refuse.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
@@ -90,7 +94,7 @@ internal sealed class SortFieldConverter : JsonConverter<SortField>
                 unknown.Add(member.Name);
         }
 
-        return new SortField { Path = path, Direction = direction, CaseSensitive = caseSensitive, Unknown = unknown };
+        return new SortField { Path = path, Direction = direction, CaseSensitive = caseSensitive, Unknown = unknown, ObjectForm = true };
     }
 
     public override void Write(Utf8JsonWriter writer, SortField value, JsonSerializerOptions options)

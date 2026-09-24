@@ -74,6 +74,25 @@ public class RemoteHostTests
     }
 
     [Fact]
+    public void The_strict_refusal_is_the_error_a_test_sees_when_the_failed_start_disposes_the_host_first()
+    {
+        // The Sample's entry point fails, disposes its host and ends before the factory starts
+        // it: the factory's start meets a disposed provider, and the fixture surfaces the
+        // refusal the web host logged instead of that artefact.
+        var client = new FakeRemoteClient { Configured = ["vehicle"] };
+
+        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client))
+        {
+            Environment = "Development",
+            StartDelay = TimeSpan.FromMilliseconds(250),
+        };
+
+        var act = () => host.CreateClient();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*InternalHosts*crm*");
+    }
+
+    [Fact]
     public async Task A_reference_into_an_unconfigured_service_is_logged_and_served_on_every_other_host()
     {
         var client = new FakeRemoteClient { Configured = ["vehicle"] };

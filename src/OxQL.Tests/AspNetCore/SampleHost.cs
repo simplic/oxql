@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using OxQL.Core.Engine;
@@ -68,6 +70,37 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
             services.PostConfigure<OxQL.AspNetCore.OxQLEndpointOptions>(endpoint => endpoint.ContinuousIntegration = ContinuousIntegration);
             configure?.Invoke(services);
         });
+    }
+
+    /// <summary>Test hook: a pause between building the host and starting it, to widen the start race on purpose.</summary>
+    internal TimeSpan StartDelay { get; init; }
+
+    /// <summary>
+    /// Starts the host and, when the Sample refuses to start, surfaces the refusal itself. The
+    /// Sample runs its entry point on a thread of its own: <c>app.Run()</c> fails, disposes the
+    /// host and ends, while this thread starts the deferred host, which first resolves
+    /// <see cref="IHostApplicationLifetime"/> from that host. When the entry point wins the race
+    /// the start throws <see cref="ObjectDisposedException"/> for the service provider instead of
+    /// the startup error. The web host logs the startup error before it rethrows it, so the
+    /// captured log holds it whichever thread wins.
+    /// </summary>
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = builder.Build();
+
+        if (StartDelay > TimeSpan.Zero)
+            Thread.Sleep(StartDelay);
+
+        try
+        {
+            host.Start();
+        }
+        catch (ObjectDisposedException) when (Logs.StartupError is { } startupError)
+        {
+            ExceptionDispatchInfo.Throw(startupError);
+        }
+
+        return host;
     }
 
     /// <summary>A client under one contract (null: no header) for one organisation.</summary>
@@ -132,21 +165,31 @@ internal sealed class LogCapture : ILoggerProvider
 {
     public ConcurrentQueue<(string Category, LogLevel Level, string Message)> Entries { get; } = new();
 
-    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries);
+    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, this);
 
     public IEnumerable<string> Of(string category) => Entries.Where(entry => entry.Category == category).Select(entry => entry.Message);
+
+    /// <summary>The exception the web host logged when building the application failed (its startup error), if any.</summary>
+    public Exception? StartupError { get; private set; }
 
     public void Dispose()
     {
     }
 
-    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, string)> entries) : ILogger
+    private sealed class Logger(string category, LogCapture capture) : ILogger
     {
+        private const string HostingDiagnostics = "Microsoft.AspNetCore.Hosting.Diagnostics";
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            entries.Enqueue((category, logLevel, formatter(state, exception)));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (exception is not null && category == HostingDiagnostics && logLevel == LogLevel.Critical)
+                capture.StartupError ??= exception;
+
+            capture.Entries.Enqueue((category, logLevel, formatter(state, exception)));
+        }
     }
 }

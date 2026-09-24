@@ -36,6 +36,11 @@ public static class WireEncoder
 
         foreach (var (name, node) in shape.Roots)
         {
+            // A join alias, an unwind alias or an index a projection after it did not keep is
+            // not in the row: an empty array or a null there would say the join found nothing.
+            if (name != Shape.ImplicitRoot && shape.Dropped.Contains(name))
+                continue;
+
             switch (node)
             {
                 case ShapeNode.Entity entity when name == Shape.ImplicitRoot:

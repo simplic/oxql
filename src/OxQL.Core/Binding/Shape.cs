@@ -48,6 +48,8 @@ public sealed class Shape
     /// <summary>The longest segment a path may have, in characters; see <see cref="MaxSegments"/>.</summary>
     private const int MaxSegmentLength = 256;
 
+    private static readonly IReadOnlySet<string> NoRoots = new HashSet<string>(StringComparer.Ordinal);
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> NoAddons =
         new Dictionary<string, IReadOnlyList<AddonDefinition>>(StringComparer.Ordinal);
 
@@ -58,7 +60,8 @@ public sealed class Shape
         bool grouped,
         IReadOnlySet<string>? included,
         IReadOnlySet<string>? excluded,
-        IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> addons)
+        IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> addons,
+        IReadOnlySet<string>? dropped = null)
     {
         Entity = entity;
         Roots = roots;
@@ -67,6 +70,7 @@ public sealed class Shape
         Included = included;
         Excluded = excluded;
         Addons = addons;
+        Dropped = dropped ?? NoRoots;
     }
 
     /// <summary>The entity the pipeline entered.</summary>
@@ -89,6 +93,17 @@ public sealed class Shape
 
     /// <summary>Addon definitions per entity id, for every entity the pipeline entered.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> Addons { get; }
+
+    /// <summary>
+    /// The named roots a projection after them did not keep. They stay roots, so their name
+    /// stays taken and a path under them stays "removed by the projection", but the row no
+    /// longer carries them. A root a stage adds after a projection is not in here: the
+    /// projection could not name it, and the row carries it.
+    /// </summary>
+    public IReadOnlySet<string> Dropped { get; }
+
+    /// <summary>Whether the row carries a named root: it is a root and no projection after it dropped it.</summary>
+    public bool Carries(string name) => Roots.ContainsKey(name) && !Dropped.Contains(name);
 
     /// <summary>True while every row is still one entity row with its key: keyset paging applies.</summary>
     public bool IsRootShape => !Grouped && Unwound.Count == 0;
@@ -141,7 +156,7 @@ public sealed class Shape
     {
         var roots = new Dictionary<string, ShapeNode>(Roots, StringComparer.Ordinal) { [alias] = node };
 
-        return new Shape(Entity, roots, Unwound, Grouped, Included, Excluded, Addons);
+        return new Shape(Entity, roots, Unwound, Grouped, Included, Excluded, Addons, Dropped);
     }
 
     /// <summary>The shape after unwinding <paramref name="path"/>, optionally under an alias and with an index root.</summary>
@@ -166,7 +181,7 @@ public sealed class Shape
         if (indexAlias is not null)
             roots[indexAlias] = new ShapeNode.Scalar(Kind.Int, indexAlias);
 
-        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons);
+        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons, Dropped);
     }
 
     /// <summary>The shape after a group: only the outputs, each rooted at its alias.</summary>
@@ -187,9 +202,18 @@ public sealed class Shape
         if (inclusion && includeId && !Grouped)
             set.Add(Model.Build.WireNames.IdWire);
 
-        return inclusion
+        var projected = inclusion
             ? new Shape(Entity, Roots, Unwound, Grouped, set, null, Addons)
             : new Shape(Entity, Roots, Unwound, Grouped, null, set, Addons);
+
+        // A named root the projection does not keep leaves the row, as a member does.
+        var dropped = new HashSet<string>(Dropped, StringComparer.Ordinal);
+
+        foreach (var name in Roots.Keys)
+            if (name != ImplicitRoot && !projected.IsVisible(name))
+                dropped.Add(name);
+
+        return new Shape(Entity, Roots, Unwound, Grouped, projected.Included, projected.Excluded, Addons, dropped);
     }
 
     public static string UnwoundKey(string root, string wire) => root + "|" + wire;

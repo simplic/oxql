@@ -166,9 +166,17 @@ public class LateJoinTests
     [Fact]
     public async Task A_join_before_a_group_stays_where_it_was_written()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "group": { "by": [{ "path": "cust.name", "as": "customer" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$group", "$project", "$sort", "$limit");
+    }
+
+    [Fact]
+    public async Task A_join_a_group_does_not_read_is_not_run()
+    {
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]""");
+
+        Kinds(compiled.PageStages).Should().Equal(["$match", "$group", "$project", "$sort", "$limit"], "the group replaces the row, and nothing in it reads the alias");
     }
 
     [Fact]
@@ -188,13 +196,26 @@ public class LateJoinTests
 
         Kinds(narrowed.PageStages).Should().Equal("$match", "$lookup", "$project", "$sort", "$limit");
 
-        var excluded = await Compile($$"""[{{OrdersLookup}}, { "project": { "orders": 0 } }, { "page": { "limit": 5 } }]""", Customer);
+        var read = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "n-1" } } }, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(excluded.PageStages).Should().Equal("$match", "$lookup", "$project", "$sort", "$limit");
+        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$match", "$project", "$sort", "$limit"], "a match reads the alias before the projection drops it");
+    }
 
-        var dropped = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
+    [Fact]
+    public async Task A_join_whose_alias_a_projection_drops_and_nothing_reads_is_not_run()
+    {
+        foreach (var (entity, join, projection) in new[]
+        {
+            (Customer, OrdersLookup, """{ "project": { "orders": 0 } }"""),
+            (Customer, OrdersLookup, """{ "project": { "id": 1, "name": 1 } }"""),
+            (Order, CustomerResolve, """{ "project": { "id": 1, "number": 1 } }"""),
+        })
+        {
+            var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "includeTotalCount": true } }]""", entity);
 
-        Kinds(dropped.PageStages).Should().Equal("$match", "$lookup", "$project", "$sort", "$limit");
+            Kinds(compiled.PageStages).Should().Equal(["$match", "$project", "$sort", "$limit"], $"{join} then {projection}: the row does not carry the alias");
+            Kinds(compiled.CountStages!).Should().Equal("$match", "$project", "$limit", "$count");
+        }
     }
 
     [Fact]

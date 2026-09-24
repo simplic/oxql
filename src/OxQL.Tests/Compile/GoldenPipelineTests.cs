@@ -273,9 +273,9 @@ public class GoldenPipelineTests
     [Fact]
     public async Task A_projection_keeps_the_reference_member_a_remote_resolve_reads()
     {
-        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }]""")).PageStages[1]
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact": 1 } }]""")).PageStages[1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "the resolver keys the page rows on the member after the aggregate");
-        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contactNumber": 1 } }]""")).PageStages[1]
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contactNumber": 1, "contact.name": 1 } }]""")).PageStages[1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "a kept member is not added twice");
         (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0, "addon": 0 } }]""")).PageStages[1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0 } }"), "an exclusion of the member is not emitted");
@@ -283,6 +283,15 @@ public class GoldenPipelineTests
         var nothingLeft = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0 } }]""");
 
         nothingLeft.PageStages.Should().NotContain(stage => stage.Contains("$project"), "an empty $project is not a valid stage");
+    }
+
+    [Fact]
+    public async Task A_remote_resolve_whose_alias_the_projection_drops_is_not_run_and_keeps_nothing()
+    {
+        var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }]""");
+
+        compiled.RemoteResolves.Should().BeEmpty("the row does not carry the alias, so there is nothing to ask the owner for");
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "no reference member is kept for a resolve that does not run");
     }
 
     [Fact]

@@ -164,6 +164,11 @@ public static class MongoCompiler
             var stage = bound.Stages[index];
             var emitted = new List<BsonDocument>();
 
+            // A join whose alias no later stage reads and the row does not show adds nothing
+            // anyone sees, and a projection would only drop it again: it is not run at all.
+            if (JoinAlias(stage) is { } joined && !JoinUsed(bound, index, joined))
+                continue;
+
             switch (stage)
             {
                 case BoundStage.Match match:
@@ -177,6 +182,12 @@ public static class MongoCompiler
 
                 case BoundStage.Lookup lookup:
                     emitted.Add(Lookup(lookup, semiJoins, collated));
+                    break;
+
+                // The owner's row only ever reaches the wire row; a projection that dropped the
+                // alias leaves nothing to call the owner for. A match under the alias is a
+                // semi-join, which fetches its ids apart from this.
+                case BoundStage.Resolve { IsRemote: true } remoteResolve when !Shown(bound.FinalShape, remoteResolve.As):
                     break;
 
                 case BoundStage.Resolve { IsRemote: true } remoteResolve:
@@ -844,6 +855,17 @@ public static class MongoCompiler
         BoundStage.Resolve { IsRemote: false } resolve => resolve.As,
         _ => null,
     };
+
+    /// <summary>
+    /// Whether a local join is needed: a later stage other than a projection reads its alias,
+    /// or the final row shows it. A projection that names the alias only passes it on.
+    /// </summary>
+    private static bool JoinUsed(BoundPipeline bound, int index, string alias) =>
+        bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, alias))
+        || Shown(bound.FinalShape, alias);
+
+    /// <summary>Whether the final row carries an alias: it is still a root and no projection after it dropped it.</summary>
+    private static bool Shown(Shape shape, string alias) => shape.Carries(alias);
 
     /// <summary>
     /// Whether a join can run after the page is taken. It can when no later stage filters,

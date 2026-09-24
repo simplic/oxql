@@ -237,13 +237,28 @@ public class RemoteResolverTests
         runner.PageRows = [Row(Id1, "a", "c1")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1 } }, { "page": { "limit": 10 } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1, "contact": 1 } }, { "page": { "limit": 10 } }]""");
 
         var row = result.Items.Should().ContainSingle().Subject!.AsObject();
 
         row["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
         row["number"]!.GetValue<string>().Should().Be("a");
         row.ContainsKey("contactNumber").Should().BeFalse("the projection dropped it from the wire view");
+    }
+
+    [Fact]
+    public async Task A_remote_resolve_whose_alias_the_projection_drops_calls_no_owner_and_the_row_leaves_it_out()
+    {
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", "c1")];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
+
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1 } }, { "page": { "limit": 10 } }]""");
+
+        var row = result.Items.Should().ContainSingle().Subject!.AsObject();
+
+        row.Select(pair => pair.Key).Should().BeEquivalentTo(["id", "number"], "a null under the alias would say the owner has no such row");
+        client.Calls.Should().BeEmpty("nothing downstream reads the alias");
     }
 
     // ---- semi-join ------------------------------------------------------------------------

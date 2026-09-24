@@ -11,7 +11,7 @@ namespace OxQL.Tests.Bind;
 
 /// <summary>
 /// One case per defect the live conformance validation of 2026-09-18 proved against a running
-/// lab (<c>.api/deep/oxql-lab/v2/FINDINGS-*.md</c>). Each pins the fixed behaviour, so the
+/// fleet of services. Each pins the fixed behaviour, so the
 /// defect coming back turns the case red rather than passing quietly; the finding id is in
 /// every name and the reproduction is in every comment.
 /// </summary>

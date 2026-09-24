@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// A condition on the alias of a remote resolve itself (D-4). The alias is the owner's row, not a
+/// A condition on the alias of a remote resolve itself. The alias is the owner's row, not a
 /// path of the owner, so no semi-join can express it: the binder refuses it with
 /// <c>RESOLVE_NOT_FILTERABLE</c> at the match stage, and the owner is never called. A condition on
 /// a member of the alias stays a semi-join.

@@ -7,7 +7,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The defect register (<c>oxql-lab/OXQL_DEFECTS.md</c>), one named case per row that is an
+/// The v1 defect register, one named case per row that is an
 /// engine fault: what v1 did silently, v2 refuses with a code or does right. F8 is a
 /// base-package configuration item; T1, T3 and T4 are the wire spelling, the removed
 /// <c>/types</c> endpoint and the published limits, covered by the model and the options.

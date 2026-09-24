@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// D-3: a sort after a group is completed by the group keys. A grouped shape pages by offset;
+/// A sort after a group is completed by the group keys. A grouped shape pages by offset;
 /// without the keys, <c>$skip</c> over rows tied on every sort field repeated and dropped
 /// groups between pages, and the same page asked twice answered different groups.
 /// </summary>

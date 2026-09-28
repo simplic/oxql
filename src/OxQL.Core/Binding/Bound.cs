@@ -56,13 +56,21 @@ public sealed record ResolvedPath
 public abstract record ShapeNode(string StoragePrefix)
 {
     /// <summary>An entity: the implicit root, or a resolved local target under its alias.</summary>
-    public sealed record Entity(EntityDef Def, string StoragePrefix) : ShapeNode(StoragePrefix);
+    public sealed record Entity(EntityDef Def, string StoragePrefix) : ShapeNode(StoragePrefix)
+    {
+        /// <summary>The paths a join fetched under its alias (its select, key included); null for a whole row.</summary>
+        public IReadOnlyList<string>? Select { get; init; }
+    }
 
     /// <summary>An unwound element under its alias.</summary>
     public sealed record Element(EntityDef Def, PathDef Source, string StoragePrefix) : ShapeNode(StoragePrefix);
 
     /// <summary>A lookup alias: an array of the target entity.</summary>
-    public sealed record Array(EntityDef Target, string StoragePrefix) : ShapeNode(StoragePrefix);
+    public sealed record Array(EntityDef Target, string StoragePrefix) : ShapeNode(StoragePrefix)
+    {
+        /// <summary>The paths the lookup fetched of each child (its select, key included).</summary>
+        public IReadOnlyList<string>? Select { get; init; }
+    }
 
     /// <summary>
     /// A resolved remote target under its alias: its shape lives on another host. A condition on

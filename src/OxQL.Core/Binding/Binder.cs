@@ -1027,6 +1027,14 @@ public sealed class Binder
                 return;
             }
 
+            // Nor did a join that fetched the parent without the member the lookup joins on.
+            if (lookup.On is not null && shape.NotSelected(lookup.On + "." + parentKey.Wire) is not null)
+            {
+                errors.Add(Error(Codes.UnknownPath,
+                    $"'{lookup.On}.{parentKey.Wire}' is not in the select of '{lookup.On}'; the lookup joins on it, so add '{parentKey.Wire}' to that select.", index, lookup.On));
+                return;
+            }
+
             var childScope = ScopeOf(child, context.Organisation!.Value);
 
             if (childScope is null)
@@ -1061,7 +1069,9 @@ public sealed class Binder
 
             stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKeyStorage, childPath.Storage!,
                 sortFields, first, lookup.On, index));
-            shape = shape.WithRoot(alias, first ? new ShapeNode.Entity(child, alias) : new ShapeNode.Array(child, alias));
+            var fetched = select.Select(path => path.Wire).ToList();
+
+            shape = shape.WithRoot(alias, first ? new ShapeNode.Entity(child, alias) { Select = fetched } : new ShapeNode.Array(child, alias) { Select = fetched });
         }
 
         /// <summary>
@@ -1375,7 +1385,7 @@ public sealed class Binder
             // Step 6: the shape. An inline alias is a row of the aggregate; a keyed local one is
             // joined after the page and checked here; a remote one is the owner's.
             if (inline)
-                shape = shape.WithRoot(alias, new ShapeNode.Entity(first.Entity!, alias));
+                shape = shape.WithRoot(alias, new ShapeNode.Entity(first.Entity!, alias) { Select = first.Select?.Select(path => path.Wire).ToList() });
             else if (anyRemote)
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(first.Declared.Entity, reference, alias, SemiJoinable: stage.IsPlain));
             else

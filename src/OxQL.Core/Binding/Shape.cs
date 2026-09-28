@@ -176,10 +176,10 @@ public sealed class Shape
         {
             // Unwinding a lookup alias: the alias becomes one target row, and so does the name
             // the unwind writes it under.
-            roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix);
+            roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix) { Select = array.Select };
 
             if (alias is not null)
-                roots[alias] = new ShapeNode.Entity(array.Target, alias);
+                roots[alias] = new ShapeNode.Entity(array.Target, alias) { Select = array.Select };
         }
         else
         {
@@ -282,6 +282,11 @@ public sealed class Shape
 
         if (!IsVisible(wire))
             return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.");
+
+        // A join fetches only its select: a path beyond it has no value to filter, sort or show.
+        if (NotSelected(wire) is { } join)
+            return PathResolution.Fail(Codes.UnknownPath,
+                $"'{wire}' is not in the select of '{join.Alias}', which fetched {string.Join(", ", join.Select.Select(path => $"'{path}'"))}; add it to the select.");
 
         var resolution = node switch
         {
@@ -624,6 +629,34 @@ public sealed class Shape
             : storage;
 
         return prefix.Length == 0 ? remainder : prefix + "." + remainder;
+    }
+
+    /// <summary>
+    /// The join alias whose select does not cover a path under it, with that select; null when the
+    /// path is not under a join alias, or the select fetched it, a member of it, or a parent of it.
+    /// </summary>
+    public (string Alias, IReadOnlyList<string> Select)? NotSelected(string wire)
+    {
+        var dot = wire.IndexOf('.', StringComparison.Ordinal);
+
+        if (dot <= 0 || !Roots.TryGetValue(wire[..dot], out var node))
+            return null;
+
+        var select = node switch
+        {
+            ShapeNode.Entity entity => entity.Select,
+            ShapeNode.Array array => array.Select,
+            _ => null,
+        };
+
+        if (select is null)
+            return null;
+
+        var relative = wire[(dot + 1)..];
+
+        return select.Any(path => relative == path || relative.StartsWith(path + ".", StringComparison.Ordinal) || path.StartsWith(relative + ".", StringComparison.Ordinal))
+            ? null
+            : (wire[..dot], select);
     }
 
     /// <summary>Whether a wire path survives the projection at this shape.</summary>

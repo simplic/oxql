@@ -100,12 +100,16 @@ namespace OxQL.Tests.Model.Fixtures.VariantMerge
     {
         public const string Holder = "rv.holder";
 
-        private static readonly Lazy<EntityModel> model = new(() =>
+        /// <summary>Registers the variants' class maps; <see cref="ModelTestSetup"/> calls it when the test assembly loads.</summary>
+        internal static void Register()
         {
             foreach (var type in new[] { typeof(RvDriver), typeof(RvTruck), typeof(RvPlain), typeof(RvTaggedA), typeof(RvTaggedB), typeof(RvOne.Item), typeof(RvTwo.Item), typeof(RvOther) })
                 if (!BsonClassMap.IsClassMapRegistered(type))
                     BsonClassMap.RegisterClassMap(new BsonClassMap(type).Also(map => map.AutoMap()));
+        }
 
+        private static readonly Lazy<EntityModel> model = new(() =>
+        {
             return ClrModelBuilder.Build(
             [
                 new EntityDeclaration(Holder, Holder, typeof(RvHolder), "holders", null, false),

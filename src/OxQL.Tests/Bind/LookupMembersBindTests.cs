@@ -67,7 +67,7 @@ public class LookupMembersBindTests
     public async Task First_places_one_entity_row_whose_members_later_stages_address()
     {
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, """
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true, "sort": [{ "when": "desc" }] } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true, "sort": [{ "when": "desc" }], "select": ["number", "when"] } },
              { "match": { "latest.number": { "eq": "n-1" } } },
              { "sort": [{ "latest.when": "desc" }] }]
             """);
@@ -79,6 +79,11 @@ public class LookupMembersBindTests
 
         await BindHost.ErrorAsync(BindHost.Probe, Customer,
             """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "unwind": { "path": "latest" } }]""", Codes.NotACollection);
+
+        // A member the lookup did not fetch has no value: sorting or matching on it is refused (PRE-1).
+        (await BindHost.ErrorAsync(BindHost.Probe, Customer,
+            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "sort": [{ "latest.when": "desc" }] }]""", Codes.UnknownPath))
+            .Message.Should().Contain("not in the select of 'latest'");
     }
 
     [Fact]
@@ -121,7 +126,7 @@ public class LookupMembersBindTests
     public async Task On_an_unwound_lookup_alias_joins_under_that_alias()
     {
         var lookup = (await BindHost.BoundAsync(BindHost.Probe, Customer, """
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["customerId"] } },
              { "unwind": { "path": "orders", "as": "order" } },
              { "resolve": { "path": "order.customerId", "as": "buyer" } },
              { "lookup": { "from": "probe.order", "path": "customerId", "on": "buyer", "as": "buyerOrders", "limit": 2 } }]

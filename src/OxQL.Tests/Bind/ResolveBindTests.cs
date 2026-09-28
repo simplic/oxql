@@ -95,7 +95,7 @@ public class ResolveBindTests
     public async Task A_path_through_a_lookup_array_is_RESOLVE_ON_COLLECTION_which_used_to_join_silently()
     {
         var error = await BindHost.ErrorAsync(BindHost.Probe, "probe.customer", """
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["customerId"] } },
              { "resolve": { "path": "orders.customerId", "as": "again" } }]
             """, Codes.ResolveOnCollection);
 

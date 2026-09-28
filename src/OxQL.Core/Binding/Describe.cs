@@ -524,7 +524,8 @@ public sealed class Describe
         {
             var name = LastSegment(path.Wire);
 
-            if (name != "*" && shape.IsVisible(prefix + "." + name))
+            // A join's alias offers what its select fetched, nothing it would answer as missing.
+            if (name != "*" && shape.IsVisible(prefix + "." + name) && shape.NotSelected(prefix + "." + name) is null)
                 yield return (name, prefix + "." + name);
         }
     }

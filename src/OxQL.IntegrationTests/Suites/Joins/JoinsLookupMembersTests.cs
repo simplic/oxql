@@ -99,7 +99,7 @@ public class JoinsLookupMembersTests
     public async Task A_truncated_lookup_under_a_group_is_still_reported()
     {
         var answer = await (await TransportClient()).SendAsync(ReportSeed.Shipment, """
-            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 1 } },
+            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 1, "select": ["status.displayName"] } },
               { "unwind": { "path": "attempts" } },
               { "group": { "by": [ { "path": "attempts.status.displayName", "as": "status" } ], "fields": { "n": { "count": true } } } } ]
             """);

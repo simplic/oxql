@@ -355,7 +355,7 @@ public class ContinuationExecutionTests
         var refusal = RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "nope"] } }]"""));
 
         refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
-        refusal.Errors[1].Path.Should().Be("nope");
+        refusal.Errors![1].Path.Should().Be("nope");
     }
 
     [Fact]

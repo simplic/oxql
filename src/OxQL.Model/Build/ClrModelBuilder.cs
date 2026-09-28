@@ -433,19 +433,40 @@ public sealed class ClrModelBuilder
     /// Appends every wire name some variant has and the type has not, as a nullable copy
     /// carrying <see cref="MemberDef.OnlyFor"/>: variants in their ordinal order, members in the
     /// variant's order. Variants that disagree on a member's shape or storage name make it
-    /// <see cref="Kind.Unknown"/>.
+    /// <see cref="Kind.Unknown"/>. Variants that share a name are not described as variants.
+    /// <para>
+    /// The copy carries the references its carriers declare: the same cases when every carrier
+    /// declares the same; otherwise each carrier's cases conditioned on the carrier's stored
+    /// variant, so a row resolves only by what its own variant declares; and none, with a finding,
+    /// when a carrier's case tests a sibling path, which a variant condition cannot be combined with.
+    /// </para>
     /// </summary>
     private void Merge(TypeDef type, Type owner, string label, IReadOnlyList<Type> variants)
     {
         var members = type.Members.ToList();
         var own = new HashSet<string>(members.Select(member => member.WireName), StringComparer.Ordinal);
-        var merged = new Dictionary<string, (MemberDef Copy, MemberDef First, List<string> Carriers)>(StringComparer.Ordinal);
+        var merged = new Dictionary<string, (MemberDef Copy, MemberDef First, List<string> Carriers, List<MemberDef> Sources)>(StringComparer.Ordinal);
+        var order = new List<string>();
         var conflicts = new List<string>();
         var variantDefs = new List<VariantDef>();
+
+        // A name two variants share would make `is`, a `$variant` case and `onlyFor` ambiguous.
+        var colliding = variants.GroupBy(VariantName, StringComparer.Ordinal).Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var name in colliding.Order(StringComparer.Ordinal))
+            findings.Add(new BuildFinding(
+                BuildCodes.PolymorphicVariantNameConflict,
+                label,
+                $"The variants {string.Join(", ", variants.Where(variant => VariantName(variant) == name).Select(variant => $"'{variant.FullName}'").Order(StringComparer.Ordinal))} share the name '{name}', so neither is described as a variant.",
+                name));
 
         foreach (var variant in variants)
         {
             var name = VariantName(variant);
+
+            if (colliding.Contains(name))
+                continue;
+
             var variantType = PoolObject(variant, label);
 
             variantDefs.Add(new VariantDef(name, DiscriminatorValueOf(variant), variantType));
@@ -460,6 +481,7 @@ public sealed class ClrModelBuilder
                 if (merged.TryGetValue(member.WireName, out var entry))
                 {
                     entry.Carriers.Add(name);
+                    entry.Sources.Add(member);
 
                     if (!SameShape(entry.First, member) && !conflicts.Contains(member.WireName))
                         conflicts.Add(member.WireName);
@@ -469,20 +491,21 @@ public sealed class ClrModelBuilder
 
                 var copy = CopyForVariants(member);
 
-                merged[member.WireName] = (copy, member, [name]);
+                merged[member.WireName] = (copy, member, [name], [member]);
+                order.Add(member.WireName);
                 members.Add(copy);
-
-                foreach (var pending in references.Where(pending => ReferenceEquals(pending.Member, member)).ToList())
-                    references.Add(pending with { Member = copy, OwnerLabel = $"{label}#{member.WireName}" });
             }
         }
 
-        foreach (var (copy, _, carriers) in merged.Values)
+        foreach (var (copy, _, carriers, _) in merged.Values)
             copy.OnlyFor = carriers;
+
+        foreach (var wire in order.Where(wire => !conflicts.Contains(wire)))
+            MergeReferences(label, wire, merged[wire].Copy, merged[wire].Carriers, merged[wire].Sources);
 
         foreach (var wire in conflicts)
         {
-            var (copy, first, carriers) = merged[wire];
+            var (copy, first, carriers, _) = merged[wire];
             var storageDiffers = variantDefs
                 .Select(variant => variant.Type.Member(wire))
                 .Any(member => member is { OnlyFor: null } && (member.Stored != first.Stored || !string.Equals(member.StorageName, first.StorageName, StringComparison.Ordinal)));
@@ -501,8 +524,6 @@ public sealed class ClrModelBuilder
                 copy.StorageName = null;
             }
 
-            references.RemoveAll(pending => ReferenceEquals(pending.Member, copy));
-
             findings.Add(new BuildFinding(
                 BuildCodes.PolymorphicMemberConflict,
                 $"{label}#{wire}",
@@ -517,6 +538,76 @@ public sealed class ClrModelBuilder
         type.DiscriminatorElement = DiscriminatorElementOf(owner);
         type.DiscriminatorForm = variants.Any(IsHierarchical) ? DiscriminatorForm.Hierarchical : DiscriminatorForm.Scalar;
     }
+
+    /// <summary>
+    /// The reference cases of a merged member, from each carrier's own member in carrier order:
+    /// when every carrier declares the same cases, those; otherwise each carrier's cases, an
+    /// unconditional one conditioned on the carrier's variant and a variant one kept (it names the
+    /// carrier or its descendants already), so no variant resolves by another's declaration; when a
+    /// carrier's case tests a sibling path, which cannot be combined with the variant, none, with a
+    /// finding.
+    /// </summary>
+    private void MergeReferences(string label, string wire, MemberDef copy, IReadOnlyList<string> carriers, IReadOnlyList<MemberDef> sources)
+    {
+        var perCarrier = sources.Select(source => references.Where(pending => ReferenceEquals(pending.Member, source)).ToList()).ToList();
+
+        if (perCarrier.All(cases => cases.Count == 0))
+            return;
+
+        var ownerLabel = $"{label}#{wire}";
+
+        if (perCarrier.All(cases => SameCases(cases, perCarrier[0])))
+        {
+            foreach (var pending in perCarrier[0])
+                references.Add(pending with { Member = copy, OwnerLabel = ownerLabel });
+
+            return;
+        }
+
+        if (perCarrier.SelectMany(cases => cases).Any(pending => pending.When is ReferenceCondition.PathEquals))
+        {
+            findings.Add(new BuildFinding(
+                BuildCodes.ReferenceDeclarationUnresolved,
+                ownerLabel,
+                $"The variants {string.Join(", ", carriers)} declare different references for the member, and a case tests a sibling path, which cannot be combined with the variant's condition, so none is emitted.",
+                string.Join(", ", carriers)));
+
+            return;
+        }
+
+        var added = new List<PendingReference>();
+
+        for (var index = 0; index < carriers.Count; index++)
+            foreach (var pending in perCarrier[index])
+            {
+                var conditioned = pending with
+                {
+                    Member = copy,
+                    OwnerLabel = ownerLabel,
+                    When = pending.When ?? new ReferenceCondition.Variant([carriers[index]]),
+                };
+
+                if (!added.Any(other => CaseKey(other) == CaseKey(conditioned)))
+                    added.Add(conditioned);
+            }
+
+        references.AddRange(added);
+    }
+
+    /// <summary>Whether two carriers declare the same cases, in the same order.</summary>
+    private static bool SameCases(IReadOnlyList<PendingReference> left, IReadOnlyList<PendingReference> right) =>
+        left.Count == right.Count && left.Zip(right).All(pair => CaseKey(pair.First) == CaseKey(pair.Second));
+
+    /// <summary>A case as text: its targets, condition, conversion and source.</summary>
+    private static string CaseKey(PendingReference pending) =>
+        string.Join("|", pending.Targets.Select(target => $"{target.Entity}#{target.Item}.{target.Field}"))
+        + "/" + pending.When switch
+        {
+            ReferenceCondition.PathEquals equals => $"path:{equals.Path}={string.Join(",", equals.Values)}",
+            ReferenceCondition.Variant variant => $"variant:{string.Join(",", variant.Names)}",
+            _ => "",
+        }
+        + "/" + pending.KeyAs + "/" + pending.Source;
 
     private static MemberDef CopyForVariants(MemberDef member) => new(member.WireName)
     {

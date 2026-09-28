@@ -695,6 +695,13 @@ public static class BuildCodes
     public const string PolymorphicSubtypeUnregistered = "polymorphic-subtype-unregistered";
 
     /// <summary>
+    /// Two variants of one polymorphic type have the same name (the simple CLR name without its
+    /// generic arity), which <c>is</c>, a <c>$variant</c> case and <c>onlyFor</c> could not tell
+    /// apart; neither is described as a variant.
+    /// </summary>
+    public const string PolymorphicVariantNameConflict = "polymorphic-variant-name-conflict";
+
+    /// <summary>
     /// A reference's stored kind does not fit its target: a string member naming a local guid
     /// field without <c>KeyAs = Guid</c>, or <c>KeyAs = Guid</c> on a member that is not a string
     /// or towards a local field that is not a guid. The case is dropped.

@@ -67,7 +67,11 @@ public static class Codes
     /// <summary>A lookup's <c>on</c> names an alias that is not one entity row: a lookup array, an unwound element, a scalar or a group output.</summary>
     public const string LookupOnNotEntity = "LOOKUP_ON_NOT_ENTITY";
 
-    /// <summary>A stage cannot run on an alias whose rows come from an owner after the page.</summary>
+    /// <summary>
+    /// A stage cannot run on an alias whose rows come from an owner after the page: anything but a
+    /// resolve or a lookup (which continue at the owner), a continuation under an <c>elements: "all"</c>
+    /// alias, or a projection that keeps a continued alias but drops the alias it continues under.
+    /// </summary>
     public const string NotContinuable = "NOT_CONTINUABLE";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
 
@@ -94,6 +98,9 @@ public static class Codes
     public const string MaxLookupStagesExceeded = "MAX_LOOKUP_STAGES_EXCEEDED";
     public const string MaxUnwindStagesExceeded = "MAX_UNWIND_STAGES_EXCEEDED";
     public const string MaxResolveStagesExceeded = "MAX_RESOLVE_STAGES_EXCEEDED";
+
+    /// <summary>More stages continue under one keyed or remote alias than <c>MaxContinuedStages</c>.</summary>
+    public const string MaxContinuedStagesExceeded = "MAX_CONTINUED_STAGES_EXCEEDED";
     public const string MaxGroupFieldsExceeded = "MAX_GROUP_FIELDS_EXCEEDED";
     public const string MaxProjectionFieldsExceeded = "MAX_PROJECTION_FIELDS_EXCEEDED";
     public const string MaxConditionsExceeded = "MAX_CONDITIONS_EXCEEDED";
@@ -114,6 +121,9 @@ public static class Codes
     // execution
     public const string ResolveUnavailable = "RESOLVE_UNAVAILABLE";
     public const string ResolveRefused = "RESOLVE_REFUSED";
+
+    /// <summary>A stage needs OxQL 2.1 at a remote owner (continued stages, typed or item targets, <c>keyedBy</c>) whose health reports an older engine (422).</summary>
+    public const string OwnerNotCapable = "OWNER_NOT_CAPABLE";
     public const string SemiJoinTooLarge = "SEMI_JOIN_TOO_LARGE";
     public const string QueryTooExpensive = "QUERY_TOO_EXPENSIVE";
     public const string QueryTimeout = "QUERY_TIMEOUT";

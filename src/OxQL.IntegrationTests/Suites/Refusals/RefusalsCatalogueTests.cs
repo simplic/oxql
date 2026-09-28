@@ -49,7 +49,9 @@ public class RefusalsCatalogueTests
         ["UNKNOWN_VARIANT"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
         ["FLATTEN_NOT_RECURSIVE"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
         ["LOOKUP_ON_NOT_ENTITY"] = nameof(Joins.JoinsLookupMembersTests.On_a_lookup_array_is_LOOKUP_ON_NOT_ENTITY),
-        ["NOT_CONTINUABLE"] = nameof(Joins.JoinsLookupMembersTests.On_a_remote_alias_is_NOT_CONTINUABLE),
+        ["NOT_CONTINUABLE"] = nameof(Joins.JoinsContinuationTests.An_unwind_under_a_remote_alias_is_NOT_CONTINUABLE),
+        ["MAX_CONTINUED_STAGES_EXCEEDED"] = nameof(Joins.JoinsContinuationTests.More_stages_continued_under_one_alias_than_MaxContinuedStages_is_MAX_CONTINUED_STAGES_EXCEEDED),
+        ["OWNER_NOT_CAPABLE"] = nameof(Joins.JoinsContinuationTests.A_continued_stage_for_an_owner_whose_health_reports_OxQL_2_0_is_OWNER_NOT_CAPABLE_before_anything_is_sent),
         ["RESOLVE_ON_COLLECTION"] = nameof(Joins.JoinsResolveMembersTests.A_resolve_through_items_that_are_not_unwound_is_RESOLVE_ON_COLLECTION),
         ["RESOLVE_TARGET_NOT_DECLARED"] = nameof(Joins.JoinsResolveMembersTests.A_target_that_is_not_a_target_of_the_reference_is_RESOLVE_TARGET_NOT_DECLARED),
         ["RESOLVE_PARENT_NOT_ITEM"] = nameof(Joins.JoinsResolveMembersTests.ParentAs_on_an_entity_target_is_RESOLVE_PARENT_NOT_ITEM),
@@ -92,9 +94,10 @@ public class RefusalsCatalogueTests
         // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED,
         // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
         // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
-        // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED.
-        catalogue.Should().HaveCount(82);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(69);
+        // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
+        // MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE.
+        catalogue.Should().HaveCount(84);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(71);
         catalogue.Count(DiagnosticCodes.Contains).Should().Be(13);
     }
 

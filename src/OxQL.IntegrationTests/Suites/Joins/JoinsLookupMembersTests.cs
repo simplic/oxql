@@ -146,19 +146,6 @@ public class JoinsLookupMembersTests
     }
 
     [Fact]
-    public async Task On_a_remote_alias_is_NOT_CONTINUABLE()
-    {
-        var ledger = await Lab.ClientAsync(LabService.Ledger, Org.R);
-        var refused = await ledger.SendAsync(ReportSeed.Transaction, """
-            [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
-              { "lookup": { "from": "ledger.billing_line", "path": "assignedTransactionId", "on": "recipientContact", "as": "lines" } } ]
-            """);
-
-        refused.ShouldRefuse("NOT_CONTINUABLE", 400)["stage"]!.GetValue<int>().Should().Be(1);
-        refused.ErrorCodes.Should().Equal(["NOT_CONTINUABLE"]);
-    }
-
-    [Fact]
     public async Task On_a_lookup_array_is_LOOKUP_ON_NOT_ENTITY()
     {
         var refused = await (await TransportClient()).SendAsync(ReportSeed.Shipment, """

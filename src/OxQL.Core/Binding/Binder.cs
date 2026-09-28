@@ -127,6 +127,23 @@ public sealed class Binder
         private int lookups, unwinds, resolves, conditions;
         private bool hasSemiJoin;
 
+        /// <summary>
+        /// The aliases a stage continues under (DESIGN §3.5.3): every keyed or remote resolve's alias and
+        /// owning row, and every alias a continued stage added, each with the keyed stage whose owner
+        /// query carries the continuation.
+        /// </summary>
+        private readonly Dictionary<string, ContinuationAnchor> anchors = new(StringComparer.Ordinal);
+
+        /// <summary>How many stages continue under each keyed stage, by its alias.</summary>
+        private readonly Dictionary<string, int> continuedPerAnchor = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// An alias a stage may continue under: the keyed <paramref name="Stage"/> whose owner runs the
+        /// continuation, the one target the alias exists on (<c>forTarget</c> of the stage that added
+        /// it), and whether it holds every resolved target of a row (<c>elements: "all"</c>).
+        /// </summary>
+        private sealed record ContinuationAnchor(BoundStage.Resolve Stage, string? ForTarget, bool Many);
+
         /// <summary>Contract 2, where a string comparison, sort or group key folds case unless it opts out.</summary>
         private readonly bool contract2 = context.Contract != 1;
 
@@ -207,6 +224,9 @@ public sealed class Binder
 
             // What failed only because it lay under a poisoned alias was reported where the alias failed.
             errors.RemoveAll(error => error.Code == Shape.PoisonedCode);
+
+            if (errors.Count == 0)
+                CheckContinuedAnchorsKept();
 
             if (conditions > options.Limits.MaxConditions)
                 errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
@@ -850,6 +870,14 @@ public sealed class Binder
                 return;
             }
 
+            // On a keyed or remote alias the lookup runs at that alias's owner (DESIGN §3.5.3);
+            // it is not a lookup of this host and does not count towards its limit.
+            if (lookup.On is { } continuedOn && anchors.TryGetValue(continuedOn, out var anchor))
+            {
+                BindContinued(new PipelineStage { Lookup = lookup, Keys = ["lookup"] }, index, continuedOn, anchor, lookup.ForTarget, [lookup.As]);
+                return;
+            }
+
             if (++lookups > options.Limits.MaxLookupStages)
                 errors.Add(Error(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null));
 
@@ -870,8 +898,8 @@ public sealed class Binder
                 return;
             }
 
-            // forTarget picks one target of a union alias a stage continues under; no alias this
-            // host binds a lookup on is one.
+            // forTarget picks one target of an alias a stage continues under; a lookup this host
+            // runs continues nothing.
             if (lookup.ForTarget is not null)
             {
                 errors.Add(Error(Codes.OptionNotApplicable,
@@ -972,10 +1000,9 @@ public sealed class Binder
 
         /// <summary>
         /// The parent a lookup's <c>on</c> names: an entity row of this host under an alias (a
-        /// local resolve, or an unwound lookup). Anything else is refused: an array, element,
-        /// scalar or group output with <c>LOOKUP_ON_NOT_ENTITY</c>; a remote alias with
-        /// <c>NOT_CONTINUABLE</c>, since its row arrives from the owner after the page and a
-        /// lookup there would have to continue at the owner.
+        /// local resolve, or an unwound lookup). An array, element, scalar or group output is
+        /// refused with <c>LOOKUP_ON_NOT_ENTITY</c>. A keyed or remote alias never gets here: a
+        /// lookup on it continues at its owner (<see cref="BindContinued"/>).
         /// </summary>
         private bool BindLookupParent(string on, int index, out EntityDef parent, out string prefix)
         {
@@ -1000,16 +1027,6 @@ public sealed class Binder
                     parent = row.Def;
                     prefix = row.StoragePrefix;
                     return true;
-
-                case ShapeNode.Remote remote:
-                    errors.Add(Error(Codes.NotContinuable,
-                        $"'lookup' cannot run on '{on}', which comes from the owner of '{remote.TargetEntity}' after the page; this host does not continue a chain at the owner.", index, on));
-                    return false;
-
-                case ShapeNode.Keyed:
-                    errors.Add(Error(Codes.NotContinuable,
-                        $"'lookup' cannot run on '{on}', which is joined after the page is taken; this host does not continue a chain there.", index, on));
-                    return false;
 
                 case ShapeNode.Poisoned:
                     errors.Add(Error(Shape.PoisonedCode, $"'{on}' failed to bind.", index, on));
@@ -1062,8 +1079,9 @@ public sealed class Binder
         /// <summary>
         /// A resolve (DESIGN §3.4.1): the members, the collection guard, the declared cases with
         /// <c>target</c> and <c>parentAs</c>, the executor, and the shape of the alias. A resolve
-        /// under a keyed or remote alias would continue a chain at the owner, which this host does
-        /// not do yet: <c>NOT_CONTINUABLE</c>.
+        /// under a keyed or remote alias continues the chain at that alias's owner
+        /// (<see cref="BindContinued"/>); a keyed or remote resolve's own alias and owning row
+        /// become aliases later stages continue under.
         /// </summary>
         private async Task BindResolveAsync(ResolveStage resolve, int index)
         {
@@ -1099,11 +1117,23 @@ public sealed class Binder
                 return;
             }
 
+            // Step 3: under a keyed or remote alias the stage is a continuation of it, run at its
+            // owner (DESIGN §3.5.3); it is not a resolve of this host and does not count towards
+            // MaxResolveStages.
+            var path = resolve.Path ?? "";
+            var head = path.Split('.')[0];
+
+            if (anchors.TryGetValue(head, out var anchor))
+            {
+                BindContinued(new PipelineStage { Resolve = resolve, Keys = ["resolve"] }, index, path, anchor, resolve.ForTarget, [resolve.As, resolve.ParentAs]);
+                return;
+            }
+
             if (++resolves > options.Limits.MaxResolveStages)
                 errors.Add(Error(Codes.MaxResolveStagesExceeded, $"The pipeline has more than {options.Limits.MaxResolveStages} resolve stages.", index, null));
 
-            // forTarget picks one target of a union alias a stage continues under; no stage this
-            // host binds is continued.
+            // forTarget picks one target of an alias a stage continues under; a resolve this host
+            // runs continues nothing.
             if (resolve.ForTarget is not null)
             {
                 errors.Add(Error(Codes.OptionNotApplicable,
@@ -1132,18 +1162,6 @@ public sealed class Binder
             else if (resolve.ParentSelect is not null)
             {
                 errors.Add(Error(Codes.OptionNotApplicable, "'parentSelect' applies with 'parentAs', which names the owning row it selects from.", index, null));
-                return;
-            }
-
-            // Step 3: under a keyed or remote alias the stage would continue at the owner.
-            var path = resolve.Path ?? "";
-            var head = path.Split('.')[0];
-
-            if (head != Shape.ImplicitRoot && shape.Roots.TryGetValue(head, out var headNode) && headNode is ShapeNode.Remote or ShapeNode.Keyed)
-            {
-                errors.Add(Error(Codes.NotContinuable, headNode is ShapeNode.Remote remoteHead
-                    ? $"'resolve' cannot run on '{head}', which comes from the owner of '{remoteHead.TargetEntity}' after the page; this host does not continue a chain at the owner."
-                    : $"'resolve' cannot run on '{head}', which is joined after the page is taken; this host does not continue a chain there.", index, resolve.Path));
                 return;
             }
 
@@ -1305,6 +1323,170 @@ public sealed class Binder
                     : new ShapeNode.Keyed(
                         cases.SelectMany(bound => bound.Targets).Select(target => new KeyedTarget(target.Entity!, null)).Distinct().ToList(),
                         elements == ResolveElements.All, parentAs));
+
+            // A keyed or remote alias and its owning row: later resolves and lookups under them
+            // continue at their owner.
+            if (!inline)
+            {
+                anchors[alias] = new ContinuationAnchor(stage, null, elements == ResolveElements.All);
+
+                if (parentAs is not null)
+                    anchors[parentAs] = new ContinuationAnchor(stage, null, elements == ResolveElements.All);
+            }
+        }
+
+        /// <summary>
+        /// A resolve or lookup under a keyed or remote alias (DESIGN §3.4.1 step 3, §3.5.3): bound
+        /// as a <see cref="ContinuedStage"/> of the keyed stage whose owner query carries it, which
+        /// the owner binds with its own model. Checked here: contract 2, the alias still in the row,
+        /// not under an <c>elements: "all"</c> alias (the per-element association would be lost),
+        /// <c>forTarget</c> naming a target of the alias (inherited under an alias a
+        /// <c>forTarget</c> stage added), at most <c>MaxContinuedStages</c> per keyed stage, the new
+        /// aliases free at the origin — so no continued alias collides with an origin alias — and every
+        /// variable bound, since the owner never receives <c>variables</c> (DESIGN §3.5.5).
+        /// </summary>
+        private void BindContinued(PipelineStage raw, int index, string root, ContinuationAnchor anchor, string? forTarget, IReadOnlyList<string?> aliases)
+        {
+            var kind = raw.Kind!;
+            var head = root.Split('.')[0];
+
+            if (!contract2)
+            {
+                errors.Add(Error(Codes.NotContinuable,
+                    $"'{kind}' cannot run on '{head}', which comes from its owner after the page; a chain continues at the owner under contract 2 only." + Contract1Hint, index, root));
+                return;
+            }
+
+            if (!shape.IsVisible(root))
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{root}' was removed by the projection.", index, root));
+                return;
+            }
+
+            if (anchor.Many)
+            {
+                errors.Add(Error(Codes.NotContinuable,
+                    $"'{kind}' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, root));
+                return;
+            }
+
+            var targets = TargetsOf(anchor.Stage);
+            var effective = anchor.ForTarget;
+
+            if (forTarget is not null)
+            {
+                if (anchor.ForTarget is not null && forTarget != anchor.ForTarget)
+                {
+                    errors.Add(Error(Codes.OptionNotApplicable,
+                        $"'forTarget' is '{forTarget}', but '{head}' exists only on rows resolved to '{anchor.ForTarget}'.", index, root));
+                    return;
+                }
+
+                if (!targets.Contains(forTarget, StringComparer.Ordinal))
+                {
+                    errors.Add(Error(Codes.OptionNotApplicable,
+                        $"'forTarget' names '{forTarget}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, root));
+                    return;
+                }
+
+                effective = forTarget;
+            }
+
+            var count = continuedPerAnchor.GetValueOrDefault(anchor.Stage.As) + 1;
+
+            if (count > options.Limits.MaxContinuedStages)
+            {
+                errors.Add(Error(Codes.MaxContinuedStagesExceeded,
+                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, root));
+                return;
+            }
+
+            var added = new List<string>();
+
+            foreach (var alias in aliases)
+            {
+                if (alias is null && added.Count > 0)
+                    continue;
+
+                if (!CheckAlias(alias, index, out var checkedAlias))
+                    return;
+
+                if (added.Contains(checkedAlias, StringComparer.Ordinal))
+                {
+                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{checkedAlias}'; the owning row needs a name of its own.", index, checkedAlias));
+                    return;
+                }
+
+                added.Add(checkedAlias);
+            }
+
+            // The stage as the owner is sent it: every variable bound here.
+            var substitution = new List<QueryValidationError>();
+            var written = JsonSerializer.SerializeToElement(raw, OxQLJson.Wire);
+            var sent = coercer.SubstituteVariables(written, index, root, substitution);
+
+            if (substitution.Count > 0)
+            {
+                errors.AddRange(substitution);
+                return;
+            }
+
+            var stage = OperandCoercer.HoldsVariable(written) ? JsonSerializer.Deserialize<PipelineStage>(sent.GetRawText(), OxQLJson.Wire)! : raw;
+
+            continuedPerAnchor[anchor.Stage.As] = count;
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective, added));
+
+            // The added aliases are the owner's rows under the origin row: projected, never
+            // filtered or sorted here, and further stages under them continue at the same owner.
+            var many = raw.Resolve?.Elements == "all";
+
+            foreach (var alias in added)
+            {
+                shape = shape.WithRoot(alias, new ShapeNode.Remote(raw.Lookup?.From ?? raw.Resolve?.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false));
+                anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many);
+            }
+        }
+
+        /// <summary>The target entities of a keyed stage's selected cases, in declaration order.</summary>
+        private static List<string> TargetsOf(BoundStage.Resolve stage) =>
+            (stage.Cases ?? []).SelectMany(bound => bound.Targets).Select(target => target.Declared.Entity).DefaultIfEmpty(stage.TargetEntity).Distinct(StringComparer.Ordinal).ToList();
+
+        /// <summary>
+        /// Whether a path lies under an alias whose rows come from an owner after the page, where
+        /// only a resolve or a lookup continues (DESIGN §3.5.3): an unwind or a group there is
+        /// <c>NOT_CONTINUABLE</c>. True when it was refused.
+        /// </summary>
+        private bool RefusedUnderAnchor(string? path, string kind, int index)
+        {
+            var head = path?.Split('.')[0];
+
+            if (head is null || !anchors.ContainsKey(head))
+                return false;
+
+            errors.Add(Error(Codes.NotContinuable,
+                $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. Aggregate chain data in the report.", index, path));
+            return true;
+        }
+
+        /// <summary>
+        /// A continued alias the final row shows needs its keyed stage fetched, and the fetch runs
+        /// only for a keyed stage whose alias or owning row the row shows: a projection that keeps a
+        /// continued alias but drops both is refused rather than answered with an alias that is
+        /// always null.
+        /// </summary>
+        private void CheckContinuedAnchorsKept()
+        {
+            foreach (var continued in stages.OfType<ContinuedStage>())
+            {
+                var anchor = anchors[continued.Anchor].Stage;
+
+                if (shape.Carries(anchor.As) || (anchor.ParentAs is { } parentAs && shape.Carries(parentAs)))
+                    continue;
+
+                if (continued.Aliases.FirstOrDefault(shape.Carries) is { } shown)
+                    errors.Add(Error(Codes.NotContinuable,
+                        $"'{shown}' continues at the owner of '{anchor.As}', which the projection drops; keep '{anchor.As}'{(anchor.ParentAs is null ? "" : $" or '{anchor.ParentAs}'")} in the projection as well.", continued.OriginIndex, shown));
+            }
         }
 
         /// <summary>
@@ -1578,6 +1760,9 @@ public sealed class Binder
                 return;
             }
 
+            if (RefusedUnderAnchor(unwind.Path, "unwind", index))
+                return;
+
             var resolution = shape.Resolve(unwind.Path, PathUsage.Unwind);
 
             if (!resolution.Succeeded)
@@ -1719,6 +1904,9 @@ public sealed class Binder
                     errors.Add(Error(Codes.UnknownPath, $"The key '{by.As}' names neither a path nor a dateTrunc.", index, null));
                     continue;
                 }
+
+                if (RefusedUnderAnchor(by.Path, "group", index))
+                    continue;
 
                 var resolution = shape.Resolve(by.Path, PathUsage.GroupKey);
 

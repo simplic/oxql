@@ -144,13 +144,15 @@ public class LookupMembersBindTests
     }
 
     [Fact]
-    public async Task On_a_remote_alias_is_NOT_CONTINUABLE_until_continuation_exists()
+    public async Task On_a_remote_alias_continues_at_its_owner()
     {
-        var error = await BindHost.ErrorAsync(BindHost.Probe, Order,
-            """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "veh", "as": "again" } }]""", Codes.NotContinuable);
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order,
+            """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "veh", "as": "again" } }]""");
 
-        error.Path.Should().Be("veh");
-        error.Message.Should().Contain("vehicle.vehicle");
+        var continued = bound.Stages.OfType<ContinuedStage>().Should().ContainSingle().Subject;
+        continued.Anchor.Should().Be("veh");
+        continued.Root.Should().Be("veh");
+        bound.Stages.OfType<BoundStage.Lookup>().Should().BeEmpty("the owner runs the lookup, this host does not");
     }
 
     [Fact]

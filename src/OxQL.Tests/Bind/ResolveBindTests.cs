@@ -356,20 +356,7 @@ public class ResolveBindTests
             .Message.Should().Contain("rc.shipment#billingLines");
     }
 
-    // ---- step 3 (without continuation): under a keyed or remote alias ---------------------------
-
-    [Theory]
-    [InlineData("""{ "resolve": { "path": "contactId", "as": "r" } }""", "the owner of 'crm.contact'")]
-    [InlineData("""{ "resolve": { "path": "billingLineId", "as": "r" } }""", "joined after the page")]
-    public async Task A_resolve_or_lookup_under_a_keyed_or_remote_alias_is_NOT_CONTINUABLE(string first, string message)
-    {
-        var resolve = await ErrorAsync($$"""[{{first}}, { "resolve": { "path": "r.customerId", "as": "c" } }]""", Codes.NotContinuable);
-
-        resolve.Message.Should().Contain(message);
-        resolve.Stage.Should().Be(1);
-
-        await ErrorAsync($$"""[{{first}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "as": "l" } }]""", Codes.NotContinuable);
-    }
+    // Step 3, a resolve or lookup under a keyed or remote alias, is ContinuationBindTests.
 
     // ---- §3.8: poisoned aliases ------------------------------------------------------------------------
 

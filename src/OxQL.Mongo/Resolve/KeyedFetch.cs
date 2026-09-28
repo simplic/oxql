@@ -60,6 +60,9 @@ public enum KeyedOutcome
 
     /// <summary>The owner did not answer for the key: timeout, unreachable, the key budget left it out, or the owner answered its chunk only in part.</summary>
     OwnerUnanswered,
+
+    /// <summary>A continued stage with <c>forTarget</c> on a row its keyed stage resolved to another target: its alias is null, which loses nothing.</summary>
+    NotApplicable,
 }
 
 /// <summary>
@@ -111,6 +114,7 @@ public static class OutcomePolicy
         KeyedOutcome.NotFound => "not_found",
         KeyedOutcome.InvalidKey => "invalid_key",
         KeyedOutcome.OwnerUnanswered => "owner_unanswered",
+        KeyedOutcome.NotApplicable => "not_applicable",
         _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
     };
 
@@ -544,14 +548,18 @@ public sealed class KeyedFetch
         var organisation = context.Organisation!.Value;
         var diagnostics = new List<Diagnostic>();
         var budget = new KeyBudget(options.Limits.MaxResolveKeys);
-        var stages = compiled.KeyedResolves.Select(stage => Plan(stage, StageIndexOf(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
+        var stages = compiled.KeyedResolves.Select(stage => Plan(stage, StageIndexOf(compiled.Bound, stage), Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
         var cacheHits = targets.Sum(target => target.CacheHits);
         var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
         var calls = 0;
 
+        // An owner known to run an engine before 2.1 cannot bind what a chain sends it.
+        if (Incapable(compiled.Bound, targets) is { } incapable)
+            return new ResolveResult { Refusal = incapable, CacheHits = cacheHits };
+
         // Round one: the filtered owner queries of every chunk.
-        var first = await SendAsync(targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList(), context, Budget(remaining), cancellationToken).ConfigureAwait(false);
+        var first = await SendAsync(targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList(), context, remaining, cancellationToken).ConfigureAwait(false);
 
         foreach (var call in first)
         {
@@ -567,7 +575,7 @@ public sealed class KeyedFetch
                 var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
 
                 if (result is null || !Succeeded(result))
-                    return new ResolveResult { Refusal = Refused(result, target.Entity, stageIndex), Calls = calls, CacheHits = cacheHits };
+                    return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex), Calls = calls, CacheHits = cacheHits };
 
                 foreach (var item in result["items"]!.AsArray())
                 {
@@ -585,7 +593,7 @@ public sealed class KeyedFetch
         // Round two: the existence probe of the keys a filtered query did not return.
         var probes = targets.Where(target => target.Probed).SelectMany(target => target.ProbeChunks(ChunkOf(target)).Select(chunk => new Sent(target, chunk, target.Probe(chunk)))).ToList();
 
-        foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, Budget(deadline), cancellationToken).ConfigureAwait(false))
+        foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline - DateTime.UtcNow, cancellationToken).ConfigureAwait(false))
         {
             calls += call.Service == SelfService ? 0 : 1;
 
@@ -599,7 +607,7 @@ public sealed class KeyedFetch
                 var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
 
                 if (result is null || !Succeeded(result))
-                    return new ResolveResult { Refusal = Refused(result, target.Entity, stageIndex), Calls = calls, CacheHits = cacheHits };
+                    return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex), Calls = calls, CacheHits = cacheHits };
 
                 foreach (var item in result["items"]!.AsArray())
                 {
@@ -636,13 +644,18 @@ public sealed class KeyedFetch
     /// <summary>The queries one owner was sent in a round, and what came back.</summary>
     private sealed record OwnerCall(string Service, IReadOnlyList<Sent> Sent, CallOutcome Outcome);
 
-    /// <summary>Sends a round's queries, batched per owner, owners in parallel; a local target's to this host's own <see cref="SelfOwner"/>.</summary>
-    private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, TimeSpan budget, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends a round's queries, batched per owner, owners in parallel; a local target's to this host's
+    /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a 2.1 target
+    /// form) under the chain ceiling, any other under the per-resolve one (DESIGN §3.5.4).
+    /// </summary>
+    private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
         var tasks = sends.GroupBy(sent => sent.Target.Service, StringComparer.Ordinal).Select(async group =>
         {
             var sent = group.ToList();
             var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
+            var budget = sent.Any(entry => entry.Target.Chain) ? ChainBudget(remaining) : Budget(remaining);
 
             return new OwnerCall(group.Key, sent, await CallInBatchesAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), budget, cancellationToken).ConfigureAwait(false));
         }).ToList();
@@ -711,13 +724,16 @@ public sealed class KeyedFetch
     /// <summary>The rows a grouped owner query returns per key at most: two tell a resolved key from an ambiguous one.</summary>
     public const int PerKey = 2;
 
-    /// <summary>One keyed stage over the page: its targets, and per row the keys its cases select.</summary>
-    private sealed class StagePlan(BoundStage.Resolve stage, int? index)
+    /// <summary>One keyed stage over the page: its targets, the stages continued under it, and per row the keys its cases select.</summary>
+    private sealed class StagePlan(BoundStage.Resolve stage, int? index, IReadOnlyList<ContinuedStage> continued)
     {
         public BoundStage.Resolve Stage { get; } = stage;
 
         /// <summary>The caller's stage index, for the outcomes.</summary>
         public int? Index { get; } = index;
+
+        /// <summary>Every stage continued under the stage's aliases, whichever target it applies to.</summary>
+        public IReadOnlyList<ContinuedStage> Continued { get; } = continued;
 
         public List<TargetPlan> Targets { get; } = [];
 
@@ -734,7 +750,8 @@ public sealed class KeyedFetch
     /// <summary>
     /// One target of a keyed stage: the keys it is asked for, what the cache and the owner answered
     /// per key (up to <see cref="PerKey"/> rows, first by record key), the keys the existence probe
-    /// found although the filter left them out, and the keys the owner did not answer.
+    /// found although the filter left them out, and the keys the owner did not answer. The stages
+    /// continued under the keyed stage for this target ride in its owner query (DESIGN §3.5.3).
     /// </summary>
     private sealed class TargetPlan
     {
@@ -742,13 +759,16 @@ public sealed class KeyedFetch
         private readonly bool strict;
         private readonly string planHash;
         private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+        private readonly HashSet<string> lifted;
 
-        public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, Guid organisation, bool strict)
+        public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict)
         {
             Stage = stage;
             Target = target;
             this.organisation = organisation;
             this.strict = strict;
+            Continued = Continuation.For(stage, target.Declared.Entity, target.Declared.Item is not null, continued);
+            lifted = new HashSet<string>(Continued.Aliases, StringComparer.Ordinal);
 
             // An entity keyed by its own key has one row per key, which a plain key match serves;
             // every other target is grouped per key. A plain 2.0 resolve keeps the plain query it
@@ -768,6 +788,21 @@ public sealed class KeyedFetch
         public BoundStage.Resolve Stage { get; }
 
         public BoundResolveTarget Target { get; }
+
+        /// <summary>The stages continued under the keyed stage that this target's owner runs.</summary>
+        public OwnerContinuation Continued { get; }
+
+        /// <summary>
+        /// Whether the owner query carries a chain: continued stages, or a target form of 2.1 (typed,
+        /// item, converted, element-wise); it runs under the chain ceiling.
+        /// </summary>
+        public bool Chain => !Continued.IsEmpty || Stage.NeedsKeyedFetch;
+
+        /// <summary>Whether the owner must run 2.1 to take the query: continued stages and <c>keyedBy</c> are 2.1 vocabulary.</summary>
+        public bool NeedsOwner21 => !Continued.IsEmpty || Grouped;
+
+        /// <summary>The owner's stage index of the first continued stage: where the query as built had its projection.</summary>
+        public int ContinuedAt { get; private set; }
 
         public bool Grouped { get; }
 
@@ -803,7 +838,40 @@ public sealed class KeyedFetch
 
         public string CacheKey(string key) => OwnerFetchCache.KeyOf(Entity, Target.Declared.Item, Target.Declared.Field, organisation, key, planHash);
 
-        public QueryRequest Query(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Target, keys, Grouped ? PerKey : null);
+        /// <summary>
+        /// The owner query of some keys: the key match, the target's filter, the continued stages with
+        /// every alias they add projected, the projection and the page. A query with continued stages
+        /// carries <c>strict</c> when the request is strict, so the owner refuses the chain's data loss
+        /// as this host would (DESIGN §3.5.4); without them strict changes nothing the owner does.
+        /// </summary>
+        public QueryRequest Query(IReadOnlyList<string> keys)
+        {
+            var query = OwnerQueryBuilder.ByKeys(Stage, Target, keys, Grouped ? PerKey : null);
+
+            if (Continued.IsEmpty)
+                return query;
+
+            var pipeline = query.Pipeline.ToList();
+            var at = pipeline.FindLastIndex(stage => stage.Project is not null);
+            var projection = new Dictionary<string, int>(pipeline[at].Project!.Fields, StringComparer.Ordinal);
+
+            foreach (var alias in Continued.Aliases)
+                projection[alias] = 1;
+
+            pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
+            pipeline.InsertRange(at, Continued.Stages);
+            ContinuedAt = at;
+
+            return query with { Pipeline = pipeline, Strict = strict ? true : null };
+        }
+
+        /// <summary>The continued stage an owner's stage index names, or null for a stage of the query itself.</summary>
+        public ContinuedStage? OriginOf(int? ownerStage) =>
+            ownerStage is { } index && index >= ContinuedAt && index - ContinuedAt < Continued.Origins.Count ? Continued.Origins[index - ContinuedAt] : null;
+
+        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
+        public static JsonNode? Lifted(JsonObject row, string alias) =>
+            row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
         /// <summary>The existence probe of some keys: the query without the filter, one row per key is enough.</summary>
         public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Target, keys, Grouped ? 1 : null, probe: true);
@@ -878,9 +946,23 @@ public sealed class KeyedFetch
             return GuidKeys && Guid.TryParse(text, out var guid) ? guid.ToString("D") : text;
         }
 
-        /// <summary>An answer row as the alias holds it: the element of an item target, the row of an entity target.</summary>
-        public JsonNode? AliasOf(JsonObject row) =>
-            (Target.Declared.Item is null ? row : row[BoundKeyedBy.Element])?.DeepClone();
+        /// <summary>An answer row as the alias holds it: the element of an item target, the row of an entity target without what continued stages added.</summary>
+        public JsonNode? AliasOf(JsonObject row)
+        {
+            if (Target.Declared.Item is not null)
+                return row[BoundKeyedBy.Element]?.DeepClone();
+
+            if (lifted.Count == 0)
+                return row.DeepClone();
+
+            var alias = new JsonObject();
+
+            foreach (var (name, value) in row)
+                if (!lifted.Contains(name))
+                    alias[name] = value?.DeepClone();
+
+            return alias;
+        }
 
         /// <summary>The owning row of an item target's answer: its entity and the parent members the owner projected.</summary>
         public JsonObject ParentOf(JsonObject row)
@@ -888,7 +970,7 @@ public sealed class KeyedFetch
             var parent = new JsonObject { ["entity"] = Entity };
 
             foreach (var (name, value) in row)
-                if (name != BoundKeyedBy.Element && name != "entity")
+                if (name != BoundKeyedBy.Element && name != "entity" && !lifted.Contains(name))
                     parent[name] = value?.DeepClone();
 
             return parent;
@@ -930,9 +1012,9 @@ public sealed class KeyedFetch
     /// what the request's key budget leaves (<c>RESOLVE_PARTIAL</c>), in chunks the owner answers in
     /// one page each.
     /// </summary>
-    private StagePlan Plan(BoundStage.Resolve stage, int? index, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
+    private StagePlan Plan(BoundStage.Resolve stage, int? index, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
     {
-        var plan = new StagePlan(stage, index);
+        var plan = new StagePlan(stage, index, continued);
         var cases = CasesOf(stage);
 
         foreach (var bound in cases)
@@ -941,7 +1023,7 @@ public sealed class KeyedFetch
                 var shared = plan.Targets.FirstOrDefault(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item);
 
                 if (shared is null)
-                    plan.Targets.Add(shared = new TargetPlan(stage, target, organisation, strict));
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict));
 
                 plan.ByTarget[target] = shared;
             }
@@ -1130,6 +1212,34 @@ public sealed class KeyedFetch
 
             if (chosen.Outcome != KeyedOutcome.Resolved)
                 outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, stage.Elements is null ? null : at, chosen.Key, chosen.Outcome));
+
+            Lift(plan, chosen, rowIndex, values, outcomes);
+        }
+    }
+
+    /// <summary>
+    /// The aliases the continued stages added, lifted from the owner row to the origin row (DESIGN
+    /// §3.5.2 step 6). A continued stage the target's owner did not run — its <c>forTarget</c> names
+    /// another target — leaves its aliases null with the outcome <c>not_applicable</c>, which loses
+    /// nothing; a row the keyed stage did not resolve has nothing to continue from.
+    /// </summary>
+    private static void Lift(StagePlan plan, Unresolved chosen, int rowIndex, Dictionary<string, JsonNode?> values, List<KeyedRowOutcome> outcomes)
+    {
+        foreach (var continued in plan.Continued)
+        {
+            if (chosen.Hit is { } hit && hit.Target.Continued.Origins.Contains(continued))
+            {
+                foreach (var alias in continued.Aliases)
+                    values[alias] = TargetPlan.Lifted(hit.Row, alias);
+
+                continue;
+            }
+
+            foreach (var alias in continued.Aliases)
+                values[alias] = null;
+
+            if (chosen.Hit is not null)
+                outcomes.Add(new KeyedRowOutcome(continued.OriginIndex, continued.Aliases[0], rowIndex, null, chosen.Key, KeyedOutcome.NotApplicable));
         }
     }
 
@@ -1239,6 +1349,23 @@ public sealed class KeyedFetch
     /// <summary>What is left of a phase for one call, under the per-call ceiling.</summary>
     private TimeSpan Budget(DateTime deadline) => Budget(deadline - DateTime.UtcNow);
 
+    /// <summary>
+    /// What one call carrying a chain may take (DESIGN §3.5.4): the time left less 50 ms, so the
+    /// owner answers before this host's own ceiling, at most <c>Execution.ChainTimeoutMs</c>, never
+    /// less than a millisecond. The owner applies it as its request ceiling and budgets its own
+    /// owner calls from what is left of it, so time bounds the whole chain without a header.
+    /// </summary>
+    private TimeSpan ChainBudget(TimeSpan remaining)
+    {
+        var ceiling = TimeSpan.FromMilliseconds(options.Execution.EffectiveChainTimeoutMs);
+        var left = remaining - TimeSpan.FromMilliseconds(50);
+
+        if (left <= TimeSpan.Zero)
+            return TimeSpan.FromMilliseconds(1);
+
+        return left < ceiling ? left : ceiling;
+    }
+
     /// <summary>What one call may take: the time left, under the per-call ceiling, never less than a millisecond.</summary>
     private TimeSpan Budget(TimeSpan remaining)
     {
@@ -1314,30 +1441,131 @@ public sealed class KeyedFetch
 
     private static bool Succeeded(JsonNode result) => result is JsonObject success && success["items"] is JsonArray;
 
-    /// <summary>The owner's refusal as this host's: 422 <c>RESOLVE_REFUSED</c> wrapping the owner's errors at the resolve stage.</summary>
-    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage)
+    /// <summary>
+    /// The owner's refusal as this host's: 422 <c>RESOLVE_REFUSED</c> wrapping the owner's errors at
+    /// the resolve stage. An owner error at one of the continued stages is mapped back (DESIGN
+    /// §3.5.3): its <c>stage</c> and <c>path</c> become the caller's, <c>params.owner</c> carries
+    /// where the owner saw it (<c>service</c>, <c>entity</c>, <c>target</c>, <c>stage</c>, <c>path</c>),
+    /// and the head points at the first such stage. An owner that continued further maps its own
+    /// owner's errors the same way first, so the mapping composes along the chain.
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage) =>
+        Refused(result, target.Entity, stage, (error, mapped) =>
+        {
+            var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
+
+            if (target.OriginOf(ownerStage) is not { } origin)
+                return null;
+
+            var parameters = error["params"] is JsonObject written
+                ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            parameters["owner"] = new Dictionary<string, object?>
+            {
+                ["service"] = service == SelfService ? null : service,
+                ["entity"] = target.Entity,
+                ["target"] = target.Target.Declared.Item is { } item ? $"{target.Entity}#{item}" : target.Entity,
+                ["stage"] = ownerStage,
+                ["path"] = mapped.Path,
+            };
+
+            return mapped with
+            {
+                Stage = origin.OriginIndex,
+                Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null),
+                Params = parameters,
+            };
+        });
+
+    /// <summary>
+    /// The owner's refusal of a query for <paramref name="targetEntity"/> as this host's 422
+    /// <c>RESOLVE_REFUSED</c> at <paramref name="stage"/>; <paramref name="map"/> maps an owner error
+    /// back to the caller's stage, or leaves it (null), and the head then points at the first mapped one.
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null)
     {
         var inner = new List<QueryValidationError>();
+        int? mappedStage = null;
 
         if (result?["errors"] is JsonArray errors)
             foreach (var error in errors.OfType<JsonObject>())
-                inner.Add(new QueryValidationError
+            {
+                var owner = new QueryValidationError
                 {
                     Code = error["code"]?.ToString() ?? Codes.InternalError,
                     Message = error["message"]?.ToString() ?? "",
                     Path = error["path"]?.ToString(),
-                });
+                };
 
+                if (map?.Invoke(error, owner) is { } mapped)
+                {
+                    owner = mapped;
+                    mappedStage ??= mapped.Stage;
+                }
+
+                inner.Add(owner);
+            }
+
+        var at = mappedStage ?? stage;
         var head = new QueryValidationError
         {
             Code = Codes.ResolveRefused,
             Message = result is null
                 ? $"The owner of '{targetEntity}' answered without a result for this query."
                 : $"The owner of '{targetEntity}' refused the query: {result["title"]?.ToString() ?? result["type"]?.ToString() ?? "no reason given"}.",
-            Stage = stage,
+            Stage = at,
         };
 
-        return Refusal.NotExecutable(Codes.ResolveRefused, head.Message, stage, [head, .. inner]);
+        return Refusal.NotExecutable(Codes.ResolveRefused, head.Message, at, [head, .. inner]);
+    }
+
+    /// <summary>
+    /// <c>OWNER_NOT_CAPABLE</c> (DESIGN §3.5.4): a remote target whose query needs 2.1 — continued
+    /// stages or <c>keyedBy</c> — at an owner whose shallow health reports an older engine, refused
+    /// before anything is sent. An owner not yet probed, or reporting a version this host cannot read,
+    /// is sent the query, and an old owner refuses its unknown members inside <c>RESOLVE_REFUSED</c>.
+    /// </summary>
+    private Refusal? Incapable(BoundPipeline bound, IReadOnlyList<TargetPlan> targets)
+    {
+        if (client is not IRemoteOwnerInfo owners)
+            return null;
+
+        foreach (var target in targets)
+        {
+            if (target.Service == SelfService || !target.NeedsOwner21 || (target.Chunks.Count == 0 && target.Continued.IsEmpty))
+                continue;
+
+            if (owners.OwnerOf(target.Service)?.EngineVersion is not { } version || EngineVersionOf(version) is not { } parsed || parsed >= Owner21)
+                continue;
+
+            var stage = target.Continued.IsEmpty ? StageIndexOf(bound, target.Stage) : target.Continued.Origins[0].OriginIndex;
+            var message = $"{target.Service} runs OxQL {version}; this stage needs 2.1.";
+
+            return Refusal.NotExecutable(Codes.OwnerNotCapable, message, stage,
+            [
+                new QueryValidationError
+                {
+                    Code = Codes.OwnerNotCapable,
+                    Message = message,
+                    Stage = stage,
+                    Params = new Dictionary<string, object?> { ["service"] = target.Service, ["version"] = version, ["needs"] = "2.1" },
+                },
+            ]);
+        }
+
+        return null;
+    }
+
+    /// <summary>The engine version remote continuation, typed and item targets and <c>keyedBy</c> need at the owner.</summary>
+    private static readonly Version Owner21 = new(2, 1);
+
+    /// <summary>The numeric part of an engine version as health reports it (<c>2.1.0.0</c>, <c>2.0.126-beta</c>), or null.</summary>
+    private static Version? EngineVersionOf(string text)
+    {
+        var numeric = text.Split('-', '+')[0];
+
+        return Version.TryParse(numeric.Contains('.') ? numeric : numeric + ".0", out var version) ? version : null;
     }
 
     /// <summary>

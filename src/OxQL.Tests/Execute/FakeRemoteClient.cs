@@ -23,8 +23,8 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
         /// <summary>Rows, as the owner's wire objects.</summary>
         public sealed record Rows(params JsonObject[] Items) : Answer;
 
-        /// <summary>A refusal envelope.</summary>
-        public sealed record Refused(string Code, string Message) : Answer;
+        /// <summary>A refusal envelope; its one error at the owner's <paramref name="Stage"/> and <paramref name="Path"/>.</summary>
+        public sealed record Refused(string Code, string Message, int Stage = 0, string? Path = null) : Answer;
 
         /// <summary>Rows with a page after them, reachable through <paramref name="NextCursor"/>.</summary>
         public sealed record Page(string NextCursor, params JsonObject[] Items) : Answer;
@@ -93,7 +93,7 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
                 {
                     ["type"] = "validation_error",
                     ["title"] = "The request could not be bound.",
-                    ["errors"] = new JsonArray(new JsonObject { ["code"] = refused.Code, ["message"] = refused.Message, ["stage"] = 0 }),
+                    ["errors"] = new JsonArray(new JsonObject { ["code"] = refused.Code, ["message"] = refused.Message, ["stage"] = refused.Stage, ["path"] = refused.Path }),
                 },
                 _ => null,
             });

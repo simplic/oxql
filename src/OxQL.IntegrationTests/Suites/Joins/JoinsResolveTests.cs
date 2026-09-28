@@ -560,16 +560,17 @@ public class JoinsResolveTests
     }
 
     [Fact]
-    public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_is_refused()
+    public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_continues_the_chain_at_the_owner()
     {
-        // It would continue the chain at the owner (DESIGN §3.5.3), which this host does not do:
-        // NOT_CONTINUABLE, no longer the misleading RESOLVE_NOT_DECLARED.
+        // The owner of the vehicle runs the department's resolve for the vehicles it was sent
+        // (DESIGN §3.5.3): a local resolve there, lifted here beside 'veh'.
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, """
             [ { "resolve": { "path": "createUserId", "as": "veh" } }, { "resolve": { "path": "veh.department.id", "as": "dep" } }, { "page": { "limit": 1 } } ]
             """);
 
-        answer.ShouldRefuse("NOT_CONTINUABLE", 400);
-        answer.ErrorCodes.Should().Equal("NOT_CONTINUABLE");
+        var row = answer.ShouldBeOk().ShouldHaveNoDiagnostics().Items.Should().ContainSingle().Subject!;
+        row["dep"]!["name"]!.GetValue<string>().Should().Be("Fleet");
+        row["veh"]!.AsObject().ContainsKey("dep").Should().BeFalse("the continued alias is the row's, not the vehicle's");
     }
 
     [Fact]

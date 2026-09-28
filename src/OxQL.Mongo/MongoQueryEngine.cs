@@ -28,6 +28,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly OxQLOptions options;
     private readonly KeyedFetch fetch;
     private readonly bool remoteClient;
+    private readonly IRemoteQueryClient? remote;
+    private readonly ExplainForwardCache explainCache;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -42,7 +44,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         ILogger<MongoQueryEngine>? logger = null,
         bool includeErrorDetails = false,
         IIndexSource? indexes = null,
-        OwnerFetchCache? cache = null)
+        OwnerFetchCache? cache = null,
+        ExplainForwardCache? explainCache = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
@@ -52,6 +55,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // remote target needs the remote client.
         fetch = new KeyedFetch(remote, this, cache ?? new OwnerFetchCache(this.options), this.options);
         remoteClient = remote is not null;
+        this.remote = remote;
+        this.explainCache = explainCache ?? new ExplainForwardCache();
         this.indexes = indexes;
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
@@ -296,14 +301,22 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var steps = Steps(binding.Trace);
         var result = binding.Trace is { } trace ? ResultOf(trace.Final) : null;
 
-        if (binding is BindOutcome.Failed failed)
-        {
-            // What stops explain before binding stays a refusal: a request without an organisation.
-            if (failed.Refusal.Status != 400)
-                return new ExplainOutcome.Refused(failed.Refusal);
+        // What stops explain before binding stays a refusal: a request without an organisation.
+        if (binding is BindOutcome.Failed { Refusal.Status: not 400 } refused)
+            return new ExplainOutcome.Refused(refused.Refusal);
 
-            return new ExplainOutcome.Success(Answer(context, valid: false, failed.Refusal.Errors ?? [], [], steps, result, request));
-        }
+        // Describe answers from the shapes of the part that binds, valid or not (DESIGN §4.2, §4.5);
+        // the owners' answers and the remote check share one budget (DESIGN §4.3).
+        var owners = new RemoteExplain(remote, explainCache, context, request);
+        var describeNotes = new List<Diagnostic>();
+        var describe = await Describe.AnswerAsync(request, binding.Trace, models.Model, context, owners, describeNotes, cancellationToken).ConfigureAwait(false);
+
+        if (binding is BindOutcome.Failed failed)
+            return new ExplainOutcome.Success(Answer(context, valid: false, failed.Refusal.Errors ?? [], [], steps, result, request) with
+            {
+                Notes = Ordered(describeNotes),
+                Describe = describe,
+            });
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
@@ -314,13 +327,32 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         steps = Placed(steps, bound, indexes, strict, notes);
         result = binding.Trace is { } bindTrace ? ResultOf(bindTrace.Final) with { Columns = Columns(bound, bindTrace) } : result;
+        notes.AddRange(describeNotes);
 
         // A request this host cannot run is not valid, though it binds: the same refusal the query
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return new ExplainOutcome.Success(Answer(context, valid: false,
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }],
-                diagnostics, steps, result, request) with { Notes = Ordered(notes) });
+                diagnostics, steps, result, request) with { Notes = Ordered(notes), Describe = describe });
+
+        // The remote check (DESIGN §4.3): the stages continued at an owner are bound by the owner's
+        // internal explain; an owner error there is this request's, at the caller's stage.
+        var (checkErrors, checkNotes) = await owners.CheckAsync(bound, strict, cancellationToken).ConfigureAwait(false);
+
+        notes.AddRange(checkNotes);
+
+        if (checkErrors.Count > 0)
+        {
+            var failedStages = checkErrors.Where(error => error.Stage is not null).Select(error => error.Stage!.Value).ToHashSet();
+
+            return new ExplainOutcome.Success(Answer(context, valid: false, checkErrors, diagnostics,
+                steps.Select(step => failedStages.Contains(step.Index) ? step with { Status = "error" } : step).ToList(), result, request) with
+            {
+                Notes = Ordered(notes),
+                Describe = describe,
+            });
+        }
 
         var advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null;
 
@@ -334,6 +366,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return new ExplainOutcome.Success(Answer(context, valid: true, [], diagnostics, steps, result, request) with
         {
             Notes = Ordered(notes),
+            Describe = describe,
             Bound = JsonNode.Parse(bound.Canonical)!,
             Stages = compiled.PageStages.Select(Relaxed).ToList(),
             Count = compiled.CountStages?.Select(Relaxed).ToList(),
@@ -686,8 +719,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         Notes = [],
         Steps = steps,
         Result = result,
-        // Describe is answered from the shapes of the trace (DESIGN §4.2, §4.5); until then every
-        // request is answered by nothing rather than guessed at.
+        // Each caller fills in describe (DESIGN §4.2): answered once per request, valid or not.
         Describe = [],
     };
 

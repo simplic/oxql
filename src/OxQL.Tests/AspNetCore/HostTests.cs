@@ -214,7 +214,10 @@ public class HostTests
         limits["maxReportedRows"]!.GetValue<int>().Should().Be(50);
         limits["chainTimeoutMs"]!.GetValue<int>().Should().Be(6_000);
         limits["negativeResolveTtlSeconds"]!.GetValue<int>().Should().Be(10);
-        limits.Count.Should().Be(25, "health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["explainRemoteTimeoutMs"]!.GetValue<int>().Should().Be(1_500);
+        limits["maxDescribeChildren"]!.GetValue<int>().Should().Be(500);
+        limits["maxDescribeRequests"]!.GetValue<int>().Should().Be(10);
+        limits.Count.Should().Be(28, "health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

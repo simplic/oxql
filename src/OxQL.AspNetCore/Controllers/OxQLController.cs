@@ -21,6 +21,7 @@ public class OxQLController : ControllerBase
     private readonly OxQLOptions options;
     private readonly ILogger<OxQLController> logger;
 
+    /// <summary>The public routes over <paramref name="queryService"/>, publishing <paramref name="options"/>' limits on health.</summary>
     public OxQLController(IOxQLQueryService queryService, OxQLOptions options, ILogger<OxQLController> logger)
     {
         this.queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
@@ -143,6 +144,9 @@ public class OxQLController : ControllerBase
             maxReportedRows = limits.MaxReportedRows,
             chainTimeoutMs = options.Execution.EffectiveChainTimeoutMs,
             negativeResolveTtlSeconds = options.Cache.NegativeResolveTtlSeconds,
+            explainRemoteTimeoutMs = options.Explain.RemoteTimeoutMs,
+            maxDescribeChildren = options.Explain.MaxDescribeChildren,
+            maxDescribeRequests = options.Explain.MaxDescribeRequests,
         };
     }
 

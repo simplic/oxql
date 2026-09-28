@@ -35,4 +35,13 @@ public interface IOxQLQueryService
     /// envelope. A request that does not bind is an answer with <c>valid: false</c>.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Explains as <see cref="ExplainAsync(ExplainRequest, CancellationToken)"/> does; with
+    /// <paramref name="internalCall"/> the request is explained as an internal call
+    /// (<c>RequestContext.Internal</c>), so the owner queries an origin forwards for its remote check,
+    /// which carry <c>keyedBy</c>, bind. The base package's internal explain route
+    /// (<c>POST internal/oxql/explain</c>, DESIGN §4.1) calls it with <c>true</c>; the public route never does.
+    /// </summary>
+    Task<ExplainOutcome> ExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken = default);
 }

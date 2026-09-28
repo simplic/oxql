@@ -143,9 +143,13 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, cancellationToken), cancellationToken);
+        ExplainAsync(request, internalCall: false, cancellationToken);
 
-    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, CancellationToken cancellationToken)
+    /// <inheritdoc/>
+    public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken = default) =>
+        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, internalCall, cancellationToken), cancellationToken);
+
+    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken)
     {
         if (request?.Query is null)
             return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
@@ -154,7 +158,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
-        var context = await ContextAsync(null, cancellationToken);
+        var context = await ContextAsync(null, internalCall, cancellationToken);
 
         if (context.Contract == 1)
         {

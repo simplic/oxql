@@ -135,8 +135,47 @@ public sealed class EntityDef
     /// <summary>The ids this entity retired, ordinally sorted.</summary>
     public IReadOnlyList<string> RetiredIds { get; internal set; } = [];
 
+    private IReadOnlyList<PathDef> paths = [];
+    private Lazy<IReadOnlyDictionary<string, IReadOnlyList<PathDef>>> children = new(() => new Dictionary<string, IReadOnlyList<PathDef>>(StringComparer.Ordinal));
+
     /// <summary>Every reachable wire path in walk order: members first, then the paths under each member, depth-first.</summary>
-    public IReadOnlyList<PathDef> Paths { get; internal set; } = [];
+    public IReadOnlyList<PathDef> Paths
+    {
+        get => paths;
+        internal set
+        {
+            paths = value;
+            children = new Lazy<IReadOnlyDictionary<string, IReadOnlyList<PathDef>>>(() => ChildrenIndex(value), LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+    }
+
+    /// <summary>
+    /// The per-entity children index (DESIGN §4.5): the paths one segment below each path, keyed by
+    /// the parent's wire spelling and <c>""</c> for the root members, in walk order. A dictionary's
+    /// value is its <c>*</c> child. Built once from <see cref="Paths"/>, outside the fingerprint.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<PathDef>> Children => children.Value;
+
+    /// <summary>The paths one segment below <paramref name="wire"/> (<c>""</c>: the root members), in walk order; empty for a leaf or an unknown path.</summary>
+    public IReadOnlyList<PathDef> ChildrenOf(string wire) => Children.TryGetValue(wire, out var found) ? found : [];
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<PathDef>> ChildrenIndex(IReadOnlyList<PathDef> paths)
+    {
+        var index = new Dictionary<string, List<PathDef>>(StringComparer.Ordinal);
+
+        foreach (var path in paths)
+        {
+            var dot = path.Wire.LastIndexOf('.');
+            var parent = dot < 0 ? "" : path.Wire[..dot];
+
+            if (!index.TryGetValue(parent, out var list))
+                index[parent] = list = [];
+
+            list.Add(path);
+        }
+
+        return index.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<PathDef>)pair.Value, StringComparer.Ordinal);
+    }
 
     /// <summary>Every reachable wire path by its spelling, ordinal.</summary>
     public IReadOnlyDictionary<string, PathDef> PathIndex { get; internal set; } = new Dictionary<string, PathDef>(StringComparer.Ordinal);

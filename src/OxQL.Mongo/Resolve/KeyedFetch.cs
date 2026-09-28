@@ -90,6 +90,14 @@ public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, 
 /// </summary>
 public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Service, bool Grouped, QueryRequest Query, IReadOnlyList<ContinuedStage> Continued, IReadOnlyList<ContinuedStage> NotApplicable);
 
+/// <summary>
+/// One owner query of a keyed stage checked at its owner's internal explain (DESIGN §4.3 remote
+/// check): the target (<c>entity</c> or <c>entity#item</c>), the owner's service, the query with the
+/// check key, the caller index of its first continued stage, and the mapping of an owner error back
+/// to the caller (null for an error at the owner query's own stages).
+/// </summary>
+public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map);
+
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
 public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
 
@@ -960,8 +968,49 @@ public sealed class KeyedFetch
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
 
-        var index = StageIndexOf(bound, stage);
         var continued = Continuation.Of(bound, stage);
+
+        return PlansOf(bound, stage, strict, continued).Select(plan => new ExplainedOwnerQuery(
+            plan.TargetName,
+            plan.Target.IsRemote,
+            plan.Target.Declared.Entity.Split('.')[0],
+            plan.Grouped,
+            plan.Query([ElidedKey]),
+            plan.Continued.Origins,
+            continued.Where(other => !plan.Continued.Origins.Any(origin => ReferenceEquals(origin, other))).ToList())).ToList();
+    }
+
+    /// <summary>The key an owner query checked at its owner's internal explain carries in place of the page's keys: of a key's form, naming nothing.</summary>
+    public const string CheckKey = "00000000-0000-0000-0000-000000000000";
+
+    /// <summary>
+    /// The owner queries of a keyed stage that a remote owner continues (DESIGN §4.3 remote check):
+    /// per remote target with continued stages, its service, the query a run sends with one
+    /// <see cref="CheckKey"/> in place of the page's keys, and how an owner error maps back — one at
+    /// a continued stage to the caller's stage and path with <c>params.owner</c>, as a run maps a
+    /// refusal; one at the owner query's own stages to null, since those are this host's making.
+    /// Nothing is sent here.
+    /// </summary>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(stage);
+
+        return PlansOf(bound, stage, strict, Continuation.Of(bound, stage))
+            .Where(plan => plan.Target.IsRemote && !plan.Continued.IsEmpty)
+            .Select(plan =>
+            {
+                var query = plan.Query([CheckKey]);
+
+                return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service));
+            })
+            .ToList();
+    }
+
+    /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
+    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued)
+    {
+        var index = StageIndexOf(bound, stage);
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
         var projected = ProjectedUnder(bound, index, stage.As);
@@ -972,14 +1021,7 @@ public sealed class KeyedFetch
             if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
                 plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, projected, parentProjected));
 
-        return plans.Select(plan => new ExplainedOwnerQuery(
-            plan.TargetName,
-            plan.Target.IsRemote,
-            plan.Target.Declared.Entity.Split('.')[0],
-            plan.Grouped,
-            plan.Query([ElidedKey]),
-            plan.Continued.Origins,
-            continued.Where(other => !plan.Continued.Origins.Any(origin => ReferenceEquals(origin, other))).ToList())).ToList();
+        return plans;
     }
 
     /// <summary>One keyed stage over the page: its targets, the stages continued under it, and per row the keys its cases select.</summary>
@@ -1845,33 +1887,44 @@ public sealed class KeyedFetch
     /// owner's errors the same way first, so the mapping composes along the chain.
     /// </summary>
     private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage) =>
-        Refused(result, target.Entity, stage, (error, mapped) =>
+        Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service));
+
+    /// <summary>An owner error at one of <paramref name="target"/>'s continued stages as the caller's; null for one at the owner query's own stages.</summary>
+    private static QueryValidationError? MapBack(JsonObject error, TargetPlan target, string service) =>
+        MapBack(error, new QueryValidationError
         {
-            var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
+            Code = error["code"]?.ToString() ?? Codes.InternalError,
+            Message = error["message"]?.ToString() ?? "",
+            Path = error["path"]?.ToString(),
+        }, target, service);
 
-            if (target.OriginOf(ownerStage) is not { } origin)
-                return null;
+    private static QueryValidationError? MapBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service)
+    {
+        var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
 
-            var parameters = error["params"] is JsonObject written
-                ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
-                : new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (target.OriginOf(ownerStage) is not { } origin)
+            return null;
 
-            parameters["owner"] = new Dictionary<string, object?>
-            {
-                ["service"] = service == SelfService ? null : service,
-                ["entity"] = target.Entity,
-                ["target"] = target.Target.Declared.Item is { } item ? $"{target.Entity}#{item}" : target.Entity,
-                ["stage"] = ownerStage,
-                ["path"] = mapped.Path,
-            };
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
 
-            return mapped with
-            {
-                Stage = origin.OriginIndex,
-                Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null),
-                Params = parameters,
-            };
-        });
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.Target.Declared.Item is { } item ? $"{target.Entity}#{item}" : target.Entity,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        return mapped with
+        {
+            Stage = origin.OriginIndex,
+            Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null),
+            Params = parameters,
+        };
+    }
 
     /// <summary>
     /// The owner's refusal of a query for <paramref name="targetEntity"/> as this host's 422

@@ -113,6 +113,27 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 
     public bool IsConfigured(string serviceKey) => Configured is null || Configured.Contains(serviceKey);
 
+    /// <summary>The owner's explain answer per (service, request); null (the default) is a client that cannot explain at owners.</summary>
+    public Func<string, ExplainRequest, JsonObject?>? Explains { get; set; }
+
+    public List<(string Service, ExplainRequest Request, TimeSpan Budget)> ExplainCalls { get; } = [];
+
+    public async Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        ExplainCalls.Add((serviceKey, request, budget));
+
+        if (Unreachable.Contains(serviceKey))
+            throw new HttpRequestException($"'{serviceKey}' is not reachable.");
+
+        if (Silent.Contains(serviceKey))
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        return Explains?.Invoke(serviceKey, request);
+    }
+
     /// <summary>How many reachability probes were answered; the health cache is measured by it.</summary>
     public int Reachability { get; private set; }
 

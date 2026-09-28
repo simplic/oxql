@@ -98,6 +98,9 @@ public sealed class OxQLOptions
         Limits.MaxReportedRows = AtLeast(1, Limits.MaxReportedRows, nameof(LimitOptions.MaxReportedRows), adjustments);
         Execution.ChainTimeoutMs = AtLeast(1, Execution.ChainTimeoutMs, nameof(ExecutionOptions.ChainTimeoutMs), adjustments, "Execution");
         Cache.NegativeResolveTtlSeconds = AtLeast(0, Cache.NegativeResolveTtlSeconds, nameof(CacheOptions.NegativeResolveTtlSeconds), adjustments, "Cache");
+        Explain.RemoteTimeoutMs = AtLeast(1, Explain.RemoteTimeoutMs, nameof(ExplainOptions.RemoteTimeoutMs), adjustments, "Explain");
+        Explain.MaxDescribeChildren = AtLeast(1, Explain.MaxDescribeChildren, nameof(ExplainOptions.MaxDescribeChildren), adjustments, "Explain");
+        Explain.MaxDescribeRequests = AtLeast(1, Explain.MaxDescribeRequests, nameof(ExplainOptions.MaxDescribeRequests), adjustments, "Explain");
 
         if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
         {
@@ -174,6 +177,19 @@ public sealed class ExplainOptions
     /// never executes the query and reads the index list only when a request asks for it.
     /// </summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// How long, in milliseconds, one explain waits for the owners' internal explain in all (DESIGN
+    /// §4.3): the remote check of continued parts and the describes of remote entities. An owner
+    /// that does not answer in time leaves a <c>REMOTE_UNCHECKED</c> note, never an error.
+    /// </summary>
+    public int RemoteTimeoutMs { get; set; } = 1_500;
+
+    /// <summary>The most children one describe answer lists; past it the answer is <c>truncated</c> (DESIGN §4.2).</summary>
+    public int MaxDescribeChildren { get; set; } = 500;
+
+    /// <summary>The most describe requests one explain answers; the ones past it are answered with an error (DESIGN §4.2).</summary>
+    public int MaxDescribeRequests { get; set; } = 10;
 }
 
 /// <summary>Every cap a request is checked against. All are published on <c>/oxql/health</c>; the schema publishes the ones a caller can act on in advance.</summary>

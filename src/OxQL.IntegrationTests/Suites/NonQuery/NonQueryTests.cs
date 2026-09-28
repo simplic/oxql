@@ -131,7 +131,7 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y8_the_limits_member_publishes_all_twenty_five_limits_with_the_values_the_host_runs_under()
+    public async Task Y8_the_limits_member_publishes_all_twenty_eight_limits_with_the_values_the_host_runs_under()
     {
         var defaults = new LimitOptions();
         var options = new OxQLOptions();
@@ -148,8 +148,10 @@ public class NonQueryTests
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
             ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
+            ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["maxDescribeChildren"] = options.Explain.MaxDescribeChildren,
+            ["maxDescribeRequests"] = options.Explain.MaxDescribeRequests,
         };
-        expected.Should().HaveCount(25);
+        expected.Should().HaveCount(28);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

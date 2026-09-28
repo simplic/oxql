@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using OxQL.Core.Models;
 
 namespace OxQL.Core.Engine;
@@ -24,4 +25,17 @@ public interface IRemoteQueryClient
 
     /// <summary>Whether the configured service answers right now; a health diagnostic, never a refusal.</summary>
     Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Explains <paramref name="request"/> at the service behind <paramref name="serviceKey"/>, over
+    /// its internal explain route (<c>POST internal/oxql/explain</c>, DESIGN §4.1: internal key,
+    /// forwarded identity, the same body as <c>POST /oxql/explain</c>) within <paramref name="budget"/>,
+    /// and answers the owner's explain answer as written (<c>{ valid, errors, describe, … }</c>). The
+    /// origin forwards the parts of a query continued at the owner (the remote check) and the
+    /// describes of the owner's entities with it. A client that cannot explain at owners answers
+    /// null, the default, and the origin notes the parts <c>REMOTE_UNCHECKED</c>; a failed call
+    /// (unreachable, timed out, refused) throws, and the origin notes them the same way.
+    /// </summary>
+    Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+        Task.FromResult<JsonObject?>(null);
 }

@@ -148,6 +148,12 @@ public static class MongoCompiler
     /// <summary>The field the <c>keyedBy</c> window numbers each key's rows in; the rows never keep it.</summary>
     private const string ReservedRank = Aliases.ReservedPrefix + "oxRank";
 
+    /// <summary>The position of an item target's element in its collection, which orders two elements of one row; the rows never keep it.</summary>
+    private const string ReservedElementIndex = Aliases.ReservedPrefix + "oxElIx";
+
+    /// <summary>The variable the <c>keyedBy</c> prologue's filter reads each element under.</summary>
+    private const string ElementVariable = "oxItem";
+
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
 
@@ -1036,8 +1042,16 @@ public static class MongoCompiler
             yield break;
         }
 
-        yield return new BsonDocument("$set", new BsonDocument(keyedBy.ElementAlias!, "$" + keyedBy.ItemStorage));
-        yield return new BsonDocument("$unwind", "$" + keyedBy.ElementAlias);
+        // Only the elements holding a key are unwound, so a row does not carry its whole collection
+        // into every element it has; each keeps its position, which orders two elements of one row
+        // under one key (RE-15).
+        yield return new BsonDocument("$set", new BsonDocument(keyedBy.ElementAlias!, new BsonDocument("$filter", new BsonDocument
+        {
+            ["input"] = "$" + keyedBy.ItemStorage,
+            ["as"] = ElementVariable,
+            ["cond"] = new BsonDocument("$in", new BsonArray { "$$" + ElementVariable + "." + keyedBy.ElementFieldStorage, new BsonDocument("$literal", keys) }),
+        })));
+        yield return new BsonDocument("$unwind", new BsonDocument { ["path"] = "$" + keyedBy.ElementAlias, ["includeArrayIndex"] = ReservedElementIndex });
         yield return new BsonDocument("$match", new BsonDocument(keyedBy.PartitionStorage, new BsonDocument("$in", keys)));
 
         if (exact)
@@ -1079,11 +1093,16 @@ public static class MongoCompiler
         new("$setWindowFields", new BsonDocument
         {
             ["partitionBy"] = "$" + keyedBy.PartitionStorage,
-            ["sortBy"] = new BsonDocument(KeyStorage, 1),
-            ["output"] = new BsonDocument(ReservedRank, new BsonDocument("$documentNumber", new BsonDocument())),
+            ["sortBy"] = keyedBy.ItemStorage is null ? new BsonDocument(KeyStorage, 1) : new BsonDocument { [KeyStorage] = 1, [ReservedElementIndex] = 1 },
+
+            // $documentNumber takes one sort field; an item's rows are numbered by record key and
+            // position, which a running count over the ordered partition does.
+            ["output"] = new BsonDocument(ReservedRank, keyedBy.ItemStorage is null
+                ? new BsonDocument("$documentNumber", new BsonDocument())
+                : new BsonDocument { ["$sum"] = 1, ["window"] = new BsonDocument("documents", new BsonArray { "unbounded", "current" }) }),
         }),
         new("$match", new BsonDocument(ReservedRank, new BsonDocument("$lte", keyedBy.PerKey))),
-        new("$unset", ReservedRank),
+        new("$unset", keyedBy.ItemStorage is null ? ReservedRank : new BsonArray { ReservedRank, ReservedElementIndex }),
     ];
 
     /// <summary>

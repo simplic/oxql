@@ -80,11 +80,13 @@ public class KeyedByCompileTests
         var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)).PageStages;
 
         stages[1]["$match"].AsBsonDocument.Names.Should().Equal("BillingLines._id");
-        stages[2]["$set"]["oxEl"].AsString.Should().Be("$BillingLines");
-        stages[3]["$unwind"].AsString.Should().Be("$oxEl");
+        stages[2]["$set"]["oxEl"]["$filter"]["input"].AsString.Should().Be("$BillingLines", "only the elements holding a key are unwound (RE-15)");
+        stages[3]["$unwind"]["path"].AsString.Should().Be("$oxEl");
+        stages[3]["$unwind"]["includeArrayIndex"].AsString.Should().Be("__oxElIx");
         stages[4]["$match"].AsBsonDocument.Names.Should().Equal("oxEl._id");
         stages[5]["$match"].AsBsonDocument.Names.Should().Equal("oxEl.Amount");
         stages[6]["$setWindowFields"]["partitionBy"].AsString.Should().Be("$oxEl._id");
+        stages[6]["$setWindowFields"]["sortBy"].AsBsonDocument.Names.Should().Equal(["_id", "__oxElIx"], "two elements of one row under one key are ordered by position");
         bound.FinalShape.Roots["oxEl"].Should().BeOfType<ShapeNode.Element>();
         bound.KeyedBy!.PerKey.Should().Be(2, "two rows tell one from several");
     }

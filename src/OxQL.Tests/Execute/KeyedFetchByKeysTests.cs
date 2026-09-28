@@ -286,7 +286,7 @@ public class KeyedFetchByKeysTests
 
         var owner = runner.StagesOf("rc.shipment").Single().Select(stage => stage.ToJson()).ToList();
 
-        owner.Should().Contain(stage => stage.Contains("\"$unwind\" : \"$oxEl\""), "each matching element is a row of its own");
+        owner.Should().Contain(stage => stage.Contains("\"$unwind\" : { \"path\" : \"$oxEl\""), "each matching element is a row of its own");
         owner.Should().Contain(stage => stage.Contains("$setWindowFields") && stage.Contains("\"partitionBy\" : \"$oxEl._id\""));
         owner.Should().Contain(stage => stage.Contains("\"$lte\" : 2"), "at most two rows per key");
     }

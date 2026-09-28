@@ -2,12 +2,9 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using MongoDB.Bson;
 using OxQL.Core.Binding;
-using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
-using OxQL.Mongo;
 using OxQL.Tests.Bind.Fixtures.Resolve;
-using OxQL.Tests.Execute;
 using Xunit;
 
 namespace OxQL.Tests.Bind;
@@ -16,8 +13,8 @@ namespace OxQL.Tests.Bind;
 /// The OxQL 2.1 resolve binding (DESIGN §3.4.1 steps 1–7 without continuation, §3.8, §3.10): the
 /// new members, the collection guard (<c>RESOLVE_ON_COLLECTION</c>), the declared cases with
 /// <c>target</c> and <c>parentAs</c>, the inline or keyed executor, the shape of a keyed alias,
-/// poisoned aliases, the canonical render, and the temporary refusal of a keyed resolve at
-/// execution until the keyed fetch exists.
+/// poisoned aliases and the canonical render. How a keyed resolve executes is
+/// <c>Execute/KeyedFetchByKeysTests</c>.
 /// </summary>
 public class ResolveBindTests
 {
@@ -456,29 +453,5 @@ public class ResolveBindTests
 
         remote["cases"]![1]!["targets"]![0]!["remote"]!.GetValue<bool>().Should().BeTrue();
         remote["cases"]![1]!["targets"]![0]!["select"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("code");
-    }
-
-    // ---- execution: the keyed fetch is not there yet -------------------------------------------------
-
-    [Fact]
-    public async Task A_keyed_resolve_is_refused_at_execution_and_explain_until_the_keyed_fetch_exists()
-    {
-        var runner = new FakeAggregateRunner();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(Model), runner, BindHost.Cursors, BindHost.Options());
-        var request = BindHost.Request(Invoice, """[{ "match": { "number": { "eq": "x" } } }, { "resolve": { "path": "billingLineId", "as": "bl" } }]""");
-
-        var refusal = (await engine.ExecuteAsync(request, BindHost.Context())).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
-
-        refusal.Status.Should().Be(422);
-        refusal.Errors!.Single().Code.Should().Be(Codes.ResolveUnavailable);
-        refusal.Errors![0].Stage.Should().Be(1);
-        runner.Calls.Should().BeEmpty("nothing runs");
-
-        (await engine.ExplainAsync(request, BindHost.Context())).Should().BeOfType<ExplainOutcome.Refused>()
-            .Which.Refusal.Errors!.Single().Code.Should().Be(Codes.ResolveUnavailable);
-
-        runner.PageRows = [];
-        (await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "customerCode", "as": "c" } }]"""), BindHost.Context()))
-            .Should().BeOfType<QueryOutcome.Success>("an inline resolve runs as before");
     }
 }

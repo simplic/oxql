@@ -37,6 +37,17 @@ public sealed record QueryRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Strict { get; init; }
 
+    /// <summary>
+    /// The per-key owner answer a keyed fetch asks for (DESIGN §3.5.2 step 3): the rows whose
+    /// <c>path</c> holds one of <c>keys</c>, at most <c>perKey</c> per key. Accepted only on an
+    /// internal call (<see cref="Binding.RequestContext.Internal"/>: the internal batch route and
+    /// this host's own <c>SelfOwner</c>); on the public route it is <c>UNKNOWN_REQUEST_MEMBER</c>, so
+    /// it never becomes public syntax.
+    /// </summary>
+    [JsonPropertyName("keyedBy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public KeyedByMember? KeyedBy { get; init; }
+
     /// <summary>Whether the request is strict: <see cref="Strict"/> written as true.</summary>
     [JsonIgnore]
     public bool IsStrict => Strict == true;
@@ -48,6 +59,27 @@ public sealed record QueryRequest
     /// </summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? Unknown { get; init; }
+}
+
+/// <summary>
+/// The internal request member <c>keyedBy</c>: the owner's rows grouped per key. <see cref="Path"/>
+/// is the matched member on the entity, through one item collection for an item target
+/// (<c>billingLines.id</c>), where each row then carries the matched element under <c>oxEl</c>.
+/// </summary>
+public sealed record KeyedByMember
+{
+    /// <summary>The member the keys are matched on, as a wire path of the entity.</summary>
+    [JsonPropertyName("path")]
+    public string? Path { get; init; }
+
+    /// <summary>The keys, as wire values of that member.</summary>
+    [JsonPropertyName("keys")]
+    public JsonElement? Keys { get; init; }
+
+    /// <summary>At most this many rows per key, first by record key; 2 by default, which tells one row from several.</summary>
+    [JsonPropertyName("perKey")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PerKey { get; init; }
 }
 
 /// <summary>

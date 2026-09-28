@@ -25,7 +25,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IAggregateRunner runner;
     private readonly CursorCodec cursors;
     private readonly OxQLOptions options;
-    private readonly KeyedFetch? remote;
+    private readonly KeyedFetch fetch;
+    private readonly bool remoteClient;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -45,14 +46,17 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.remote = remote is null ? null : new KeyedFetch(remote, cache ?? new OwnerFetchCache(this.options), this.options);
+        // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
+        // remote target needs the remote client.
+        fetch = new KeyedFetch(remote, this, cache ?? new OwnerFetchCache(this.options), this.options);
+        remoteClient = remote is not null;
         this.indexes = indexes;
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
     }
 
     /// <inheritdoc/>
-    public bool RemoteResolve => remote is not null;
+    public bool RemoteResolve => remoteClient;
 
     /// <inheritdoc/>
     public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
@@ -64,13 +68,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return QueryOutcome.Of(failed.Refusal);
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
-
-        if (KeyedFetchPending(bound) is { } pending)
-            return QueryOutcome.Of(pending);
-
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
 
-        if ((compiled.RemoteResolves.Count > 0 || compiled.SemiJoins.Count > 0) && remote is null)
+        if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
@@ -81,7 +81,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
         if (compiled.SemiJoins.Count > 0)
         {
-            var refused = await remote!.ByConditionAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var refused = await fetch.ByConditionAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
             resolveCalls += compiled.SemiJoins.Select(slot => KeyedFetch.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
 
@@ -135,12 +135,14 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A lookup marks the rows with a parent over its limit; the marks leave the rows here.
         diagnostics.AddRange(MongoCompiler.LookupTruncations(compiled, page));
 
-        // Remote resolves run over the trimmed page; an owner that does not answer yields null rows and a diagnostic, never a failed page.
+        // Keyed resolves run over the trimmed page, remote targets at their owners and local ones
+        // through this host's SelfOwner; an owner that does not answer yields null rows and a
+        // diagnostic, never a failed page.
         IReadOnlyList<IReadOnlyDictionary<string, JsonNode?>>? resolved = null;
 
-        if (compiled.RemoteResolves.Count > 0)
+        if (compiled.KeyedResolves.Count > 0)
         {
-            var resolution = await remote!.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var resolution = await fetch.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;
@@ -228,18 +230,6 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private static TimeSpan Remaining(CompiledQuery compiled, Stopwatch timer) =>
         TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
 
-    /// <summary>
-    /// E07a, temporary until the keyed fetch (E09): a resolve that binds to the keyed fetch other
-    /// than a plain remote one (typed, item, converted, element-wise, narrowed, with an owning
-    /// row, or a filter told apart from a missing record) has no executor on this engine yet, so
-    /// it is refused rather than compiled as the inline join it is not.
-    /// </summary>
-    private static Refusal? KeyedFetchPending(BoundPipeline bound) =>
-        bound.Stages.OfType<BoundStage.Resolve>().FirstOrDefault(resolve => resolve.NeedsKeyedFetch) is { } keyed
-            ? Refusal.NotExecutable(Codes.ResolveUnavailable,
-                $"The resolve of '{keyed.Reference.Wire}' as '{keyed.As}' needs the keyed fetch, which this engine does not run yet.", keyed.Stage >= 0 ? keyed.Stage : null)
-            : null;
-
     /// <inheritdoc/>
     public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
@@ -249,10 +239,6 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return new ExplainOutcome.Refused(failed.Refusal);
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
-
-        if (KeyedFetchPending(bound) is { } pending)
-            return new ExplainOutcome.Refused(pending);
-
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
 
         return new ExplainOutcome.Success(new ExplainResult
@@ -407,7 +393,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 HasRegex(compiled.PageStages),
                 HasUnboundedSort(compiled.PageStages),
                 compiled.IncludeTotalCount,
-                compiled.RemoteResolves.Count > 0 || compiled.SemiJoins.Count > 0,
+                compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0,
                 outcome,
                 context.Organisation,
                 context.CorrelationId);

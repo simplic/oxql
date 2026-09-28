@@ -150,7 +150,9 @@ public sealed record BoundResolveCase(ReferenceDef Declared, BoundCaseCondition?
 /// values are its stored form; for a variant condition it is the holding object and
 /// <paramref name="Storage"/> its discriminator element, the values the discriminators of the
 /// named variants and their descendants (<see cref="BsonNull"/> for a value stored without one).
-/// Storage is absolute in the row; under <c>elements</c> it lies under the collection crossed.
+/// Storage is absolute in the row; under <c>elements</c> it is relative to one element of the
+/// collection crossed (<see cref="BoundStage.Resolve.CollectionStorage"/>), where the keyed fetch
+/// reads it element by element.
 /// </summary>
 public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IReadOnlyList<BsonValue> Values, bool IsVariant);
 
@@ -158,6 +160,9 @@ public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IRead
 /// One target of a case as bound. A local target carries its entity, the storage of the matched
 /// field (relative to the element for an item target) and of the item collection, its select,
 /// filter, scope and owning-row select; a remote target carries what the owner binds, as written.
+/// A local target also carries the filter and the owning-row select as written
+/// (<paramref name="RemoteFilter"/>, <paramref name="RemoteParentSelect"/>): the keyed fetch sends
+/// them to this host's own <c>SelfOwner</c> as an ordinary owner query.
 /// <paramref name="DroppedSelect"/> lists the select paths this target does not have, which the
 /// target leaves out (a union's select is flat).
 /// </summary>
@@ -375,11 +380,30 @@ public sealed record BoundPipeline
     /// <summary>Whether any condition is a semi-join on a remote alias.</summary>
     public bool HasSemiJoin { get; init; }
 
+    /// <summary>The internal per-key owner answer the request asked for, or null (DESIGN §3.5.2 step 3).</summary>
+    public BoundKeyedBy? KeyedBy { get; init; }
+
     /// <summary>
     /// Whether the aggregate runs under the host's collation: some string comparison, sort
     /// field or group key folds case. A pipeline that folds nothing runs without one.
     /// </summary>
     public bool Collated { get; init; }
+}
+
+/// <summary>
+/// The bound <c>keyedBy</c> of an internal owner query: the matched member
+/// <paramref name="Path"/> (stored at <c>Path.Storage</c>), the keys in stored form, and at most
+/// <paramref name="PerKey"/> rows per key. For an item target <paramref name="ItemStorage"/> is the
+/// item collection, each row carries the matched element under <paramref name="ElementAlias"/>,
+/// and <paramref name="ElementFieldStorage"/> is the member on that element.
+/// </summary>
+public sealed record BoundKeyedBy(ResolvedPath Path, IReadOnlyList<BsonValue> Keys, int PerKey, string? ItemStorage, string? ElementAlias, string? ElementFieldStorage)
+{
+    /// <summary>The alias an item target's element travels under in the owner's rows.</summary>
+    public const string Element = "oxEl";
+
+    /// <summary>The storage every row's key lies at after the prologue: the element's member for an item, the entity's otherwise.</summary>
+    public string PartitionStorage => ItemStorage is null ? Path.Storage! : ElementAlias + "." + ElementFieldStorage;
 }
 
 /// <summary>The outcome of binding: a pipeline, or the errors.</summary>

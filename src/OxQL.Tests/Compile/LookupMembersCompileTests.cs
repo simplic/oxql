@@ -186,7 +186,7 @@ public class LookupMembersCompileTests
             PagingMode = PagingMode.Keyset,
             IncludeTotalCount = false,
             SortFields = [],
-            RemoteResolves = [],
+            KeyedResolves = [],
             SemiJoins = [],
             MaxTimeMs = 1,
             CountCap = 1,

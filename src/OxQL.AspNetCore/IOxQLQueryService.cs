@@ -20,6 +20,16 @@ public interface IOxQLQueryService
     /// </summary>
     Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Executes a batch as <see cref="BatchAsync(BatchRequest, CancellationToken)"/> does; with
+    /// <paramref name="internalCall"/> every request runs as an internal call
+    /// (<c>RequestContext.Internal</c>), which alone may carry the keyed fetch's <c>keyedBy</c>.
+    /// The base package's internal batch route calls it with <c>true</c>; the public route never
+    /// does, so <c>keyedBy</c> stays <c>UNKNOWN_REQUEST_MEMBER</c> there. The route is the signal:
+    /// no header carries it.
+    /// </summary>
+    Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default);
+
     /// <summary>Binds and compiles one request without executing it.</summary>
     Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default);
 }

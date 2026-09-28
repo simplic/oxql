@@ -68,9 +68,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken = default) =>
-        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, cancellationToken), cancellationToken);
+        ExecuteAsync(request, maxTimeMs, internalCall: false, cancellationToken);
 
-    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, CancellationToken cancellationToken)
+    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken) =>
+        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, internalCall, cancellationToken), cancellationToken);
+
+    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken)
     {
         // A null query is a caller error, not a fault: the batch route can carry one
         // ({"queries":[null]}) and the body of the query route can be the literal `null`.
@@ -81,7 +84,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
-        var context = await ContextAsync(maxTimeMs, cancellationToken);
+        var context = await ContextAsync(maxTimeMs, internalCall, cancellationToken);
 
         if (context.Contract == 1)
         {
@@ -98,9 +101,13 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<BatchOutcome> BatchAsync(BatchRequest batch, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, cancellationToken), cancellationToken);
+        BatchAsync(batch, internalCall: false, cancellationToken);
 
-    private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, CancellationToken cancellationToken)
+    /// <inheritdoc/>
+    public Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default) =>
+        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, internalCall, cancellationToken), cancellationToken);
+
+    private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken)
     {
         if (batch is null || batch.Queries is null)
             return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
@@ -121,7 +128,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
         // Sequential per host: the parallelism of a batch is across services, not within one.
         foreach (var query in batch.Queries)
         {
-            var outcome = await ExecuteAsync(query, batch.MaxTimeMs, cancellationToken);
+            var outcome = await ExecuteAsync(query, batch.MaxTimeMs, internalCall, cancellationToken);
 
             results.Add(outcome switch
             {
@@ -206,7 +213,11 @@ public sealed class OxQLQueryService : IOxQLQueryService
     }
 
     /// <summary>The context of the current request.</summary>
-    public async ValueTask<RequestContext> ContextAsync(int? maxTimeMs, CancellationToken cancellationToken)
+    public ValueTask<RequestContext> ContextAsync(int? maxTimeMs, CancellationToken cancellationToken) =>
+        ContextAsync(maxTimeMs, internalCall: false, cancellationToken);
+
+    /// <summary>The context of the current request; <paramref name="internalCall"/> marks it as arriving over the internal route.</summary>
+    public async ValueTask<RequestContext> ContextAsync(int? maxTimeMs, bool internalCall, CancellationToken cancellationToken)
     {
         var httpContext = httpContextAccessor?.HttpContext;
 
@@ -220,6 +231,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
             // The scope provider may read the correlation off a caller's header; every log line reads it from here.
             CorrelationId = LogText.Of(scope.CorrelationId(httpContext)),
             MaxTimeMs = maxTimeMs,
+            Internal = internalCall,
         };
     }
 

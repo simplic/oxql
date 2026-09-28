@@ -291,7 +291,7 @@ public class LateJoinTests
         var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$sort", "$limit");
-        compiled.RemoteResolves.Should().ContainSingle();
+        compiled.KeyedResolves.Should().ContainSingle();
     }
 
     // ---- the rows and the cursor -----------------------------------------------------------

@@ -10,8 +10,9 @@ namespace OxQL.Mongo.Resolve;
 /// owner through its public query vocabulary, so the owner binds, authorises and compiles them
 /// like any caller's query:
 /// <list type="bullet">
-///   <item><b>by keys</b> (after the page): <c>match &lt;target field&gt; in keys</c>, the stage's
-///   remote filter, the projection, one page as large as the chunk;</item>
+///   <item><b>by keys</b> (after the page), per target: <c>match &lt;target field&gt; in keys</c>, the
+///   target's filter, the projection, one page as large as the chunk; or the same grouped per key
+///   through the internal <c>keyedBy</c> for an item or a member that is not the target's key;</item>
 ///   <item><b>by condition</b> (before the page, the semi-join): the caller's condition rebased onto
 ///   the target, the target field projected, paged by offset.</item>
 /// </list>
@@ -25,42 +26,88 @@ public static class OwnerQueryBuilder
     public static string TargetFieldOf(SemiJoinSlot slot) => RemoteOf(slot).Reference.Path?.Reference?.TargetField ?? "id";
 
     /// <summary>
-    /// The owner query of one by-keys chunk: the keys, the stage's remote filter, and a projection
-    /// that always travels and always carries the target field so the rows can be keyed.
+    /// The owner query of one by-keys chunk for one target of a resolve. A plain query (no
+    /// <paramref name="perKey"/>) matches the target field against the keys, applies the
+    /// target's filter and projection, and takes one page as large as the chunk: the form of an
+    /// entity target keyed by its own key, where no key has two rows. A grouped query carries
+    /// the keys in the internal <c>keyedBy</c> instead, at most <paramref name="perKey"/> rows per
+    /// key and a page of <c>keys × perKey</c>; for an item target the key path runs through the
+    /// item collection and the element travels under <see cref="BoundKeyedBy.Element"/>, which the
+    /// filter and the select are rebased onto and beside which the owning row's members travel
+    /// when the resolve names <c>parentAs</c>. The projection always travels and always carries
+    /// the member the rows are keyed by.
     /// </summary>
-    public static QueryRequest ByKeys(BoundStage.Resolve stage, IReadOnlyList<string> keys)
+    public static QueryRequest ByKeys(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<string> keys, int? perKey)
     {
         ArgumentNullException.ThrowIfNull(stage);
+        ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(keys);
 
-        var pipeline = new List<PipelineStage>
-        {
-            new()
+        var field = target.Declared.Field;
+        var item = target.Declared.Item;
+        var element = item is null ? "" : BoundKeyedBy.Element + ".";
+        var pipeline = new List<PipelineStage>();
+
+        if (perKey is null)
+            pipeline.Add(new PipelineStage
             {
-                Match = new MatchStage { Condition = new FilterCondition { Path = stage.TargetField, Op = "in", Value = JsonSerializer.SerializeToElement(keys) } },
+                Match = new MatchStage { Condition = new FilterCondition { Path = field, Op = "in", Value = JsonSerializer.SerializeToElement(keys) } },
                 Keys = ["match"],
-            },
-        };
+            });
 
-        if (stage.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
-            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!, Keys = ["match"] });
+        if (target.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
+        {
+            var match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!;
 
-        // A projection always travels. With a select it is the caller's; without one it is
-        // the reserved $default key, which the owner expands to its own entity's key and
-        // display members — the pair the local half of this stage keeps. Without a projection
-        // the owner answers with whole documents, organizationId and every other member
-        // included, to a caller that wanted a label.
-        var projection = stage.RemoteSelect is { Count: > 0 } select
-            ? select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal)
-            : new Dictionary<string, int>(StringComparer.Ordinal) { ["$default"] = 1 };
+            pipeline.Add(new PipelineStage { Match = element.Length == 0 ? match : match with { Condition = Rebased(match.Condition, element) }, Keys = ["match"] });
+        }
 
-        projection[stage.TargetField] = 1;
+        // With a select it is the caller's (a local target's as bound, the paths it has); without
+        // one the reserved $default key, which the owner expands to its own entity's key and
+        // display members — the pair the local half of this stage keeps — or, for an item, the
+        // matched member. Without a projection the owner answers with whole documents,
+        // organizationId and every other member included, to a caller that wanted a label.
+        IReadOnlyList<string>? select = target.IsRemote ? target.RemoteSelect : target.Select?.Select(path => path.Wire).ToList();
+        var projection = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        if (select is { Count: > 0 })
+            foreach (var path in select)
+                projection[element + path] = 1;
+        else if (item is null)
+            projection["$default"] = 1;
+
+        projection[element + field] = 1;
+
+        if (item is not null && stage.ParentAs is not null)
+        {
+            if (target.RemoteParentSelect is { Count: > 0 } parent)
+                foreach (var path in parent)
+                    projection[path] = 1;
+            else
+                projection["$default"] = 1;
+        }
+
         pipeline.Add(new PipelineStage { Project = new ProjectStage { Fields = projection }, Keys = ["project"] });
+        pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count * (perKey ?? 1) }, Keys = ["page"] });
 
-        pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count }, Keys = ["page"] });
-
-        return new QueryRequest { EntityType = stage.TargetEntity, Pipeline = pipeline };
+        return new QueryRequest
+        {
+            EntityType = target.Declared.Entity,
+            Pipeline = pipeline,
+            KeyedBy = perKey is { } rows
+                ? new KeyedByMember { Path = item is null ? field : item + "." + field, Keys = JsonSerializer.SerializeToElement(keys), PerKey = rows }
+                : null,
+        };
     }
+
+    /// <summary>A condition on an item's members rebased onto the element's alias; an <c>any</c>'s inner condition stays relative to its own element.</summary>
+    private static FilterCondition? Rebased(FilterCondition? condition, string prefix) => condition is null ? null : condition with
+    {
+        Path = condition.Path is null ? null : prefix + condition.Path,
+        And = condition.And?.Select(inner => Rebased(inner, prefix)!).ToList(),
+        Or = condition.Or?.Select(inner => Rebased(inner, prefix)!).ToList(),
+        Not = condition.Not is null ? null : Rebased(condition.Not, prefix),
+    };
 
     /// <summary>
     /// The owner query of one by-condition page: the slot's condition relative to the target, the

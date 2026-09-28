@@ -69,9 +69,10 @@ public static class WireEncoder
                         result[name] = new JsonArray();
                     break;
 
-                // The owner's row, or null when the owner had none: the local document holds
-                // nothing under the alias.
+                // The owner's row (a keyed alias: this host's own, from its SelfOwner), or null
+                // when the owner had none: the local document holds nothing under the alias.
                 case ShapeNode.Remote:
+                case ShapeNode.Keyed:
                     result[name] = remote is not null && remote.TryGetValue(name, out var resolvedRemote) ? resolvedRemote : null;
                     break;
 

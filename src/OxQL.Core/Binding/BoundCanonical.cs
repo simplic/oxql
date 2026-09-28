@@ -17,7 +17,11 @@ public static class BoundCanonical
     private static readonly JsonWriterSettings Canonical = new() { OutputMode = JsonOutputMode.CanonicalExtendedJson };
 
     /// <summary>The canonical JSON of the stages, page included.</summary>
-    public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode)
+    /// <remarks>
+    /// The internal <c>keyedBy</c> is written only when the request carried it, so every other
+    /// request renders as before.
+    /// </remarks>
+    public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode, BoundKeyedBy? keyedBy = null)
     {
         var node = new JsonObject
         {
@@ -26,6 +30,15 @@ public static class BoundCanonical
             ["stages"] = new JsonArray(stages.Select(stage => (JsonNode)RenderStage(stage)).ToArray()),
             ["paging"] = mode == PagingMode.Keyset ? "keyset" : "offset",
         };
+
+        if (keyedBy is not null)
+            node["keyedBy"] = new JsonObject
+            {
+                ["path"] = keyedBy.Path.Storage,
+                ["item"] = keyedBy.ItemStorage,
+                ["keys"] = new JsonArray(keyedBy.Keys.Select(value => JsonNode.Parse(value.ToJson(Canonical))).ToArray()),
+                ["perKey"] = keyedBy.PerKey,
+            };
 
         if (page is not null)
             node["page"] = new JsonObject
@@ -40,9 +53,9 @@ public static class BoundCanonical
     }
 
     /// <summary>The fingerprint: SHA-256 over the canonical form without the page.</summary>
-    public static string Fingerprint(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, PagingMode mode)
+    public static string Fingerprint(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, PagingMode mode, BoundKeyedBy? keyedBy = null)
     {
-        var text = Render(scope, stages.Where(stage => stage is not BoundStage.Page).ToList(), null, mode).ToJsonString();
+        var text = Render(scope, stages.Where(stage => stage is not BoundStage.Page).ToList(), null, mode, keyedBy).ToJsonString();
 
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
     }

@@ -30,8 +30,14 @@ public sealed class Binder
     /// </summary>
     public const string Contract1Hint = " This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.";
 
-    /// <summary>The top-level members a request carries.</summary>
+    /// <summary>
+    /// The top-level members a request carries. An internal call may also carry <c>keyedBy</c>
+    /// (<see cref="InternalRequestMembers"/>); the public route never names it.
+    /// </summary>
     public const string RequestMembers = "entityType, variables, pipeline, strict";
+
+    /// <summary>The top-level members a request carries on an internal call (<see cref="RequestContext.Internal"/>).</summary>
+    public const string InternalRequestMembers = RequestMembers + ", keyedBy";
 
     private readonly EntityModel model;
     private readonly CursorCodec cursors;
@@ -139,6 +145,7 @@ public sealed class Binder
             shape = Shape.ForEntity(entity, addons);
 
             BindRequestMembers();
+            BindKeyedBy();
 
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
                 errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
@@ -248,6 +255,83 @@ public sealed class Binder
                     $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {RequestMembers}.", null, null));
         }
 
+        /// <summary>
+        /// The internal <c>keyedBy</c> (DESIGN §3.5.2 step 3): the owner's rows grouped per key, at most
+        /// <c>perKey</c> per key. Only an internal call carries it; anywhere else it is a member a
+        /// request does not have. The path is a stored member of the entity, or of one item
+        /// collection's element, which then travels under <see cref="BoundKeyedBy.Element"/> and is
+        /// a root the rest of the pipeline reads (the filter, the projection).
+        /// </summary>
+        private void BindKeyedBy()
+        {
+            if (request.KeyedBy is not { } keyedBy)
+                return;
+
+            if (!context.Internal || !contract2)
+            {
+                errors.Add(Error(Codes.UnknownRequestMember,
+                    $"'keyedBy' is not a member of a request; a request carries {RequestMembers}." + Hint(!contract2), null, null));
+                return;
+            }
+
+            var wire = keyedBy.Path ?? "";
+            var resolution = shape.Resolve(wire, PathUsage.Match);
+
+            if (!resolution.Succeeded)
+            {
+                errors.Add(Error(resolution.Code!, resolution.Message!, null, keyedBy.Path));
+                return;
+            }
+
+            var path = resolution.Path!;
+            var crossed = CollectionsCrossed(wire);
+
+            if (path.Storage is null || path.Kind == Kind.Array || crossed.Count > 1 || crossed.Any(collection => collection.Wire == wire))
+            {
+                errors.Add(Error(Codes.InvalidPath,
+                    $"'keyedBy.path' is a stored member of the entity or of the element of one item collection; '{wire}' is not.", null, keyedBy.Path));
+                return;
+            }
+
+            if (keyedBy.Keys is not { ValueKind: JsonValueKind.Array } keys || keys.GetArrayLength() == 0)
+            {
+                errors.Add(Error(Codes.InvalidOperand, "'keyedBy.keys' is a non-empty array of keys.", null, keyedBy.Path));
+                return;
+            }
+
+            var perKey = keyedBy.PerKey ?? 2;
+
+            if (perKey < 1 || perKey > options.Limits.MaxLookupLimit)
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'keyedBy.perKey' is between 1 and {options.Limits.MaxLookupLimit}.", null, keyedBy.Path));
+                return;
+            }
+
+            // The keys compare exactly, as the ids they are; the coercer's errors are the request's.
+            var coerced = new List<QueryValidationError>();
+            var operand = coercer.Coerce(keys, path, "in", 0, coerced);
+
+            if (operand is null)
+            {
+                errors.AddRange(coerced.Select(error => error with { Stage = null }));
+                return;
+            }
+
+            string? itemStorage = null, element = null, elementField = null;
+
+            if (crossed is [var collection])
+            {
+                itemStorage = collection.Storage!;
+                element = BoundKeyedBy.Element;
+                elementField = path.Storage[(itemStorage.Length + 1)..];
+                shape = shape.WithRoot(element, new ShapeNode.Element(entity, collection.Path!, element));
+            }
+
+            keyedByBound = new BoundKeyedBy(path, ValuesOf(operand), perKey, itemStorage, element, elementField);
+        }
+
+        private BoundKeyedBy? keyedByBound;
+
         /// <summary>The contract 1 hint when <paramref name="contract2Construct"/> is what a contract 1 request was refused for; empty otherwise.</summary>
         private string Hint(bool contract2Construct) => !contract2 && contract2Construct ? Contract1Hint : "";
 
@@ -328,7 +412,7 @@ public sealed class Binder
         public BoundPipeline Result(BoundStage.Scope scope)
         {
             var mode = shape.IsRootShape ? PagingMode.Keyset : PagingMode.Offset;
-            var fingerprint = BoundCanonical.Fingerprint(scope, stages, mode);
+            var fingerprint = BoundCanonical.Fingerprint(scope, stages, mode, keyedByBound);
 
             // The cursor is verified against the finished fingerprint.
             if (pageIndex >= 0 && request.Pipeline![pageIndex].Page!.Cursor is { } cursor)
@@ -354,8 +438,9 @@ public sealed class Binder
                 PagingMode = mode,
                 Diagnostics = diagnostics,
                 Fingerprint = fingerprint,
-                Canonical = BoundCanonical.Render(scope, stages, page, mode).ToJsonString(),
+                Canonical = BoundCanonical.Render(scope, stages, page, mode, keyedByBound).ToJsonString(),
                 HasSemiJoin = hasSemiJoin,
+                KeyedBy = keyedByBound,
                 Collated = collated,
             };
         }
@@ -1162,7 +1247,7 @@ public sealed class Binder
 
             foreach (var declared in selected)
             {
-                var when = BindCaseCondition(declared.When, reference, index);
+                var when = BindCaseCondition(declared.When, reference, collectionStorage, index);
                 var targets = new List<BoundResolveTarget>();
 
                 foreach (var target in declared.Targets)
@@ -1237,7 +1322,7 @@ public sealed class Binder
         /// the object holding it, with the stored values the declaration names. The model build
         /// checked both, so a failure here is the model's, reported like a path the model lacks.
         /// </summary>
-        private BoundCaseCondition? BindCaseCondition(ReferenceCondition? condition, ResolvedPath reference, int index)
+        private BoundCaseCondition? BindCaseCondition(ReferenceCondition? condition, ResolvedPath reference, string? collectionStorage, int index)
         {
             if (condition is null)
                 return null;
@@ -1260,7 +1345,7 @@ public sealed class Binder
 
                     var operand = coercer.Coerce(JsonSerializer.SerializeToElement(equals.Values), sibling.Path, "in", index, errors);
 
-                    return operand is null ? null : new BoundCaseCondition(sibling.Path, sibling.Path.Storage, ValuesOf(operand), IsVariant: false);
+                    return operand is null ? null : new BoundCaseCondition(sibling.Path, ElementRelative(sibling.Path.Storage, collectionStorage), ValuesOf(operand), IsVariant: false);
                 }
 
                 case ReferenceCondition.Variant variant:
@@ -1280,13 +1365,22 @@ public sealed class Binder
                     var probe = holding?.Path ?? reference;
                     var operand = coercer.CoerceVariants(JsonSerializer.SerializeToElement(variant.Names), probe, type, index, errors);
 
-                    return operand is null ? null : new BoundCaseCondition(probe, storage, ValuesOf(operand), IsVariant: true);
+                    return operand is null ? null : new BoundCaseCondition(probe, ElementRelative(storage, collectionStorage), ValuesOf(operand), IsVariant: true);
                 }
 
                 default:
                     return null;
             }
         }
+
+        /// <summary>
+        /// A case condition's storage as the keyed fetch reads it: under <c>elements</c> relative to
+        /// one element of the collection crossed, absolute in the row otherwise.
+        /// </summary>
+        private static string ElementRelative(string storage, string? collectionStorage) =>
+            collectionStorage is not null && storage.StartsWith(collectionStorage + ".", StringComparison.Ordinal)
+                ? storage[(collectionStorage.Length + 1)..]
+                : storage;
 
         private static IReadOnlyList<BsonValue> ValuesOf(BoundOperand operand) => operand switch
         {
@@ -1374,7 +1468,10 @@ public sealed class Binder
             var filter = resolve.Filter?.Condition is null ? null : BindTargetFilter(resolve.Filter.Condition, at, index);
             var parentSelect = withParent && declared.Item is not null ? BindSelect(resolve.ParentSelect, target, entityShape, index) : null;
 
-            return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, null, scope, parentSelect, null, dropped);
+            // The filter and the owning row's select also travel as written: the keyed fetch asks
+            // this host's own SelfOwner with an ordinary owner query, which binds them again.
+            return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, resolve.RawFilter, scope, parentSelect,
+                withParent && declared.Item is not null ? resolve.ParentSelect : null, dropped);
         }
 
         /// <summary>

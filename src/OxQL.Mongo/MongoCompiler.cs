@@ -45,7 +45,11 @@ public sealed record CompiledQuery
     /// <summary>The sort fields whose values the next cursor carries.</summary>
     public required IReadOnlyList<BoundSortField> SortFields { get; init; }
 
-    public required IReadOnlyList<BoundStage.Resolve> RemoteResolves { get; init; }
+    /// <summary>
+    /// The resolves the keyed fetch runs after the page (DESIGN §3.5.2), in stage order: every
+    /// resolve on the keyed executor, remote or local, whose alias or owning row the row shows.
+    /// </summary>
+    public required IReadOnlyList<BoundStage.Resolve> KeyedResolves { get; init; }
 
     public required IReadOnlyList<SemiJoinSlot> SemiJoins { get; init; }
 
@@ -108,6 +112,9 @@ public static class MongoCompiler
     /// <summary>The variable a join on an alias binds the parent's key to, so a parent the row does not hold joins no children.</summary>
     private const string ParentVariable = "oxParent";
 
+    /// <summary>The field the <c>keyedBy</c> window numbers each key's rows in; the rows never keep it.</summary>
+    private const string ReservedRank = Aliases.ReservedPrefix + "oxRank";
+
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
 
@@ -141,7 +148,7 @@ public static class MongoCompiler
 
         var page = bound.Page;
         var stages = new List<BsonDocument>();
-        var remote = new List<BoundStage.Resolve>();
+        var keyed = new List<BoundStage.Resolve>();
         var semiJoins = new List<SemiJoinSlot>();
         var sortFields = bound.Sort?.Fields ?? [];
         var collated = bound.Collated;
@@ -193,6 +200,19 @@ public static class MongoCompiler
         stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope, keyset })));
 
         var countStages = page.IncludeTotalCount ? new List<BsonDocument> { new("$match", scope) } : null;
+
+        // An internal owner query grouped per key: the keys matched first, where an index serves
+        // them, and the window after the caller's leading matches (the resolve's filter), so a
+        // key's rows are numbered among those that pass it.
+        var window = bound.KeyedBy is { } keyedBy ? KeyedByWindow(keyedBy) : null;
+
+        if (bound.KeyedBy is { } prologueOf)
+        {
+            var prologue = KeyedByPrologue(prologueOf).ToList();
+
+            stages.AddRange(prologue);
+            countStages?.AddRange(prologue);
+        }
         var sortEmitted = false;
 
         // A join only the rows' display reads runs after the page is taken: the sort stays
@@ -209,6 +229,13 @@ public static class MongoCompiler
         {
             var stage = bound.Stages[index];
             var emitted = new List<BsonDocument>();
+
+            if (window is not null && stage is not BoundStage.Match)
+            {
+                stages.AddRange(window);
+                countStages?.AddRange(window);
+                window = null;
+            }
 
             // A join whose alias no later stage reads and the row does not show adds nothing
             // anyone sees, and a projection would only drop it again: it is not run at all.
@@ -238,14 +265,14 @@ public static class MongoCompiler
                     emitted.AddRange(Lookup(lookup, semiJoins, collated, flag));
                     break;
 
-                // The owner's row only ever reaches the wire row; a projection that dropped the
-                // alias leaves nothing to call the owner for. A match under the alias is a
-                // semi-join, which fetches its ids apart from this.
-                case BoundStage.Resolve { IsRemote: true } remoteResolve when !Shown(bound.FinalShape, remoteResolve.As):
+                // The keyed fetch's rows only ever reach the wire row; a projection that dropped
+                // the alias and the owning row leaves nothing to fetch. A match under a remote
+                // alias is a semi-join, which fetches its ids apart from this.
+                case BoundStage.Resolve keyedResolve when IsKeyed(keyedResolve) && !Shown(bound.FinalShape, keyedResolve.As) && !(keyedResolve.ParentAs is { } parentAs && Shown(bound.FinalShape, parentAs)):
                     break;
 
-                case BoundStage.Resolve { IsRemote: true } remoteResolve:
-                    remote.Add(remoteResolve);
+                case BoundStage.Resolve keyedResolve when IsKeyed(keyedResolve):
+                    keyed.Add(keyedResolve);
                     break;
 
                 case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
@@ -290,7 +317,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, keyed, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -320,6 +347,12 @@ public static class MongoCompiler
             // rows' display reads does not change how many rows there are.
             if (countStages is not null && stage is not (BoundStage.Sort or BoundStage.Page) && (JoinAlias(stage) is not { } alias || CountReads(bound.Stages.Skip(index + 1), alias)))
                 countStages.AddRange(emitted);
+        }
+
+        if (window is not null)
+        {
+            stages.AddRange(window);
+            countStages?.AddRange(window);
         }
 
         if (pagingSort is not null)
@@ -374,7 +407,7 @@ public static class MongoCompiler
             PagingMode = bound.PagingMode,
             IncludeTotalCount = page.IncludeTotalCount,
             SortFields = sortFields,
-            RemoteResolves = remote,
+            KeyedResolves = keyed,
             SemiJoins = semiJoins,
             MaxTimeMs = options.MaxTimeMs,
             AllowDiskUse = options.AllowDiskUse,
@@ -815,6 +848,66 @@ public static class MongoCompiler
         });
     }
 
+    /// <summary>Whether the keyed fetch runs a resolve after the page rather than the aggregate joining it.</summary>
+    private static bool IsKeyed(BoundStage.Resolve resolve) => resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed;
+
+    /// <summary>
+    /// The start of an internal owner query grouped per key (<c>keyedBy</c>, DESIGN §3.5.2 step 3):
+    /// the rows holding a key, and for an item target each matching element under its alias, one
+    /// row per element.
+    /// </summary>
+    private static IEnumerable<BsonDocument> KeyedByPrologue(BoundKeyedBy keyedBy)
+    {
+        var keys = new BsonArray(keyedBy.Keys);
+
+        yield return new BsonDocument("$match", new BsonDocument(keyedBy.Path.Storage!, new BsonDocument("$in", keys)));
+
+        if (keyedBy.ItemStorage is null)
+            yield break;
+
+        yield return new BsonDocument("$set", new BsonDocument(keyedBy.ElementAlias!, "$" + keyedBy.ItemStorage));
+        yield return new BsonDocument("$unwind", "$" + keyedBy.ElementAlias);
+        yield return new BsonDocument("$match", new BsonDocument(keyedBy.PartitionStorage, new BsonDocument("$in", keys)));
+    }
+
+    /// <summary>
+    /// The window of a query grouped per key: each key's rows numbered by record key, the rows
+    /// past <c>perKey</c> dropped, the number removed. A key with two rows is how the caller tells
+    /// an ambiguous reference from a resolved one.
+    /// </summary>
+    private static List<BsonDocument> KeyedByWindow(BoundKeyedBy keyedBy) =>
+    [
+        new("$setWindowFields", new BsonDocument
+        {
+            ["partitionBy"] = "$" + keyedBy.PartitionStorage,
+            ["sortBy"] = new BsonDocument(KeyStorage, 1),
+            ["output"] = new BsonDocument(ReservedRank, new BsonDocument("$documentNumber", new BsonDocument())),
+        }),
+        new("$match", new BsonDocument(ReservedRank, new BsonDocument("$lte", keyedBy.PerKey))),
+        new("$unset", ReservedRank),
+    ];
+
+    /// <summary>
+    /// What a keyed resolve reads off the page rows, which a projection before the page keeps in
+    /// storage: the reference, the collection it crosses under <c>elements</c>, and the stored
+    /// values that select its cases.
+    /// </summary>
+    private static IEnumerable<string> KeptStorages(BoundStage.Resolve resolve)
+    {
+        if (resolve.CollectionStorage is { } collection)
+        {
+            yield return collection;
+            yield break;
+        }
+
+        if (resolve.Reference.Storage is { } reference)
+            yield return reference;
+
+        foreach (var bound in resolve.Cases ?? [])
+            if (bound.When is { } when)
+                yield return when.Storage;
+    }
+
     private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
@@ -1056,7 +1149,7 @@ public static class MongoCompiler
     /// </summary>
     private static BsonDocument? Project(
         BoundStage.Project project,
-        IReadOnlyList<BoundStage.Resolve> remoteResolves,
+        IReadOnlyList<BoundStage.Resolve> keyedResolves,
         IReadOnlyList<string> lateJoinKeys,
         bool keepKey,
         IReadOnlyList<string> reservedIndexes,
@@ -1065,7 +1158,7 @@ public static class MongoCompiler
         ref bool keyKeptAgainstProjection)
     {
         var projection = new BsonDocument();
-        var kept = remoteResolves.Select(resolve => resolve.Reference.Storage).Where(storage => storage is not null).Select(storage => storage!).ToList();
+        var kept = keyedResolves.SelectMany(KeptStorages).Distinct(StringComparer.Ordinal).ToList();
 
         foreach (var storage in lateJoinKeys)
             if (!kept.Contains(storage, StringComparer.Ordinal))
@@ -1161,11 +1254,11 @@ public static class MongoCompiler
 
     // ---- helpers ----------------------------------------------------------------------------
 
-    /// <summary>The alias a lookup or a local resolve joins under; null for every other stage.</summary>
+    /// <summary>The alias a lookup or an inline resolve joins under; null for every other stage.</summary>
     private static string? JoinAlias(BoundStage stage) => stage switch
     {
         BoundStage.Lookup lookup => lookup.As,
-        BoundStage.Resolve { IsRemote: false } resolve => resolve.As,
+        BoundStage.Resolve resolve when !IsKeyed(resolve) => resolve.As,
         _ => null,
     };
 

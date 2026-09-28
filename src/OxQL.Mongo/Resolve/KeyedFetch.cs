@@ -20,6 +20,16 @@ public sealed record ResolveResult
     /// <summary>What did not change the rows.</summary>
     public IReadOnlyList<Diagnostic> Diagnostics { get; init; } = [];
 
+    /// <summary>
+    /// Every row (or element, under <c>elements: "all"</c>) whose keyed resolve did not simply
+    /// resolve, with its outcome (DESIGN §3.6); an <c>ambiguous</c> one resolved to its first
+    /// target. What the outcomes report or refuse is the caller's policy.
+    /// </summary>
+    public IReadOnlyList<KeyedRowOutcome> Outcomes { get; init; } = [];
+
+    /// <summary>The rows whose <c>elements: "all"</c> alias holds only the first <c>MaxLookupLimit</c> of more targets.</summary>
+    public IReadOnlyList<KeyedTruncation> Truncations { get; init; } = [];
+
     /// <summary>How many calls went to remote owners.</summary>
     public int Calls { get; init; }
 
@@ -27,13 +37,50 @@ public sealed record ResolveResult
     public int CacheHits { get; init; }
 }
 
+/// <summary>What became of one reference value of a keyed resolve (DESIGN §3.6).</summary>
+public enum KeyedOutcome
+{
+    /// <summary>The key selects a case and exactly one target record or element.</summary>
+    Resolved,
+
+    /// <summary>As resolved, but more than one record or element holds the key; the alias holds the first by target order, then record key.</summary>
+    Ambiguous,
+
+    /// <summary>The reference is null or absent, or <c>elements</c> found no element.</summary>
+    ReferenceNull,
+
+    /// <summary>No case matches the stored values, or <c>target</c> narrowed the case away.</summary>
+    Excluded,
+
+    /// <summary>The key selects a case and no target holds a record for it.</summary>
+    NotFound,
+
+    /// <summary>A case converts the key (<c>KeyAs</c>) and the stored value does not convert.</summary>
+    InvalidKey,
+
+    /// <summary>The owner did not answer for the key: timeout, unreachable, or the key budget left it out.</summary>
+    OwnerUnanswered,
+}
+
+/// <summary>
+/// The outcome of one row of a keyed resolve: the caller's <paramref name="Stage"/> index, the
+/// alias, the page row, the element index under <c>elements</c>, and the key (in the form sent to
+/// the owner) where there is one.
+/// </summary>
+public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
+
+/// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
+public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
+
 /// <summary>
 /// The one cross-record fetch through an owner (DESIGN §3.5.8), in two modes that share the
 /// owner query builder (<see cref="OwnerQueryBuilder"/>), the owner client, batching at
 /// <c>MaxBatchQueries</c>, budgeting, error mapping and the cache (<see cref="OwnerFetchCache"/>):
 /// <list type="bullet">
 ///   <item><b>by keys</b> (<see cref="ByKeysAsync"/>): after the page is fixed, one batch per owning
-///   service carrying one query per resolve stage and key chunk, cached per key for a TTL;</item>
+///   service carrying one query per target and key chunk — plain for an entity keyed by its own
+///   key, grouped per key (<c>keyedBy</c>) otherwise — and this host's own targets answered by its
+///   <see cref="SelfOwner"/>; cached per key for a TTL;</item>
 ///   <item><b>by condition</b> (<see cref="ByConditionAsync"/>): before the page runs, the semi-join
 ///   that asks an owner for the ids a condition on its rows selects, refusing above the cap rather
 ///   than truncating.</item>
@@ -41,14 +88,27 @@ public sealed record ResolveResult
 /// </summary>
 public sealed class KeyedFetch
 {
-    private readonly IRemoteQueryClient client;
+    private readonly IRemoteQueryClient? client;
+    private readonly IQueryEngine? self;
     private readonly OwnerFetchCache cache;
     private readonly OxQLOptions options;
 
     /// <summary>A keyed fetch through <paramref name="client"/>, caching owner answers in <paramref name="cache"/>.</summary>
     public KeyedFetch(IRemoteQueryClient client, OwnerFetchCache cache, OxQLOptions options)
+        : this(client ?? throw new ArgumentNullException(nameof(client)), null, cache, options)
     {
-        this.client = client ?? throw new ArgumentNullException(nameof(client));
+    }
+
+    /// <summary>
+    /// A keyed fetch whose remote targets go through <paramref name="client"/> (none when null: the
+    /// engine refuses such a request before it gets here) and whose local targets this host's own
+    /// <paramref name="self"/> answers through a <see cref="SelfOwner"/>, caching owner answers in
+    /// <paramref name="cache"/>.
+    /// </summary>
+    public KeyedFetch(IRemoteQueryClient? client, IQueryEngine? self, OwnerFetchCache cache, OxQLOptions options)
+    {
+        this.client = client;
+        this.self = self;
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
     }
@@ -106,7 +166,7 @@ public sealed class KeyedFetch
         {
             var members = group.ToList();
             var queries = members.Select(slot => OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true)).ToList();
-            var outcome = await CallInBatchesAsync(group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false);
+            var outcome = await CallInBatchesAsync(client!, group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
                 return Unanswered(group.Key, outcome);
@@ -170,7 +230,7 @@ public sealed class KeyedFetch
                 var entries = group.ToList();
                 var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
 
-                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false));
+                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false));
             }).ToList();
 
             await Task.WhenAll(calls).ConfigureAwait(false);
@@ -295,193 +355,551 @@ public sealed class KeyedFetch
 
     // ---- by keys: the resolve, after the page -----------------------------------------------
 
-    /// <summary>Resolves every remote stage over the trimmed page rows.</summary>
+    /// <summary>
+    /// Resolves every keyed stage over the trimmed page rows (DESIGN §3.5.2 steps 1, 3–5): per row
+    /// the keys of the selected cases (one per row, or one per element under <c>elements</c>),
+    /// converted per <c>KeyAs</c>; one owner query per target and key chunk, a remote target's
+    /// batched per service and a local target's run by this host's own <see cref="SelfOwner"/>; the
+    /// answers assigned per row by case and target order. A plain key match serves an entity
+    /// target keyed by its own key, where no key can have two rows; every other target is asked
+    /// grouped per key (<c>keyedBy</c>), at most <see cref="PerKey"/> rows per key, so a key with
+    /// two rows is <c>ambiguous</c> and no key cuts another key's rows from the page.
+    /// </summary>
     public async Task<ResolveResult> ByKeysAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
-        var stages = compiled.RemoteResolves;
-        var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
+        var organisation = context.Organisation!.Value;
         var diagnostics = new List<Diagnostic>();
-        var plans = new List<StagePlan>();
-        var cacheHits = 0;
-
-        foreach (var stage in stages)
-        {
-            var plan = Plan(stage, rows, context.Organisation!.Value, diagnostics);
-
-            cacheHits += plan.CacheHits;
-            plans.Add(plan);
-        }
-
-        var calls = 0;
+        var stages = compiled.KeyedResolves.Select(stage => Plan(stage, StageIndexOf(compiled.Bound, stage), rows, organisation, diagnostics)).ToList();
+        var targets = stages.SelectMany(stage => stage.Targets).ToList();
+        var cacheHits = targets.Sum(target => target.CacheHits);
         var budget = Budget(remaining);
+        var calls = 0;
 
-        var byService = plans.Where(plan => plan.Chunks.Count > 0).GroupBy(plan => ServiceKeyOf(plan.Stage.TargetEntity), StringComparer.Ordinal).ToList();
-        var tasks = byService.Select(async group =>
+        var byOwner = targets.Where(target => target.Chunks.Count > 0).GroupBy(target => target.Service, StringComparer.Ordinal).ToList();
+        var tasks = byOwner.Select(async group =>
         {
             var queries = new List<QueryRequest>();
-            var owners = new List<(StagePlan Plan, IReadOnlyList<string> Keys)>();
+            var sent = new List<(TargetPlan Target, IReadOnlyList<string> Keys)>();
 
-            foreach (var plan in group)
-                foreach (var chunk in plan.Chunks)
+            foreach (var target in group)
+                foreach (var chunk in target.Chunks)
                 {
-                    queries.Add(OwnerQueryBuilder.ByKeys(plan.Stage, chunk));
-                    owners.Add((plan, chunk));
+                    queries.Add(target.Query(chunk));
+                    sent.Add((target, chunk));
                 }
 
-            return (Service: group.Key, Owners: owners, Outcome: await CallInBatchesAsync(group.Key, queries, budget, cancellationToken).ConfigureAwait(false));
+            var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
+
+            return (Service: group.Key, Sent: sent, Outcome: await CallInBatchesAsync(owner, group.Key, queries, budget, cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
         foreach (var call in tasks.Select(task => task.Result))
         {
-            calls++;
+            if (call.Service != SelfService)
+                calls++;
 
             if (call.Outcome.Failure is { } failure)
             {
-                var stagesHit = call.Owners.Select(owner => owner.Plan.Stage.As).Distinct().ToList();
+                var aliases = call.Sent.Select(entry => entry.Target.Stage.As).Distinct().ToList();
+                var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
 
                 diagnostics.Add(new Diagnostic
                 {
                     Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
                     Message = failure == Failure.Timeout
-                        ? $"The owner of '{call.Service}' did not answer within {options.Execution.EffectiveResolveTimeoutMs} ms; '{string.Join("', '", stagesHit)}' is null on this page."
+                        ? $"{owner} did not answer within {options.Execution.EffectiveResolveTimeoutMs} ms; '{string.Join("', '", aliases)}' is null on this page."
                         : call.Outcome.Status is { } status
-                            ? $"The owner of '{call.Service}' answered with HTTP {status}; '{string.Join("', '", stagesHit)}' is null on this page."
-                            : $"The owner of '{call.Service}' could not be reached; '{string.Join("', '", stagesHit)}' is null on this page.",
-                    Params = new Dictionary<string, object?> { ["service"] = call.Service, ["aliases"] = stagesHit },
+                            ? $"{owner} answered with HTTP {status}; '{string.Join("', '", aliases)}' is null on this page."
+                            : $"{owner} could not be reached; '{string.Join("', '", aliases)}' is null on this page.",
+                    Params = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases },
                 });
+
+                foreach (var (target, keys) in call.Sent)
+                    target.Unanswered.UnionWith(keys);
+
                 continue;
             }
 
-            for (var index = 0; index < call.Owners.Count; index++)
+            for (var index = 0; index < call.Sent.Count; index++)
             {
-                var (plan, keys) = call.Owners[index];
+                var (target, keys) = call.Sent[index];
                 var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
+                var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
 
                 if (result is null || !Succeeded(result))
-                    return new ResolveResult { Refusal = Refused(result, plan.Stage.TargetEntity, StageIndexOf(compiled.Bound, plan.Stage)), Calls = calls, CacheHits = cacheHits };
-
-                var field = plan.Stage.TargetField;
-                var byKey = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+                    return new ResolveResult { Refusal = Refused(result, target.Entity, stageIndex), Calls = calls, CacheHits = cacheHits };
 
                 foreach (var item in result["items"]!.AsArray())
                 {
-                    if (item is not JsonObject row || !row.ContainsKey(field))
-                        return new ResolveResult { Refusal = WithoutKey(plan.Stage.TargetEntity, field, StageIndexOf(compiled.Bound, plan.Stage)), Calls = calls, CacheHits = cacheHits };
+                    if (item is not JsonObject row || target.KeyOf(row) is not { } key)
+                        return new ResolveResult { Refusal = WithoutKey(target.Entity, target.KeyWire, stageIndex), Calls = calls, CacheHits = cacheHits };
 
-                    var key = row[field]?.ToString();
-
-                    if (key is not null)
-                        byKey[key] = item;
+                    target.Hit(key, row);
                 }
 
                 foreach (var key in keys)
-                {
-                    byKey.TryGetValue(key, out var row);
-                    plan.Resolved[key] = row;
-                    cache.Set(plan.CacheKey(key), row);
-                }
+                    cache.Set(target.CacheKey(key), target.Cached(key));
             }
         }
 
-        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
-            foreach (var plan in plans)
-            {
-                var key = plan.KeyOfRow[rowIndex];
+        var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
+        var outcomes = new List<KeyedRowOutcome>();
+        var truncations = new List<KeyedTruncation>();
 
-                perRow[rowIndex][plan.Stage.As] = key is not null && plan.Resolved.TryGetValue(key, out var row) ? row?.DeepClone() : null;
-            }
+        foreach (var stage in stages)
+            Assign(stage, perRow, outcomes, truncations);
 
-        return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Calls = calls, CacheHits = cacheHits };
+        return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Calls = calls, CacheHits = cacheHits };
     }
 
-    /// <summary>One resolve stage over the page: the key per row, the cache answers, and the chunks still to fetch.</summary>
-    private sealed class StagePlan(BoundStage.Resolve stage, string selectHash, string filterHash, Guid organisation)
+    /// <summary>The owner key of this host's own targets in a call plan; no service namespace is empty.</summary>
+    private const string SelfService = "";
+
+    /// <summary>The rows a grouped owner query returns per key at most: two tell a resolved key from an ambiguous one.</summary>
+    public const int PerKey = 2;
+
+    /// <summary>One keyed stage over the page: its targets, and per row the keys its cases select.</summary>
+    private sealed class StagePlan(BoundStage.Resolve stage, int? index)
     {
         public BoundStage.Resolve Stage { get; } = stage;
 
-        public List<string?> KeyOfRow { get; } = [];
+        /// <summary>The caller's stage index, for the outcomes.</summary>
+        public int? Index { get; } = index;
 
-        public Dictionary<string, JsonNode?> Resolved { get; } = new(StringComparer.Ordinal);
+        public List<TargetPlan> Targets { get; } = [];
 
-        public List<IReadOnlyList<string>> Chunks { get; } = [];
+        /// <summary>Per bound target, its plan; targets of different cases with the same entity, field and item share one.</summary>
+        public Dictionary<BoundResolveTarget, TargetPlan> ByTarget { get; } = new(ReferenceEqualityComparer.Instance);
 
-        public int CacheHits { get; set; }
-
-        public string CacheKey(string key) => OwnerFetchCache.KeyOf(Stage.TargetEntity, Stage.TargetField, organisation, key, selectHash, filterHash);
+        /// <summary>Per row its slots: one for a single value, one per element under <c>elements</c>; empty when there is nothing to resolve.</summary>
+        public List<List<Slot>> Rows { get; } = [];
     }
 
-    private StagePlan Plan(BoundStage.Resolve stage, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
+    /// <summary>One reference value of a row: the case it selects, its key, or the outcome it already has without a call.</summary>
+    private sealed record Slot(BoundResolveCase? Case, string? Key, KeyedOutcome? Outcome);
+
+    /// <summary>
+    /// One target of a keyed stage: the keys it is asked for, what the cache and the owner answered
+    /// per key (up to <see cref="PerKey"/> rows, first by record key), and the keys the owner
+    /// did not answer.
+    /// </summary>
+    private sealed class TargetPlan
     {
-        // The select is hashed as a JSON array: a joined string would give two different lists
-        // whose paths contain the separator the same hash.
-        var selectHash = OwnerFetchCache.HashOf(stage.RemoteSelect is null ? null : JsonSerializer.Serialize(stage.RemoteSelect));
-        var filterHash = OwnerFetchCache.HashOf(stage.RemoteFilter?.GetRawText());
-        var plan = new StagePlan(stage, selectHash, filterHash, organisation);
-        var misses = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Guid organisation;
+        private readonly string selectHash;
+        private readonly string filterHash;
+        private readonly HashSet<string> seen = new(StringComparer.Ordinal);
 
-        foreach (var row in rows)
+        public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, Guid organisation)
         {
-            var key = KeyOfRow(row, stage.Reference);
+            Stage = stage;
+            Target = target;
+            this.organisation = organisation;
 
-            plan.KeyOfRow.Add(key);
+            // An entity keyed by its own key has one row per key, which a plain key match serves;
+            // every other target is grouped per key. A plain 2.0 resolve keeps the plain query it
+            // always sent (DESIGN §3.5.7, §3.5.8): its owner may still be on 2.0, or reached over
+            // a route that does not take keyedBy.
+            Grouped = stage.NeedsKeyedFetch && (target.Declared.Item is not null || !target.Declared.FieldIsKey);
+            Service = target.IsRemote ? ServiceKeyOf(target.Declared.Entity) : SelfService;
 
-            if (key is null || !seen.Add(key))
-                continue;
-
-            if (cache.TryGet(plan.CacheKey(key), out var cached))
+            if (Grouped)
             {
-                plan.Resolved[key] = cached;
-                plan.CacheHits++;
+                // The plan of the grouped query without its keys: select, filter, owning row and form.
+                selectHash = OwnerFetchCache.HashOf(JsonSerializer.Serialize(Query([]), OxQLJson.Wire));
+                filterHash = "keyedBy";
             }
             else
             {
-                misses.Add(key);
+                // The select is hashed as a JSON array: a joined string would give two different lists
+                // whose paths contain the separator the same hash.
+                var select = target.IsRemote ? target.RemoteSelect : target.Select?.Select(path => path.Wire).ToList();
+
+                selectHash = OwnerFetchCache.HashOf(select is null ? null : JsonSerializer.Serialize(select));
+                filterHash = OwnerFetchCache.HashOf(target.RemoteFilter?.GetRawText());
+            }
+        }
+
+        public BoundStage.Resolve Stage { get; }
+
+        public BoundResolveTarget Target { get; }
+
+        public bool Grouped { get; }
+
+        /// <summary>The service the target's owner query goes to; <see cref="SelfService"/> for a local target.</summary>
+        public string Service { get; }
+
+        public string Entity => Target.Declared.Entity;
+
+        /// <summary>The member of an answer row the rows are keyed by, as the owner writes it.</summary>
+        public string KeyWire => Target.Declared.Item is null ? Target.Declared.Field : BoundKeyedBy.Element + "." + Target.Declared.Field;
+
+        /// <summary>Whether the keys are guids, compared in their normalised form.</summary>
+        public bool GuidKeys { get; set; }
+
+        public Dictionary<string, List<JsonObject>> Hits { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> Unanswered { get; } = new(StringComparer.Ordinal);
+
+        public List<string> Misses { get; } = [];
+
+        public List<IReadOnlyList<string>> Chunks { get; } = [];
+
+        public int CacheHits { get; private set; }
+
+        public string CacheKey(string key) => Target.Declared.Item is null
+            ? OwnerFetchCache.KeyOf(Entity, Target.Declared.Field, organisation, key, selectHash, filterHash)
+            : OwnerFetchCache.KeyOf(Entity + "#" + Target.Declared.Item, Target.Declared.Field, organisation, key, selectHash, filterHash);
+
+        public QueryRequest Query(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Target, keys, Grouped ? PerKey : null);
+
+        /// <summary>Asks for a key once: from the cache when it holds the answer, otherwise from the owner.</summary>
+        public void Want(string key, OwnerFetchCache cache)
+        {
+            if (!seen.Add(key))
+                return;
+
+            if (!cache.TryGet(CacheKey(key), out var cached))
+            {
+                Misses.Add(key);
+                return;
+            }
+
+            CacheHits++;
+
+            var rows = Hits[key] = [];
+
+            if (cached is JsonArray grouped)
+                rows.AddRange(grouped.OfType<JsonObject>().Select(row => (JsonObject)row.DeepClone()));
+            else if (cached is JsonObject row)
+                rows.Add(row);
+        }
+
+        /// <summary>What the cache keeps for a key: the row or null for a plain query, the rows for a grouped one.</summary>
+        public JsonNode? Cached(string key)
+        {
+            Hits.TryGetValue(key, out var rows);
+
+            return Grouped
+                ? new JsonArray((rows ?? []).Select(row => (JsonNode)row.DeepClone()).ToArray())
+                : rows is [var row, ..] ? row : null;
+        }
+
+        public void Hit(string key, JsonObject row)
+        {
+            if (!Hits.TryGetValue(key, out var rows))
+                Hits[key] = rows = [];
+
+            if (rows.Count < PerKey)
+                rows.Add(row);
+        }
+
+        /// <summary>The key of an answer row, or null when the row does not carry the member it was keyed by.</summary>
+        public string? KeyOf(JsonObject row)
+        {
+            JsonNode? at = row;
+
+            foreach (var segment in KeyWire.Split('.'))
+            {
+                if (at is not JsonObject inner || !inner.TryGetPropertyValue(segment, out var next))
+                    return null;
+
+                at = next;
+            }
+
+            var text = at switch
+            {
+                null => "",
+                JsonValue scalar => scalar.ToString(),
+                _ => at.ToJsonString(),
+            };
+
+            return GuidKeys && Guid.TryParse(text, out var guid) ? guid.ToString("D") : text;
+        }
+
+        /// <summary>An answer row as the alias holds it: the element of an item target, the row of an entity target.</summary>
+        public JsonNode? AliasOf(JsonObject row) =>
+            (Target.Declared.Item is null ? row : row[BoundKeyedBy.Element])?.DeepClone();
+
+        /// <summary>The owning row of an item target's answer: its entity and the parent members the owner projected.</summary>
+        public JsonObject ParentOf(JsonObject row)
+        {
+            var parent = new JsonObject { ["entity"] = Entity };
+
+            foreach (var (name, value) in row)
+                if (name != BoundKeyedBy.Element && name != "entity")
+                    parent[name] = value?.DeepClone();
+
+            return parent;
+        }
+    }
+
+    /// <summary>
+    /// Plans one keyed stage: per row the slots its reference yields with their case, key or
+    /// provisional outcome; per target the keys to ask for, less what the cache holds, in chunks
+    /// the owner answers in one page each.
+    /// </summary>
+    private StagePlan Plan(BoundStage.Resolve stage, int? index, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
+    {
+        var plan = new StagePlan(stage, index);
+        var cases = CasesOf(stage);
+
+        foreach (var bound in cases)
+            foreach (var target in bound.Targets)
+            {
+                var shared = plan.Targets.FirstOrDefault(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item);
+
+                if (shared is null)
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, organisation));
+
+                plan.ByTarget[target] = shared;
+            }
+
+        foreach (var row in rows)
+        {
+            var slots = SlotsOf(stage, cases, row);
+
+            plan.Rows.Add(slots);
+
+            foreach (var slot in slots)
+            {
+                if (slot is not { Case: { } selected, Key: { } key, Outcome: null })
+                    continue;
+
+                foreach (var target in selected.Targets)
+                {
+                    var targetPlan = plan.ByTarget[target];
+
+                    targetPlan.GuidKeys |= selected.KeyAs == KeyAs.Guid || stage.Reference.LeafKind == Kind.Guid;
+                    targetPlan.Want(key, cache);
+                }
             }
         }
 
         var max = options.Limits.MaxResolveKeys;
 
-        if (misses.Count > max)
+        foreach (var target in plan.Targets)
         {
-            diagnostics.Add(new Diagnostic
+            var misses = target.Misses;
+
+            if (misses.Count > max)
             {
-                Code = Codes.ResolvePartial,
-                Message = $"'{stage.As}' needs {misses.Count} keys of '{stage.TargetEntity}'; only the first {max} are resolved on this page.",
-                Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = max },
-            });
-            misses = misses.Take(max).ToList();
+                diagnostics.Add(new Diagnostic
+                {
+                    Code = Codes.ResolvePartial,
+                    Message = $"'{stage.As}' needs {misses.Count} keys of '{target.Entity}'; only the first {max} are resolved on this page.",
+                    Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = max },
+                });
+
+                target.Unanswered.UnionWith(misses.Skip(max));
+                misses = misses.Take(max).ToList();
+            }
+
+            // A grouped chunk is answered in one page of up to PerKey rows per key, which the
+            // owner's page limit bounds.
+            var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
+
+            if (target.Grouped)
+                chunk = Math.Max(1, Math.Min(chunk, options.Limits.MaxPageSize / PerKey));
+
+            for (var start = 0; start < misses.Count; start += chunk)
+                target.Chunks.Add(misses.Skip(start).Take(chunk).ToList());
         }
-
-        var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
-
-        for (var start = 0; start < misses.Count; start += chunk)
-            plan.Chunks.Add(misses.Skip(start).Take(chunk).ToList());
 
         return plan;
     }
 
-    // ---- values ---------------------------------------------------------------------------
-
-    /// <summary>The reference member's value of a row in the wire encoding the owner binds, or null.</summary>
-    private static string? KeyOfRow(BsonDocument row, ResolvedPath reference)
+    /// <summary>The bound cases of a stage; a resolve bound without them (a 2.0 form) has its one simple case.</summary>
+    private static IReadOnlyList<BoundResolveCase> CasesOf(BoundStage.Resolve stage)
     {
-        var value = ValueAt(row, reference.Storage!);
+        if (stage.Cases is { Count: > 0 } cases)
+            return cases;
+
+        var declared = new ReferenceTarget(stage.TargetEntity, stage.TargetField, null, stage.IsRemote, stage.TargetField == "id");
+        var target = new BoundResolveTarget(declared, stage.Target, stage.TargetFieldStorage, null, stage.Select, stage.RemoteSelect, stage.Filter, stage.RemoteFilter, stage.TargetScope, null, null, []);
+
+        return [new BoundResolveCase(new ReferenceDef { Targets = [declared], DeclaredBy = ReferenceSource.Declaration }, null, [target])];
+    }
+
+    /// <summary>
+    /// The slots of one row (DESIGN §3.5.2 step 1): the reference's value, or under
+    /// <c>elements</c> each element's, with the first case its stored values select and its key
+    /// converted per the case's <c>KeyAs</c>. A value that is null is <c>reference_null</c>, one no
+    /// case selects <c>excluded</c>, one that does not convert <c>invalid_key</c>.
+    /// </summary>
+    private static List<Slot> SlotsOf(BoundStage.Resolve stage, IReadOnlyList<BoundResolveCase> cases, BsonDocument row)
+    {
+        var slots = new List<Slot>();
+
+        if (stage.CollectionStorage is not { } collection)
+        {
+            slots.Add(SlotOf(stage, cases, row, row, stage.Reference.Storage!));
+            return slots;
+        }
+
+        // Under elements the reference and the case conditions are read per element.
+        var relative = stage.Reference.Storage == collection ? "" : stage.Reference.Storage![(collection.Length + 1)..];
+
+        if (ValueAt(row, collection) is BsonArray elements)
+            foreach (var element in elements)
+                slots.Add(element is BsonDocument document
+                    ? SlotOf(stage, cases, document, document, relative)
+                    : relative.Length == 0 ? SlotOf(stage, cases, null, element, "") : new Slot(null, null, KeyedOutcome.ReferenceNull));
+
+        return slots;
+    }
+
+    private static Slot SlotOf(BoundStage.Resolve stage, IReadOnlyList<BoundResolveCase> cases, BsonDocument? holder, BsonValue scope, string storage)
+    {
+        var value = storage.Length == 0 ? scope : scope is BsonDocument document ? ValueAt(document, storage) : null;
 
         if (value is null || value.IsBsonNull || value.IsBsonUndefined)
-            return null;
+            return new Slot(null, null, KeyedOutcome.ReferenceNull);
 
-        var encoded = WireEncoder.EncodeScalar(value, reference.LeafKind, reference.Leaf);
+        var selected = cases.FirstOrDefault(bound => bound.When is null || (holder is not null && Selects(bound.When, holder)));
 
-        return encoded switch
+        if (selected is null || selected.Targets.Count == 0)
+            return new Slot(null, null, KeyedOutcome.Excluded);
+
+        if (selected.KeyAs == KeyAs.Guid)
+            return value is BsonString text && Guid.TryParse(text.Value, out var guid)
+                ? new Slot(selected, guid.ToString("D"), null)
+                : new Slot(selected, value.ToString(), KeyedOutcome.InvalidKey);
+
+        var encoded = WireEncoder.EncodeScalar(value, stage.Reference.LeafKind, stage.Reference.Leaf);
+        var key = encoded switch
         {
             null => null,
             JsonValue scalar => scalar.ToString(),
             _ => encoded.ToJsonString(),
         };
+
+        if (key is null)
+            return new Slot(null, null, KeyedOutcome.ReferenceNull);
+
+        // A guid is keyed in one form, whatever form it is stored in, so the owner's answer finds it.
+        return new Slot(selected, stage.Reference.LeafKind == Kind.Guid && Guid.TryParse(key, out var stored) ? stored.ToString("D") : key, null);
     }
+
+    /// <summary>
+    /// Whether a case's condition holds for a row or element: the stored value is one of the
+    /// declared values; a hierarchical discriminator matches by any of its entries, and an absent
+    /// one when the values admit a value stored without one.
+    /// </summary>
+    private static bool Selects(BoundCaseCondition when, BsonDocument holder)
+    {
+        var stored = ValueAt(holder, when.Storage);
+
+        if (stored is null || stored.IsBsonNull || stored.IsBsonUndefined)
+            return when.Values.Any(value => value.IsBsonNull);
+
+        return stored is BsonArray entries
+            ? entries.Any(entry => when.Values.Contains(entry))
+            : when.Values.Contains(stored);
+    }
+
+    /// <summary>
+    /// Assigns one stage's answers to the rows (DESIGN §3.5.2 step 5, §3.6): per slot the hits of
+    /// its case's targets in target order, the first taken; <c>elements: first</c> takes the first
+    /// slot that resolves, <c>all</c> every one up to <c>MaxLookupLimit</c>. The owning row of an
+    /// item target goes under <c>parentAs</c>.
+    /// </summary>
+    private void Assign(StagePlan plan, List<Dictionary<string, JsonNode?>> perRow, List<KeyedRowOutcome> outcomes, List<KeyedTruncation> truncations)
+    {
+        var stage = plan.Stage;
+
+        for (var rowIndex = 0; rowIndex < plan.Rows.Count; rowIndex++)
+        {
+            var slots = plan.Rows[rowIndex].Select(slot => Answer(plan, slot)).ToList();
+            var values = perRow[rowIndex];
+
+            if (stage.Elements == ResolveElements.All)
+            {
+                var resolved = slots.Where(slot => slot.Hit is not null).ToList();
+                var limit = options.Limits.MaxLookupLimit;
+
+                if (resolved.Count > limit)
+                {
+                    truncations.Add(new KeyedTruncation(plan.Index, stage.As, rowIndex, resolved.Count));
+                    resolved = resolved.Take(limit).ToList();
+                }
+
+                values[stage.As] = new JsonArray(resolved.Select(slot => slot.Hit!.Value.Target.AliasOf(slot.Hit.Value.Row)).ToArray());
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = new JsonArray(resolved.Select(slot => (JsonNode?)slot.Hit!.Value.Target.ParentOf(slot.Hit.Value.Row)).ToArray());
+
+                for (var element = 0; element < slots.Count; element++)
+                    if (slots[element].Outcome != KeyedOutcome.Resolved)
+                        outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, element, slots[element].Key, slots[element].Outcome));
+
+                continue;
+            }
+
+            var (chosen, at) = stage.Elements == ResolveElements.First ? First(slots) : (slots.FirstOrDefault() ?? Unresolved.Null, 0);
+
+            values[stage.As] = chosen.Hit is { } hit ? hit.Target.AliasOf(hit.Row) : null;
+
+            if (stage.ParentAs is not null)
+                values[stage.ParentAs] = chosen.Hit is { } parentHit ? parentHit.Target.ParentOf(parentHit.Row) : null;
+
+            if (chosen.Outcome != KeyedOutcome.Resolved)
+                outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, stage.Elements is null ? null : at, chosen.Key, chosen.Outcome));
+        }
+    }
+
+    /// <summary>A slot with its answer: the first hit by target order and record key, and the outcome.</summary>
+    private sealed record Unresolved(string? Key, KeyedOutcome Outcome, (TargetPlan Target, JsonObject Row)? Hit)
+    {
+        public static readonly Unresolved Null = new(null, KeyedOutcome.ReferenceNull, null);
+    }
+
+    private static Unresolved Answer(StagePlan plan, Slot slot)
+    {
+        if (slot.Outcome is not null || slot.Case is null || slot.Key is null)
+            return new Unresolved(slot.Key, slot.Outcome ?? KeyedOutcome.ReferenceNull, null);
+
+        var hits = new List<(TargetPlan Target, JsonObject Row)>();
+        var unanswered = false;
+
+        foreach (var target in slot.Case.Targets.Select(bound => plan.ByTarget[bound]).Distinct())
+        {
+            if (target.Hits.TryGetValue(slot.Key, out var rows))
+                hits.AddRange(rows.Select(row => (target, row)));
+            else if (target.Unanswered.Contains(slot.Key))
+                unanswered = true;
+        }
+
+        return hits.Count switch
+        {
+            0 => new Unresolved(slot.Key, unanswered ? KeyedOutcome.OwnerUnanswered : KeyedOutcome.NotFound, null),
+            1 => new Unresolved(slot.Key, KeyedOutcome.Resolved, hits[0]),
+            _ => new Unresolved(slot.Key, KeyedOutcome.Ambiguous, hits[0]),
+        };
+    }
+
+    /// <summary>
+    /// <c>elements: first</c> (DESIGN §3.6): the first slot that resolves, ambiguous or not; else the
+    /// row folds to <c>owner_unanswered</c>, <c>not_found</c> or <c>invalid_key</c> when any slot had
+    /// it, then <c>excluded</c>, then <c>reference_null</c>.
+    /// </summary>
+    private static (Unresolved Slot, int Index) First(IReadOnlyList<Unresolved> slots)
+    {
+        for (var index = 0; index < slots.Count; index++)
+            if (slots[index].Hit is not null)
+                return (slots[index], index);
+
+        foreach (var outcome in new[] { KeyedOutcome.OwnerUnanswered, KeyedOutcome.NotFound, KeyedOutcome.InvalidKey, KeyedOutcome.Excluded })
+            for (var index = 0; index < slots.Count; index++)
+                if (slots[index].Outcome == outcome)
+                    return (slots[index], index);
+
+        return (Unresolved.Null, 0);
+    }
+
+    // ---- values ---------------------------------------------------------------------------
 
     /// <summary>An owner's wire value of the target field as the reference member stores it.</summary>
     private static BsonValue OwnerValueToBson(string text, ResolvedPath reference)
@@ -548,7 +966,7 @@ public sealed class KeyedFetch
     /// The queries for one owner, in batches no larger than the batch cap (the owner's is
     /// assumed equal to this host's), each within the budget, results concatenated in order.
     /// </summary>
-    private async Task<CallOutcome> CallInBatchesAsync(string service, IReadOnlyList<QueryRequest> queries, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, TimeSpan budget, CancellationToken cancellationToken)
     {
         var size = Math.Max(1, options.Limits.MaxBatchQueries);
         var results = new List<JsonNode?>(queries.Count);
@@ -556,7 +974,7 @@ public sealed class KeyedFetch
         for (var start = 0; start < queries.Count; start += size)
         {
             var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = (int)budget.TotalMilliseconds };
-            var outcome = await CallAsync(service, request, budget, cancellationToken).ConfigureAwait(false);
+            var outcome = await CallAsync(owner, service, request, budget, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
                 return outcome;
@@ -568,7 +986,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>One call to one owner within the budget; a timeout or a transport fault is an outcome, never an exception.</summary>
-    private async Task<CallOutcome> CallAsync(string service, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
+    private static async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -576,7 +994,7 @@ public sealed class KeyedFetch
 
         try
         {
-            var response = await client.BatchAsync(service, request, budget, timeout.Token).ConfigureAwait(false);
+            var response = await owner.BatchAsync(service, request, budget, timeout.Token).ConfigureAwait(false);
 
             return new CallOutcome(response.Results, null);
         }

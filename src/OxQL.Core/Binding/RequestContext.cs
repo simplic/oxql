@@ -26,4 +26,12 @@ public sealed record RequestContext
 
     /// <summary>A per-request ceiling on the aggregate, under the configured one; a batch sets it.</summary>
     public int? MaxTimeMs { get; init; }
+
+    /// <summary>
+    /// Whether the request came over an internal call: the internal batch route
+    /// (<c>IOxQLQueryService.BatchAsync(batch, internalCall: true, …)</c>) or this host's own keyed
+    /// fetch in process. Only such a request may carry <c>keyedBy</c>; the route is the signal, no
+    /// header carries it.
+    /// </summary>
+    public bool Internal { get; init; }
 }

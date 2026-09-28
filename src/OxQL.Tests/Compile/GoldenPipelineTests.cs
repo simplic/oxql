@@ -202,7 +202,7 @@ public class GoldenPipelineTests
     {
         var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "match": { "contact.name": { "eq": "x" } } }]""");
 
-        compiled.RemoteResolves.Should().ContainSingle();
+        compiled.KeyedResolves.Should().ContainSingle();
         compiled.SemiJoins.Should().ContainSingle();
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { ContactNumber: { $in: [] } } }"));
 
@@ -291,7 +291,7 @@ public class GoldenPipelineTests
     {
         var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }]""");
 
-        compiled.RemoteResolves.Should().BeEmpty("the row does not carry the alias, so there is nothing to ask the owner for");
+        compiled.KeyedResolves.Should().BeEmpty("the row does not carry the alias, so there is nothing to ask the owner for");
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "no reference member is kept for a resolve that does not run");
     }
 

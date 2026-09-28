@@ -164,7 +164,9 @@ public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IRead
 /// (<paramref name="RemoteFilter"/>, <paramref name="RemoteParentSelect"/>): the keyed fetch sends
 /// them to this host's own <c>SelfOwner</c> as an ordinary owner query.
 /// <paramref name="DroppedSelect"/> lists the select paths this target does not have, which the
-/// target leaves out (a union's select is flat).
+/// target leaves out (a union's select is flat); <paramref name="DroppedParentSelect"/> the same
+/// for the owning row's select. A remote target's paths are only known to its owner: the keyed
+/// fetch drops them per target at run time (<c>ResolveResult.Dropped</c>).
 /// </summary>
 public sealed record BoundResolveTarget(
     ReferenceTarget Declared,
@@ -178,7 +180,8 @@ public sealed record BoundResolveTarget(
     BoundStage.Scope? Scope,
     IReadOnlyList<ResolvedPath>? ParentSelect,
     IReadOnlyList<string>? RemoteParentSelect,
-    IReadOnlyList<string> DroppedSelect)
+    IReadOnlyList<string> DroppedSelect,
+    IReadOnlyList<string>? DroppedParentSelect = null)
 {
     /// <summary>True when the target lives on another host.</summary>
     public bool IsRemote => Declared.IsRemote;

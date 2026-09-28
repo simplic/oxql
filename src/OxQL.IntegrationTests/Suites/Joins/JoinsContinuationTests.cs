@@ -30,9 +30,8 @@ public class JoinsContinuationTests
     private static string Id(Guid id) => id.ToString("D");
 
     /// <summary>
-    /// A1 with A2b appended after the second resolve (DESIGN §2). The owning row selects only
-    /// <c>id</c>: A1's flat <c>parentSelect</c> names paths only one of the two remote targets has, and
-    /// a remote owner refuses a path it lacks (a gap of the select rule, not of continuation).
+    /// A1 with A2b appended after the second resolve (DESIGN §2), A1's flat <c>parentSelect</c> as
+    /// written: each of the two remote targets gets only the paths its row has.
     /// </summary>
     private static string A1WithLatestAttempt => $$"""
         {
@@ -47,7 +46,7 @@ public class JoinsContinuationTests
                            "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
                            "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
-                           "parentAs": "sourceParent", "parentSelect": ["id"] } },
+                           "parentAs": "sourceParent", "parentSelect": ["id", "shipmentNumber", "referenceNumber", "number"] } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent",
                           "forTarget": "transport.shipment", "as": "lastAttempt",
                           "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
@@ -85,6 +84,10 @@ public class JoinsContinuationTests
         }
 
         tourRows.Should().OnlyContain(row => row["lastAttempt"] == null, "the lookup applies to shipment lines only");
+        shipmentRows.Should().OnlyContain(row => row["sourceParent"]!["shipmentNumber"] != null && !row["sourceParent"]!.AsObject().ContainsKey("number"),
+            "a shipment row carries the shipment's paths of the flat select, and not the tour's");
+        tourRows.Should().OnlyContain(row => row["sourceParent"]!["number"] != null && !row["sourceParent"]!.AsObject().ContainsKey("shipmentNumber"),
+            "a tour row the tour's");
         rows.Should().OnlyContain(row => !row["sourceParent"]!.AsObject().ContainsKey("lastAttempt"), "the continued alias is lifted to the row, not left on the owning row");
     }
 
@@ -117,6 +120,58 @@ public class JoinsContinuationTests
         chained.Should().OnlyContain(row => row["lineShipment"] is JsonObject, "a tour is only reached through its shipment");
         chained.Should().Contain(row => row["tourVehicle"] != null && row["tourVehicle"]!["matchCode"] != null, "the tour's tractor, resolved at fleet two hops away");
         answer.Items.OfType<JsonObject>().Where(row => row["lineShipment"] == null).Should().OnlyContain(row => row["deliveringTour"] == null && row["tourVehicle"] == null);
+    }
+
+    [Fact]
+    public async Task A5_the_full_invoice_as_written_runs_under_strict()
+    {
+        var answer = await (await LedgerClient()).QueryAsync($$"""
+            {
+              "entityType": "ledger.transaction",
+              "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
+              "strict": true,
+              "pipeline": [
+                { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+                { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact",
+                               "select": ["primaryEmailAddress.email", "primaryPhoneNumber.number", "address.companyName"] } },
+                { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null",
+                               "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
+                { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+                { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+                { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+                { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
+                               "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
+                               "parentAs": "sourceParent", "parentSelect": ["id", "shipmentNumber", "referenceNumber", "number"] } },
+                { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "transport.shipment",
+                              "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
+                { "resolve": { "path": "item.references.referenceId", "as": "lineShipment", "elements": "first", "target": "transport.shipment",
+                               "select": ["shipmentNumber", "referenceNumber", "loadAddress", "deliveryAddress", "effectiveDeliveryEnd",
+                                          "deliveryNoteNumber", "items.weightNotes.number", "items.weightNotes.quantity"] } },
+                { "resolve": { "path": "lineShipment.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["number"] } },
+                { "resolve": { "path": "deliveringTour.resource.id", "as": "tourVehicle", "target": "fleet.vehicle", "onMissing": "null",
+                               "select": ["registrationPlate.registrationIdentifier", "matchCode"] } },
+                { "resolve": { "path": "deliveringTour.attachedResources.resource.id", "as": "driver", "elements": "first", "target": "staff.employee",
+                               "onMissing": "null", "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
+                { "resolve": { "path": "item.references.referenceId", "as": "lineTour", "elements": "first", "target": "transport.tour",
+                               "select": ["number", "startDateTime", "endDateTime", "actions"] } },
+                { "project": { "number": 1, "date": 1, "dueDate": 1, "invoiceRecipient": 1, "termsOfPayment.formattedText": 1,
+                               "totalPriceNet": 1, "totalPriceGross": 1, "taxKeyTotalPrices": 1, "recipientContact": 1, "clerk": 1,
+                               "position": 1, "item.text": 1, "item.quantity": 1, "item.totalPriceNet": 1, "erpLine": 1,
+                               "sourceLine": 1, "sourceParent": 1, "lastAttempt": 1, "lineShipment": 1, "deliveringTour": 1,
+                               "tourVehicle": 1, "driver": 1, "lineTour": 1 } },
+                { "sort": [ { "position": "asc" } ] },
+                { "page": { "limit": 5000 } }
+              ]
+            }
+            """);
+
+        answer.ShouldBeOk();
+        var rows = answer.Items.OfType<JsonObject>().ToList();
+
+        rows.Should().NotBeEmpty();
+        rows.Where(row => row["sourceParent"]?["entity"]?.GetValue<string>() == ReportSeed.Tour).Should().OnlyContain(row => row["lastAttempt"] == null);
+        rows.Should().Contain(row => row["lastAttempt"] is JsonObject, "a shipment line's latest attempt");
+        rows.Should().Contain(row => row["tourVehicle"] is JsonObject, "a tour's vehicle, two services away");
     }
 
     [Fact]

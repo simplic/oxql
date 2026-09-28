@@ -26,6 +26,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
         /// <summary>A refusal envelope; its one error at the owner's <paramref name="Stage"/> and <paramref name="Path"/>.</summary>
         public sealed record Refused(string Code, string Message, int Stage = 0, string? Path = null) : Answer;
 
+        /// <summary>Rows with the diagnostics the owner reported beside them.</summary>
+        public sealed record Reported(JsonArray Diagnostics, params JsonObject[] Items) : Answer;
+
         /// <summary>Rows with a page after them, reachable through <paramref name="NextCursor"/>.</summary>
         public sealed record Page(string NextCursor, params JsonObject[] Items) : Answer;
 
@@ -73,6 +76,12 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
                 {
                     ["items"] = new JsonArray(rows.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
                     ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                },
+                Answer.Reported reported => new JsonObject
+                {
+                    ["items"] = new JsonArray(reported.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
+                    ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                    ["diagnostics"] = reported.Diagnostics.DeepClone(),
                 },
                 Answer.Page page => new JsonObject
                 {

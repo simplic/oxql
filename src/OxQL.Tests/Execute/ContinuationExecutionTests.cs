@@ -271,6 +271,141 @@ public class ContinuationExecutionTests
         Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""));
     }
 
+    // ---- owner diagnostics ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task An_owners_diagnostic_about_a_continued_stage_comes_back_at_the_callers_stage_with_its_rows_on_the_page_rows()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] =
+        [
+            InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId)),
+            InvoiceRow(Guid.Parse("10000000-0000-0000-0000-000000000002"), row => row["ContactId"] = Id(ContactId)),
+        ];
+        var reported = new JsonArray(new JsonObject
+        {
+            ["code"] = Codes.ResolveMissing,
+            ["message"] = "1 row references a record that does not exist ('co').",
+            ["stage"] = 1,
+            ["path"] = "companyId",
+            ["params"] = new JsonObject
+            {
+                ["alias"] = "co", ["count"] = 1, ["truncated"] = false,
+                ["rows"] = new JsonArray(new JsonObject { ["row"] = 0, ["key"] = "k-1", ["outcome"] = "not_found" }),
+            },
+        });
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Reported(reported, FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice"), ("co", null)));
+
+        var result = Succeeded(await RunAsync(engine, ContactChain));
+
+        var diagnostic = result.Diagnostics.Should().ContainSingle().Subject;
+        diagnostic.Code.Should().Be(Codes.ResolveMissing);
+        diagnostic.Stage.Should().Be(1);
+        diagnostic.Path.Should().Be("r.companyId");
+        diagnostic.Params!["count"].Should().Be(2L, "both page rows took the owner's one row");
+        var rows = ((IEnumerable<Dictionary<string, object?>>)diagnostic.Params["rows"]!).ToList();
+        rows.Select(row => row["row"]).Should().Equal(0, 1);
+        rows.Should().OnlyContain(row => row["outcome"]!.ToString() == "not_found");
+        ((IReadOnlyDictionary<string, object?>)diagnostic.Params["owner"]!)["stage"].Should().Be(1);
+
+        client.Calls.Clear();
+        Succeeded(await RunAsync(engine, ContactChain)).Diagnostics.Should().ContainSingle("an answer with a report is not cached, so the report comes back every time");
+        client.Calls.Should().ContainSingle();
+    }
+
+    // ---- a flat select over remote targets -------------------------------------------------------------
+
+    private static readonly Guid RemoteShipment = Guid.Parse("5a000000-0000-0000-0000-000000000001");
+
+    private static FakeRemoteClient.Answer TransportOwner(QueryRequest query, params string[] lacking)
+    {
+        var projectAt = query.Pipeline.ToList().FindLastIndex(stage => stage.Project is not null);
+        var missing = query.Pipeline[projectAt].Project!.Fields.Keys.FirstOrDefault(lacking.Contains);
+
+        return missing is not null
+            ? new FakeRemoteClient.Answer.Refused(Codes.UnknownPath, $"'{missing}' is not a path of transport.shipment.", Stage: projectAt, Path: missing)
+            : new FakeRemoteClient.Answer.Rows(new JsonObject
+            {
+                ["entity"] = "transport.shipment", ["id"] = RemoteShipment.ToString(), ["number"] = "S-9",
+                ["oxEl"] = new JsonObject { ["id"] = InvoiceId.ToString() },
+            });
+    }
+
+    [Fact]
+    public async Task A_remote_union_target_is_asked_again_without_the_owning_row_paths_its_owner_lacks()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(InvoiceId) })];
+        client.Script = (_, query, _) => TransportOwner(query, "name");
+
+        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]"""));
+
+        result.Items[0]!["owner"]!["number"]!.GetValue<string>().Should().Be("S-9");
+        client.Calls.Should().HaveCount(2, "the first answer named the path the target lacks");
+        client.Calls[1].Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys.Should().NotContain("name").And.Contain("number");
+    }
+
+    [Fact]
+    public async Task A_select_path_no_target_of_the_union_has_is_refused()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(InvoiceId) })];
+        client.Script = (_, query, _) => TransportOwner(query, "nope");
+
+        var refusal = RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "nope"] } }]"""));
+
+        refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
+        refusal.Errors[1].Path.Should().Be("nope");
+    }
+
+    [Fact]
+    public async Task The_dropped_paths_are_recorded_per_target_for_explains_note()
+    {
+        var (engine, _, client) = Host();
+        client.Script = (_, query, _) => TransportOwner(query, "name");
+        const string Pipeline = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""";
+        var bound = ((BindOutcome.Bound)await new Binder(ResolveModel.Model, BindHost.Cursors).BindAsync(BindHost.Request(Invoice, Pipeline), BindHost.Context(), CancellationToken.None)).Pipeline;
+        var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
+        var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(BindHost.Options()), BindHost.Options());
+        var page = new[] { InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(InvoiceId) }) };
+
+        var resolved = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
+
+        resolved.Dropped.Should().Equal(new DroppedSelectPath(0, "line", "transport.shipment#billingLines", "name", Parent: true));
+    }
+
+    [Fact]
+    public async Task A_single_remote_target_still_refuses_a_path_it_lacks()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.UnknownPath, "no", Stage: 1, Path: "nope");
+
+        RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["nope"] } }]""")).Errors![0].Code.Should().Be(Codes.ResolveRefused);
+        client.Calls.Should().ContainSingle("a target that is the only one has the path or the request is wrong");
+    }
+
+    // ---- a projection narrows the select --------------------------------------------------------------
+
+    [Fact]
+    public async Task A_projected_path_under_a_keyed_alias_narrows_the_select_the_owner_is_sent()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice")));
+
+        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "code", "address"] } }, { "project": { "number": 1, "r.name": 1, "r.address.city": 1 } }]"""));
+
+        client.Calls.Single().Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
+            .Should().BeEquivalentTo(["name", "address.city", "id"], "only what the projection keeps of the alias, and the key");
+        result.Items[0]!["r"]!["name"]!.GetValue<string>().Should().Be("Alice");
+
+        client.Calls.Clear();
+        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "code"] } }, { "project": { "number": 1, "r": 1 } }]"""));
+        client.Calls.Single().Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
+            .Should().BeEquivalentTo(["name", "code", "id"], "a projection of the whole alias keeps the select");
+    }
+
     // ---- termination -----------------------------------------------------------------------------------
 
     /// <summary>

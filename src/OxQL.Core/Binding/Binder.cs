@@ -1658,12 +1658,49 @@ public sealed class Binder
                 select.Insert(0, key.Path!);
 
             var filter = resolve.Filter?.Condition is null ? null : BindTargetFilter(resolve.Filter.Condition, at, index);
-            var parentSelect = withParent && declared.Item is not null ? BindSelect(resolve.ParentSelect, target, entityShape, index) : null;
+            // The owning row's select is flat as well: a path this target's entity lacks is dropped
+            // for it (refused below only when no target has it).
+            IReadOnlyList<ResolvedPath>? parentSelect = null;
+            List<string>? parentSent = null;
+            var parentDropped = new List<string>();
 
-            // The filter and the owning row's select also travel as written: the keyed fetch asks
-            // this host's own SelfOwner with an ordinary owner query, which binds them again.
+            if (withParent && declared.Item is not null)
+            {
+                if (resolve.ParentSelect is { Count: > 0 } parentWanted)
+                {
+                    var parentPaths = new List<ResolvedPath>();
+
+                    parentSent = [];
+
+                    foreach (var wire in parentWanted)
+                    {
+                        if (entityShape.Resolve(wire, PathUsage.Select) is { Succeeded: true } kept)
+                        {
+                            parentPaths.Add(kept.Path!);
+                            parentSent.Add(wire);
+                        }
+                        else
+                        {
+                            parentDropped.Add(wire);
+                        }
+                    }
+
+                    if (target.Key is not null && parentPaths.All(kept => kept.Wire != target.Key.Wire))
+                        parentPaths.Insert(0, entityShape.Resolve(target.Key.Wire, PathUsage.Select).Path!);
+
+                    parentSelect = parentPaths;
+                }
+                else
+                {
+                    parentSelect = BindSelect(null, target, entityShape, index);
+                }
+            }
+
+            // The filter and the owning row's select also travel: the keyed fetch asks this host's
+            // own SelfOwner with an ordinary owner query, which binds them again — the owning row's
+            // select without the paths this target lacks.
             return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, sentFilter, scope, parentSelect,
-                withParent && declared.Item is not null ? resolve.ParentSelect : null, dropped);
+                parentSent, dropped, parentDropped);
         }
 
         /// <summary>
@@ -1717,6 +1754,10 @@ public sealed class Binder
 
             if (targets.Count == 0 || targets.Any(target => target.IsRemote))
                 return;
+
+            foreach (var wire in targets[0].DroppedParentSelect ?? [])
+                if (targets.All(target => target.DroppedParentSelect?.Contains(wire, StringComparer.Ordinal) == true))
+                    errors.Add(Error(Codes.UnknownPath, $"'{wire}' is not a path of any row that owns a target of '{resolve.Path}' ({string.Join(", ", targets.Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal))}).", index, wire));
 
             foreach (var wire in targets[0].DroppedSelect)
             {

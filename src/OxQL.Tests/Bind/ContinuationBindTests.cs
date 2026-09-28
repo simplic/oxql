@@ -147,6 +147,31 @@ public class ContinuationBindTests
         await ErrorAsync($$"""[{{Source}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "forTarget": "rc.shipment", "as": "l" } }]""", Codes.OptionNotApplicable);
     }
 
+    // ---- a flat owning-row select ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_flat_parentSelect_drops_per_local_target_what_its_row_lacks_and_sends_each_only_what_it_has()
+    {
+        var bound = await BoundAsync($$"""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name", "nope"] } }]""");
+
+        var targets = bound.Stages.OfType<BoundStage.Resolve>().Single().Cases!.SelectMany(bound => bound.Targets).ToList();
+        var shipment = targets.Single(target => target.Declared.Entity == "rc.shipment");
+        var tour = targets.Single(target => target.Declared.Entity == "rc.tour");
+
+        shipment.DroppedParentSelect.Should().Equal("name", "nope");
+        shipment.RemoteParentSelect.Should().Equal("id", "number");
+        tour.DroppedParentSelect.Should().Equal("number", "nope");
+        tour.RemoteParentSelect.Should().Equal("id", "name");
+        targets.Single(target => target.IsRemote).RemoteParentSelect.Should().Equal(["id", "number", "name", "nope"], "a remote target's owner decides what its row has");
+    }
+
+    [Fact]
+    public async Task An_owning_row_select_path_no_local_target_has_is_UNKNOWN_PATH()
+    {
+        (await ErrorAsync("""[{ "resolve": { "path": "billingLineId", "as": "line", "parentAs": "owner", "parentSelect": ["number", "nope"] } }]""", Codes.UnknownPath))
+            .Path.Should().Be("nope");
+    }
+
     // ---- limits and refusals -------------------------------------------------------------------------
 
     [Fact]

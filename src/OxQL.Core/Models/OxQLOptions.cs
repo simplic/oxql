@@ -316,8 +316,19 @@ public sealed class CacheOptions
     /// <summary>How long a resolved remote row stays cached.</summary>
     public int ResolveTtlSeconds { get; set; } = 60;
 
-    /// <summary>The most resolved rows the cache holds.</summary>
-    public int ResolveCacheMaxEntries { get; set; } = 50_000;
+    /// <summary>
+    /// The owner-fetch cache's budget per mode: the most resolved remote rows it holds, and the most
+    /// semi-join ids (one unit per id).
+    /// </summary>
+    public int OwnerFetchCacheMaxEntries { get; set; } = 50_000;
+
+    /// <summary>The former name of <see cref="OwnerFetchCacheMaxEntries"/>; configuration under this key still binds to it.</summary>
+    [Obsolete("Use OwnerFetchCacheMaxEntries; this alias is kept for one release.")]
+    public int ResolveCacheMaxEntries
+    {
+        get => OwnerFetchCacheMaxEntries;
+        set => OwnerFetchCacheMaxEntries = value;
+    }
 
     /// <summary>How long an organisation's addon definitions stay cached on replicas that did not write them.</summary>
     public int AddonDefinitionTtlSeconds { get; set; } = 30;

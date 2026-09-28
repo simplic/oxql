@@ -160,7 +160,7 @@ Simplic base package (column */schema*).
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | remote resolver: one owner call | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
 | `Execution:AllowDiskUse` | `true` | aggregate option | 422 `QUERY_TOO_EXPENSIVE` when `false` | no | — |
 | `Execution:SlowQueryMs` | 1 000 (`0` off) | warning log line for a slower request | — | no | — |
-| `Cache:ResolveTtlSeconds` / `ResolveCacheMaxEntries` | 60 / 50 000 | resolved remote rows and semi-join ids, per organisation | — | no | an owner's change is seen by callers within the TTL |
+| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | the owner-fetch cache: resolved remote rows and semi-join ids, per organisation; the budget holds per mode (rows, ids) | — | no | an owner's change is seen by callers within the TTL; the former key `ResolveCacheMaxEntries` still binds for one release |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | — |
 

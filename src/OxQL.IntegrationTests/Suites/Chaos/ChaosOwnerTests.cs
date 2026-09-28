@@ -17,7 +17,7 @@ namespace OxQL.IntegrationTests.Suites.Chaos;
 [Trait("Category", "Integration")]
 public class ChaosOwnerTests
 {
-    private static JsonObject ResolveQuery(params string[] keys) => new()
+    private static JsonObject OwnerQuery(params string[] keys) => new()
     {
         ["entityType"] = ChaosOwner.Entity,
         ["pipeline"] = JsonNode.Parse($$"""
@@ -27,7 +27,7 @@ public class ChaosOwnerTests
             """),
     };
 
-    private static readonly JsonObject Two = new() { ["queries"] = new JsonArray(ResolveQuery("W-1", "W-2"), ResolveQuery("W-3")) };
+    private static readonly JsonObject Two = new() { ["queries"] = new JsonArray(OwnerQuery("W-1", "W-2"), OwnerQuery("W-3")) };
 
     private static async Task<(HttpStatusCode Status, string Text)> Batch(ChaosOwner owner, JsonNode? body = null, CancellationToken cancellationToken = default)
     {
@@ -67,7 +67,7 @@ public class ChaosOwnerTests
     public async Task Every_match_stage_applies_with_combinators_and_folding_and_the_decoy_id_answers_another_widget()
     {
         var owner = new ChaosOwner();
-        var both = ResolveQuery("W-1", "W-2", "W-3");
+        var both = OwnerQuery("W-1", "W-2", "W-3");
         both["pipeline"]!.AsArray().Insert(1, JsonNode.Parse("""{ "match": { "and": [ { "name": { "contains": "widget t", "options": { "ignoreCase": true } } }, { "not": { "code": { "eq": "W-3" } } } ] } }"""));
 
         var filtered = await Parsed(owner, new JsonObject { ["queries"] = new JsonArray(both) });

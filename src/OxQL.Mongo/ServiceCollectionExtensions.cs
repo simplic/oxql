@@ -67,7 +67,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEntityModelProvider>(_ => new LazyEntityModelProvider(() => ClrModelBuilder.Build(mongoOptions.AssembliesToScan)));
         services.TryAddSingleton<IAggregateRunner>(provider => new MongoAggregateRunner(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
         services.TryAddSingleton<IIndexSource>(provider => new MongoIndexSource(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
-        services.TryAddSingleton(provider => new ResolveCache(provider.GetRequiredService<OxQLOptions>()));
+        services.TryAddSingleton(provider => new OwnerFetchCache(provider.GetRequiredService<OxQLOptions>()));
 
         services.AddSingleton<IQueryEngine>(provider =>
         {
@@ -86,7 +86,7 @@ public static class ServiceCollectionExtensions
                 logger,
                 mongoOptions.IncludeErrorDetails,
                 provider.GetService<IIndexSource>(),
-                provider.GetRequiredService<ResolveCache>());
+                provider.GetRequiredService<OwnerFetchCache>());
         });
 
         return services;

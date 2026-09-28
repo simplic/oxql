@@ -3,7 +3,9 @@
 What a well-formed request means once it binds: which rows an operator matches when a value is
 null, absent or empty, how each kind is matched against the representations storage may hold,
 what folds case and accents, how rows are ordered and paged, how projections interact with
-joins, sorts and cursors, and how `group` types its output. The grammar is in
+joins, sorts and cursors, how `group` types its output, and, since 2.1, polymorphic values,
+flattened trees, typed and item references, the outcome of every join, strict requests and chains
+across services. The grammar is in
 [`oxql-query-syntax.md`](oxql-query-syntax.md); status codes, limits and the operational
 endpoints are in [`oxql-operations.md`](oxql-operations.md).
 
@@ -45,10 +47,12 @@ matches it and always matches `not { any }`. `unwind` drops a row whose collecti
 `null` or empty unless `preserveNull` is `true`, which keeps it once with the element absent
 (or `null`).
 
-**Joins.** A `lookup` with no matching child yields `[]`. A `resolve` yields `null` when the
-reference member is `null` or absent, when the target does not exist, when it fails the stage's
-`filter`, and, for a remote target, when the owner did not answer (with a `RESOLVE_TIMEOUT` or
-`RESOLVE_UNREACHABLE` diagnostic).
+**Joins.** A `lookup` with no matching child yields `[]` (`first`: `null`). A `resolve` yields
+`null` when the reference member is `null` or absent, when the target does not exist, when it fails
+the stage's `filter`, when no case of a typed reference matches, and, for a remote target, when
+the owner did not answer (with a `RESOLVE_TIMEOUT` or `RESOLVE_UNREACHABLE` diagnostic). Which of
+these a `null` is, and which of them lose data, is the join's outcome
+([Outcomes and data loss](#outcomes-and-data-loss)).
 
 **Rows.** A member stored as `null` is `null` in the row; a member absent from the document is
 absent from the row object. A `double` that is `NaN` or infinite is `null`.
@@ -188,8 +192,8 @@ with no index but `_id`. What changes with the collation is which indexes the se
 - A service whose lists filter or sort on a string member at volume adds an index such as
   `{ organizationId: 1, <member>: 1, _id: 1 }` with the engine's collation. When the configured
   collation changes, those indexes are rebuilt with it.
-- `POST /oxql/explain` shows the collation a request runs under, and its advisory says which
-  fields an index serves.
+- `POST /oxql/explain` shows the collation a request runs under; asked with
+  `include: ["indexes"]`, its advisory says which fields an index serves.
 
 ## Sorting and paging
 
@@ -221,8 +225,9 @@ with no index but `_id`. What changes with the collation is which indexes the se
   by its stored value (its number, or its name when stored as text); a `timeSpan` stored as text
   by character; a mixed member by BSON type bracket.
 - A `lookup` returns at most `limit` children per parent (default and maximum
-  `Limits:MaxLookupLimit`, 100) in ascending order of the child's key; children beyond the limit
-  are not returned and not reported.
+  `Limits:MaxLookupLimit`, 100) in the order of its `sort`, then the child's key (without `sort`,
+  ascending by the child's key). Children beyond the limit are not returned, and the page carries
+  `LOOKUP_TRUNCATED` naming the alias and how many rows were cut; under `strict` it refuses.
 
 **Cursors.** A cursor is signed with a key derived from `Cursor:SigningKey` and bound to a
 fingerprint of the bound pipeline: the entity, the organisation, every stage with its storage
@@ -268,7 +273,9 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
   at all: a remote owner is not called for it. An alias a stage writes after the projection is
   in the row.
 - A projection may name a member below a join alias (`"vehicle.matchCode": 1`); the join then
-  stays before the projection and the alias carries the named members only.
+  stays before the projection and the alias carries the named members only. Under a keyed or remote
+  alias the named members narrow what the owner is asked for; a projection that keeps an alias
+  continued under it but drops the alias itself is `NOT_CONTINUABLE`.
 - The sort fields, the entity key and the key a remote `resolve` or a late join reads survive
   every projection in storage and are dropped from the row when not asked for, so projecting
   them away never changes the rows, the cursor or the join.
@@ -322,3 +329,184 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
 - After a `group` the shape is the aliases: a later `match`, `sort` or `group` addresses them by
   name, the members of an object returned by `first` or `last` are not addressable, and `lookup`
   and `unwind` have nothing to work on.
+
+## Polymorphic values
+
+A member typed as a base class or an interface may hold one of several variants: the driver
+stores the variant's discriminator beside the value (`_t` by default) and the variant's own
+members. The model reads the variants from the class maps registered with the driver (and
+`[BsonKnownTypes]`), never from an assembly scan, and publishes one type for the member:
+
+- Its members are the base type's own members followed by every member some variant has and the
+  base has not, each marked with the variants that carry it (`onlyFor`) and nullable. Paths stay
+  the paths of storage: `items.billingLineId`, not a variant-qualified form.
+- A member the variants carry with a different kind or storage name becomes `unknown` (build
+  finding `polymorphic-member-conflict`). A concrete subclass the scan finds but the driver does not
+  know is `polymorphic-subtype-unregistered` and is not a variant.
+- An interface-typed member whose implementations are registered is an object of the union of
+  their members, all with `onlyFor`; before 2.1 it was `unknown`. A polymorphic entity keeps its
+  declared class as the root, merged the same way, once its subclasses are registered.
+- A row renders each value with the members of the variant it is stored as: the base members in
+  order, then that variant's own. 2.0 rendered the base members only.
+
+On a row of another variant a variant-only member is absent, so `eq null` and `neq <value>` match it
+(explain notes `ONLY_FOR_VARIANTS`). `is` tests the variant itself: a name stands for that variant
+and every registered descendant; a concrete base name for all of them and for values stored without
+a discriminator. The discriminator is compared exactly.
+
+## Flattened trees
+
+`unwind` with `flatten` turns a tree of items of one kind (an invoice's group items holding items)
+into one row per item at any level down to `MaxFlattenDepth`:
+
+- Order is pre-order: a group, then its children, then the next sibling. `includeIndex` numbers the
+  rows of one document in that order.
+- Each row carries the item without its nested collection; the members of its variant are there as
+  usual, so a group row and a billing-line row can be told apart with `is`.
+- Items below the depth are not in the rows; the page names the path, the depth and how many rows
+  lost items (`UNWIND_DEPTH_TRUNCATED`). Under `strict` the request refuses instead.
+- `preserveNull` keeps a document with no items once, as for a plain unwind. The rows page by
+  offset.
+
+## References
+
+A join follows a reference the model declares; nothing is inferred from names. 2.0 had one form, a
+member naming one entity by its key or another field (`[OxQLReference("<entity>", field?)]`, or the
+base package's `[ReferenceId]`). 2.1 adds four:
+
+| form | declaration | what the key names |
+|---|---|---|
+| item target | `[OxQLReference("transport.shipment", "id", Item = "billingLines")]` | an element of the keyed collection `billingLines` of some shipment; the alias holds the element, `parentAs` the shipment |
+| key conversion | `[OxQLReference("transport.shipment", "id", KeyAs = OxQLKeyAs.Guid)]` on a string member | the guid the string holds |
+| typed reference | one `[OxQLReferenceWhen("type", "logistics", "transport.shipment#billingLines", "transport.tour#billingLines", Field = "id")]` per case | a target chosen by the stored value of a sibling member; several targets in one case are tried in order |
+| typed by variant | `[OxQLReferenceWhen(OxQLReferenceWhenAttribute.Variant, "DriverResource", "staff.employee", Field = "id")]` | a target chosen by the variant of the object holding the member |
+
+- A target is `entity` or `entity#itemPath`; the field is the attribute's second argument or `Field`.
+  Every `[OxQLReferenceWhen]` of one member with the same `path` is one case of one reference;
+  combining them with `[OxQLReference]` on the same member, or with conflicting cases, drops them
+  all (`reference-declaration-unresolved`). The condition's values compare exactly with the stored
+  string or enum sibling.
+- A member the service cannot annotate (inherited, or on a shared type) is declared by the host:
+  `new ReferenceDeclarations().For<Resource>("id").When(ReferenceDeclarations.Variant, "DriverResource", "staff.employee", field: "id")`,
+  or `.To(target, field?, item?, keyAs?)` for an unconditional one, passed to
+  `ClrModelBuilder.Build(assemblies, retiredIds, references)`. It applies to that type and its
+  variants wherever they are embedded, and to no other type that inherits the same CLR member.
+- **Key conversion.** The stored string is parsed as a guid in any .NET format and sent in lower-case
+  `D` form; a value that does not parse is outcome `invalid_key`. A string member referencing a local
+  guid key without `KeyAs` is the build finding `reference-key-kind-mismatch`.
+- **Item targets.** The element whose field equals the key is the alias; `parentAs` is the owning row
+  as `{ "entity": "<entity id>", <parentSelect members> }`. Two owning rows holding the same element
+  id are `ambiguous`: the first by target order, then by key, is taken.
+- The schema publishes a simple reference (one unconditional case, one entity target, no item, no
+  conversion) under `references` as before; the other forms only as reference cases, so a reader
+  that maps every `references` entry to an entity join never meets one it cannot follow.
+
+`target` narrows a typed reference to one target entity; rows whose case selects another target are
+`excluded`. `elements` resolves a reference inside a collection that is not unwound; without it such
+a path is refused (`RESOLVE_ON_COLLECTION`), where 2.0 joined an arbitrary element.
+
+## Outcomes and data loss
+
+Every slot of a join (a row, or an element under `elements`) ends in one outcome:
+
+| outcome | when | alias | data loss |
+|---|---|---|---|
+| `resolved` | the key selects a case and a target record or element exists (and passes `filter`) | the target | no |
+| `ambiguous` | as resolved, but an item key or a non-key field matched more than one record | the first by target order, then key | **yes** |
+| `reference_null` | the reference is `null` or absent; an earlier hop was `null`; `elements` met no keyed element | `null` | no |
+| `excluded` | no case matches the stored value (a tariff reference among shipment references), `target` narrowed the case away, or the target fails `filter` | `null` | no |
+| `not_applicable` | a `forTarget` stage on a row resolved to another target | `null` | no |
+| `not_found` | the key selects a case and target and no record exists in any target of the case | `null` | **yes** |
+| `invalid_key` | a key conversion case whose value does not parse | `null` | **yes** |
+| `owner_unanswered` | the owner timed out, was unreachable, cut its answer, or the key was over the key budget | `null` | **yes** |
+| lookup with no children | | `[]` / `null` | no |
+| lookup over its limit | | the first `limit` | **yes** (`LOOKUP_TRUNCATED`) |
+| `elements: "all"` over `MaxLookupLimit` | | the first targets | **yes** (`RESOLVE_TRUNCATED`) |
+
+- A filtered-out target reads as `not_found` unless the stage reports or refuses missing references
+  (`onMissing` other than `null`): then the keyed fetch asks the owner once more for the keys the
+  filtered answer lacked, without the filter, and a key present there is `excluded`. An inline
+  resolve with a `filter` and such an `onMissing` runs as a keyed fetch for this reason.
+- `elements: "first"` takes the first `resolved` element; failing that the row is `not_found` or
+  `invalid_key` if any element was, else `excluded` if any was, else `reference_null`.
+- `onMissing` decides what `not_found`, `invalid_key` and `owner_unanswered` do. `null` (the default
+  outside `strict`): nothing but an owner failure's own `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE`
+  (which name the aliases, not rows). `report`: one `RESOLVE_MISSING` per stage listing the rows.
+  `refuse` (the default under `strict`): that diagnostic becomes a 422. Outside `strict`, `refuse`
+  refuses on `RESOLVE_MISSING` only; under `strict`, `report` keeps `RESOLVE_MISSING` a diagnostic
+  while every other loss still refuses.
+- `ambiguous` is reported (`RESOLVE_AMBIGUOUS`) whatever `onMissing` says, and refuses under `strict`.
+- Rows an owner reported are mapped back through the key to every row of the page holding it. An
+  inline resolve reads its missing references off the page's rows, and only when its effective
+  `onMissing` is not `null`.
+
+**Where ambiguity is seen.** The keyed fetch asks an owner for at most two records per key whenever
+the target is an item or a non-key field, so a second record is always seen. Two plain forms keep
+2.0's single-record query and cannot always see it: a simple local reference onto a non-key field
+runs inline and takes the first match; a simple remote reference onto a non-key field sends the
+plain key match, so the second record is seen only when the owner's page happens to hold both, and
+not when the key is answered from the cache. Declare such a reference onto the target's key, or
+expect `ambiguous` to be reported only by the keyed forms.
+
+## Strict requests
+
+`strict: true` says: these rows go into a document, so answer them all or refuse. Every data-loss
+outcome and truncation above refuses with 422, carrying the diagnostic it would have answered as its
+error; the plain `null` of `reference_null`, `excluded` and `not_applicable` does not. A report page
+(no `cursor`, no `offset`) may hold up to `MaxReportPageSize` rows and refuses with
+`PAGE_INCOMPLETE` when more match. The request's `strict` is carried in the query sent to an owner
+that runs continued stages, and a strict request reads no cached "not found". Without `strict`
+nothing about the rows changes: `strict` and `onMissing` refuse or report, they never alter a row,
+and neither enters the cursor fingerprint.
+
+## Chains across services
+
+A report often needs a record behind a record another service returned: the invoice line's source
+billing line lives in a shipment of the transport service, and the delivery attempt that shipment
+had last lives there too. The service answering the query cannot take that second step itself; it
+has neither the shipment data nor its model. So it puts the step **into the query it already sends
+the transport service** for the keys. That query becomes *match the keys → the continued steps →
+the projection*, and the owner answers with rows that already carry the second step's result.
+
+Nothing else changes compared with a plain remote resolve:
+
+- The same batch, over the same internal route (`internal/oxql/batch` in the Simplic base package),
+  under the same forwarded user and organisation. The owner applies the organisation scope at every
+  entity it enters, exactly as for a direct query; a continued step reads only what that user could
+  read with `POST /oxql/query` at the owner. No header is added.
+- The owner binds the continued steps with its own model. If a step reaches a third service, the
+  owner does the same from its side; a local target of the owner is fetched in process.
+- The aliases the continued steps add are lifted back from each owner row to the origin row, so the
+  caller sees one row with every hop. An owner's refusal of a step comes back as `RESOLVE_REFUSED`
+  at the caller's stage, with the owner's errors mapped to the caller's `stage` and `path` and
+  `params.owner` naming the owner's own view; an owner's diagnostics come back mapped the same way.
+- **It ends by construction.** A forwarded query carries only the steps continued under the alias it
+  answers; the resolve that created the alias and every stage before it stay at the origin. Each
+  forwarded query therefore has strictly fewer join stages than the one that produced it, and a
+  chain ends after at most as many levels as the original request has join stages. No hop counter is
+  needed.
+- **Time.** The batch carries `maxTimeMs`, which the owner applies as its request ceiling and budgets
+  its own owner calls from. A call carrying continued stages, or a typed, item, converted or
+  element-wise resolve, gets the origin's remaining time less 50 ms, at most `Execution:ChainTimeoutMs` (6 000); a plain remote
+  resolve keeps `min(remaining, ResolveTimeoutMs)`. An owner that runs out answers nothing for its
+  keys: `RESOLVE_TIMEOUT`, rows `owner_unanswered`.
+- **Cost.** Owner queries per level are bounded by stages × key chunks, and keys per level by the
+  rows the previous level returned; the remaining limits are `MaxResolveKeys` (per request),
+  `MaxContinuedStages`, the owner's `MaxBatchQueries` and the time ceiling.
+- **Unions.** On an alias with several targets (shipment or tour billing lines), a continued step
+  without `forTarget` goes to every target and must bind on each; with `forTarget` it goes only to
+  that target's owner query, and on rows resolved to another target its alias is `null`
+  (`not_applicable`).
+- **Owner version.** Continued stages and grouped owner queries need the owner on 2.1. An owner whose
+  health reports an older engine is refused before anything is sent (`OWNER_NOT_CAPABLE`); an owner
+  not yet probed is sent the query, and an old one refuses the unknown members inside
+  `RESOLVE_REFUSED`.
+
+Aggregation over chain data (`unwind`, `group` under a chain alias) is refused (`NOT_CONTINUABLE`);
+it belongs in the report that reads the rows.
+
+**Variables in chains.** An owner never receives `variables`. The origin binds every `{ "$var": … }`
+inside a continued stage and inside the `filter` of every remote resolve and writes the value into
+the owner query; an unbound one is `UNBOUND_VARIABLE` at the origin. 2.0 forwarded a remote filter
+with its `$var` and no variables, so the owner refused it. Because the cache key is taken over the
+substituted query, two requests with different variables never share a cached answer.

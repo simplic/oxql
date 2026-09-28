@@ -17,6 +17,7 @@ dotnet test src/oxql.slnx --filter Category!=Integration    # the unit tests onl
 dotnet test src/OxQL.IntegrationTests                       # the conformance suite only
 dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Shipment"
 dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~SH03"
+dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report"   # the report scenarios
 ```
 
 Every test class carries `[Trait("Category", "Integration")]`.
@@ -34,7 +35,9 @@ network access for the download; later runs start the server in well under a sec
 | `OXQL_TEST_MONGO_BIN=<directory>` | start the `mongod` in that directory instead of a downloaded one (pins an exact version) |
 
 When no server can be provided, every test fails with one message naming these variables.
-Nothing is skipped: a skipped case is not a passing case.
+Nothing is skipped for want of a server: a skipped case is not a passing case. The only skips
+are the opt-in fixture exporter (see *The fixture exporter*) and a case parked on a known engine
+defect with the maintainer's agreement, whose `Skip` text names the defect.
 
 ## How it is built
 
@@ -43,6 +46,7 @@ Nothing is skipped: a skipped case is not a passing case.
 | `Fleet/` | the simulated fleet: one in-process host per lab service, the MongoDB fixture, the lab model |
 | `Corpus/` (namespace `Fixtures`) | the rows, the seeder, and the oracle every expectation is computed with |
 | `Harness/` | the verbs a case speaks: `LabClient`, `WireAnswer`, `CorpusFleet`, `ChaosOwner`, `EngineDirect` |
+| `Spike/` | the fleet model's own checks (`FleetModelTests`): entities, variants, references and build findings per service |
 | `Suites/<Area>/` | the cases, one folder per area |
 
 **The fleet.** Each lab service is a small ASP.NET Core application on an in-memory test server
@@ -50,24 +54,43 @@ that registers the engine exactly as a service does: the options section, the Mo
 the service's own database, the controller, a scope provider, an addon definition source and a
 remote query client. The seams are test implementations: the organisation comes from the
 `OrganizationId` header, addon definitions are read from the service's database on every request,
-and a remote reference is answered by the owning host's `OxQL/batch` route. Each host sees only
-its own entities, so a reference into another service is remote exactly as between real services.
+and a remote reference is answered by the owning host (`InMemoryRemoteClient`). The client calls the
+owner's query service through its internal overload (`BatchAsync(batch, internalCall: true)`), in a
+request scope of the owner carrying the caller's organisation, user and correlation, exactly as the
+base package's internal route does: only that path admits the keyed fetch's `keyedBy`. It answers
+the internal explain the same way (`ExplainAsync(request, internalCall: true)`), and keeps each
+owner's shallow health (engine version, `maxBatchQueries`) as the base package's client does. A
+service served by a mounted handler (the chaos owner, a scripted owner) is posted to over HTTP
+(`OxQL/batch`). Each host sees only its own entities, so a reference into another service is remote
+exactly as between real services, and a chain across services continues at each owner in process.
 Hosts are started on first use and shared by the whole run; a *variant* is the same service and
 database under changed configuration (`OxQL:Limits:MaxPageSize`, `OxQL:Explain:Enabled`, …).
+Explain is on by default, as on a real host.
 
 **The lab model.** Synthetic entities under neutral names; the shapes carry the storage hazards
-real services have.
+real services have. Since 2.1 the member names, nesting, polymorphism and reference declarations of
+the report entities mirror the real services (ERP, logistics, HR, vehicle, contact), so a scenario
+path on the fleet is the path the real service accepts after its migration; only the namespace
+differs. The variants' class maps are registered with the storage conventions
+(`FleetClassMaps.Register()`), and the transport service's host-side reference declarations
+(`FleetReferences.For("transport")`) type the resource ids. The entities marked — hold no rows in
+organisations A and B.
 
 | service | entity | collection | rows A / B | what it is for |
 |---|---|---|---:|---|
-| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag |
+| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag; since 2.1 `userId`, which a transaction's `createUserId` names |
 | `fleet` | `fleet.vehicle` | `vehicle` | 20 / 2 | numbers: decimals stored as Decimal128 and as strings, zero, negative, 25 places, Int32 max; a storage name the derivation does not give (`QRCode`) |
 | | `fleet.equipment` | `equipment` | 5 / 1 | a local reference onto vehicles: hit, duplicate, miss, null source |
 | | `fleet.department` | `department` | 3 / 1 | the target of the vehicle and shipment departments |
 | | `fleet.status` | `status` | 4 / 1 | a small lookup table with a null name |
-| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department` |
+| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department`; since 2.1 its `billingLines[]` are the item target of typed references, and `tours[].tourId` references `transport.tour` beside a polymorphic `tours[].resource` |
 | | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling; duplicate, null and missing names at scale; a remote reference onto vehicles |
-| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag |
+| | `transport.tour` | `tour` | — | billing lines (the shipment's item type), a polymorphic `resource`, `attachedResources[]`, and `actions`, an interface-typed collection of seven variants |
+| | `transport.delivery_attempt` | `deliveryAttempt` | — | `shipmentId` onto the shipment, `dateTime`, `status { displayName }`, `text`: "the latest attempt" |
+| | `transport.resource` | `resource` | — | an abstract entity of seven variants; the host-side declaration makes a driver's id an employee and a vehicle-like resource's id a vehicle; a carrier references nothing |
+| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag; since 2.1 `items` of seven variants with nested group items, billing-line items referencing `ledger.billing_line`, `references[].referenceId` typed by `dataType` onto shipment or tour (key as guid), the recipient's `address.id` onto `directory.contact`, `createUserId` onto `staff.employee.userId` |
+| | `ledger.billing_line` | `billing_line` | — | `sourceBillingLineReference { type, id }`, typed by `type`, onto the billing lines of a shipment or a tour (item targets, a union) |
+| `directory` | `directory.contact` | `contact` | — | the contact-like service: `primaryEmailAddress.email`, `primaryPhoneNumber.number`, `address.companyName`, a GeoJSON location (`unknown`) |
 | `conformance` | `conformance.entity` | `conformance` | 3 / 1 | every kind the model has: long above 2^53, date, char, binary, long enum, both dictionary forms, unstored members, local and remote references |
 | | `conformance.ref` | `conformance_ref` | 2 / 1 | a local target keyed on `code` |
 | | `conformance.child` | `conformance_child` | 3 / 1 | lookup children |
@@ -75,12 +98,33 @@ real services have.
 
 Organisation C (`55555555-…`) holds only the 100 001-row bulk volume, written on demand.
 
+**The report fleet.** Organisation R (`77777777-…`, tag `0077`) holds the rows of the report
+scenarios (A1–A5 of the studio design) and of their failure modes, and nothing else; no case over A
+or B sees them. They are seeded with the corpus (`ReportSeed`, rows in `Corpus/Rows/ReportRows.cs`)
+and read through `ReportSeed.Entities`, `Rows(entity)`, `Row(entity, key)` and the ids it names
+(`TransactionId`, `ShipmentId`, `ErpLineIds`, …); every oracle helper that takes a row reads them.
+`Lab.ClientAsync(service, Org.R)` asks as organisation R.
+
+| entity | rows | what they carry |
+|---|---:|---|
+| `ledger.transaction` | 6 | the mixed invoice: every item variant, groups two deep, shipment and tour lines, a tariff-only line; one invoice per failure: a deleted source line, a source id held by a shipment and a tour, a clerk user id two employees share, a user id no employee has, a billing line seven groups deep |
+| `ledger.billing_line` | 6 | the ERP lines the invoice's items name: shipment freight and waiting time, the tour line, a deleted source, a duplicate source, a tariff-only line |
+| `transport.shipment` | 3 | the scenario shipment (two billing lines, weight notes, its tour, three delivery attempts), one without attempts, one holding a billing-line id a tour holds too |
+| `transport.tour` | 2 | a tractor tour (driver, trailer attached, one action per variant, a billing line) and a carrier tour |
+| `transport.delivery_attempt` | 4 | three on the scenario shipment, the latest stored in the middle; one on the third shipment |
+| `transport.resource` | 7 | one per variant; the car, container and equipment name vehicles the fleet does not hold |
+| `staff.employee` | 4 | the clerk, two employees sharing one user id, the driver |
+| `fleet.vehicle` | 2 | the tractor and the trailer |
+| `directory.contact` | 2 | the invoice recipient, and a contact without an e-mail address |
+
+`Suites/Seed/ReportSeedTests` proves these rows against the engine like the corpus.
+
 ## The corpus
 
 The rules the data follows, and a case may rely on:
 
 - **Deterministic ids.** Every id is `TTTTTTTT-OOOO-4000-8000-NNNNNNNNNNNN`: the id space
-  (`Spaces`), the organisation tag (`0001` A, `0002` B, `0055` C), the version and variant
+  (`Spaces`), the organisation tag (`0001` A, `0002` B, `0055` C, `0077` R), the version and variant
   nibbles, and the ordinal. `Ids.Of(Spaces.Shipment, Org.A, 7)` is the same value on every
   machine. `00000000` is the dangling space: ids that name nothing, so a join that answers null is
   observable. A case never hard-codes an id; it asks `Corpus.IdOf(Corpus.Shipment, "items-one")`.
@@ -161,7 +205,7 @@ public class ShipmentTests
 | `SendAsync(entity, pipeline, variables?)` | `POST OxQL/query` |
 | `QueryAsync(body)` | the same with a whole request body |
 | `BatchAsync(queries, maxTimeMs?)`, `BatchBodyAsync(body)` | `POST OxQL/batch` |
-| `ExplainAsync(body)` | `POST OxQL/explain` on the explain-enabled variant |
+| `ExplainAsync(body)` | `POST OxQL/explain` (a plain query or the envelope); explain is on by default, the explain variant only sets it explicitly |
 | `HealthAsync(shallow)`, `GetAsync`, `PostAsync` | health, and raw requests for malformed bodies |
 | `As(Org.B)`, `As(guid)`, `Anonymous()`, `Contract(1)`, `Contract(null)`, `WithHeader` | who the request is sent as; contract 2 is the default, `null` sends no contract header |
 | `MatchIdsAsync`, `MatchCountAsync`, `PullAsync` | a condition's ids or count; every row as the engine renders it |
@@ -219,6 +263,49 @@ health probe independently. `BatchCalls`, `HealthCalls`, `Requests`, `Mark()` an
 `BatchesSince(mark)` (with `Stage` and `Condition` on each request) show what the engine sent.
 The shared fleet's owner is frozen in `Ok`; a case that changes the mode, or counts owner calls,
 uses a private fleet's owner.
+
+**The scripted owner** (`Suites/Chain/ScriptedOwner`, mounted by `ScriptedOwnerFleet`) covers the
+keyed fetch's failure modes the chaos owner has no mode for. It answers as the chaos owner does,
+then hides widgets (`Hidden`), cuts each answer to `Cut` rows and says a next page exists, answers
+late (`Delay`) or with an error `Status`, and reports an engine `Version` and a `MaxBatchQueries`
+on its shallow health. Every batch it receives is kept (`Batches`, `Since(mark)`), so a case can
+assert what a forwarded query carried.
+
+## The 2.1 suites
+
+| suite | what it proves |
+|---|---|
+| `Rows/RowsVariantsTests` | polymorphic members on rows and in conditions, `is`, `flatten` |
+| `Joins/JoinsLookupMembersTests`, `JoinsResolveMembersTests` | lookup `sort`, `first`, `on`, `LOOKUP_TRUNCATED`; the resolve members and their refusals |
+| `Joins/JoinsKeyedFetchTests`, `JoinsOutcomesTests`, `JoinsRemoteVariablesTests` | the keyed fetch by keys, every outcome with `onMissing` and `strict`, variables substituted before sending |
+| `Joins/JoinsContinuationTests` | continued stages across services and in process, `forTarget`, `not_applicable`, `OWNER_NOT_CAPABLE` |
+| `Refusals/RefusalsRequestMembersTests` | `strict`, unknown top-level members, `keyedBy` refused on the public route |
+| `Chain/ChainOwnerFailureTests`, `ChainOwnerCapabilityTests` | against the scripted owner, each outside strict, under `onMissing: "report"` and under `strict`: unreachable and late owners, a cut answer (`hasNextPage`), the key budget, a negative cache entry a strict request reads past, an owner batch cap below this host's, the chain ceiling, what a forwarded query carries; an owner on 2.0 |
+| `Explain/ExplainNeverExecutesTests` | a command monitor on the engine's client sees no command without `include`, only `listIndexes` with `include: ["indexes"]`, and the `aggregate` when the same query runs |
+| `Explain/ExplainDescribePlanTests` | every envelope the Angular studio sends while a user builds A1–A5 (`Fixtures/describe-plan.json`, generated by the frontend's `describe-plan.spec.ts`) binds, and every part at another service is answered by its owner's internal explain, with no `REMOTE_UNCHECKED` left |
+| `Report/ReportRequestTests` | the studio's scenario requests (`Fixtures/scenarios/<id>.request.json`) equal the design's JSON, structurally |
+| `Report/ReportExplainTests`, `ReportQueryTests` | A1–A5 through `POST /oxql/explain` (valid, the executor, phase and owner of every join, continued parts checked) and through `POST /oxql/query` under `strict`, over organisation R; the contract-1 hint |
+| `Report/ReportFailureModesTests`, `ReportInvalidKeyTests` | duplicate keys in one grouped chunk, ambiguity through a plain non-key remote resolve, the existence probe, a flatten cut at its depth, the key budget over an in-process chain, the 5 000-row report page and `PAGE_INCOMPLETE`, `MAX_CONTINUED_STAGES_EXCEEDED`, `invalid_key` |
+
+## The fixture exporter
+
+`Report/ReportFixtureExport` writes the fixtures the Angular studio's acceptance specs replay: every
+report scenario's request sent to the fleet as the studio sends it, and the answers as the wire
+JSON the hosts answered. It is opt-in and skipped unless `OXQL_EXPORT_FIXTURES` names the fixtures
+directory:
+
+```bash
+OXQL_EXPORT_FIXTURES=<absolute path>/oxql-studio/fixtures \
+  dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report.ReportFixtureExportTests"
+```
+
+It reads the describe plan and the scenario requests from that directory, so a re-export follows the
+studio's current plan, and writes per scenario `scenarios/<id>.explain.json` (the request explained
+and every describe-plan envelope explained, each `{ status, answer }`) and
+`scenarios/<id>.query.json`; beside them `explain-invalid.json` (`valid: false`),
+`strict-missing.json`, `strict-ambiguous.json`, `contract1-hint.json` and `export.json` (the files
+and the flagged steps). The request files are input and are not rewritten. The output is indented
+with two spaces and LF, and holds nothing that changes between runs of the same engine.
 
 ## Conventions for adding cases
 

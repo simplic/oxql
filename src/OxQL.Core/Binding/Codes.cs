@@ -119,6 +119,9 @@ public static class Codes
     public const string QueryTimeout = "QUERY_TIMEOUT";
     public const string InternalError = "INTERNAL_ERROR";
 
+    /// <summary>A strict request without <c>cursor</c> or <c>offset</c> matches more rows than its page holds (422).</summary>
+    public const string PageIncomplete = "PAGE_INCOMPLETE";
+
     // compat
     public const string LegacyStageUnsupported = "LEGACY_STAGE_UNSUPPORTED";
 
@@ -146,4 +149,17 @@ public static class Codes
 
     /// <summary>A lookup had more children for some parent than its limit; only the first <c>limit</c> are in the rows.</summary>
     public const string LookupTruncated = "LOOKUP_TRUNCATED";
+
+    /// <summary>
+    /// A resolve with <c>onMissing: "report"</c> or <c>"refuse"</c> lost rows: the referenced record
+    /// does not exist (<c>not_found</c>), the key does not convert (<c>invalid_key</c>), or the owner
+    /// did not answer (<c>owner_unanswered</c>). An error under <c>onMissing: "refuse"</c>.
+    /// </summary>
+    public const string ResolveMissing = "RESOLVE_MISSING";
+
+    /// <summary>A resolve met a key more than one record holds; the alias holds the first by target order, then key.</summary>
+    public const string ResolveAmbiguous = "RESOLVE_AMBIGUOUS";
+
+    /// <summary>An <c>elements: "all"</c> resolve met a row with more targets than <c>MaxLookupLimit</c>; only the first are in the alias.</summary>
+    public const string ResolveTruncated = "RESOLVE_TRUNCATED";
 }

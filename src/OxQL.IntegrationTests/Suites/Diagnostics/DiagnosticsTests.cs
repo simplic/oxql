@@ -222,12 +222,13 @@ public class DiagnosticsTests
     [Fact]
     public void W12_the_engine_declares_exactly_the_diagnostics_that_are_provoked_live()
     {
-        // UNWIND_DEPTH_TRUNCATED is provoked in RowsVariantsTests, LOOKUP_TRUNCATED in JoinsLookupMembersTests, every other one in this suite.
+        // UNWIND_DEPTH_TRUNCATED is provoked in RowsVariantsTests, LOOKUP_TRUNCATED in JoinsLookupMembersTests, RESOLVE_MISSING,
+        // RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED in JoinsOutcomesTests, every other one in this suite.
         var provoked = new[]
         {
             "SORT_ON_ADDON", "REGEX_UNANCHORED", "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED",
             "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE", "RESOLVE_PARTIAL", "DECIMAL_TEXT_EXCLUDED",
-            "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED",
+            "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED",
         };
         var catalogue = typeof(OxQL.Core.Binding.Codes).GetFields()
             .Where(field => field.IsLiteral)
@@ -238,7 +239,7 @@ public class DiagnosticsTests
         // (RefusalsCatalogueTests checks that half), so these are the diagnostics.
         provoked.Should().BeSubsetOf(catalogue);
         RefusalsCatalogueTests.DiagnosticCodes.Should().BeEquivalentTo(provoked);
-        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 16 + provoked.Length,
-            "52 codes of the V table, 16 provoked outside it (7 in the catalogue suite, UNKNOWN_REQUEST_MEMBER in RefusalsRequestMembersTests, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY and NOT_CONTINUABLE in JoinsLookupMembersTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 10 diagnostics");
+        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 17 + provoked.Length,
+            "52 codes of the V table, 17 provoked outside it (7 in the catalogue suite, UNKNOWN_REQUEST_MEMBER in RefusalsRequestMembersTests, PAGE_INCOMPLETE in JoinsOutcomesTests, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY and NOT_CONTINUABLE in JoinsLookupMembersTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 13 diagnostics");
     }
 }

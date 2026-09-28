@@ -32,7 +32,7 @@ public class RefusalsCatalogueTests
     {
         "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED", "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE",
         "RESOLVE_PARTIAL", "SORT_ON_ADDON", "REGEX_UNANCHORED", "DECIMAL_TEXT_EXCLUDED",
-        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED",
+        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED",
     };
 
     /// <summary>Every error code and the case that provokes it outside the V table.</summary>
@@ -54,6 +54,7 @@ public class RefusalsCatalogueTests
         ["RESOLVE_TARGET_NOT_DECLARED"] = nameof(Joins.JoinsResolveMembersTests.A_target_that_is_not_a_target_of_the_reference_is_RESOLVE_TARGET_NOT_DECLARED),
         ["RESOLVE_PARENT_NOT_ITEM"] = nameof(Joins.JoinsResolveMembersTests.ParentAs_on_an_entity_target_is_RESOLVE_PARENT_NOT_ITEM),
         ["UNKNOWN_REQUEST_MEMBER"] = nameof(RefusalsRequestMembersTests.An_unknown_top_level_member_under_contract_2_is_UNKNOWN_REQUEST_MEMBER),
+        ["PAGE_INCOMPLETE"] = nameof(Joins.JoinsOutcomesTests.A_strict_report_page_that_holds_fewer_rows_than_match_is_PAGE_INCOMPLETE),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -90,10 +91,11 @@ public class RefusalsCatalogueTests
 
         // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED,
         // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
-        // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER.
-        catalogue.Should().HaveCount(78);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(68);
-        catalogue.Count(DiagnosticCodes.Contains).Should().Be(10);
+        // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
+        // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED.
+        catalogue.Should().HaveCount(82);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(69);
+        catalogue.Count(DiagnosticCodes.Contains).Should().Be(13);
     }
 
     [Fact]

@@ -22,4 +22,12 @@ public sealed record QueryValidationError
     [JsonPropertyName("path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Path { get; init; }
+
+    /// <summary>
+    /// Machine-readable details, when the error is a diagnostic refused under <c>strict</c> or
+    /// <c>onMissing: "refuse"</c>: the diagnostic's own <c>params</c> (DESIGN §3.4.3, §3.6).
+    /// </summary>
+    [JsonPropertyName("params")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, object?>? Params { get; init; }
 }

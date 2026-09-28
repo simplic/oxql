@@ -72,6 +72,173 @@ public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Ele
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
 public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
 
+/// <summary>What the outcomes of a page's resolves say: the diagnostics, and those of them the request refuses on.</summary>
+public sealed record OutcomeReport(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<Diagnostic> Refusing)
+{
+    /// <summary>A report with nothing to say.</summary>
+    public static readonly OutcomeReport Empty = new([], []);
+}
+
+/// <summary>
+/// The policy over per-row join outcomes (DESIGN §3.6, §3.4.3): the outcomes of a resolve, keyed
+/// or inline, become at most one diagnostic per stage and kind, and the diagnostics that lose
+/// data refuse the request under <c>strict</c> or <c>onMissing: "refuse"</c>.
+/// <list type="bullet">
+///   <item><c>RESOLVE_AMBIGUOUS</c>, always: the rows whose key more than one record holds;</item>
+///   <item><c>RESOLVE_MISSING</c>, under an effective <c>onMissing</c> of <c>report</c> or
+///   <c>refuse</c>: the rows whose outcome is <c>not_found</c>, <c>invalid_key</c> or
+///   <c>owner_unanswered</c>; refused under <c>refuse</c>;</item>
+///   <item><c>RESOLVE_TRUNCATED</c>, always: the rows whose <c>elements: "all"</c> alias holds only the first targets.</item>
+/// </list>
+/// The rows a diagnostic lists are capped at <c>MaxReportedRows</c>; <c>count</c> is every one.
+/// </summary>
+public static class OutcomePolicy
+{
+    /// <summary>The diagnostics a strict request refuses on (DESIGN §3.4.3); <c>RESOLVE_MISSING</c> refuses by its stage's effective <c>onMissing</c>.</summary>
+    public static readonly IReadOnlySet<string> StrictCodes = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Codes.ResolveAmbiguous, Codes.ResolveTimeout, Codes.ResolveUnreachable, Codes.ResolvePartial,
+        Codes.LookupTruncated, Codes.ResolveTruncated, Codes.UnwindDepthTruncated, Codes.PageIncomplete,
+    };
+
+    /// <summary>The wire name of an outcome, as <c>params.rows[].outcome</c> carries it.</summary>
+    public static string WireName(KeyedOutcome outcome) => outcome switch
+    {
+        KeyedOutcome.Resolved => "resolved",
+        KeyedOutcome.Ambiguous => "ambiguous",
+        KeyedOutcome.ReferenceNull => "reference_null",
+        KeyedOutcome.Excluded => "excluded",
+        KeyedOutcome.NotFound => "not_found",
+        KeyedOutcome.InvalidKey => "invalid_key",
+        KeyedOutcome.OwnerUnanswered => "owner_unanswered",
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
+    };
+
+    /// <summary>Whether an outcome is a missing reference: data loss that <c>onMissing</c> governs.</summary>
+    public static bool IsMissing(KeyedOutcome outcome) => outcome is KeyedOutcome.NotFound or KeyedOutcome.InvalidKey or KeyedOutcome.OwnerUnanswered;
+
+    /// <summary>
+    /// The diagnostics of the outcomes and truncations of <paramref name="bound"/>'s resolves, in
+    /// stage order, and those that refuse: a <c>RESOLVE_MISSING</c> of a stage whose effective
+    /// <c>onMissing</c> is <c>refuse</c>, and under <paramref name="strict"/> every other one.
+    /// </summary>
+    public static OutcomeReport Report(BoundPipeline bound, IEnumerable<KeyedRowOutcome> outcomes, IEnumerable<KeyedTruncation> truncations, bool strict, OxQLOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var byAlias = bound.Stages.OfType<BoundStage.Resolve>().ToDictionary(stage => stage.As, StringComparer.Ordinal);
+        var cap = Math.Max(1, options.Limits.MaxReportedRows);
+        var diagnostics = new List<Diagnostic>();
+        var refusing = new List<Diagnostic>();
+        var outcomeGroups = outcomes.GroupBy(outcome => (outcome.Stage, outcome.Alias)).ToDictionary(group => group.Key, group => group.ToList());
+        var truncationGroups = truncations.GroupBy(truncation => (truncation.Stage, truncation.Alias)).ToDictionary(group => group.Key, group => group.ToList());
+        var keys = outcomeGroups.Keys.Concat(truncationGroups.Keys).Distinct().OrderBy(key => key.Stage ?? int.MaxValue).ThenBy(key => key.Alias, StringComparer.Ordinal);
+
+        foreach (var key in keys)
+        {
+            byAlias.TryGetValue(key.Alias, out var stage);
+            var path = stage?.Reference.Wire;
+            var rows = outcomeGroups.GetValueOrDefault(key) ?? [];
+
+            var ambiguous = rows.Where(row => row.Outcome == KeyedOutcome.Ambiguous).ToList();
+
+            if (ambiguous.Count > 0)
+            {
+                var diagnostic = Rows(Codes.ResolveAmbiguous, key.Stage, key.Alias, path, ambiguous, cap,
+                    $"{ambiguous.Count} {Rows(ambiguous.Count)} a key that more than one record holds ('{key.Alias}'); the first by target order, then key, is taken.");
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+
+            var missing = rows.Where(row => IsMissing(row.Outcome)).ToList();
+            var onMissing = stage?.EffectiveOnMissing ?? ResolveOnMissing.Null;
+
+            if (missing.Count > 0 && onMissing != ResolveOnMissing.Null)
+            {
+                var diagnostic = Rows(Codes.ResolveMissing, key.Stage, key.Alias, path, missing, cap,
+                    missing.All(row => row.Outcome == KeyedOutcome.NotFound)
+                        ? $"{missing.Count} {Rows(missing.Count)} a record that does not exist ('{key.Alias}')."
+                        : $"{missing.Count} {Rows(missing.Count)} a record that does not exist, by a key that does not convert, or that its owner did not answer ('{key.Alias}').");
+
+                diagnostics.Add(diagnostic);
+
+                if (onMissing == ResolveOnMissing.Refuse)
+                    refusing.Add(diagnostic);
+            }
+
+            if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } truncated)
+            {
+                var limit = options.Limits.MaxLookupLimit;
+                var diagnostic = new Diagnostic
+                {
+                    Code = Codes.ResolveTruncated,
+                    Message = $"'{key.Alias}' holds the first {limit} targets of a row that references more ({truncated.Count} {(truncated.Count == 1 ? "row" : "rows")} of this page affected).",
+                    Stage = key.Stage,
+                    Path = path,
+                    Params = new Dictionary<string, object?> { ["alias"] = key.Alias, ["limit"] = limit, ["rows"] = truncated.Count },
+                };
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+        }
+
+        return new OutcomeReport(diagnostics, refusing);
+    }
+
+    /// <summary>
+    /// The diagnostics of a page that refuse under <paramref name="strict"/> by their code alone:
+    /// owner failures and truncations (the outcome diagnostics refuse through <see cref="Report"/>).
+    /// </summary>
+    public static IEnumerable<Diagnostic> StrictLosses(IEnumerable<Diagnostic> diagnostics, bool strict) =>
+        strict ? diagnostics.Where(diagnostic => StrictCodes.Contains(diagnostic.Code) && diagnostic.Code is not (Codes.ResolveAmbiguous or Codes.ResolveTruncated)) : [];
+
+    private static string Rows(int count) => count == 1 ? "row references" : "rows reference";
+
+    /// <summary>A diagnostic listing rows: <c>{ alias, count, truncated, rows: [{ row, element?, key, outcome }] }</c>, rows by row then element, at most <paramref name="cap"/>.</summary>
+    private static Diagnostic Rows(string code, int? stage, string alias, string? path, IReadOnlyList<KeyedRowOutcome> outcomes, int cap, string message)
+    {
+        var listed = outcomes
+            .OrderBy(outcome => outcome.Row)
+            .ThenBy(outcome => outcome.Element ?? -1)
+            .Take(cap)
+            .Select(outcome =>
+            {
+                var entry = new Dictionary<string, object?> { ["row"] = outcome.Row };
+
+                if (outcome.Element is { } element)
+                    entry["element"] = element;
+
+                entry["key"] = outcome.Key;
+                entry["outcome"] = WireName(outcome.Outcome);
+
+                return entry;
+            })
+            .ToList();
+
+        return new Diagnostic
+        {
+            Code = code,
+            Message = message,
+            Stage = stage,
+            Path = path,
+            Params = new Dictionary<string, object?>
+            {
+                ["alias"] = alias,
+                ["count"] = outcomes.Count,
+                ["truncated"] = outcomes.Count > cap,
+                ["rows"] = listed,
+            },
+        };
+    }
+}
+
 /// <summary>
 /// The one cross-record fetch through an owner (DESIGN §3.5.8), in two modes that share the
 /// owner query builder (<see cref="OwnerQueryBuilder"/>), the owner client, batching at

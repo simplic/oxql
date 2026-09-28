@@ -116,6 +116,31 @@ public sealed record Refusal
         Errors = inner ?? [new QueryValidationError { Code = code, Message = message, Stage = stage }],
     };
 
+    /// <summary>
+    /// A request that would lose data under <c>strict</c> or <c>onMissing: "refuse"</c> (DESIGN
+    /// §3.4.3, §3.6): 422, carrying every would-be diagnostic as an error with its code, message,
+    /// stage, path and params.
+    /// </summary>
+    public static Refusal DataLoss(IReadOnlyList<Diagnostic> losses)
+    {
+        ArgumentNullException.ThrowIfNull(losses);
+
+        return new Refusal
+        {
+            Type = "not_executable",
+            Title = "The query would lose data, which strict or onMissing: refuse does not allow.",
+            Status = 422,
+            Errors = losses.Select(loss => new QueryValidationError
+            {
+                Code = loss.Code,
+                Message = loss.Message,
+                Stage = loss.Stage,
+                Path = loss.Path,
+                Params = loss.Params,
+            }).ToList(),
+        };
+    }
+
     /// <summary>The aggregate exceeded its time budget: 504.</summary>
     public static Refusal Timeout(string message) => new()
     {

@@ -5,6 +5,7 @@ using OxQL.Core.Cursor;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
+using OxQL.Mongo.Resolve;
 
 namespace OxQL.Mongo;
 
@@ -24,6 +25,13 @@ public sealed record FlattenProbe(string Field, int Stage, string Path, int Dept
 /// alias. <paramref name="Stage"/> and <paramref name="Alias"/> are the caller's, for the diagnostic.
 /// </summary>
 public sealed record LookupFlag(string Field, int Stage, string Alias, int Limit);
+
+/// <summary>
+/// An inline resolve whose missing references the executor reads off the page rows (DESIGN §3.6):
+/// a row whose reference at <paramref name="ReferenceStorage"/> holds a value and whose alias is
+/// null is <c>not_found</c>. The compiler keeps the reference in storage against projections.
+/// </summary>
+public sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage);
 
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
 public sealed record CompiledQuery
@@ -84,6 +92,9 @@ public sealed record CompiledQuery
 
     /// <summary>The truncation flags of the lookups that return an array, in stage order; the executor turns a set flag into <c>LOOKUP_TRUNCATED</c>.</summary>
     public IReadOnlyList<LookupFlag> LookupFlags { get; init; } = [];
+
+    /// <summary>The inline resolves whose effective <c>onMissing</c> is not <c>null</c> and whose alias the row shows; the executor reads their missing references off the page.</summary>
+    public IReadOnlyList<InlineProbe> InlineProbes { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
@@ -225,6 +236,11 @@ public static class MongoCompiler
         // does; the wire row follows the shape and leaves it out when it was not asked for.
         var lateJoinKeys = new List<string>();
 
+        // The reference of an inline resolve whose missing rows are reported (DESIGN §3.6) is read
+        // off the page rows as well, so it survives every projection in storage the same way.
+        var inlineProbes = new List<InlineProbe>();
+        var probeKeys = new List<string>();
+
         for (var index = 0; index < bound.Stages.Count; index++)
         {
             var stage = bound.Stages[index];
@@ -278,10 +294,12 @@ public static class MongoCompiler
                 case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
                     lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
+                    Probe(bound, index, resolve, inlineProbes, probeKeys);
                     break;
 
                 case BoundStage.Resolve resolve:
                     emitted.AddRange(LocalResolve(resolve, semiJoins, collated));
+                    Probe(bound, index, resolve, inlineProbes, probeKeys);
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -317,7 +335,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, keyed, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -417,7 +435,61 @@ public static class MongoCompiler
             Collation = collated ? CollationDocument(options.Collation ?? new CollationOptions()) : null,
             FlattenProbes = probes,
             LookupFlags = flags,
+            InlineProbes = inlineProbes,
         };
+    }
+
+    /// <summary>Registers an inline resolve's missing-reference probe when its effective <c>onMissing</c> asks for one and the row shows its alias.</summary>
+    private static void Probe(BoundPipeline bound, int index, BoundStage.Resolve resolve, List<InlineProbe> probes, List<string> keys)
+    {
+        if (resolve.EffectiveOnMissing == ResolveOnMissing.Null || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
+            return;
+
+        probes.Add(new InlineProbe(index, resolve, storage));
+
+        if (!keys.Contains(storage, StringComparer.Ordinal))
+            keys.Add(storage);
+    }
+
+    /// <summary>
+    /// The missing references of the page's inline resolves (DESIGN §3.6): per probe, every row
+    /// whose reference holds a value and whose alias is null or absent is <c>not_found</c>, keyed
+    /// by the reference's wire value. A null reference is <c>reference_null</c>, which is not
+    /// reported.
+    /// </summary>
+    public static IReadOnlyList<KeyedRowOutcome> InlineOutcomes(CompiledQuery compiled, IReadOnlyList<BsonDocument> page)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+        ArgumentNullException.ThrowIfNull(page);
+
+        var outcomes = new List<KeyedRowOutcome>();
+
+        foreach (var probe in compiled.InlineProbes)
+        {
+            var reference = probe.Resolve.Reference;
+
+            for (var row = 0; row < page.Count; row++)
+            {
+                var value = KeyedFetch.ValueAt(page[row], probe.ReferenceStorage);
+
+                if (value is null || value.IsBsonNull || value.IsBsonUndefined)
+                    continue;
+
+                if (KeyedFetch.ValueAt(page[row], probe.Resolve.As) is { IsBsonNull: false, IsBsonUndefined: false })
+                    continue;
+
+                var key = WireEncoder.EncodeScalar(value, reference.LeafKind, reference.Leaf) switch
+                {
+                    null => null,
+                    System.Text.Json.Nodes.JsonValue scalar => scalar.ToString(),
+                    var other => other.ToJsonString(),
+                };
+
+                outcomes.Add(new KeyedRowOutcome(probe.Stage, probe.Resolve.As, row, null, key, KeyedOutcome.NotFound));
+            }
+        }
+
+        return outcomes;
     }
 
     /// <summary>

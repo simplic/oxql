@@ -128,12 +128,39 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var hasNextPage = rows.Count > compiled.Limit;
         var page = hasNextPage ? rows.Take(compiled.Limit).ToList() : rows;
+        var strict = context.Contract == 2 && request.IsStrict;
+        var losses = new List<Diagnostic>();
 
         // A flattening unwind marks the rows whose collection nests deeper than it descends.
         diagnostics.AddRange(MongoCompiler.DepthTruncations(compiled, page));
 
         // A lookup marks the rows with a parent over its limit; the marks leave the rows here.
         diagnostics.AddRange(MongoCompiler.LookupTruncations(compiled, page));
+
+        // An inline resolve that reports its missing rows reads them off the page (DESIGN §3.6).
+        var inline = OutcomePolicy.Report(bound, MongoCompiler.InlineOutcomes(compiled, page), [], strict, options);
+
+        diagnostics.AddRange(inline.Diagnostics);
+        losses.AddRange(OutcomePolicy.StrictLosses(diagnostics, strict));
+        losses.AddRange(inline.Refusing);
+
+        // A strict request that neither continues nor jumps reads every matching row in its one
+        // page, or refuses (DESIGN §3.4.3).
+        if (strict && hasNextPage && IsReportPage(request))
+        {
+            var max = Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize);
+
+            losses.Add(new Diagnostic
+            {
+                Code = Codes.PageIncomplete,
+                Message = $"The query matches more rows than one page holds ({compiled.Limit}); narrow the root or raise the page limit up to {max}.",
+                Params = new Dictionary<string, object?> { ["limit"] = compiled.Limit, ["max"] = max },
+            });
+        }
+
+        // What the page already loses refuses before any owner is asked.
+        if (losses.Count > 0)
+            return Refuse(compiled, timer, context, losses, resolveCalls, cacheHits);
 
         // Keyed resolves run over the trimmed page, remote targets at their owners and local ones
         // through this host's SelfOwner; an owner that does not answer yields null rows and a
@@ -155,6 +182,15 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             resolved = resolution.Rows;
             diagnostics.AddRange(resolution.Diagnostics);
+
+            var report = OutcomePolicy.Report(bound, resolution.Outcomes, resolution.Truncations, strict, options);
+
+            diagnostics.AddRange(report.Diagnostics);
+            losses.AddRange(OutcomePolicy.StrictLosses(resolution.Diagnostics, strict));
+            losses.AddRange(report.Refusing);
+
+            if (losses.Count > 0)
+                return Refuse(compiled, timer, context, losses, resolveCalls, cacheHits);
         }
 
         long? totalCount = null;
@@ -218,6 +254,21 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         return QueryOutcome.Of(result);
     }
+
+    /// <summary>The 422 of a request that would lose data (DESIGN §3.4.3, §3.6), logged like any refusal.</summary>
+    private QueryOutcome Refuse(CompiledQuery compiled, Stopwatch timer, RequestContext context, IReadOnlyList<Diagnostic> losses, int resolveCalls, int cacheHits)
+    {
+        var refusal = Refusal.DataLoss(losses);
+
+        Log(compiled, timer, 0, false, false, context, refusal, resolveCalls, cacheHits);
+
+        return QueryOutcome.Of(refusal);
+    }
+
+    /// <summary>Whether the request's page neither continues (<c>cursor</c>) nor jumps (<c>offset</c>): the report page of a strict request.</summary>
+    private static bool IsReportPage(QueryRequest request) =>
+        request.Pipeline.Select(stage => stage.Page).FirstOrDefault(page => page is not null) is not { } page
+        || (page.Cursor is null && page.Offset is null);
 
     /// <summary>
     /// Reads the failure of an aggregate nobody awaits any more, so it ends here instead of

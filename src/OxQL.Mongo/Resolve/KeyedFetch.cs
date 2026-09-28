@@ -371,6 +371,8 @@ public sealed class KeyedFetch
         // again on every block of the same filter.
         var pending = new List<SemiJoinSlot>();
 
+        await ReadOwnersAsync(slots.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))), remaining, cancellationToken).ConfigureAwait(false);
+
         foreach (var slot in slots)
         {
             if (cache.TryGetKeys(CacheKeyOf(slot, organisation, pageSize), out var cached))
@@ -607,6 +609,10 @@ public sealed class KeyedFetch
         var organisation = context.Organisation!.Value;
         var diagnostics = new List<Diagnostic>();
         var budget = new KeyBudget(options.Limits.MaxResolveKeys);
+
+        // The owners' facts gate and size what is sent them, so they are read before the plan.
+        await ReadOwnersAsync(compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), remaining, cancellationToken).ConfigureAwait(false);
         var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
         var cacheHits = targets.Sum(target => target.CacheHits);
@@ -2147,6 +2153,30 @@ public sealed class KeyedFetch
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Asks the client for each owner's facts before anything is sized or gated by them (RS-4): a
+    /// client that has not read an owner's shallow health yet may read it now. Bounded by the time
+    /// left; a client that does not answer in time leaves the facts unknown, as they were.
+    /// </summary>
+    private async Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        if (client is not IRemoteOwnerInfo owners)
+            return;
+
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        bounded.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+
+        try
+        {
+            await Task.WhenAll(services.Distinct(StringComparer.Ordinal).Select(service => owners.OwnerOfAsync(service, bounded.Token).AsTask())).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Facts are an optimisation of what is sent; without them the owner answers or refuses.
+        }
     }
 
     /// <summary>Whether the owner of <paramref name="service"/> is known, by its shallow health, to run an engine before 2.1.</summary>

@@ -17,6 +17,27 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 
     public RemoteOwnerInfo? OwnerOf(string serviceKey) => Owners.GetValueOrDefault(serviceKey);
 
+    /// <summary>What an owner's shallow health says when first asked before a batch; null: nothing learned.</summary>
+    public Func<string, RemoteOwnerInfo?>? Probe { get; set; }
+
+    /// <summary>The services asked for their facts before a batch.</summary>
+    public List<string> Probed { get; } = [];
+
+    public ValueTask<RemoteOwnerInfo?> OwnerOfAsync(string serviceKey, CancellationToken cancellationToken)
+    {
+        Probed.Add(serviceKey);
+
+        if (!Owners.ContainsKey(serviceKey) && Probe?.Invoke(serviceKey) is { } learned)
+            Owners[serviceKey] = learned;
+
+        return ValueTask.FromResult(OwnerOf(serviceKey));
+    }
+
+    /// <summary>The API version each service is routed to.</summary>
+    public Dictionary<string, string> ApiVersions { get; } = new(StringComparer.Ordinal);
+
+    public string? ApiVersionOf(string serviceKey) => ApiVersions.GetValueOrDefault(serviceKey);
+
     /// <summary>What one query is answered with.</summary>
     public abstract record Answer
     {

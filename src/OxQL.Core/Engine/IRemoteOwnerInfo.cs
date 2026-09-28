@@ -34,4 +34,22 @@ public interface IRemoteOwnerInfo
 {
     /// <summary>What is known of the owner behind <paramref name="serviceKey"/>, or null.</summary>
     RemoteOwnerInfo? OwnerOf(string serviceKey);
+
+    /// <summary>
+    /// What is known of the owner behind <paramref name="serviceKey"/> before this host sends it a
+    /// batch: a client that has not read the owner's shallow health yet, or holds facts older than
+    /// it trusts, may read it now (bounded by its own health budget and by
+    /// <paramref name="cancellationToken"/>), so the first batch is sized and gated by the owner's own
+    /// facts rather than only after someone called the health route. The default answers
+    /// <see cref="OwnerOf"/>.
+    /// </summary>
+    ValueTask<RemoteOwnerInfo?> OwnerOfAsync(string serviceKey, CancellationToken cancellationToken) =>
+        ValueTask.FromResult(OwnerOf(serviceKey));
+
+    /// <summary>
+    /// The API version this host routes <paramref name="serviceKey"/>'s internal calls to (its
+    /// <c>InternalApiVersions</c> entry, <c>v1</c> by default), which explain names in an owner's
+    /// <c>route.apiVersion</c>; null when the client does not know (the default).
+    /// </summary>
+    string? ApiVersionOf(string serviceKey) => null;
 }

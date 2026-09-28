@@ -537,12 +537,14 @@ public class ExplainDescribeTests
     }
 
     [Fact]
-    public void The_cache_key_holds_the_organisation_the_service_and_the_bodys_hash()
+    public void The_cache_key_holds_the_organisation_the_user_the_service_and_the_bodys_hash()
     {
         var request = new ExplainRequest { Query = BindHost.Request("crm.contact", "[]") };
         var key = ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request);
 
-        key.Should().StartWith(BindHost.Organisation.ToString("N") + "|crm|");
+        key.Should().StartWith(BindHost.Organisation.ToString("N") + "|").And.Contain("|crm|");
+        ExplainForwardCache.KeyOf(BindHost.Organisation, "user-a", "crm", request).Should().NotBe(ExplainForwardCache.KeyOf(BindHost.Organisation, "user-b", "crm", request),
+            "an owner may refuse one user what it answers another (RE-11)");
         ExplainForwardCache.KeyOf(Guid.NewGuid(), "crm", request).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, "hr", request).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request with { Remote = ExplainRequest.RemoteSkip }).Should().NotBe(key);

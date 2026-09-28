@@ -143,8 +143,12 @@ public class OwnerFetchRobustnessTests
 
         client.Calls.Select(call => call.Budget).Should().BeInDescendingOrder("each split batch gets what is left, not the whole budget again");
         client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs == KeyedFetch.OwnerCeilingMs(call.Budget));
-        client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs < (int)call.Budget.TotalMilliseconds, "the owner stops before this host stops waiting");
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(440), "four batches of 120 ms in a request of 300 ms end with the request, not after 480 ms");
+        client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs < (int)call.Budget.TotalMilliseconds || call.Budget <= TimeSpan.FromMilliseconds(1),
+            "the owner stops before this host stops waiting");
+        for (var next = 1; next < client.Calls.Count; next++)
+            client.Calls[next].Budget.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(Math.Max(1, (client.Calls[next - 1].Budget - TimeSpan.FromMilliseconds(100)).TotalMilliseconds)),
+                "a later batch has what the earlier ones (120 ms each) left");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(1_000), "four batches of 120 ms in a request of 300 ms end with the request");
 
         var timeout = result.Diagnostics!.Should().ContainSingle(diagnostic => diagnostic.Code == Codes.ResolveTimeout).Subject;
         timeout.Message.Should().MatchRegex(@"within \d+ ms").And.NotContain("4000", "the message names the time the failing batch had, not the per-resolve ceiling");

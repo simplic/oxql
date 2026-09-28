@@ -430,7 +430,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// follows, the owner and the owner queries of a keyed or continued stage (keys elided), the stages
     /// continued under a keyed stage; and the join-placement note of each join run on this host.
     /// </summary>
-    private static IReadOnlyList<ExplainStep> Placed(IReadOnlyList<ExplainStep> steps, BoundPipeline bound, IReadOnlyList<int?> indexes, bool strict, List<Diagnostic> notes)
+    private IReadOnlyList<ExplainStep> Placed(IReadOnlyList<ExplainStep> steps, BoundPipeline bound, IReadOnlyList<int?> indexes, bool strict, List<Diagnostic> notes)
     {
         var placed = steps.ToDictionary(step => step.Index);
         var owners = new Dictionary<string, IReadOnlyList<ExplainedOwnerQuery>>(StringComparer.Ordinal);
@@ -516,10 +516,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// The owner block of a keyed or continued stage: the first remote target's owner (else the first
     /// target's) with its route and query, and every target's owner query, service, continued stages
     /// and the continued stages that are <c>not_applicable</c> to its rows. The engine knows an owner's
-    /// service, which names its API (<c>&lt;service&gt;-api</c>), but not the version the host routes
-    /// to, which stays null.
+    /// service, which names its API (<c>&lt;service&gt;-api</c>); the version the host routes to is the
+    /// remote client's (<see cref="IRemoteOwnerInfo.ApiVersionOf"/>), null when it does not say.
     /// </summary>
-    private static JsonObject OwnerOf(IReadOnlyList<ExplainedOwnerQuery> explained)
+    private JsonObject OwnerOf(IReadOnlyList<ExplainedOwnerQuery> explained)
     {
         var first = explained.FirstOrDefault(owner => owner.Remote) ?? explained[0];
 
@@ -542,7 +542,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         };
     }
 
-    private static JsonObject Route(string service) => new() { ["apiName"] = service + "-api", ["apiVersion"] = null };
+    private JsonObject Route(string service) => new() { ["apiName"] = service + "-api", ["apiVersion"] = (remote as IRemoteOwnerInfo)?.ApiVersionOf(service) };
 
     /// <summary>An owner query in wire form, the page's size elided with its keys: it is the number of keys times the rows per key.</summary>
     private static JsonNode QueryOf(ExplainedOwnerQuery owner)
@@ -779,6 +779,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Version = EngineCapabilities.Version,
             Capabilities = EngineCapabilities.Of(remoteClient, options.Compat.Enabled, options.Explain.Enabled),
         },
+        SchemaRevision = models.SchemaRevision,
         Errors = errors,
         Diagnostics = diagnostics,
         Notes = [],

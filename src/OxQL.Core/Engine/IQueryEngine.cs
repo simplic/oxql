@@ -25,6 +25,12 @@ public interface IEntityModelProvider
 {
     /// <summary>The model. Throws when the host has not built one yet.</summary>
     EntityModel Model { get; }
+
+    /// <summary>
+    /// The revision of the schema document the host publishes for the model, which explain answers
+    /// in <c>schemaRevision</c> (DESIGN §4.3); null when the host publishes none (the default).
+    /// </summary>
+    string? SchemaRevision => null;
 }
 
 /// <summary>A provider over a model the host built and handed over.</summary>

@@ -13,10 +13,11 @@ namespace OxQL.Mongo.Explain;
 
 /// <summary>
 /// What owners' internal explain answered (DESIGN §4.1): each answer kept 30 seconds by organisation,
-/// owner service and the hash of the forwarded body with its variables substituted, so the studio's
-/// debounced explains of one query do not ask the owner again. The owner's schema revision is not
-/// part of the key, since the origin learns it only from the answer; the 30 seconds bound how long a
-/// changed owner model is answered from before. Only answers are kept, never a failed call.
+/// user, owner service and the hash of the forwarded body with its variables substituted, so the
+/// studio's debounced explains of one query do not ask the owner again and no user is answered from
+/// another's call (an owner may refuse one user what it answers another). The owner's schema revision
+/// is not part of the key, since the origin learns it only from the answer; the 30 seconds bound how
+/// long a changed owner model is answered from before. Only answers are kept, never a failed call.
 /// </summary>
 public sealed class ExplainForwardCache : IDisposable
 {
@@ -36,12 +37,16 @@ public sealed class ExplainForwardCache : IDisposable
         answers = new MemoryCache(new MemoryCacheOptions { SizeLimit = MaxEntries });
     }
 
-    /// <summary>The key of one forwarded body.</summary>
-    public static string KeyOf(Guid organisation, string service, ExplainRequest request)
+    /// <summary>The key of one forwarded body, for no user in particular.</summary>
+    public static string KeyOf(Guid organisation, string service, ExplainRequest request) => KeyOf(organisation, null, service, request);
+
+    /// <summary>The key of one forwarded body for one user of an organisation.</summary>
+    public static string KeyOf(Guid organisation, string? user, string service, ExplainRequest request)
     {
         var body = JsonSerializer.SerializeToUtf8Bytes(request, OxQLJson.Wire);
+        var who = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(user ?? "")))[..16];
 
-        return $"{organisation:N}|{service}|{Convert.ToHexString(SHA256.HashData(body))}";
+        return $"{organisation:N}|{who}|{service}|{Convert.ToHexString(SHA256.HashData(body))}";
     }
 
     /// <summary>A kept answer, cloned, or null.</summary>
@@ -295,7 +300,7 @@ public sealed class RemoteExplain : IDescribeOwners
         if (client is null)
             return (null, Unsupported);
 
-        var key = ExplainForwardCache.KeyOf(context.Organisation ?? Guid.Empty, service, request);
+        var key = ExplainForwardCache.KeyOf(context.Organisation ?? Guid.Empty, context.UserId, service, request);
 
         if (cache.Get(key) is { } kept)
             return (kept, null);

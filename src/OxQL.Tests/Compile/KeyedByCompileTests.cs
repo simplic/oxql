@@ -58,14 +58,16 @@ public class KeyedByCompileTests
         var bound = await BoundAsync(Request("rc.customer", """{ "path": "code", "keys": ["A", "B"], "perKey": 2 }""",
             """[{ "match": { "name": { "eq": "x" } } }, { "project": { "name": 1, "code": 1 } }, { "page": { "limit": 4 } }]"""), Internal());
 
-        StagesOf(bound).Should().Equal("$match", "$match", "$match", "$setWindowFields", "$match", "$unset", "$project", "$sort", "$limit");
+        // The filter folds case, so the aggregate is collated and the string keys are compared again byte for byte (RE-12).
+        StagesOf(bound).Should().Equal("$match", "$match", "$match", "$match", "$setWindowFields", "$match", "$unset", "$project", "$sort", "$limit");
 
         var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)).PageStages;
 
         stages[1]["$match"]["Code"]["$in"].AsBsonArray.Select(key => key.AsString).Should().Equal("A", "B");
-        stages[3]["$setWindowFields"]["partitionBy"].AsString.Should().Be("$Code");
-        stages[3]["$setWindowFields"]["sortBy"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("_id", 1), "the first row of a key is the one with the lowest record key");
-        stages[4]["$match"]["__oxRank"]["$lte"].AsInt32.Should().Be(2);
+        stages[2]["$match"].AsBsonDocument.Names.Should().Equal("$expr");
+        stages[4]["$setWindowFields"]["partitionBy"].AsString.Should().Be("$Code");
+        stages[4]["$setWindowFields"]["sortBy"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("_id", 1), "the first row of a key is the one with the lowest record key");
+        stages[5]["$match"]["__oxRank"]["$lte"].AsInt32.Should().Be(2);
         JsonNode.Parse(bound.Canonical)!["keyedBy"]!["path"]!.GetValue<string>().Should().Be("Code");
     }
 

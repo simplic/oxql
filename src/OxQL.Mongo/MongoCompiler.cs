@@ -241,7 +241,7 @@ public static class MongoCompiler
 
         if (bound.KeyedBy is { } prologueOf)
         {
-            var prologue = KeyedByPrologue(prologueOf).ToList();
+            var prologue = KeyedByPrologue(prologueOf, collated).ToList();
 
             stages.AddRange(prologue);
             countStages?.AddRange(prologue);
@@ -1018,18 +1018,55 @@ public static class MongoCompiler
     /// the rows holding a key, and for an item target each matching element under its alias, one
     /// row per element.
     /// </summary>
-    private static IEnumerable<BsonDocument> KeyedByPrologue(BoundKeyedBy keyedBy)
+    private static IEnumerable<BsonDocument> KeyedByPrologue(BoundKeyedBy keyedBy, bool collated)
     {
         var keys = new BsonArray(keyedBy.Keys);
+
+        // Inside a collated aggregate the $in folds case like any comparison, so string keys are
+        // compared again byte for byte on the one value per row, as a join's key is.
+        var exact = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString);
 
         yield return new BsonDocument("$match", new BsonDocument(keyedBy.Path.Storage!, new BsonDocument("$in", keys)));
 
         if (keyedBy.ItemStorage is null)
+        {
+            if (exact)
+                yield return ExactKeysMatch(keyedBy.Path.Storage!, keys);
+
             yield break;
+        }
 
         yield return new BsonDocument("$set", new BsonDocument(keyedBy.ElementAlias!, "$" + keyedBy.ItemStorage));
         yield return new BsonDocument("$unwind", "$" + keyedBy.ElementAlias);
         yield return new BsonDocument("$match", new BsonDocument(keyedBy.PartitionStorage, new BsonDocument("$in", keys)));
+
+        if (exact)
+            yield return ExactKeysMatch(keyedBy.PartitionStorage, keys);
+    }
+
+    /// <summary>
+    /// The match that keeps a key lookup on strings exact inside a collated aggregate: the stored
+    /// string equals one of the keys byte for byte, with the byte functions a collation does not reach.
+    /// </summary>
+    private static BsonDocument ExactKeysMatch(string storage, BsonArray keys)
+    {
+        var field = "$" + storage;
+        var key = "$$" + KeyVariable;
+
+        return new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$anyElementTrue", new BsonArray
+        {
+            new BsonDocument("$map", new BsonDocument
+            {
+                ["input"] = new BsonDocument("$literal", keys),
+                ["as"] = KeyVariable,
+                ["in"] = new BsonDocument("$and", new BsonArray
+                {
+                    new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", field), "string" }),
+                    new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { field, key }), 0 }),
+                    new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", field), new BsonDocument("$strLenBytes", key) }),
+                }),
+            }),
+        })));
     }
 
     /// <summary>

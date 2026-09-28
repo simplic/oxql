@@ -60,10 +60,23 @@ public static class OwnerQueryBuilder
         var element = item is null ? "" : BoundKeyedBy.Element + ".";
         var pipeline = new List<PipelineStage>();
 
+        // A key is an id and compares exactly: this host's own string target is asked so, and never
+        // folds a key into another's record. A remote owner's field kind is not known here, and it
+        // may refuse the option on a member that holds no text; this host keys its answer rows
+        // exactly again either way.
+        var exact = !target.IsRemote && target.Entity?.Path(field)?.LeafKind == Kind.String;
+
         if (perKey is null)
             pipeline.Add(new PipelineStage
             {
-                Match = new MatchStage { Condition = new FilterCondition { Path = field, Op = "in", Value = JsonSerializer.SerializeToElement(keys) } },
+                Match = new MatchStage
+                {
+                    Condition = new FilterCondition
+                    {
+                        Path = field, Op = "in", Value = JsonSerializer.SerializeToElement(keys),
+                        Options = exact ? new FilterConditionOptions { CaseSensitive = true } : null,
+                    },
+                },
                 Keys = ["match"],
             });
 

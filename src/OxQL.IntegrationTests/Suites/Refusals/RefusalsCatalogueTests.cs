@@ -32,7 +32,7 @@ public class RefusalsCatalogueTests
     {
         "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED", "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE",
         "RESOLVE_PARTIAL", "SORT_ON_ADDON", "REGEX_UNANCHORED", "DECIMAL_TEXT_EXCLUDED",
-        "UNWIND_DEPTH_TRUNCATED",
+        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED",
     };
 
     /// <summary>Every error code and the case that provokes it outside the V table.</summary>
@@ -48,6 +48,8 @@ public class RefusalsCatalogueTests
         ["RESOLVE_NOT_FILTERABLE"] = nameof(RefusalsServerTests.V35_a_condition_on_the_remote_alias_itself_is_refused_with_RESOLVE_NOT_FILTERABLE_before_the_owner_is_called),
         ["UNKNOWN_VARIANT"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
         ["FLATTEN_NOT_RECURSIVE"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
+        ["LOOKUP_ON_NOT_ENTITY"] = nameof(Joins.JoinsLookupMembersTests.On_a_lookup_array_is_LOOKUP_ON_NOT_ENTITY),
+        ["NOT_CONTINUABLE"] = nameof(Joins.JoinsLookupMembersTests.On_a_remote_alias_is_NOT_CONTINUABLE),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -82,10 +84,11 @@ public class RefusalsCatalogueTests
     {
         var catalogue = Catalogue();
 
-        // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED.
-        catalogue.Should().HaveCount(71);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(62);
-        catalogue.Count(DiagnosticCodes.Contains).Should().Be(9);
+        // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED,
+        // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED.
+        catalogue.Should().HaveCount(74);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(64);
+        catalogue.Count(DiagnosticCodes.Contains).Should().Be(10);
     }
 
     [Fact]

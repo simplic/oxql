@@ -672,19 +672,61 @@ public sealed class Binder
 
         private async Task BindLookupAsync(LookupStage lookup, int index)
         {
-            if (lookup.Unknown.Count > 0)
+            // sort, first, on and forTarget are contract 2 members; under contract 1 they are
+            // members the stage does not have, as is any of them written with the wrong kind.
+            var contract2Members = new (string Name, bool Written)[]
+            {
+                ("sort", lookup.Sort is not null), ("first", lookup.First is not null), ("on", lookup.On is not null), ("forTarget", lookup.ForTarget is not null),
+            };
+            IReadOnlyList<string> unknown = contract2
+                ? lookup.Unknown
+                : [.. lookup.Unknown, .. contract2Members.Where(member => member.Written).Select(member => member.Name), .. lookup.Malformed];
+
+            if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", lookup.Unknown)}' is not a member of lookup; a lookup carries from, path, as, select, filter, limit.", index, null));
+                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget" : "from, path, as, select, filter, limit")}.", index, null));
+                return;
+            }
+
+            if (lookup.Malformed.Count > 0)
+            {
+                foreach (var name in lookup.Malformed)
+                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    {
+                        "first" => "A lookup's 'first' is true or false.",
+                        "sort" => "A lookup's 'sort' is an array of sort entries: [{\"path\": \"asc\"}, …].",
+                        _ => $"A lookup's '{name}' is a string.",
+                    }, index, null));
                 return;
             }
 
             if (++lookups > options.Limits.MaxLookupStages)
                 errors.Add(Error(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null));
 
-            if (shape.Grouped)
+            // The parent: the implicit root, or the entity row the alias 'on' names.
+            var parent = entity;
+            var parentPrefix = "";
+
+            if (lookup.On is null)
             {
-                errors.Add(Error(Codes.UnknownPath, "The shape after a group has no key to join on.", index, null));
+                if (shape.Grouped)
+                {
+                    errors.Add(Error(Codes.UnknownPath, "The shape after a group has no key to join on.", index, null));
+                    return;
+                }
+            }
+            else if (!BindLookupParent(lookup.On, index, out parent, out parentPrefix))
+            {
+                return;
+            }
+
+            // forTarget picks one target of a union alias a stage continues under; no alias this
+            // host binds a lookup on is one.
+            if (lookup.ForTarget is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable,
+                    $"'forTarget' applies to a stage continued under a remote alias with several targets; {(lookup.On is null ? "this lookup joins on the entity itself" : $"'{lookup.On}' is a row of this host")}.", index, null));
                 return;
             }
 
@@ -720,18 +762,25 @@ public sealed class Binder
 
             var childPath = reference.Path!;
 
-            if (childPath.Reference() is not { } declared || declared.TargetEntity != entity.Id)
+            if (childPath.Reference() is not { } declared || declared.TargetEntity != parent.Id)
             {
-                errors.Add(Error(Codes.LookupNotDeclared, $"'{child.Id}#{lookup.Path}' does not declare a reference to '{entity.Id}'.", index, lookup.Path));
+                errors.Add(Error(Codes.LookupNotDeclared, $"'{child.Id}#{lookup.Path}' does not declare a reference to '{parent.Id}'.", index, lookup.Path));
                 return;
             }
 
             var targetField = declared.TargetField;
-            var parentKey = entity.Path(targetField);
+            var parentKey = parent.Path(targetField);
 
             if (parentKey is null || !parentKey.Stored)
             {
-                errors.Add(Error(Codes.LookupNotDeclared, $"The reference targets '{entity.Id}#{targetField}', which is not stored.", index, lookup.Path));
+                errors.Add(Error(Codes.LookupNotDeclared, $"The reference targets '{parent.Id}#{targetField}', which is not stored.", index, lookup.Path));
+                return;
+            }
+
+            // A projection that kept members of the parent alias but not its key left nothing to join on.
+            if (lookup.On is not null && !shape.IsVisible(lookup.On + "." + parentKey.Wire))
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{lookup.On}.{parentKey.Wire}' was removed by the projection; the lookup joins on it.", index, lookup.On));
                 return;
             }
 
@@ -745,13 +794,83 @@ public sealed class Binder
 
             var select = BindSelect(lookup.Select, child, childShape, index);
             var filter = lookup.Filter?.Condition is null ? null : BindCondition(lookup.Filter.Condition, childShape, index);
-            var limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
+            var sortFields = lookup.Sort is { Count: > 0 } entries ? BindSortEntries(entries, childShape, index) : [];
+            var first = lookup.First is true;
+            int limit;
 
-            if (limit < 1 || limit > options.Limits.MaxLookupLimit)
-                errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
+            if (first)
+            {
+                // One child is what first takes; a limit would say something else.
+                if (lookup.Limit is not null)
+                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
 
-            stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKey.Storage!, childPath.Storage!));
-            shape = shape.WithRoot(alias, new ShapeNode.Array(child, alias));
+                limit = 1;
+            }
+            else
+            {
+                limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
+
+                if (limit < 1 || limit > options.Limits.MaxLookupLimit)
+                    errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
+            }
+
+            var parentKeyStorage = parentPrefix.Length == 0 ? parentKey.Storage! : parentPrefix + "." + parentKey.Storage;
+
+            stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKeyStorage, childPath.Storage!,
+                sortFields, first, lookup.On, index));
+            shape = shape.WithRoot(alias, first ? new ShapeNode.Entity(child, alias) : new ShapeNode.Array(child, alias));
+        }
+
+        /// <summary>
+        /// The parent a lookup's <c>on</c> names: an entity row of this host under an alias (a
+        /// local resolve, or an unwound lookup). Anything else is refused: an array, element,
+        /// scalar or group output with <c>LOOKUP_ON_NOT_ENTITY</c>; a remote alias with
+        /// <c>NOT_CONTINUABLE</c>, since its row arrives from the owner after the page and a
+        /// lookup there would have to continue at the owner.
+        /// </summary>
+        private bool BindLookupParent(string on, int index, out EntityDef parent, out string prefix)
+        {
+            parent = entity;
+            prefix = "";
+
+            if (on == Shape.ImplicitRoot || !shape.Roots.TryGetValue(on, out var node))
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{on}' is not an alias of the row here; 'on' names the alias of the parent row.", index, on));
+                return false;
+            }
+
+            if (!shape.IsVisible(on))
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{on}' was removed by the projection.", index, on));
+                return false;
+            }
+
+            switch (node)
+            {
+                case ShapeNode.Entity row:
+                    parent = row.Def;
+                    prefix = row.StoragePrefix;
+                    return true;
+
+                case ShapeNode.Remote remote:
+                    errors.Add(Error(Codes.NotContinuable,
+                        $"'lookup' cannot run on '{on}', which comes from the owner of '{remote.TargetEntity}' after the page; this host does not continue a chain at the owner.", index, on));
+                    return false;
+
+                default:
+                    var what = node switch
+                    {
+                        ShapeNode.Array => "the array of a lookup",
+                        ShapeNode.Element => "an unwound element",
+                        ShapeNode.Scalar => "a scalar",
+                        ShapeNode.GroupOutput => "a group output",
+                        _ => "not an entity row",
+                    };
+
+                    errors.Add(Error(Codes.LookupOnNotEntity,
+                        $"'{on}' is {what}; a lookup's parent is one entity row: the entity itself, a resolved alias or an unwound lookup alias.", index, on));
+                    return false;
+            }
         }
 
         private IReadOnlyList<ResolvedPath> BindSelect(IReadOnlyList<string>? select, EntityDef target, Shape targetShape, int index)
@@ -1391,6 +1510,31 @@ public sealed class Binder
 
         private void BindSort(IReadOnlyList<Models.SortField> fields, int index)
         {
+            var bound = BindSortEntries(fields, shape, index);
+
+            // A grouped shape pages by offset, and $skip over rows that tie on every sort field
+            // repeats and drops groups between pages: $group emits no stable order and a top-k
+            // sort answers any members of a tie. The group keys complete the order, as the key
+            // completes it on a root shape; a key the caller sorts on already keeps its place.
+            if (shape.Grouped && bound.Count == fields.Count)
+                foreach (var key in GroupKeyOrder())
+                    if (!bound.Any(field => field.Path.Storage == key.Path.Storage))
+                        bound.Add(key);
+
+            var stage = new BoundStage.Sort(bound);
+
+            stages.Add(stage);
+            sort = stage;
+        }
+
+        /// <summary>
+        /// Binds sort entries against <paramref name="at"/>: the sort stage against the row, a
+        /// lookup's <c>sort</c> against the child. Each string entry counts in the collation
+        /// rules of the whole request, since a lookup's sub-pipeline runs under the aggregate's
+        /// collation too.
+        /// </summary>
+        private List<BoundSortField> BindSortEntries(IReadOnlyList<Models.SortField> fields, Shape at, int index)
+        {
             var bound = new List<BoundSortField>();
 
             foreach (var field in fields)
@@ -1446,7 +1590,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var resolution = shape.Resolve(field.Path, PathUsage.Sort);
+                var resolution = at.Resolve(field.Path, PathUsage.Sort);
 
                 if (!resolution.Succeeded)
                 {
@@ -1489,19 +1633,7 @@ public sealed class Binder
                 bound.Add(new BoundSortField(path, ascending.Value, ignoreCase));
             }
 
-            // A grouped shape pages by offset, and $skip over rows that tie on every sort field
-            // repeats and drops groups between pages: $group emits no stable order and a top-k
-            // sort answers any members of a tie. The group keys complete the order, as the key
-            // completes it on a root shape; a key the caller sorts on already keeps its place.
-            if (shape.Grouped && bound.Count == fields.Count)
-                foreach (var key in GroupKeyOrder())
-                    if (!bound.Any(field => field.Path.Storage == key.Path.Storage))
-                        bound.Add(key);
-
-            var stage = new BoundStage.Sort(bound);
-
-            stages.Add(stage);
-            sort = stage;
+            return bound;
         }
 
         /// <summary>Whether the stage carries a value under its one key; the JSON literal <c>null</c> leaves none.</summary>

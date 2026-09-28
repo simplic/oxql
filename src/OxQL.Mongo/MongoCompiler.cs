@@ -18,6 +18,13 @@ public sealed record SemiJoinSlot(BoundCondition.Leaf Leaf, BsonArray Ids);
 /// </summary>
 public sealed record FlattenProbe(string Field, int Stage, string Path, int Depth);
 
+/// <summary>
+/// The field a lookup writes into every row it joins: true when some parent had more children
+/// than <paramref name="Limit"/>, of which only the first <paramref name="Limit"/> are under the
+/// alias. <paramref name="Stage"/> and <paramref name="Alias"/> are the caller's, for the diagnostic.
+/// </summary>
+public sealed record LookupFlag(string Field, int Stage, string Alias, int Limit);
+
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
 public sealed record CompiledQuery
 {
@@ -70,6 +77,9 @@ public sealed record CompiledQuery
 
     /// <summary>The depth probes of the flattening unwinds, in stage order; the executor turns a set probe into <c>UNWIND_DEPTH_TRUNCATED</c>.</summary>
     public IReadOnlyList<FlattenProbe> FlattenProbes { get; init; } = [];
+
+    /// <summary>The truncation flags of the lookups that return an array, in stage order; the executor turns a set flag into <c>LOOKUP_TRUNCATED</c>.</summary>
+    public IReadOnlyList<LookupFlag> LookupFlags { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
@@ -91,6 +101,12 @@ public static class MongoCompiler
 
     /// <summary>The prefix of a flattening unwind's depth probe; the row keeps it through projections and groups, and the wire row never shows it.</summary>
     private const string ReservedFlatten = Aliases.ReservedPrefix + "oxFlat";
+
+    /// <summary>The prefix of a lookup's truncation flag; the row keeps it through projections and groups, and the executor removes it.</summary>
+    private const string ReservedLookupFlag = Aliases.ReservedPrefix + "oxLk";
+
+    /// <summary>The variable a join on an alias binds the parent's key to, so a parent the row does not hold joins no children.</summary>
+    private const string ParentVariable = "oxParent";
 
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
@@ -138,6 +154,11 @@ public static class MongoCompiler
         var unwoundOffsetPaging = bound.PagingMode == PagingMode.Offset && !bound.FinalShape.Grouped && bound.Sort is not null;
         var reservedIndexes = new List<string>();
         var probes = new List<FlattenProbe>();
+        var flags = new List<LookupFlag>();
+
+        // The flags of the lookups that join before the page: only they are in the rows a
+        // projection or a group reshapes. A late lookup writes its flag after both.
+        var rowFlags = new List<string>();
         IReadOnlyList<BoundSortField>? pagingSort = null;
 
         // The key orders and identifies a page. A projection that drops it leaves the sort and
@@ -200,13 +221,21 @@ public static class MongoCompiler
                     emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins, collated)));
                     break;
 
+                // JOIN_BEFORE_PAGE / JOIN_AFTER_PAGE (E12b): JoinsAfterPage decides the phase of a
+                // join; a join a later lookup's 'on' reads stays before the page unless that
+                // lookup joins after the page as well (see JoinsAfterPage).
                 case BoundStage.Lookup lookup when JoinsAfterPage(bound.Stages, index, lookup.As):
-                    lateJoins.Add(Lookup(lookup, semiJoins, collated));
+                    lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags)));
                     lateJoinKeys.Add(lookup.ParentKeyStorage);
                     break;
 
                 case BoundStage.Lookup lookup:
-                    emitted.Add(Lookup(lookup, semiJoins, collated));
+                    var flag = Flag(lookup, flags);
+
+                    if (flag is not null)
+                        rowFlags.Add(flag.Field);
+
+                    emitted.AddRange(Lookup(lookup, semiJoins, collated, flag));
                     break;
 
                 // The owner's row only ever reaches the wire row; a projection that dropped the
@@ -257,11 +286,11 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Group group:
-                    emitted.AddRange(Group(group, probes));
+                    emitted.AddRange(Group(group, [.. probes.Select(probe => probe.Field), .. rowFlags]));
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field)], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, remote, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -354,7 +383,49 @@ public static class MongoCompiler
             SortKeptAgainstProjection = sortKeptAgainstProjection,
             Collation = collated ? CollationDocument(options.Collation ?? new CollationOptions()) : null,
             FlattenProbes = probes,
+            LookupFlags = flags,
         };
+    }
+
+    /// <summary>
+    /// The <c>LOOKUP_TRUNCATED</c> diagnostics of a page: one per lookup when some row of the
+    /// page joined a parent with more children than the lookup's limit. <c>rows</c> counts the
+    /// page's rows that carry the flag. The flags are removed from the rows, which never show them.
+    /// </summary>
+    public static IReadOnlyList<Diagnostic> LookupTruncations(CompiledQuery compiled, IReadOnlyList<BsonDocument> page)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+        ArgumentNullException.ThrowIfNull(page);
+
+        var diagnostics = new List<Diagnostic>();
+
+        foreach (var flag in compiled.LookupFlags)
+        {
+            var rows = 0;
+
+            foreach (var row in page)
+                if (row.TryGetValue(flag.Field, out var set))
+                {
+                    if (set is BsonBoolean { Value: true })
+                        rows++;
+
+                    row.Remove(flag.Field);
+                }
+
+            if (rows == 0)
+                continue;
+
+            diagnostics.Add(new Diagnostic
+            {
+                Code = Codes.LookupTruncated,
+                Message = $"'{flag.Alias}' holds the first {flag.Limit} children of a parent that has more ({rows} {(rows == 1 ? "row" : "rows")} of this page affected).",
+                Stage = flag.Stage,
+                Path = flag.Alias,
+                Params = new Dictionary<string, object?> { ["alias"] = flag.Alias, ["limit"] = flag.Limit, ["rows"] = rows },
+            });
+        }
+
+        return diagnostics;
     }
 
     /// <summary>
@@ -669,10 +740,35 @@ public static class MongoCompiler
 
     // ---- joins ------------------------------------------------------------------------------
 
-    private static BsonDocument Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins, bool collated)
+    /// <summary>The truncation flag of a lookup that returns an array, registered in stage order; null for a <c>first</c> lookup.</summary>
+    private static LookupFlag? Flag(BoundStage.Lookup lookup, List<LookupFlag> flags)
+    {
+        if (lookup.First)
+            return null;
+
+        var flag = new LookupFlag(ReservedLookupFlag + flags.Count, lookup.Stage, lookup.As, lookup.Limit);
+
+        flags.Add(flag);
+
+        return flag;
+    }
+
+    /// <summary>
+    /// A lookup: the indexed <c>$lookup</c> with the scope inside, the caller's sort completed by
+    /// the child's key, and one child more than the limit, then a <c>$set</c> that flags a parent
+    /// with more children and cuts the array to the limit; with <c>first</c>, one child and the
+    /// <c>$set</c> that takes it out of the array (absent, so null, when there is none). A lookup
+    /// on an alias joins nothing where the row holds no parent: <c>$lookup</c> reads a missing
+    /// local field as null, which would join the children whose reference is null.
+    /// </summary>
+    private static IEnumerable<BsonDocument> Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins, bool collated, LookupFlag? flag)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(lookup.ChildScope)) };
         var exactKey = collated && IsStringStored(lookup.ChildReference);
+        var onAlias = lookup.On is not null;
+
+        if (onAlias)
+            pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { "$$" + ParentVariable, BsonNull.Value }))));
 
         if (exactKey)
             pipeline.Add(ExactKeyMatch(lookup.ChildKeyStorage));
@@ -680,11 +776,43 @@ public static class MongoCompiler
         if (lookup.Filter is not null)
             pipeline.Add(new BsonDocument("$match", Filter(lookup.Filter, semiJoins, collated)));
 
-        pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
-        pipeline.Add(new BsonDocument("$limit", lookup.Limit));
+        pipeline.Add(Sort(lookup.ChildSort ?? [], tieBreak: true));
+        pipeline.Add(new BsonDocument("$limit", lookup.First ? 1 : lookup.Limit + 1));
         pipeline.Add(new BsonDocument("$project", Select(lookup.Select)));
 
-        return new BsonDocument("$lookup", Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As));
+        var join = Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As);
+
+        if (onAlias)
+        {
+            var let = join.TryGetValue("let", out var existing) ? existing.AsBsonDocument : new BsonDocument();
+
+            let[ParentVariable] = "$" + lookup.ParentKeyStorage;
+
+            // The same member order as a join without it: let before pipeline.
+            join = new BsonDocument
+            {
+                ["from"] = join["from"],
+                ["localField"] = join["localField"],
+                ["foreignField"] = join["foreignField"],
+                ["let"] = let,
+                ["pipeline"] = join["pipeline"],
+                ["as"] = join["as"],
+            };
+        }
+
+        yield return new BsonDocument("$lookup", join);
+
+        if (lookup.First)
+        {
+            yield return new BsonDocument("$set", new BsonDocument(lookup.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + lookup.As, 0 })));
+            yield break;
+        }
+
+        yield return new BsonDocument("$set", new BsonDocument
+        {
+            [flag!.Field] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + lookup.As), lookup.Limit }),
+            [lookup.As] = new BsonDocument("$slice", new BsonArray { "$" + lookup.As, lookup.Limit }),
+        });
     }
 
     private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated)
@@ -781,13 +909,14 @@ public static class MongoCompiler
 
     // ---- group ------------------------------------------------------------------------------
 
-    private static IEnumerable<BsonDocument> Group(BoundStage.Group group, IReadOnlyList<FlattenProbe> probes)
+    private static IEnumerable<BsonDocument> Group(BoundStage.Group group, IReadOnlyList<string> truncations)
     {
         var groupDocument = new BsonDocument { ["_id"] = GroupId(group.Keys) };
 
-        // A group of rows some flattened item's truncation reached is reached by it too.
-        foreach (var probe in probes)
-            groupDocument[probe.Field] = new BsonDocument("$max", "$" + probe.Field);
+        // A group of rows some truncation reached (a flattened item's depth, a lookup's limit)
+        // is reached by it too.
+        foreach (var field in truncations)
+            groupDocument[field] = new BsonDocument("$max", "$" + field);
         var distinct = new List<string>();
 
         foreach (var field in group.Fields)
@@ -818,8 +947,8 @@ public static class MongoCompiler
         foreach (var field in group.Fields)
             reshape[field.As] = 1;
 
-        foreach (var probe in probes)
-            reshape[probe.Field] = 1;
+        foreach (var field in truncations)
+            reshape[field] = 1;
 
         reshape["_id"] = 0;
 
@@ -1072,6 +1201,11 @@ public static class MongoCompiler
                         return false;
                     break;
 
+                // A lookup on the alias reads the joined parent, which is there after the page
+                // too when that lookup also joins after the page: the late joins run in stage order.
+                case BoundStage.Lookup lookup when lookup.On == alias && JoinsAfterPage(stages, later, lookup.As):
+                    break;
+
                 case var stage when Reads(stage, alias):
                     return false;
             }
@@ -1104,6 +1238,7 @@ public static class MongoCompiler
             || group.Fields.Any(field => field.Argument is not null && Paths(field.Argument).Any(path => RootIs(path, alias))),
         BoundStage.Project project => project.Paths.Any(path => RootIs(path, alias)),
         BoundStage.Resolve resolve => RootIs(resolve.Reference, alias),
+        BoundStage.Lookup lookup => lookup.On == alias,
         _ => false,
     };
 

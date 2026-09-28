@@ -50,19 +50,7 @@ public static class BoundCanonical
     private static JsonObject RenderStage(BoundStage stage) => stage switch
     {
         BoundStage.Match match => new JsonObject { ["match"] = RenderCondition(match.Condition) },
-        BoundStage.Lookup lookup => new JsonObject
-        {
-            ["lookup"] = new JsonObject
-            {
-                ["from"] = lookup.From.Id,
-                ["localField"] = lookup.ParentKeyStorage,
-                ["foreignField"] = lookup.ChildKeyStorage,
-                ["as"] = lookup.As,
-                ["select"] = new JsonArray(lookup.Select.Select(path => (JsonNode)path.Storage!).ToArray()),
-                ["filter"] = lookup.Filter is null ? null : RenderCondition(lookup.Filter),
-                ["limit"] = lookup.Limit,
-            },
-        },
+        BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
         BoundStage.Resolve resolve => new JsonObject
         {
             ["resolve"] = new JsonObject
@@ -130,6 +118,42 @@ public static class BoundCanonical
         BoundStage.Scope scope => new JsonObject { ["scope"] = scope.OrganisationStorage },
         _ => new JsonObject { ["unknown"] = stage.GetType().Name },
     };
+
+    /// <summary>
+    /// A lookup. <c>sort</c>, <c>first</c> and <c>on</c> are written only when they differ from
+    /// what a 2.0 lookup did (children by key, an array, the entity itself as the parent), so a
+    /// lookup without them renders as it did under 2.0 and its cursors stay valid. The stage
+    /// index is bound-only and never written.
+    /// </summary>
+    private static JsonObject RenderLookup(BoundStage.Lookup lookup)
+    {
+        var node = new JsonObject
+        {
+            ["from"] = lookup.From.Id,
+            ["localField"] = lookup.ParentKeyStorage,
+            ["foreignField"] = lookup.ChildKeyStorage,
+            ["as"] = lookup.As,
+            ["select"] = new JsonArray(lookup.Select.Select(path => (JsonNode)path.Storage!).ToArray()),
+            ["filter"] = lookup.Filter is null ? null : RenderCondition(lookup.Filter),
+            ["limit"] = lookup.Limit,
+        };
+
+        if (lookup.ChildSort is { Count: > 0 } sort)
+            node["sort"] = new JsonArray(sort.Select(field => (JsonNode)new JsonObject
+            {
+                ["path"] = field.Path.Storage,
+                ["direction"] = field.Ascending ? "asc" : "desc",
+                ["caseSensitive"] = !field.IgnoreCase,
+            }).ToArray());
+
+        if (lookup.First)
+            node["first"] = true;
+
+        if (lookup.On is not null)
+            node["on"] = lookup.On;
+
+        return node;
+    }
 
     /// <summary>
     /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an

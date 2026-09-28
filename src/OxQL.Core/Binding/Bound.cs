@@ -138,7 +138,16 @@ public abstract record BoundStage
 
     public sealed record Match(BoundCondition Condition) : BoundStage;
 
-    public sealed record Lookup(EntityDef From, ResolvedPath ChildReference, string As, IReadOnlyList<ResolvedPath> Select, BoundCondition? Filter, int Limit, Scope ChildScope, string ParentKeyStorage, string ChildKeyStorage) : BoundStage;
+    /// <summary>
+    /// A lookup. <paramref name="ChildSort"/> is the caller's order of the children (the child's key
+    /// completes it at compile time), empty for the key order; <paramref name="First"/> places
+    /// the first child or null instead of the array; <paramref name="On"/> is the alias of the
+    /// parent row, null for the implicit root, and <paramref name="ParentKeyStorage"/> already
+    /// lies under it. <paramref name="Stage"/> is the request's stage index, for the diagnostic;
+    /// it is bound-only and never rendered.
+    /// </summary>
+    public sealed record Lookup(EntityDef From, ResolvedPath ChildReference, string As, IReadOnlyList<ResolvedPath> Select, BoundCondition? Filter, int Limit, Scope ChildScope, string ParentKeyStorage, string ChildKeyStorage,
+        IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage;
 
     public sealed record Resolve(ResolvedPath Reference, string As, string TargetEntity, string TargetField, bool IsRemote,
         EntityDef? Target, string? TargetFieldStorage, IReadOnlyList<ResolvedPath>? Select, BoundCondition? Filter, Scope? TargetScope,

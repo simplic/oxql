@@ -128,6 +128,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A flattening unwind marks the rows whose collection nests deeper than it descends.
         diagnostics.AddRange(MongoCompiler.DepthTruncations(compiled, page));
 
+        // A lookup marks the rows with a parent over its limit; the marks leave the rows here.
+        diagnostics.AddRange(MongoCompiler.LookupTruncations(compiled, page));
+
         // Remote resolves run over the trimmed page; an owner that does not answer yields null rows and a diagnostic, never a failed page.
         IReadOnlyList<IReadOnlyDictionary<string, JsonNode?>>? resolved = null;
 

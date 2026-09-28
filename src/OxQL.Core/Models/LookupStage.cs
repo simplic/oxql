@@ -5,8 +5,9 @@ namespace OxQL.Core.Models;
 
 /// <summary>
 /// A backward join along a declared reference: <c>from</c> is the child entity, <c>path</c>
-/// the child's member that references the current entity, the result an array under
-/// <c>as</c> ordered by the child's key.
+/// the child's member that references the parent, the result an array under <c>as</c> ordered
+/// by <c>sort</c> (the child's key by default), or with <c>first</c> the first child or null.
+/// The parent is the current entity, or with <c>on</c> an entity alias of the row.
 /// </summary>
 [JsonConverter(typeof(LookupStageConverter))]
 public sealed record LookupStage
@@ -28,6 +29,22 @@ public sealed record LookupStage
 
     /// <summary>The most children per parent, under the host cap.</summary>
     public int? Limit { get; init; }
+
+    /// <summary>The order of the children, bound against the child; the child's key completes it. Contract 2.</summary>
+    public IReadOnlyList<SortField>? Sort { get; init; }
+
+    /// <summary>The first child by <see cref="Sort"/> as an object, or null, instead of the array. Contract 2.</summary>
+    public bool? First { get; init; }
+
+    /// <summary>The alias of the parent row; the implicit root when absent. Contract 2.</summary>
+    public string? On { get; init; }
+
+    /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
+    public string? ForTarget { get; init; }
+
+    /// <summary>Members the caller wrote with a value of the wrong JSON kind, such as a <c>first</c> that is not a boolean.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Malformed { get; init; } = [];
 
     /// <summary>Member names the caller wrote that the stage does not have: the v1 <c>localPath</c>, <c>foreignPath</c>, <c>convert</c> among them.</summary>
     [JsonIgnore]
@@ -67,6 +84,7 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         var root = doc.RootElement;
         var stage = new LookupStage();
         var unknown = new List<string>();
+        var malformed = new List<string>();
 
         foreach (var property in root.EnumerateObject())
         {
@@ -78,11 +96,35 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                 case "select": stage = stage with { Select = StageJson.ReadStrings(property.Value) }; break;
                 case "filter": stage = stage with { Filter = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options) }; break;
                 case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
+                case "sort":
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                        stage = stage with { Sort = JsonSerializer.Deserialize<IReadOnlyList<SortField>>(property.Value.GetRawText(), options) };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "first":
+                    if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                        stage = stage with { First = property.Value.GetBoolean() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "on":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { On = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "forTarget":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ForTarget = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Malformed = malformed };
     }
 
     public override void Write(Utf8JsonWriter writer, LookupStage value, JsonSerializerOptions options)
@@ -94,6 +136,10 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         if (value.Select is not null) { writer.WritePropertyName("select"); JsonSerializer.Serialize(writer, value.Select, options); }
         if (value.Filter is not null) { writer.WritePropertyName("filter"); JsonSerializer.Serialize(writer, value.Filter, options); }
         if (value.Limit is not null) writer.WriteNumber("limit", value.Limit.Value);
+        if (value.Sort is not null) { writer.WritePropertyName("sort"); JsonSerializer.Serialize(writer, value.Sort, options); }
+        if (value.First is not null) writer.WriteBoolean("first", value.First.Value);
+        if (value.On is not null) writer.WriteString("on", value.On);
+        if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
         writer.WriteEndObject();
     }
 }

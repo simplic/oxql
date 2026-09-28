@@ -58,6 +58,12 @@ public static class Codes
     public const string InvalidTimezone = "INVALID_TIMEZONE";
     public const string InvalidSortDirection = "INVALID_SORT_DIRECTION";
     public const string LookupNotDeclared = "LOOKUP_NOT_DECLARED";
+
+    /// <summary>A lookup's <c>on</c> names an alias that is not one entity row: a lookup array, an unwound element, a scalar or a group output.</summary>
+    public const string LookupOnNotEntity = "LOOKUP_ON_NOT_ENTITY";
+
+    /// <summary>A stage cannot run on an alias whose rows come from an owner after the page.</summary>
+    public const string NotContinuable = "NOT_CONTINUABLE";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
     /// <summary>
     /// A condition on the alias of a remote resolve itself (<c>{"veh":{"eq":null}}</c>,
@@ -122,4 +128,7 @@ public static class Codes
 
     /// <summary>An unwind with <c>flatten</c> met items nested deeper than <see cref="Models.LimitOptions.MaxFlattenDepth"/>; they are not in the rows.</summary>
     public const string UnwindDepthTruncated = "UNWIND_DEPTH_TRUNCATED";
+
+    /// <summary>A lookup had more children for some parent than its limit; only the first <c>limit</c> are in the rows.</summary>
+    public const string LookupTruncated = "LOOKUP_TRUNCATED";
 }

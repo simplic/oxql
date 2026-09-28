@@ -30,7 +30,10 @@ public class LateJoinTests
 
     private static string OrgJson => $"{{ OrganizationId: {Org.ToJson()} }}";
 
-    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1, Number: 1 } } ], as: "orders" } }""";
+    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { _id: 1, Number: 1 } } ], as: "orders" } }""";
+
+    /// <summary>The lookup's cut to its limit and its truncation flag: it fetches one child more than it keeps.</summary>
+    private const string OrdersCutJson = """{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 100 ] }, orders: { $slice: [ "$orders", 100 ] } } }""";
 
     private static string CustomerLookupJson => $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }""";
 
@@ -61,7 +64,8 @@ public class LateJoinTests
             $"{{ $match: {OrgJson} }}",
             "{ $sort: { Name: 1, _id: 1 } }",
             "{ $limit: 6 }",
-            OrdersLookupJson);
+            OrdersLookupJson,
+            OrdersCutJson);
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
             "{ $limit: 100001 }",
@@ -99,12 +103,12 @@ public class LateJoinTests
     {
         var included = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "name": 1, "orders": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup");
+        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
         included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Name: 1, orders: 1, _id: 1 } }"), "the projection is emitted as written; the join adds the alias to what it kept");
 
         var excludedElsewhere = await Compile($$"""[{{OrdersLookup}}, { "project": { "matchCode": 0 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup");
+        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
     }
 
     [Fact]
@@ -138,8 +142,8 @@ public class LateJoinTests
     {
         var compiled = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$match", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$match", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit");
+        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$match", "$limit", "$count");
     }
 
     [Fact]
@@ -197,9 +201,9 @@ public class LateJoinTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$unwind", "$set", "$match", "$project", "$sort", "$limit");
-        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
-        compiled.PageStages[4]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$match", "$project", "$sort", "$limit");
+        compiled.PageStages[4].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
+        compiled.PageStages[5]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
 
         var row = WireEncoder.Encode(new BsonDocument
         {
@@ -217,8 +221,8 @@ public class LateJoinTests
     {
         var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$unwind", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$unwind", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$sort", "$limit");
+        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$unwind", "$limit", "$count");
     }
 
     [Fact]
@@ -242,9 +246,9 @@ public class LateJoinTests
     {
         var compiled = await Compile($$"""[{{OrdersLookup}}, { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$sort", "$limit", "$lookup", "$set", "$unset");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$sort", "$limit", "$lookup", "$set", "$unset");
         compiled.PageStages[1]["$lookup"]["as"].AsString.Should().Be("orders", "the lookup that is read stays before the page");
-        compiled.PageStages[4]["$lookup"]["as"].AsString.Should().Be("again__arr", "the resolve nothing reads runs after it");
+        compiled.PageStages[5]["$lookup"]["as"].AsString.Should().Be("again__arr", "the resolve nothing reads runs after it");
     }
 
     [Fact]
@@ -252,11 +256,11 @@ public class LateJoinTests
     {
         var narrowed = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(narrowed.PageStages).Should().Equal("$match", "$lookup", "$project", "$sort", "$limit");
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$lookup", "$set", "$project", "$sort", "$limit");
 
         var read = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "n-1" } } }, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$match", "$project", "$sort", "$limit"], "a match reads the alias before the projection drops it");
+        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$set", "$match", "$project", "$sort", "$limit"], "a match reads the alias before the projection drops it");
     }
 
     [Fact]
@@ -329,7 +333,7 @@ public class LateJoinTests
 
         var withJoin = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 1, "cursor": "{{first.PageInfo.NextCursor}}" } }]""", Customer);
 
-        Kinds(withJoin.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup");
+        Kinds(withJoin.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup", "$set");
         withJoin.PageStages[0]["$match"].AsBsonDocument.Contains("$and").Should().BeTrue("the cursor predicate is merged into the leading match");
         withJoin.PageStages[0]["$match"]["$and"].AsBsonArray[1].AsBsonDocument.ToJson().Should().Contain("Name", "the predicate reads the sort leg off the row, which no join touches");
     }

@@ -196,17 +196,40 @@ public class LateJoinExecutionTests
         {
             var copy = row.DeepClone().AsBsonDocument;
 
+            // Every expression reads the row as it came in, as the server's $set does.
             foreach (var field in set)
             {
-                var elementAt = field.Value.AsBsonDocument["$arrayElemAt"].AsBsonArray;
-                var array = Get(copy, elementAt[0].AsString[1..]) as BsonArray;
-                var index = elementAt[1].ToInt32();
+                var expression = field.Value.AsBsonDocument.GetElement(0);
+                var operands = expression.Value.AsBsonArray;
 
-                // An index past the end leaves the field out, as the server does.
-                if (array is not null && index < array.Count)
-                    Set(copy, field.Name, array[index].DeepClone());
-                else
-                    Remove(copy, field.Name);
+                switch (expression.Name)
+                {
+                    case "$arrayElemAt":
+                    {
+                        var array = Get(row, operands[0].AsString[1..]) as BsonArray;
+                        var index = operands[1].ToInt32();
+
+                        // An index past the end leaves the field out, as the server does.
+                        if (array is not null && index < array.Count)
+                            Set(copy, field.Name, array[index].DeepClone());
+                        else
+                            Remove(copy, field.Name);
+                        break;
+                    }
+
+                    // A lookup's cut to its limit.
+                    case "$slice":
+                        Set(copy, field.Name, new BsonArray(((BsonArray)Get(row, operands[0].AsString[1..])!).Take(operands[1].ToInt32()).Select(item => item.DeepClone())));
+                        break;
+
+                    // A lookup's truncation flag: { $gt: [ { $size: "$alias" }, limit ] }.
+                    case "$gt":
+                        Set(copy, field.Name, ((BsonArray)Get(row, operands[0].AsBsonDocument["$size"].AsString[1..])!).Count > operands[1].ToInt32());
+                        break;
+
+                    default:
+                        throw new NotSupportedException($"The evaluator does not set {expression.Name}.");
+                }
             }
 
             return copy;

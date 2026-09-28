@@ -170,16 +170,17 @@ public class GoldenPipelineTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId",
-                pipeline: [ { $match: {{OrgJson}} }, { $match: { Flag: true } }, { $sort: { _id: 1 } }, { $limit: 5 }, { $project: { _id: 1, Number: 1 } } ],
+                pipeline: [ { $match: {{OrgJson}} }, { $match: { Flag: true } }, { $sort: { _id: 1 } }, { $limit: 6 }, { $project: { _id: 1, Number: 1 } } ],
                 as: "orders" } }
             """));
-        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $match: { "orders.Number": "x" } }"""));
-        compiled.CountStages!.Should().HaveCount(5, "the lookup is read by the later match, so the count keeps it");
+        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 5 ] }, orders: { $slice: [ "$orders", 5 ] } } }"""), "one child over the limit is fetched to flag the cut");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { "orders.Number": "x" } }"""));
+        compiled.CountStages!.Should().HaveCount(6, "the lookup is read by the later match, so the count keeps it");
 
         var unread = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "page": { "includeTotalCount": true } }]""", "probe.customer");
 
         unread.CountStages!.Should().HaveCount(3, "a lookup nothing reads is not in the count");
-        unread.PageStages[^1]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
+        unread.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
     }
 
     [Fact]

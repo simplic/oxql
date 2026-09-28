@@ -13,8 +13,9 @@ namespace OxQL.AspNetCore.Resolve;
 
 /// <summary>
 /// The startup check of the model's remote references: every declared reference into another
-/// service needs that service configured on this host (an <c>InternalHosts</c> entry, read
-/// through <see cref="IRemoteQueryClient.IsConfigured"/>). A reference without one is a
+/// service, which is every remote target of every case of a typed, item or converted reference
+/// too (<see cref="RemoteReferences.Of"/>), needs that service configured on this host (an
+/// <c>InternalHosts</c> entry, read through <see cref="IRemoteQueryClient.IsConfigured"/>). A reference without one is a
 /// configuration problem of this service, never a silent runtime null: an error log on every
 /// host, and a refusal to start in <c>Development</c>, <c>Local</c> and under continuous
 /// integration (<see cref="OxQLEndpointOptions.ContinuousIntegration"/>), the same strict set

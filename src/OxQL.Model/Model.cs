@@ -326,8 +326,20 @@ public sealed class MemberDef : ShapeDef
     /// <summary>The human label where it is not the de-camelCased wire name; null otherwise.</summary>
     public string? DisplayName { get; internal set; }
 
-    /// <summary>The declared reference this member carries, when it is a foreign key.</summary>
+    /// <summary>
+    /// The declared reference this member carries when it is a <see cref="ReferenceDef.IsSimple">simple</see>
+    /// one: one unconditional case naming one entity, without item or conversion. Null
+    /// otherwise, also when <see cref="References"/> holds typed, item or converted cases.
+    /// </summary>
     public ReferenceDef? Reference { get; internal set; }
+
+    /// <summary>
+    /// Every case of the reference this member carries, in declaration order: the simple one
+    /// (also in <see cref="Reference"/>), or the typed cases of <c>[OxQLReferenceWhen]</c> and
+    /// host-side declarations, item targets and converted keys. Empty when the member is no
+    /// foreign key.
+    /// </summary>
+    public IReadOnlyList<ReferenceDef> References { get; internal set; } = [];
 
     /// <summary>
     /// The variants that carry the member, when it is merged into a polymorphic type from its
@@ -428,27 +440,118 @@ public sealed class PathDef
     /// <summary>True on the addon bag of an extendable entity; keys under it are typed per organisation, not by the model.</summary>
     public bool IsAddonRoot { get; internal set; }
 
-    /// <summary>The declared reference this path carries.</summary>
+    /// <summary>The declared simple reference this path carries.</summary>
     public ReferenceDef? Reference => Member.Reference;
+
+    /// <summary>Every declared reference case this path carries.</summary>
+    public IReadOnlyList<ReferenceDef> References => Member.References;
 }
 
-/// <summary>A declared foreign key: the entity a member points at.</summary>
+/// <summary>
+/// One case of a declared foreign key: the targets a member's value names, the condition under
+/// which it names them, and how the stored value becomes the targets' key.
+/// </summary>
 public sealed record ReferenceDef
 {
-    /// <summary>The target entity id, normalised.</summary>
-    public required string TargetEntity { get; init; }
+    /// <summary>The targets in declaration order. Never empty.</summary>
+    public required IReadOnlyList<ReferenceTarget> Targets { get; init; }
 
-    /// <summary>The wire path on the target the member's value matches; the target's key unless declared otherwise.</summary>
-    public required string TargetField { get; init; }
+    /// <summary>When the case applies; null when it always does.</summary>
+    public ReferenceCondition? When { get; init; }
+
+    /// <summary>How the stored value becomes the targets' key.</summary>
+    public KeyAs KeyAs { get; init; }
 
     /// <summary>Where the declaration came from.</summary>
     public required ReferenceSource DeclaredBy { get; init; }
 
-    /// <summary>True when the target lives on another host: its namespace is not one of this model's.</summary>
-    public bool IsRemote { get; init; }
+    /// <summary>The first target's entity id, normalised.</summary>
+    public string TargetEntity => Targets[0].Entity;
+
+    /// <summary>The wire path on the first target the member's value matches.</summary>
+    public string TargetField => Targets[0].Field;
+
+    /// <summary>True when the first target lives on another host: its namespace is not one of this model's.</summary>
+    public bool IsRemote => Targets[0].IsRemote;
+
+    /// <summary>
+    /// True for the one form a 1.0 reader understands: unconditional, one entity target, no
+    /// item, no conversion. Only a simple case is published under <c>references</c> and set on
+    /// <see cref="MemberDef.Reference"/>; every other one goes under <c>referenceCases</c>.
+    /// </summary>
+    public bool IsSimple => When is null && KeyAs == KeyAs.None && Targets is [{ Item: null }];
 
     /// <summary>The direction; every declaration in this version is forward, from the id member to the target.</summary>
     public ReferenceDirection Direction => ReferenceDirection.Forward;
+
+    /// <summary>The case as one line: condition, conversion and targets; what the fingerprint and messages print.</summary>
+    public override string ToString()
+    {
+        var when = When switch
+        {
+            ReferenceCondition.PathEquals equals => $"when {equals.Path}={string.Join("|", equals.Values)} ",
+            ReferenceCondition.Variant variant => $"when $variant={string.Join("|", variant.Names)} ",
+            _ => "",
+        };
+
+        return $"{when}{(KeyAs == KeyAs.None ? "" : "keyAs guid ")}-> {string.Join(", ", Targets.Select(target => $"{target}.{target.Field}{(target.IsRemote ? " (remote)" : "")}"))}";
+    }
+}
+
+/// <summary>One target of a reference case.</summary>
+/// <param name="Entity">The target entity id, normalised.</param>
+/// <param name="Field">
+/// The wire path the value matches: on the entity, or on the element of <paramref name="Item"/>.
+/// The key of what it is read on unless declared otherwise.
+/// </param>
+/// <param name="Item">
+/// The wire path of the keyed item collection on the target whose element the value names; null
+/// when the value names the entity itself.
+/// </param>
+/// <param name="IsRemote">True when the entity lives on another host.</param>
+/// <param name="FieldIsKey">
+/// True when <paramref name="Field"/> is the key of what it is read on (the entity, or the
+/// element), so a value names at most one. A remote target's key is <c>id</c> by the fleet's
+/// convention.
+/// </param>
+public sealed record ReferenceTarget(string Entity, string Field, string? Item, bool IsRemote, bool FieldIsKey)
+{
+    /// <summary>The target as a declaration spells it: <c>entity</c> or <c>entity#item</c>.</summary>
+    public override string ToString() => Item is null ? Entity : $"{Entity}#{Item}";
+}
+
+/// <summary>When a reference case applies to a row.</summary>
+public abstract record ReferenceCondition
+{
+    private ReferenceCondition()
+    {
+    }
+
+    /// <summary>
+    /// A stored string or enum sibling of the id member holds one of <paramref name="Values"/>,
+    /// compared exactly: the schema's <c>{ "path", "equals" }</c>. (DESIGN §3.3.1 names it
+    /// <c>Equals</c>, which a record cannot nest beside its own <c>Equals</c> method.)
+    /// </summary>
+    /// <param name="Path">The sibling's wire name.</param>
+    /// <param name="Values">The values, in declaration order, distinct.</param>
+    public sealed record PathEquals(string Path, IReadOnlyList<string> Values) : ReferenceCondition;
+
+    /// <summary>
+    /// The object holding the id member is stored as one of the named variants (by its
+    /// discriminator): the schema's <c>{ "variant" }</c>.
+    /// </summary>
+    /// <param name="Names">The variant names as <see cref="VariantDef.Name"/> spells them.</param>
+    public sealed record Variant(IReadOnlyList<string> Names) : ReferenceCondition;
+}
+
+/// <summary>How a reference's stored value becomes its targets' key.</summary>
+public enum KeyAs
+{
+    /// <summary>The value is the key as stored.</summary>
+    None,
+
+    /// <summary>A string holding a guid in any .NET format, sent as the lower-case <c>D</c> form: the schema's <c>"keyAs": "guid"</c>.</summary>
+    Guid,
 }
 
 /// <summary>How a reference was declared.</summary>
@@ -460,8 +563,11 @@ public enum ReferenceSource
     /// <summary><c>[ReferenceId]</c> on the navigation property naming the id member.</summary>
     ReferenceId,
 
-    /// <summary>A declared (not inferred) <c>references</c> member of a schema document.</summary>
+    /// <summary>A declared (not inferred) <c>references</c> or <c>referenceCases</c> member of a schema document.</summary>
     Document,
+
+    /// <summary>A host-side declaration (<see cref="Build.ReferenceDeclarations"/>) on a pooled type's wire member.</summary>
+    Declaration,
 }
 
 /// <summary>The direction of a reference.</summary>
@@ -548,4 +654,23 @@ public static class BuildCodes
 
     /// <summary>A concrete subclass of a polymorphic type has no registered class map, so the model does not describe it as a variant.</summary>
     public const string PolymorphicSubtypeUnregistered = "polymorphic-subtype-unregistered";
+
+    /// <summary>
+    /// A reference's stored kind does not fit its target: a string member naming a local guid
+    /// field without <c>KeyAs = Guid</c>, or <c>KeyAs = Guid</c> on a member that is not a string
+    /// or towards a local field that is not a guid. The case is dropped.
+    /// </summary>
+    public const string ReferenceKeyKindMismatch = "reference-key-kind-mismatch";
+
+    /// <summary>A typed or multi-target reference case names a local entity id the model does not have; the case is dropped.</summary>
+    public const string ReferenceCaseTargetUnknown = "reference-case-target-unknown";
+
+    /// <summary>An item target's path is not an array of keyed objects on the target entity, or its field is not a member of the element; the case is dropped.</summary>
+    public const string ReferenceItemUnknown = "reference-item-unknown";
+
+    /// <summary>
+    /// Reserved for the log-only hint that a guid member named <c>*Id</c> matches an entity but
+    /// declares no reference; never published. No builder of this version emits it.
+    /// </summary>
+    public const string ReferenceCandidateUndeclared = "reference-candidate-undeclared";
 }

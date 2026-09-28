@@ -13,10 +13,12 @@ public sealed record RemoteReference(string Entity, string Path, string TargetEn
 public static class RemoteReferences
 {
     /// <summary>
-    /// Every remote reference of the model, in entity and path order: on a root member, on a
-    /// member of an embedded object (<c>department.id</c>) and on a member of a collection
-    /// element (<c>lines.vehicleId</c>, resolvable once the collection is unwound), since a
-    /// resolve or semi-join can name each of them. A dictionary's <c>*</c> path repeats its
+    /// Every remote target of every reference case of the model, in entity, path and declaration
+    /// order, each (path, target entity) once: on a root member, on a member of an embedded
+    /// object (<c>department.id</c>) and on a member of a collection element
+    /// (<c>lines.vehicleId</c>, resolvable once the collection is unwound), since a resolve or
+    /// semi-join can name each of them. A typed reference lists every remote target of each of
+    /// its cases, and a union every one of its targets. A dictionary's <c>*</c> path repeats its
     /// member's reference and is not listed again.
     /// </summary>
     public static IReadOnlyList<RemoteReference> Of(EntityModel model)
@@ -27,8 +29,17 @@ public static class RemoteReferences
 
         foreach (var entity in model.Entities.Values)
             foreach (var path in entity.Paths)
-                if (path.Member.Reference is { IsRemote: true } reference && ReferenceEquals(path.Shape, path.Member))
-                    references.Add(new RemoteReference(entity.Id, path.Wire, reference.TargetEntity));
+            {
+                if (!ReferenceEquals(path.Shape, path.Member))
+                    continue;
+
+                var listed = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var reference in path.Member.References)
+                    foreach (var target in reference.Targets)
+                        if (target.IsRemote && listed.Add(target.Entity))
+                            references.Add(new RemoteReference(entity.Id, path.Wire, target.Entity));
+            }
 
         return references;
     }

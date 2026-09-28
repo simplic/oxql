@@ -216,7 +216,13 @@ public sealed class DocumentModelBuilder
                 && options.DictionaryRepresentations.TryGetValue(label, out var representation))
                 member.DictionaryRepresentation = representation;
 
-            if (descriptor.TryGetProperty("references", out var reference) && reference.ValueKind == JsonValueKind.Object)
+            if (descriptor.TryGetProperty("referenceCases", out var cases) && cases.ValueKind == JsonValueKind.Array)
+            {
+                // Format 1.1: the typed, item and converted cases. A member publishes either
+                // these or a simple `references`, never both; the cases win if a document does.
+                ReadReferenceCases(member, label, cases);
+            }
+            else if (descriptor.TryGetProperty("references", out var reference) && reference.ValueKind == JsonValueKind.Object)
             {
                 var inferred = ReadBool(reference, "inferred");
                 var target = ReadString(reference, "entity");
@@ -230,6 +236,90 @@ public sealed class DocumentModelBuilder
 
         return members;
     }
+
+    /// <summary>
+    /// A property's <c>referenceCases</c> (format 1.1): per case an optional <c>when</c>
+    /// (<c>{ "path", "equals": [..] }</c> or <c>{ "variant": [..] }</c>), an optional
+    /// <c>"keyAs": "guid"</c> and the <c>targets</c> <c>{ entity, item?, field? }</c>. A case this
+    /// reader cannot read (no targets, a <c>when</c> that is neither form or both, an unknown
+    /// <c>keyAs</c>) is <c>reference-declaration-unresolved</c> and left out.
+    /// </summary>
+    private void ReadReferenceCases(MemberDef member, string label, JsonElement cases)
+    {
+        foreach (var item in cases.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var targets = new List<PendingTarget>();
+
+            if (item.TryGetProperty("targets", out var targetList) && targetList.ValueKind == JsonValueKind.Array)
+                foreach (var target in targetList.EnumerateArray())
+                    if (ReadString(target, "entity") is { Length: > 0 } entity)
+                        targets.Add(new PendingTarget(entity, ReadString(target, "field"), ReadString(target, "item")));
+
+            var keyAsText = ReadString(item, "keyAs");
+            KeyAs? keyAs = keyAsText switch
+            {
+                null => KeyAs.None,
+                "guid" => KeyAs.Guid,
+                _ => null,
+            };
+
+            var when = ReadCondition(item, out var readable);
+
+            if (targets.Count == 0 || keyAs is null || !readable)
+            {
+                findings.Add(new BuildFinding(
+                    BuildCodes.ReferenceDeclarationUnresolved,
+                    label,
+                    "A reference case of the document names no target, an unknown keyAs or a condition that is neither { path, equals } nor { variant }, so the case is left out.",
+                    item.GetRawText()));
+
+                continue;
+            }
+
+            references.Add(new PendingReference(member, label, targets, ReferenceSource.Document, when, keyAs.Value));
+        }
+    }
+
+    /// <summary>A case's <c>when</c>: null when absent; <paramref name="readable"/> false when present and neither form.</summary>
+    private static ReferenceCondition? ReadCondition(JsonElement item, out bool readable)
+    {
+        readable = true;
+
+        if (!item.TryGetProperty("when", out var when) || when.ValueKind == JsonValueKind.Null)
+            return null;
+
+        readable = false;
+
+        if (when.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var path = ReadString(when, "path");
+        var equals = ReadStrings(when, "equals");
+        var variant = ReadStrings(when, "variant");
+
+        if (!string.IsNullOrEmpty(path) && equals is { Count: > 0 } && variant is null)
+        {
+            readable = true;
+            return new ReferenceCondition.PathEquals(path, equals);
+        }
+
+        if (path is null && equals is null && variant is { Count: > 0 })
+        {
+            readable = true;
+            return new ReferenceCondition.Variant(variant);
+        }
+
+        return null;
+    }
+
+    /// <summary>An array of strings, or null when the member is absent or not an array.</summary>
+    private static List<string>? ReadStrings(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+            ? [.. value.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.String).Select(entry => entry.GetString()!)]
+            : null;
 
     /// <summary>
     /// A polymorphic entry's <c>discriminator</c> and <c>variants</c> (format 1.1). A document

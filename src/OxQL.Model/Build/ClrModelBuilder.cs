@@ -61,12 +61,15 @@ public sealed class ClrModelBuilder
     private readonly List<(TypeDef Type, Type Owner, string Label, IReadOnlyList<Type> Variants)> pendingMerges = [];
     private readonly HashSet<Type> registered;
     private readonly IReadOnlyList<Assembly> candidateAssemblies;
+    private readonly ILookup<(Type Type, string WireMember), ReferenceDeclaration> hostDeclarations;
+    private readonly HashSet<(Type Type, string WireMember)> appliedDeclarations = [];
     private Dictionary<Type, List<Type>>? subclassIndex;
 
-    private ClrModelBuilder(IReadOnlyList<Assembly> candidateAssemblies)
+    private ClrModelBuilder(IReadOnlyList<Assembly> candidateAssemblies, ReferenceDeclarations? declarations)
     {
         registered = RegisteredVariantCandidates();
         this.candidateAssemblies = candidateAssemblies;
+        hostDeclarations = (declarations ?? new ReferenceDeclarations()).ByMember();
     }
 
     /// <summary>
@@ -74,23 +77,40 @@ public sealed class ClrModelBuilder
     /// <paramref name="retiredIds"/> maps a current entity id to the ids it retired, as the
     /// host's schema options declare them.
     /// </summary>
-    public static EntityModel Build(IEnumerable<Assembly> assemblies, IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds = null)
+    public static EntityModel Build(IEnumerable<Assembly> assemblies, IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds = null) =>
+        Build(assemblies, retiredIds, references: null);
+
+    /// <summary>
+    /// Builds the model from the entities of <paramref name="assemblies"/>, with the host-side
+    /// reference <paramref name="references"/> for members the service cannot annotate.
+    /// </summary>
+    public static EntityModel Build(
+        IEnumerable<Assembly> assemblies,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds,
+        ReferenceDeclarations? references)
     {
         ArgumentNullException.ThrowIfNull(assemblies);
 
         var list = assemblies.ToList();
 
-        return new ClrModelBuilder(list).BuildCore(list, retiredIds ?? NoRetiredIds);
+        return new ClrModelBuilder(list, references).BuildCore(list, retiredIds ?? NoRetiredIds);
     }
 
     /// <summary>Builds the model from already scanned declarations; the overload tests and tooling use.</summary>
-    public static EntityModel Build(IReadOnlyList<EntityDeclaration> declarations, IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds = null)
+    public static EntityModel Build(IReadOnlyList<EntityDeclaration> declarations, IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds = null) =>
+        Build(declarations, retiredIds, references: null);
+
+    /// <summary>Builds the model from already scanned declarations, with host-side reference declarations.</summary>
+    public static EntityModel Build(
+        IReadOnlyList<EntityDeclaration> declarations,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? retiredIds,
+        ReferenceDeclarations? references)
     {
         ArgumentNullException.ThrowIfNull(declarations);
 
         var assemblies = declarations.Select(declaration => declaration.ClrType.Assembly).Distinct().ToList();
 
-        return new ClrModelBuilder(assemblies).BuildCore(declarations, retiredIds ?? NoRetiredIds);
+        return new ClrModelBuilder(assemblies, references).BuildCore(declarations, retiredIds ?? NoRetiredIds);
     }
 
     private EntityModel BuildCore(IReadOnlyList<Assembly> assemblies, IReadOnlyDictionary<string, IReadOnlyList<string>> retiredIds) =>
@@ -128,6 +148,7 @@ public sealed class ClrModelBuilder
         for (var index = 0; index < pendingMerges.Count; index++)
             Merge(pendingMerges[index].Type, pendingMerges[index].Owner, pendingMerges[index].Label, pendingMerges[index].Variants);
 
+        ReportUnappliedDeclarations();
         StructuralIds.Assign(pool);
 
         return ModelAssembler.Finish(entities, pool.Values, retiredIds, references, findings);
@@ -158,6 +179,7 @@ public sealed class ClrModelBuilder
         var members = new List<MemberDef>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var variants = VariantsOf(owner, registered);
+        var memberReferences = new List<PendingReference>();
 
         // An interface, or an abstract type the driver cannot describe, is known only through
         // its variants: its members are theirs, every one merged with `onlyFor`. The driver's
@@ -193,13 +215,11 @@ public sealed class ClrModelBuilder
             member.Deprecated = DeprecationOf(property);
             member.Constraints = ConstraintsOf(property, member.Kind);
 
-            if (property.GetCustomAttribute<OxQLReferenceAttribute>(inherit: false) is { } declared)
-                references.Add(new PendingReference(member, $"{label}#{wire}", declared.Entity, declared.Field, ReferenceSource.Attribute));
-            else if (declaredTargets.TryGetValue(wire, out var target))
-                references.Add(new PendingReference(member, $"{label}#{wire}", target, null, ReferenceSource.ReferenceId));
-
+            memberReferences.AddRange(DeclaredReferences(owner, property, member, $"{label}#{wire}", declaredTargets));
             members.Add(member);
         }
+
+        AddReferences(memberReferences, members);
 
         type.Members = members;
         type.Discriminator = DiscriminatorOf(owner);
@@ -210,6 +230,204 @@ public sealed class ClrModelBuilder
 
         ReportUnregisteredSubtypes(owner, label);
     }
+
+    /// <summary>
+    /// The reference cases a member declares, unvalidated against its siblings: one
+    /// <c>[OxQLReference]</c>, the <c>[OxQLReferenceWhen]</c> cases, or the host-side
+    /// declarations on the pooled type (or a type it is a variant of); <c>[ReferenceId]</c> only
+    /// when none of those. Two of the three forms on one member declare nothing.
+    /// </summary>
+    private List<PendingReference> DeclaredReferences(
+        Type owner,
+        PropertyInfo property,
+        MemberDef member,
+        string memberLabel,
+        IReadOnlyDictionary<string, string> declaredTargets)
+    {
+        var plain = property.GetCustomAttribute<OxQLReferenceAttribute>(inherit: false);
+        var when = property.GetCustomAttributes<OxQLReferenceWhenAttribute>(inherit: false).ToList();
+        var hosted = HostDeclarations(owner, member.WireName);
+        var forms = (plain is null ? 0 : 1) + (when.Count == 0 ? 0 : 1) + (hosted.Count == 0 ? 0 : 1);
+
+        if (forms > 1)
+            return Unresolved(memberLabel, "The member declares its reference in more than one way (OxQLReference, OxQLReferenceWhen, a host-side declaration), so none is emitted.", property);
+
+        if (plain is not null)
+            return [new PendingReference(member, memberLabel, plain.Entity, plain.Field, ReferenceSource.Attribute, NullIfBlank(plain.Item), KeyAsOf(plain.KeyAs))];
+
+        if (when.Count > 0)
+            return Cases(owner, property.DeclaringType ?? owner, member, memberLabel, ReferenceSource.Attribute,
+                [.. when.Select(attribute => (attribute.Path, attribute.Value, attribute.Targets, attribute.Field, attribute.KeyAs))], property);
+
+        if (hosted.Count > 0)
+        {
+            if (hosted.Select(declaration => declaration.Type).Distinct().Count() > 1)
+                return Unresolved(memberLabel, "Host-side declarations on more than one type of the hierarchy name the member, so none is emitted.", property);
+
+            if (hosted.Any(declaration => declaration.Path is null))
+            {
+                if (hosted.Count > 1)
+                    return Unresolved(memberLabel, "A host-side declaration names the member unconditionally beside other declarations, so none is emitted.", property);
+
+                var single = hosted[0];
+
+                return [new PendingReference(member, memberLabel, [PendingTarget.Parse(single.Targets[0], single.Field)], ReferenceSource.Declaration, null, KeyAsOf(single.KeyAs))];
+            }
+
+            return Cases(owner, hosted[0].Type, member, memberLabel, ReferenceSource.Declaration,
+                [.. hosted.Select(declaration => (declaration.Path!, declaration.Value!, declaration.Targets, declaration.Field, declaration.KeyAs))], property);
+        }
+
+        return declaredTargets.TryGetValue(member.WireName, out var target)
+            ? [new PendingReference(member, memberLabel, target, null, ReferenceSource.ReferenceId)]
+            : [];
+    }
+
+    /// <summary>
+    /// The typed cases of one member: one path for every case and no value twice. A variant
+    /// condition names variants of the declaring type (or the type itself); on a variant's own
+    /// pooled type only the cases naming it or its descendants are kept.
+    /// </summary>
+    private List<PendingReference> Cases(
+        Type owner,
+        Type declaringType,
+        MemberDef member,
+        string memberLabel,
+        ReferenceSource source,
+        IReadOnlyList<(string Path, string Value, IReadOnlyList<string> Targets, string? Field, OxQLKeyAs KeyAs)> declared,
+        PropertyInfo property)
+    {
+        var path = declared[0].Path;
+
+        if (declared.Any(item => !string.Equals(item.Path, path, StringComparison.Ordinal)))
+            return Unresolved(memberLabel, "The cases of the reference test different paths; every case of one member tests the same one, so none is emitted.", property);
+
+        if (declared.GroupBy(item => item.Value, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice)
+            return Unresolved(memberLabel, $"Two cases of the reference apply for '{twice.Key}', so none is emitted.", property);
+
+        var byVariant = path == OxQLReferenceWhenAttribute.Variant;
+        IReadOnlySet<string>? applicable = null;
+
+        if (byVariant)
+        {
+            var known = VariantNames(declaringType);
+
+            if (declared.FirstOrDefault(item => !known.Contains(item.Value)) is { Value: not null } unknown)
+                return Unresolved(memberLabel,
+                    $"'{unknown.Value}' is not a variant of '{VariantName(declaringType)}'; its variants are {string.Join(", ", known.Order(StringComparer.Ordinal))}. No case is emitted.",
+                    property);
+
+            applicable = VariantNames(owner);
+        }
+
+        var cases = new List<PendingReference>();
+
+        foreach (var item in declared)
+        {
+            if (applicable is not null && !applicable.Contains(item.Value))
+                continue;
+
+            cases.Add(new PendingReference(
+                member,
+                memberLabel,
+                [.. item.Targets.Select(target => PendingTarget.Parse(target, NullIfBlank(item.Field)))],
+                source,
+                byVariant ? new ReferenceCondition.Variant([item.Value]) : new ReferenceCondition.PathEquals(path, [item.Value]),
+                KeyAsOf(item.KeyAs)));
+        }
+
+        return cases;
+    }
+
+    /// <summary>
+    /// Adds the members' cases once the type's members are known: a case tested on a sibling
+    /// needs that sibling to be a stored string or enum member of the same type.
+    /// </summary>
+    private void AddReferences(List<PendingReference> pending, IReadOnlyList<MemberDef> members)
+    {
+        foreach (var group in pending.GroupBy(item => item.Member, ReferenceEqualityComparer.Instance))
+        {
+            var first = group.First();
+
+            if (first.When is ReferenceCondition.PathEquals condition)
+            {
+                var sibling = members.FirstOrDefault(member => string.Equals(member.WireName, condition.Path, StringComparison.Ordinal));
+
+                if (sibling is not { Stored: true, Kind: Kind.String or Kind.Enum })
+                {
+                    findings.Add(new BuildFinding(
+                        BuildCodes.ReferenceDeclarationUnresolved,
+                        first.OwnerLabel,
+                        $"The cases test '{condition.Path}', which is not a stored string or enum member beside the reference, so none is emitted.",
+                        condition.Path));
+
+                    continue;
+                }
+            }
+
+            references.AddRange(group);
+        }
+    }
+
+    /// <summary>The host-side declarations on the wire member of the owner or of a type the owner is a variant of.</summary>
+    private List<ReferenceDeclaration> HostDeclarations(Type owner, string wire)
+    {
+        var applicable = new List<ReferenceDeclaration>();
+
+        foreach (var group in hostDeclarations)
+        {
+            if (!string.Equals(group.Key.WireMember, wire, StringComparison.Ordinal))
+                continue;
+
+            if (group.Key.Type != owner && !VariantsOf(group.Key.Type, registered).Contains(owner))
+                continue;
+
+            appliedDeclarations.Add(group.Key);
+            applicable.AddRange(group);
+        }
+
+        return applicable;
+    }
+
+    /// <summary>A finding for every host-side declaration no described member took.</summary>
+    private void ReportUnappliedDeclarations()
+    {
+        foreach (var group in hostDeclarations)
+        {
+            if (appliedDeclarations.Contains(group.Key))
+                continue;
+
+            findings.Add(new BuildFinding(
+                BuildCodes.ReferenceDeclarationUnresolved,
+                $"{StructuralIds.ReadableId(group.Key.Type)}#{group.Key.WireMember}",
+                pool.ContainsKey(group.Key.Type)
+                    ? $"The host-side declaration names the member '{group.Key.WireMember}', which the type does not have, so no reference is emitted."
+                    : "The host-side declaration names a type the model does not describe, so no reference is emitted.",
+                group.Key.Type.FullName));
+        }
+    }
+
+    /// <summary>The names a stored value of the type can carry: its own and its variants'.</summary>
+    private HashSet<string> VariantNames(Type type)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal) { VariantName(type) };
+
+        foreach (var variant in VariantsOf(type, registered))
+            names.Add(VariantName(variant));
+
+        return names;
+    }
+
+    private List<PendingReference> Unresolved(string memberLabel, string message, PropertyInfo property)
+    {
+        findings.Add(new BuildFinding(BuildCodes.ReferenceDeclarationUnresolved, memberLabel, message, $"{property.DeclaringType?.FullName}.{property.Name}"));
+
+        return [];
+    }
+
+    private static KeyAs KeyAsOf(OxQLKeyAs keyAs) => keyAs == OxQLKeyAs.Guid ? KeyAs.Guid : KeyAs.None;
+
+    private static string? NullIfBlank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     /// <summary>
     /// Appends every wire name some variant has and the type has not, as a nullable copy

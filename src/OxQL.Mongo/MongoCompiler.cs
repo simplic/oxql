@@ -264,9 +264,9 @@ public static class MongoCompiler
                     emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins, collated)));
                     break;
 
-                // JOIN_BEFORE_PAGE / JOIN_AFTER_PAGE (E12b): JoinsAfterPage decides the phase of a
-                // join; a join a later lookup's 'on' reads stays before the page unless that
-                // lookup joins after the page as well (see JoinsAfterPage).
+                // JoinsAfterPage decides the phase of a join, which explain reports (JOIN_BEFORE_PAGE /
+                // JOIN_AFTER_PAGE); a join a later lookup's 'on' reads stays before the page unless
+                // that lookup joins after the page as well (see JoinsAfterPage).
                 case BoundStage.Lookup lookup when JoinsAfterPage(bound.Stages, index, lookup.As):
                     lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags)));
                     lateJoinKeys.Add(lookup.ParentKeyStorage);
@@ -1350,9 +1350,9 @@ public static class MongoCompiler
     /// orders, unwinds, groups or resolves through its alias, no group replaces the row, and
     /// every later projection passes the alias whole: the page then holds the same rows, and
     /// the join adds the same value to each of them, whether it runs before the sort or
-    /// after the limit.
+    /// after the limit. Explain reads it for a join step's phase (DESIGN §4.3).
     /// </summary>
-    private static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, string alias)
+    public static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, string alias)
     {
         for (var later = index + 1; later < stages.Count; later++)
         {

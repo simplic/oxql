@@ -82,6 +82,14 @@ public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Ele
 /// <summary>A select path (<paramref name="Parent"/>: of the owning row) that one target of a union's keyed stage lacks, dropped for it.</summary>
 public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent);
 
+/// <summary>
+/// One target's owner query of a keyed stage as explain shows it: the target (<c>entity</c> or
+/// <c>entity#item</c>), whether it is remote and the service owning it, whether the query is grouped
+/// per key, the query with its keys elided, the continued stages it carries and those that do not
+/// apply to its rows.
+/// </summary>
+public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Service, bool Grouped, QueryRequest Query, IReadOnlyList<ContinuedStage> Continued, IReadOnlyList<ContinuedStage> NotApplicable);
+
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
 public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
 
@@ -937,6 +945,42 @@ public sealed class KeyedFetch
 
     /// <summary>The rows a grouped owner query returns per key at most: two tell a resolved key from an ambiguous one.</summary>
     public const int PerKey = 2;
+
+    /// <summary>The placeholder an explained owner query carries where the page's keys would be (DESIGN §4.3 "keys elided").</summary>
+    public const string ElidedKey = "…";
+
+    /// <summary>
+    /// The owner queries a keyed stage would send, one per distinct target, as explain shows them
+    /// (DESIGN §4.3 <c>owner</c>): built by the very plan a run builds, the page's keys elided to
+    /// <see cref="ElidedKey"/>, with the continued stages that target's owner runs and those it does
+    /// not (<c>not_applicable</c> for its rows). Nothing is sent and nothing is cached.
+    /// </summary>
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(stage);
+
+        var index = StageIndexOf(bound, stage);
+        var continued = Continuation.Of(bound, stage);
+        var cases = CasesOf(stage);
+        var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
+        var projected = ProjectedUnder(bound, index, stage.As);
+        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, index, parentAs) : null;
+        var plans = new List<TargetPlan>();
+
+        foreach (var target in cases.SelectMany(selected => selected.Targets))
+            if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
+                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, projected, parentProjected));
+
+        return plans.Select(plan => new ExplainedOwnerQuery(
+            plan.TargetName,
+            plan.Target.IsRemote,
+            plan.Target.Declared.Entity.Split('.')[0],
+            plan.Grouped,
+            plan.Query([ElidedKey]),
+            plan.Continued.Origins,
+            continued.Where(other => !plan.Continued.Origins.Any(origin => ReferenceEquals(origin, other))).ToList())).ToList();
+    }
 
     /// <summary>One keyed stage over the page: its targets, the stages continued under it, and per row the keys its cases select.</summary>
     private sealed class StagePlan(BoundStage.Resolve stage, int? index, IReadOnlyList<ContinuedStage> continued)

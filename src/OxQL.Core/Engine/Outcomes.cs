@@ -500,7 +500,12 @@ public sealed record ExplainStep
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Phase { get; init; }
 
-    /// <summary>For a keyed or continued stage: the owner and the query forwarded to it; null elsewhere.</summary>
+    /// <summary>
+    /// For a keyed or continued stage: the owner and the query forwarded to it, keys elided —
+    /// <c>{ service, route: { apiName, apiVersion }, query, targets: [{ target, service, remote, grouped,
+    /// route, query, continued: [index], notApplicable: [index] }] }</c>, the head naming the first remote
+    /// target (else the first); null elsewhere.
+    /// </summary>
     [JsonPropertyName("owner")]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public JsonNode? Owner { get; init; }
@@ -514,7 +519,7 @@ public sealed record ExplainStep
     [JsonPropertyName("creates")]
     public required IReadOnlyList<ExplainCreated> Creates { get; init; }
 
-    /// <summary>For a keyed stage: the stages continued at its owner.</summary>
+    /// <summary>For a keyed stage: the stages continued at its owners, <c>{ index, forTarget }</c> each; absent when none.</summary>
     [JsonPropertyName("continued")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<JsonNode>? Continued { get; init; }

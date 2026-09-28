@@ -343,6 +343,12 @@ public class ContinuationExecutionTests
         result.Items[0]!["owner"]!["number"]!.GetValue<string>().Should().Be("S-9");
         client.Calls.Should().HaveCount(2, "the first answer named the path the target lacks");
         client.Calls[1].Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys.Should().NotContain("name").And.Contain("number");
+
+        var dropped = result.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget, "only the run learns what a remote target lacks, so the run says it").Subject;
+        dropped.Should().Match<Diagnostic>(diagnostic => diagnostic.Stage == 0 && diagnostic.Path == "name");
+        dropped.Params!["target"].Should().Be("transport.shipment#billingLines");
+        dropped.Params["alias"].Should().Be("line", "the resolve's alias; parent says the path is the owning row's");
+        dropped.Params["parent"].Should().Be(true);
     }
 
     [Fact]

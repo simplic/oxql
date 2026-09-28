@@ -40,7 +40,10 @@ public class HostHardeningExplainTests
         Strings(body["engine"]!["capabilities"]).Should().Contain(["explain", "oxql.2.1"]).And.NotContain("resolve.chain", "the Sample host has no remote query client");
         body["engine"]!["version"]!.GetValue<string>().Should().NotBeNullOrEmpty();
         body["errors"]!.AsArray().Should().BeEmpty();
-        body["notes"]!.AsArray().Should().BeEmpty();
+        body["notes"]!.AsArray().Select(note => note!["code"]!.GetValue<string>()).Should().Equal([Notes.LookupLimit, Notes.JoinAfterPage],
+            "the lookup's limit, and the lookup joins after the page since nothing later reads it");
+        body["steps"]![0]!["executor"]!.GetValue<string>().Should().Be("inline");
+        body["result"]!["columns"]!.AsArray().Should().Contain(column => column!["path"]!.GetValue<string>() == "orders" && column["root"]!.GetValue<string>() == "orders");
         body["describe"]!.AsArray().Should().BeEmpty();
         body["stages"]!.AsArray().Should().Contain(stage => stage!.AsObject().ContainsKey("$lookup"));
         body.ContainsKey("advisory").Should().BeFalse("the advisory is opt-in");
@@ -78,6 +81,10 @@ public class HostHardeningExplainTests
 
         join["used"]!.GetValue<bool>().Should().BeTrue(join.ToJsonString());
         join["index"]!.GetValue<string>().Should().Be("org_customer");
+
+        var advice = body["notes"]!.AsArray().Select(node => node!.AsObject()).Where(note => note["code"]!.GetValue<string>() == Notes.IndexAdvice).ToList();
+        advice.Should().HaveCount(body["advisory"]!.AsArray().Count, "each line of the advisory is also a note");
+        advice.Single(note => note["params"]!["field"]!.GetValue<string>() == "lookup:orders")["params"]!["index"]!.GetValue<string>().Should().Be("org_customer");
     }
 
     [Fact]

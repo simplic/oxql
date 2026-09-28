@@ -113,6 +113,31 @@ public class ContinuationBindTests
         (await ErrorAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "parentAs": "c" } }]""", Codes.AliasCollision)).Stage.Should().Be(1);
     }
 
+    // ---- the canonical form --------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_continued_stage_renders_its_anchor_target_aliases_and_stage_in_the_canonical_form_and_the_fingerprint()
+    {
+        var bound = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "select": ["name"] } }]""");
+
+        var stage = System.Text.Json.Nodes.JsonNode.Parse(bound.Canonical)!["stages"]![1]!;
+        stage.ToJsonString().Should().NotContain("unknown");
+        stage["continued"]!["anchor"]!.GetValue<string>().Should().Be("r");
+        stage["continued"]!["kind"]!.GetValue<string>().Should().Be("resolve");
+        stage["continued"]!["forTarget"].Should().BeNull();
+        stage["continued"]!["aliases"]!.ToJsonString().Should().Be("""["c"]""");
+        stage["continued"]!["stage"]!["resolve"]!["path"]!.GetValue<string>().Should().Be("r.customerId", "the stage as the caller wrote it; the owner's rewrite is per target");
+
+        var other = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "select": ["code"] } }]""");
+        other.Fingerprint.Should().NotBe(bound.Fingerprint, "two requests continuing different stages never share a cursor");
+
+        var forTarget = await BoundAsync($$"""
+            [{{Union}},
+             { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "forTarget": "rc.shipment", "as": "invoices" } }]
+            """);
+        System.Text.Json.Nodes.JsonNode.Parse(forTarget.Canonical)!["stages"]![1]!["continued"]!["forTarget"]!.GetValue<string>().Should().Be("rc.shipment");
+    }
+
     // ---- forTarget ------------------------------------------------------------------------------------
 
     [Fact]

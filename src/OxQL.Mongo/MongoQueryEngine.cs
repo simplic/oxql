@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,6 +32,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
 
+    /// <summary>The engine over <paramref name="models"/> and <paramref name="runner"/>; a remote client lets it resolve targets of other services.</summary>
     public MongoQueryEngine(
         IEntityModelProvider models,
         IAggregateRunner runner,
@@ -183,6 +185,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             resolved = resolution.Rows;
             diagnostics.AddRange(resolution.Diagnostics);
 
+            // A flat select path an owner said its target lacks was dropped for that target; only
+            // the run learns it, so the run says it (DESIGN §3.4.1; explain notes the local ones).
+            diagnostics.AddRange(resolution.Dropped.Select(drop => Notes.SelectPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path, drop.Parent)));
+
             var report = OutcomePolicy.Report(bound, resolution.Outcomes, resolution.Truncations, strict, options);
 
             diagnostics.AddRange(report.Diagnostics);
@@ -302,23 +308,368 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var bound = ((BindOutcome.Bound)binding).Pipeline;
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
         var diagnostics = bound.Diagnostics.ToList();
+        var strict = context.Contract == 2 && request.Query.IsStrict;
+        var indexes = Notes.CallerIndexes(bound, request.Query);
+        var notes = Notes.Of(bound, request.Query, indexes, strict, context.Contract, options);
+
+        steps = Placed(steps, bound, indexes, strict, notes);
+        result = binding.Trace is { } bindTrace ? ResultOf(bindTrace.Final) with { Columns = Columns(bound, bindTrace) } : result;
 
         // A request this host cannot run is not valid, though it binds: the same refusal the query
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return new ExplainOutcome.Success(Answer(context, valid: false,
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }],
-                diagnostics, steps, result, request));
+                diagnostics, steps, result, request) with { Notes = Ordered(notes) });
+
+        var advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null;
+
+        foreach (var line in advisory ?? [])
+            notes.Add(Notes.Index(
+                line["field"]?.GetValue<string>() ?? "",
+                line["used"] is JsonValue used && used.TryGetValue<bool>(out var flag) ? flag : null,
+                line["index"]?.GetValue<string>(),
+                line["note"]?.GetValue<string>()));
 
         return new ExplainOutcome.Success(Answer(context, valid: true, [], diagnostics, steps, result, request) with
         {
+            Notes = Ordered(notes),
             Bound = JsonNode.Parse(bound.Canonical)!,
             Stages = compiled.PageStages.Select(Relaxed).ToList(),
             Count = compiled.CountStages?.Select(Relaxed).ToList(),
             Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
-            Advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null,
+            Advisory = advisory,
         });
     }
+
+    /// <summary>The notes in stage order, request-wide ones (no stage) last; within a stage as they were found.</summary>
+    private static IReadOnlyList<Diagnostic> Ordered(List<Diagnostic> notes) =>
+        notes.OrderBy(note => note.Stage ?? int.MaxValue).ToList();
+
+    /// <summary>
+    /// The steps with where each join runs (DESIGN §4.3): its executor and phase, the reference it
+    /// follows, the owner and the owner queries of a keyed or continued stage (keys elided), the stages
+    /// continued under a keyed stage; and the join-placement note of each join run on this host.
+    /// </summary>
+    private static IReadOnlyList<ExplainStep> Placed(IReadOnlyList<ExplainStep> steps, BoundPipeline bound, IReadOnlyList<int?> indexes, bool strict, List<Diagnostic> notes)
+    {
+        var placed = steps.ToDictionary(step => step.Index);
+        var owners = new Dictionary<string, IReadOnlyList<ExplainedOwnerQuery>>(StringComparer.Ordinal);
+
+        for (var position = 0; position < bound.Stages.Count; position++)
+        {
+            if (indexes[position] is not { } index || !placed.TryGetValue(index, out var step))
+                continue;
+
+            switch (bound.Stages[position])
+            {
+                case BoundStage.Lookup lookup:
+                {
+                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, lookup.As);
+
+                    placed[index] = step with { Executor = "inline", Phase = after ? "afterPage" : "beforePage" };
+                    notes.Add(Notes.Join(index, lookup.As, "lookup", after));
+                    break;
+                }
+
+                case BoundStage.Resolve resolve when resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed:
+                {
+                    var explained = KeyedFetch.Explain(bound, resolve, strict);
+                    var continued = Continuation.Of(bound, resolve);
+
+                    owners[resolve.As] = explained;
+                    placed[index] = step with
+                    {
+                        Executor = resolve.IsRemote ? "keyed-remote" : "keyed-local",
+                        Phase = "afterPage",
+                        Owner = OwnerOf(explained),
+                        Reference = ReferenceOf(resolve),
+                        Continued = continued.Count == 0 ? null : continued.Select(stage => (JsonNode)new JsonObject { ["index"] = stage.OriginIndex, ["forTarget"] = stage.ForTarget }).ToList(),
+                    };
+                    notes.Add(Notes.Join(index, resolve.As, "resolve", afterPage: true));
+                    break;
+                }
+
+                case BoundStage.Resolve resolve:
+                {
+                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, resolve.As);
+
+                    placed[index] = step with { Executor = "inline", Phase = after ? "afterPage" : "beforePage", Reference = ReferenceOf(resolve) };
+                    notes.Add(Notes.Join(index, resolve.As, "resolve", after));
+                    break;
+                }
+
+                case ContinuedStage continued:
+                {
+                    var carrying = owners.TryGetValue(continued.Anchor, out var explained)
+                        ? explained.Where(owner => owner.Continued.Any(stage => ReferenceEquals(stage, continued))).ToList()
+                        : [];
+
+                    placed[index] = step with { Executor = "continued", Phase = "owner", Owner = carrying.Count == 0 ? null : OwnerOf(carrying) };
+                    break;
+                }
+            }
+        }
+
+        return steps.Select(step => placed[step.Index]).ToList();
+    }
+
+    /// <summary>
+    /// The owner block of a keyed or continued stage: the first remote target's owner (else the first
+    /// target's) with its route and query, and every target's owner query, service, continued stages
+    /// and the continued stages that are <c>not_applicable</c> to its rows. The engine knows an owner's
+    /// service, which names its API (<c>&lt;service&gt;-api</c>), but not the version the host routes
+    /// to, which stays null.
+    /// </summary>
+    private static JsonObject OwnerOf(IReadOnlyList<ExplainedOwnerQuery> explained)
+    {
+        var first = explained.FirstOrDefault(owner => owner.Remote) ?? explained[0];
+
+        return new JsonObject
+        {
+            ["service"] = first.Service,
+            ["route"] = Route(first.Service),
+            ["query"] = QueryOf(first),
+            ["targets"] = new JsonArray(explained.Select(owner => (JsonNode)new JsonObject
+            {
+                ["target"] = owner.Target,
+                ["service"] = owner.Service,
+                ["remote"] = owner.Remote,
+                ["grouped"] = owner.Grouped,
+                ["route"] = Route(owner.Service),
+                ["query"] = QueryOf(owner),
+                ["continued"] = new JsonArray(owner.Continued.Select(stage => (JsonNode)stage.OriginIndex).ToArray()),
+                ["notApplicable"] = new JsonArray(owner.NotApplicable.Select(stage => (JsonNode)stage.OriginIndex).ToArray()),
+            }).ToArray()),
+        };
+    }
+
+    private static JsonObject Route(string service) => new() { ["apiName"] = service + "-api", ["apiVersion"] = null };
+
+    /// <summary>An owner query in wire form, the page's size elided with its keys: it is the number of keys times the rows per key.</summary>
+    private static JsonNode QueryOf(ExplainedOwnerQuery owner)
+    {
+        var query = JsonSerializer.SerializeToNode(owner.Query, OxQLJson.Wire)!;
+
+        foreach (var stage in query["pipeline"]?.AsArray() ?? [])
+            if (stage?["page"] is JsonObject page && page.ContainsKey("limit"))
+                page["limit"] = KeyedFetch.ElidedKey;
+
+        return query;
+    }
+
+    /// <summary>
+    /// The reference a resolve follows as bound (DESIGN §4.3 <c>reference</c>): each selected case with
+    /// its condition, conversion and targets after <c>target</c> narrowed them, the conversion shared by
+    /// every case, and <c>elements</c>.
+    /// </summary>
+    private static JsonObject ReferenceOf(BoundStage.Resolve resolve)
+    {
+        var cases = resolve.Cases is { Count: > 0 } bound
+            ? bound.Select(selected => (selected.Declared.When, selected.KeyAs, Targets: selected.Targets.Select(target => target.Declared).ToList())).ToList()
+            : [(When: (ReferenceCondition?)null, KeyAs: KeyAs.None, Targets: new List<ReferenceTarget> { new(resolve.TargetEntity, resolve.TargetField, null, resolve.IsRemote, resolve.TargetField == "id") })];
+
+        return new JsonObject
+        {
+            ["cases"] = new JsonArray(cases.Select(selected => (JsonNode)new JsonObject
+            {
+                ["when"] = selected.When switch
+                {
+                    ReferenceCondition.PathEquals equals => new JsonObject { ["path"] = equals.Path, ["equals"] = new JsonArray(equals.Values.Select(value => (JsonNode)value).ToArray()) },
+                    ReferenceCondition.Variant variant => new JsonObject { ["variant"] = new JsonArray(variant.Names.Select(name => (JsonNode)name).ToArray()) },
+                    _ => null,
+                },
+                ["keyAs"] = KeyAsName(selected.KeyAs),
+                ["targets"] = new JsonArray(selected.Targets.Select(target => (JsonNode)new JsonObject
+                {
+                    ["entity"] = target.Entity,
+                    ["item"] = target.Item,
+                    ["field"] = target.Field,
+                    ["remote"] = target.IsRemote,
+                }).ToArray()),
+            }).ToArray()),
+            ["keyAs"] = cases.Select(selected => selected.KeyAs).Distinct().Count() == 1 ? KeyAsName(cases[0].KeyAs) : null,
+            ["elements"] = resolve.Elements switch
+            {
+                ResolveElements.First => "first",
+                ResolveElements.All => "all",
+                _ => null,
+            },
+        };
+    }
+
+    private static string? KeyAsName(KeyAs keyAs) => keyAs == KeyAs.Guid ? "guid" : null;
+
+    /// <summary>
+    /// The final shape's visible members and roots (DESIGN §4.3 <c>result.columns</c>), in row order,
+    /// grouped the way the row nests them: a member of the entity under root <c>""</c>, an object
+    /// member one level down under its own name, and every alias under its name — a join's select, an
+    /// element's members, a lookup's array — so the studio groups a join's columns under its hop.
+    /// Scalars a stage adds (an unwind index, a group output) lie under <c>""</c>.
+    /// </summary>
+    private static IReadOnlyList<ExplainColumn> Columns(BoundPipeline bound, BindTrace trace)
+    {
+        var shape = bound.FinalShape;
+        var created = new Dictionary<string, int>(StringComparer.Ordinal);
+        var columns = new List<ExplainColumn>();
+
+        foreach (var stage in trace.Stages)
+            foreach (var alias in stage.After.Roots.Keys)
+                if (alias != Shape.ImplicitRoot && !stage.Before.Roots.ContainsKey(alias))
+                    created.TryAdd(alias, stage.Index);
+
+        foreach (var (name, node) in shape.Roots)
+        {
+            if (name != Shape.ImplicitRoot && shape.Dropped.Contains(name))
+                continue;
+
+            int? stage = created.TryGetValue(name, out var index) ? index : null;
+
+            switch (node)
+            {
+                case ShapeNode.Entity entity when name == Shape.ImplicitRoot:
+                    Members(entity.Def.Root, "", Shape.ImplicitRoot, nullable: false, null, shape, columns, expand: true);
+                    break;
+
+                case ShapeNode.Entity entity:
+                    if (SelectOf(bound, name) is { } entitySelect)
+                        Joined(name, entitySelect, stage, shape, columns);
+                    else
+                        Members(entity.Def.Root, name + ".", name, nullable: true, stage, shape, columns, expand: false);
+                    break;
+
+                case ShapeNode.Element element:
+                    var elementShape = element.Source.Shape.Of ?? element.Source.Shape;
+
+                    if (elementShape is { Kind: Kind.Object, Type: { } elementType })
+                        Members(elementType, name + ".", name, nullable: false, stage, shape, columns, expand: false);
+                    else
+                        columns.Add(Column(name, elementShape.Kind, nullable: true, stage, Shape.ImplicitRoot));
+                    break;
+
+                case ShapeNode.Array:
+                    columns.Add(Column(name, Kind.Array, nullable: false, stage, name));
+                    break;
+
+                case ShapeNode.Keyed { Many: true }:
+                    columns.Add(Column(name, Kind.Array, nullable: true, stage, name));
+                    break;
+
+                case ShapeNode.Remote or ShapeNode.Keyed:
+                    var select = SelectOf(bound, name) ?? [];
+                    var projected = shape.Included?.Where(path => path.StartsWith(name + ".", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList() ?? [];
+
+                    if (select.Count == 0 && projected.Count > 0)
+                        select = projected.Select(path => (path[(name.Length + 1)..], Kind.Unknown)).ToList();
+
+                    if (select.Count > 0)
+                        Joined(name, select, stage, shape, columns);
+                    else
+                        columns.Add(Column(name, Kind.Object, nullable: true, stage, name));
+                    break;
+
+                case ShapeNode.Scalar scalar:
+                    columns.Add(Column(name, scalar.Kind, nullable: false, stage, Shape.ImplicitRoot));
+                    break;
+
+                case ShapeNode.GroupOutput output:
+                    columns.Add(Column(name, output.Kind, nullable: true, stage, Shape.ImplicitRoot));
+                    break;
+            }
+        }
+
+        return columns;
+    }
+
+    private static ExplainColumn Column(string path, Kind kind, bool nullable, int? stage, string root) =>
+        new() { Path = path, Kind = Kinds.NameOf(kind), Nullable = nullable, Stage = stage, Root = root };
+
+    /// <summary>The columns of a join alias: its select paths, each nullable (the join may find nothing), as far as a projection keeps them.</summary>
+    private static void Joined(string alias, IReadOnlyList<(string Path, Kind Kind)> select, int? stage, Shape shape, List<ExplainColumn> columns)
+    {
+        foreach (var (path, kind) in select)
+            if (shape.IsVisible(alias + "." + path) && !columns.Any(column => column.Path == alias + "." + path))
+                columns.Add(Column(alias + "." + path, kind, nullable: true, stage, alias));
+    }
+
+    /// <summary>
+    /// The stored members of a type as columns, the type's own first, then those only a variant has
+    /// (nullable: other variants lack them). On the entity row (<paramref name="expand"/>) an object
+    /// member, or an unwound collection of objects, is a root of its own with its members one level down.
+    /// </summary>
+    private static void Members(TypeDef type, string prefix, string root, bool nullable, int? stage, Shape shape, List<ExplainColumn> columns, bool expand)
+    {
+        var members = type.Members.Select(member => (Member: member, Variant: false))
+            .Concat(type.Variants.SelectMany(variant => variant.Type.Members).Where(member => type.Member(member.WireName) is null)
+                .DistinctBy(member => member.WireName).Select(member => (Member: member, Variant: true)));
+
+        foreach (var (member, variant) in members)
+        {
+            var wire = prefix + member.WireName;
+
+            if (!member.Stored || !shape.IsVisible(wire))
+                continue;
+
+            var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(Shape.ImplicitRoot, wire)) && member.Of is { } element ? element : member;
+            var memberNullable = nullable || variant || member.Nullable || member.OnlyFor is not null;
+
+            if (expand && memberShape is { Kind: Kind.Object, Type: { } inner })
+                Members(inner, wire + ".", wire, memberNullable, stage, shape, columns, expand: false);
+            else
+                columns.Add(Column(wire, memberShape.Kind, memberNullable, stage, root));
+        }
+    }
+
+    /// <summary>
+    /// The select of a join alias as the row carries it, relative to the alias: a lookup's, an inline or
+    /// keyed resolve's (the union of its targets', a flat select), the owning row's of a <c>parentAs</c>
+    /// (with the <c>entity</c> it names), a remote resolve's as written, or a continued stage's as
+    /// written; null when the alias has none this host knows (the owner's default).
+    /// </summary>
+    private static List<(string Path, Kind Kind)>? SelectOf(BoundPipeline bound, string alias)
+    {
+        foreach (var stage in bound.Stages)
+        {
+            switch (stage)
+            {
+                case BoundStage.Lookup lookup when lookup.As == alias:
+                    return lookup.Select.Select(path => (path.Wire, path.Kind)).ToList();
+
+                case BoundStage.Resolve resolve when resolve.As == alias:
+                    return Flat(TargetsOf(resolve).Select(target => target.IsRemote
+                        ? target.RemoteSelect?.Select(path => (path, Kind.Unknown))
+                        : target.Select?.Select(path => (path.Wire, path.Kind))));
+
+                case BoundStage.Resolve resolve when resolve.ParentAs == alias:
+                    var parent = Flat(TargetsOf(resolve).Select(target => target.IsRemote
+                        ? target.RemoteParentSelect?.Select(path => (path, Kind.Unknown))
+                        : target.ParentSelect?.Select(path => (path.Wire, path.Kind))));
+
+                    return parent is null ? null : [("entity", Kind.String), .. parent];
+
+                case ContinuedStage continued when continued.Aliases.Contains(alias):
+                    return continued.Stage.Resolve is { As: var resolved, Select: { Count: > 0 } written } && resolved == alias
+                        ? written.Select(path => (path, Kind.Unknown)).ToList()
+                        : null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The paths of every target's select in first-seen order, or null when no target has one.</summary>
+    private static List<(string Path, Kind Kind)>? Flat(IEnumerable<IEnumerable<(string Path, Kind Kind)>?> selects)
+    {
+        var known = selects.Where(select => select is not null).ToList();
+
+        return known.Count == 0 ? null : known.SelectMany(select => select!).DistinctBy(pair => pair.Path).ToList();
+    }
+
+    private static IEnumerable<BoundResolveTarget> TargetsOf(BoundStage.Resolve resolve) =>
+        resolve.Cases is { Count: > 0 } cases
+            ? cases.SelectMany(selected => selected.Targets)
+            : [new BoundResolveTarget(new ReferenceTarget(resolve.TargetEntity, resolve.TargetField, null, resolve.IsRemote, resolve.TargetField == "id"),
+                resolve.Target, resolve.TargetFieldStorage, null, resolve.Select, resolve.RemoteSelect, resolve.Filter, resolve.RemoteFilter, resolve.TargetScope, null, null, [])];
 
     /// <summary>The members every explain answer carries, valid or not.</summary>
     private ExplainResult Answer(RequestContext context, bool valid, IReadOnlyList<QueryValidationError> errors, IReadOnlyList<Diagnostic> diagnostics, IReadOnlyList<ExplainStep> steps, ExplainShapeResult? result, ExplainRequest request) => new()
@@ -403,7 +754,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         Projection = shape.Included?.Order(StringComparer.Ordinal).ToList(),
     };
 
-    /// <summary>The final shape. Its columns are the visible members and roots (E12b fills them).</summary>
+    /// <summary>The final shape's paging; its columns are filled from the bound pipeline once the request binds (<see cref="Columns"/>).</summary>
     private static ExplainShapeResult ResultOf(Shape shape) => new() { Paging = Paging(shape), Columns = [] };
 
     private static string Paging(Shape shape) => shape.IsRootShape ? "cursor" : "offset";

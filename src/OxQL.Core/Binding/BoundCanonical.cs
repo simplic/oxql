@@ -113,7 +113,24 @@ public static class BoundCanonical
             ["page"] = new JsonObject { ["limit"] = page.Limit, ["offset"] = page.Offset, ["includeTotalCount"] = IncludeTotalCount(page) },
         },
         BoundStage.Scope scope => new JsonObject { ["scope"] = scope.OrganisationStorage },
+        ContinuedStage continued => new JsonObject { ["continued"] = RenderContinued(continued) },
         _ => new JsonObject { ["unknown"] = stage.GetType().Name },
+    };
+
+    /// <summary>
+    /// A stage continued at the owner of <c>anchor</c> (DESIGN §3.5.3): the anchor, the one target it
+    /// applies to, the aliases it adds and the stage as the owner is sent it before the per-target
+    /// rewrite, in wire form with every variable substituted. The owner binds it, so there is no
+    /// storage form here; two requests continuing different stages never share a fingerprint. No
+    /// 2.0 request continues a stage, so no earlier render changes.
+    /// </summary>
+    private static JsonObject RenderContinued(ContinuedStage continued) => new()
+    {
+        ["anchor"] = continued.Anchor,
+        ["kind"] = continued.Kind,
+        ["forTarget"] = continued.ForTarget,
+        ["aliases"] = new JsonArray(continued.Aliases.Select(alias => (JsonNode)alias).ToArray()),
+        ["stage"] = JsonSerializer.SerializeToNode(continued.Stage, Models.OxQLJson.Wire),
     };
 
     /// <summary>

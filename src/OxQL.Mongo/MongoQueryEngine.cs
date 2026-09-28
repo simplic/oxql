@@ -909,7 +909,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         if (context.MaxTimeMs is { } requested && requested > 0)
             maxTime = Math.Min(maxTime, requested);
 
-        return new CompileOptions(maxTime, options.Execution.AllowDiskUse, options.Limits.CountCap, options.Representation.Collation);
+        return new CompileOptions(maxTime, options.Execution.AllowDiskUse, options.Limits.CountCap, options.Representation.Collation) { KeepDiscriminators = context.Contract != 1 };
     }
 
     /// <summary>The cursor for the page after <paramref name="last"/>.</summary>

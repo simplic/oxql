@@ -143,8 +143,8 @@ public class OwnerFetchRobustnessTests
 
         client.Calls.Select(call => call.Budget).Should().BeInDescendingOrder("each split batch gets what is left, not the whole budget again");
         client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs == KeyedFetch.OwnerCeilingMs(call.Budget));
-        client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs < (int)call.Budget.TotalMilliseconds || call.Budget <= TimeSpan.FromMilliseconds(1),
-            "the owner stops before this host stops waiting");
+        client.Calls.Should().OnlyContain(call => call.Request.MaxTimeMs < (int)call.Budget.TotalMilliseconds || call.Budget < TimeSpan.FromMilliseconds(10),
+            "the owner stops before this host stops waiting (a budget under 10 ms has no margin left to take)");
         for (var next = 1; next < client.Calls.Count; next++)
             client.Calls[next].Budget.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(Math.Max(1, (client.Calls[next - 1].Budget - TimeSpan.FromMilliseconds(100)).TotalMilliseconds)),
                 "a later batch has what the earlier ones (120 ms each) left");

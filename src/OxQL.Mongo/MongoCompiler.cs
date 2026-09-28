@@ -114,7 +114,15 @@ public sealed record CompiledQuery
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
-public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null);
+public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null)
+{
+    /// <summary>
+    /// Whether a projection or a join's select that keeps a member below a polymorphic object also
+    /// keeps that object's discriminator, so the row is encoded by the variant it is stored as (a
+    /// contract 2 row; a contract 1 row is the document as stored and would show it).
+    /// </summary>
+    public bool KeepDiscriminators { get; init; }
+}
 
 /// <summary>
 /// Emits the aggregation pipeline for a bound pipeline: typed <c>$match</c>, string
@@ -300,7 +308,7 @@ public static class MongoCompiler
                 // JOIN_AFTER_PAGE); a join a later lookup's 'on' reads stays before the page unless
                 // that lookup joins after the page as well (see JoinsAfterPage).
                 case BoundStage.Lookup lookup when JoinsAfterPage(bound.Stages, index, lookup.As):
-                    lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags)));
+                    lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags), options.KeepDiscriminators));
                     lateJoinKeys.Add(lookup.ParentKeyStorage);
                     break;
 
@@ -310,7 +318,7 @@ public static class MongoCompiler
                     if (flag is not null)
                         rowFlags.Add(flag.Field);
 
-                    emitted.AddRange(Lookup(lookup, semiJoins, collated, flag));
+                    emitted.AddRange(Lookup(lookup, semiJoins, collated, flag, options.KeepDiscriminators));
 
                     if (flag is not null && bound.Strict && FilteredLater(bound.Stages, index, lookup.As))
                         truncationProbes.Add(new TruncationProbe(Codes.LookupTruncated, lookup.Stage, lookup.As, lookup.Limit, Probing(stages, emitted, flag.Field)));
@@ -327,12 +335,12 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
-                    lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys)));
+                    lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
                     break;
 
                 case BoundStage.Resolve resolve:
-                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys)));
+                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -371,7 +379,9 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes)], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
+                        [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
+                        sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -962,7 +972,7 @@ public static class MongoCompiler
     /// on an alias joins nothing where the row holds no parent: <c>$lookup</c> reads a missing
     /// local field as null, which would join the children whose reference is null.
     /// </summary>
-    private static IEnumerable<BsonDocument> Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins, bool collated, LookupFlag? flag)
+    private static IEnumerable<BsonDocument> Lookup(BoundStage.Lookup lookup, List<SemiJoinSlot> semiJoins, bool collated, LookupFlag? flag, bool keepDiscriminators = false)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(lookup.ChildScope)) };
         var exactKey = collated && IsStringStored(lookup.ChildReference);
@@ -979,7 +989,7 @@ public static class MongoCompiler
 
         pipeline.Add(Sort(lookup.ChildSort ?? [], tieBreak: true));
         pipeline.Add(new BsonDocument("$limit", lookup.First ? 1 : lookup.Limit + 1));
-        pipeline.Add(new BsonDocument("$project", Select(lookup.Select)));
+        pipeline.Add(new BsonDocument("$project", Select(lookup.Select, keepDiscriminators)));
 
         var join = Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As);
 
@@ -1132,7 +1142,7 @@ public static class MongoCompiler
     /// two records and the flag says whether there were two; with an existence flag a second join
     /// without the filter says whether the target has the record at all (DESIGN §3.6).
     /// </summary>
-    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated, InlineProbe? probe = null)
+    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated, InlineProbe? probe = null, bool keepDiscriminators = false)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
         var exactKey = collated && IsStringStored(resolve.Reference);
@@ -1148,7 +1158,7 @@ public static class MongoCompiler
             pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
 
         pipeline.Add(new BsonDocument("$limit", probe?.AmbiguityFlag is null ? 1 : 2));
-        pipeline.Add(new BsonDocument("$project", Select(resolve.Select!)));
+        pipeline.Add(new BsonDocument("$project", Select(resolve.Select!, keepDiscriminators)));
 
         // No caller alias ends in the suffix, so the temporary field shadows nothing.
         var temporary = resolve.As + Aliases.ReservedSuffix;
@@ -1240,13 +1250,18 @@ public static class MongoCompiler
         })));
     }
 
-    private static BsonDocument Select(IReadOnlyList<ResolvedPath> select)
+    private static BsonDocument Select(IReadOnlyList<ResolvedPath> select, bool keepDiscriminators = false)
     {
         var projection = new BsonDocument();
 
         foreach (var path in select)
             if (path.Storage is not null)
                 projection[path.Storage] = 1;
+
+        // A select under a polymorphic object keeps its discriminator, unless a selected path covers it.
+        foreach (var storage in keepDiscriminators ? DiscriminatorsOf(select) : [])
+            if (!projection.Names.Any(kept => storage == kept || storage.StartsWith(kept + ".", StringComparison.Ordinal)))
+                projection[storage] = 1;
 
         if (projection.ElementCount == 0)
             projection[KeyStorage] = 1;
@@ -1474,6 +1489,51 @@ public static class MongoCompiler
         }
 
         return projection.ElementCount == 0 ? null : new BsonDocument("$project", projection);
+    }
+
+    /// <summary>
+    /// The discriminators a projection of <paramref name="paths"/> has to keep (RE-16): for each path
+    /// below a polymorphic object (an object, or the element of a collection of objects, whose type has
+    /// variants), that object's discriminator element, in storage; the path itself is not an ancestor.
+    /// </summary>
+    private static IEnumerable<string> DiscriminatorsOf(IEnumerable<ResolvedPath> paths)
+    {
+        var kept = new List<string>();
+
+        foreach (var path in paths)
+        {
+            if (path is not { Path: { } def, Entity: { } entity, Storage: { } storage })
+                continue;
+
+            var wire = def.Wire.Split('.');
+            var stored = storage.Split('.');
+
+            for (var length = 1; length < wire.Length; length++)
+            {
+                var holder = entity.Path(string.Join('.', wire.Take(length)));
+                var type = holder?.Shape.Kind switch
+                {
+                    Kind.Object => holder.Shape.Type,
+                    Kind.Array => holder.Shape.Of?.Type,
+                    _ => null,
+                };
+
+                if (type is not { Variants.Count: > 0, DiscriminatorElement: { } element })
+                    continue;
+
+                var depth = stored.Length - (wire.Length - length);
+
+                if (depth <= 0)
+                    continue;
+
+                var discriminator = string.Join('.', stored.Take(depth)) + "." + element;
+
+                if (!kept.Contains(discriminator, StringComparer.Ordinal))
+                    kept.Add(discriminator);
+            }
+        }
+
+        return kept;
     }
 
     /// <summary>Whether a projected storage path is the reference path or one of its ancestors.</summary>

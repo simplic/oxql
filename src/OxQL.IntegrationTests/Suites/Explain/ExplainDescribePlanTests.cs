@@ -26,7 +26,7 @@ namespace OxQL.IntegrationTests.Suites.Explain;
 [Trait("Category", "Integration")]
 public class ExplainDescribePlanTests
 {
-    private static readonly Lazy<JsonObject> Plan = new(() => JsonNode.Parse(File.ReadAllText(PlanPath()))!.AsObject());
+    internal static readonly Lazy<JsonObject> Plan = new(() => JsonNode.Parse(File.ReadAllText(PlanPath()))!.AsObject());
 
     /// <summary>The (step, describe id) pairs of the plan that focus an alias the step's query does not create yet.</summary>
     private static readonly HashSet<(string Step, string Describe)> AheadOfItsStage = [("A5.14", "focus")];
@@ -110,7 +110,7 @@ public class ExplainDescribePlanTests
     }
 
     /// <summary>The fleet's engines side by side, each the owner of its service's entities, explaining for one another in process as the internal explain route would.</summary>
-    private sealed class InProcessFleet : IRemoteQueryClient
+    internal sealed class InProcessFleet : IRemoteQueryClient
     {
         private readonly Dictionary<string, MongoQueryEngine> engines = new(StringComparer.Ordinal);
         private readonly EngineDirect direct = new(LabService.Ledger.Model);

@@ -735,10 +735,18 @@ public sealed class Describe
     /// <summary>
     /// A child described in a target's shape, re-described at the origin under its alias: its path is
     /// the origin's, and what may be done with it there — filter, sort, unwind, group, project — is
-    /// what the origin's shape answers, which knows the rows are joined after the page.
+    /// what the origin's shape answers, which knows the rows are joined after the page. The
+    /// collections the path crosses below the alias are the target's: the origin cannot see them
+    /// under a remote alias, and a resolve continued there follows them with <c>elements</c> at
+    /// the owner, so <c>underCollection</c> and <c>reference.followable</c> keep what the target said.
     /// </summary>
     private static JsonObject Rebased(JsonObject child, Shape origin, string path, string usage, string? owner = null)
     {
+        var ownUnder = child["underCollection"] is JsonValue under && under.TryGetValue<int>(out var depth) ? depth : 0;
+        var ownCrossed = child["reference"]?["followable"] is JsonObject followable
+            ? followable["one"]?.GetValue<bool>() == true ? 0 : followable["elements"] is JsonArray ? 1 : 2
+            : 0;
+
         child["path"] = path;
 
         var match = origin.Resolve(path, PathUsage.Match);
@@ -749,7 +757,7 @@ public sealed class Describe
         child["projectable"] = origin.Resolve(path, PathUsage.Project).Succeeded;
         child["unwindable"] = false;
         child["groupable"] = false;
-        child["underCollection"] = 0;
+        child["underCollection"] = ownUnder;
 
         if (!filterable)
             child["operators"] = new JsonArray();
@@ -767,11 +775,7 @@ public sealed class Describe
         child["notes"] = notes.DeepClone();
 
         if (child["reference"] is JsonObject reference)
-        {
-            var crossed = Crossed(origin, path);
-
-            reference["followable"] = Followable(crossed);
-        }
+            reference["followable"] = Followable(Math.Max(Crossed(origin, path), ownCrossed));
 
         var asked = Asked(origin, path, usage);
 
@@ -840,7 +844,8 @@ public sealed class Describe
             ["caseFolding"] = folds ? Folds : NoFolding,
             ["enum"] = enumValues,
             ["variants"] = variantHolder is { Variants.Count: > 0 } ? new JsonArray(VariantNames(variantHolder).Select(variant => (JsonNode)variant).ToArray()) : null,
-            ["flatten"] = FlattenOf(facts),
+            ["flatten"] = FlattensOf(facts).FirstOrDefault(),
+            ["flattenMembers"] = FlattensOf(facts) is { Count: > 1 } flattens ? new JsonArray(flattens.Select(flatten => (JsonNode)flatten).ToArray()) : null,
             ["onlyFor"] = member?.OnlyFor is { Count: > 0 } onlyFor ? new JsonArray(onlyFor.Select(variant => (JsonNode)variant).ToArray()) : null,
             ["snapshotOf"] = SnapshotOf(facts),
             ["reference"] = ReferenceOf(facts, Crossed(shape, path)),
@@ -976,18 +981,26 @@ public sealed class Describe
         }).ToArray());
     }
 
-    /// <summary>The member <c>unwind.flatten</c> may follow on a collection of objects: the first member nesting the same kind of element.</summary>
-    private static string? FlattenOf(ResolvedPath? facts)
+    /// <summary>
+    /// The members <c>unwind.flatten</c> may follow on a collection of objects, every member nesting
+    /// the same kind of element (the binder's rule): first the one named like the collection itself
+    /// (a group's <c>items</c> under <c>items</c>), which is the recursion of the collection; then the
+    /// others in member order. <c>flatten</c> advertises the first, <c>flattenMembers</c> all of them
+    /// when there are several.
+    /// </summary>
+    private static List<string> FlattensOf(ResolvedPath? facts)
     {
         if (facts is not { Kind: Kind.Array } || facts.Shape?.Of is not { Kind: Kind.Object, Type: { } element })
-            return null;
+            return [];
 
-        foreach (var member in element.Members)
-            if (member is { Kind: Kind.Array, Of: { Kind: Kind.Object, Type: { } nested }, Stored: true, StorageName: not null }
+        var own = facts.Wire[(facts.Wire.LastIndexOf('.') + 1)..];
+
+        return element.Members
+            .Where(member => member is { Kind: Kind.Array, Of: { Kind: Kind.Object, Type: { } nested }, Stored: true, StorageName: not null }
                 && (ReferenceEquals(nested, element) || nested.Variants.Any(variant => ReferenceEquals(variant.Type, element))))
-                return member.WireName;
-
-        return null;
+            .Select(member => member.WireName)
+            .OrderBy(name => name == own ? 0 : 1)
+            .ToList();
     }
 
     private static string? SnapshotOf(ResolvedPath? facts) => facts?.Shape?.SnapshotOf ?? facts?.Shape?.Leaf.SnapshotOf;

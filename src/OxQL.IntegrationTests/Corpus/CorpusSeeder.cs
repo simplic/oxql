@@ -9,8 +9,8 @@ namespace OxQL.IntegrationTests.Fixtures;
 /// <summary>
 /// Writes the corpus into a fleet's databases: every row of every entity of the services asked
 /// for, as <see cref="CorpusRow.Stored"/> (the driver's serialization of the model, then the raw
-/// overrides), and the addon definitions each organisation declares, into the collection the
-/// host's addon source reads. Callers go through <see cref="CorpusFleet"/>, which seeds a fleet
+/// overrides), the report scenario rows of organisation R (<see cref="ReportSeed"/>), and the
+/// addon definitions each organisation declares, into the collection the host's addon source reads. Callers go through <see cref="CorpusFleet"/>, which seeds a fleet
 /// once; the seeder itself writes whatever it is told.
 /// </summary>
 public static class CorpusSeeder
@@ -29,6 +29,9 @@ public static class CorpusSeeder
             if (rows.Count > 0)
                 await database.GetCollection<BsonDocument>(entity.Collection).InsertManyAsync(rows, new InsertManyOptions { IsOrdered = false }, cancellationToken);
         }));
+
+        // The report scenario rows, all in organisation R: nothing a case over A or B reads.
+        await ReportSeed.SeedAsync(fleet, wanted, cancellationToken);
 
         foreach (var service in wanted)
         {

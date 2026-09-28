@@ -313,9 +313,11 @@ public class ExplainDescribeTests
         entity["id"]!.GetValue<string>().Should().Be("entity");
         ChildAt(entity, "name")["sortable"]!.GetValue<bool>().Should().BeTrue("an entity describe is the owner's answer as it stands");
 
-        client.ExplainCalls.Should().HaveCount(2);
-        client.ExplainCalls.Should().OnlyContain(call => call.Service == "crm" && call.Request.Remote == ExplainRequest.RemoteSkip && call.Budget <= TimeSpan.FromMilliseconds(1_500));
-        client.ExplainCalls[0].Request.Query.EntityType.Should().Be("crm.contact");
+        var describes = client.ExplainCalls.Where(call => call.Request.Remote == ExplainRequest.RemoteSkip).ToList();
+        describes.Should().HaveCount(2);
+        describes.Should().OnlyContain(call => call.Service == "crm" && call.Budget <= TimeSpan.FromMilliseconds(1_500));
+        describes[0].Request.Query.EntityType.Should().Be("crm.contact");
+        client.ExplainCalls.Should().ContainSingle(call => call.Request.Remote == ExplainRequest.RemoteCheck, "ct's written select is checked at its owner as well");
     }
 
     [Fact]
@@ -464,14 +466,14 @@ public class ExplainDescribeTests
     }
 
     [Fact]
-    public async Task A_query_without_continued_parts_asks_no_owner()
+    public async Task A_query_without_continued_parts_or_paths_an_owner_binds_asks_no_owner()
     {
         var client = new FakeRemoteClient();
 
-        var result = await ExplainAsync(Joins, "[]", client);
+        var result = await ExplainAsync("""[{ "unwind": { "path": "lines", "as": "line" } }, { "resolve": { "path": "contactId", "as": "ct" } }]""", "[]", client);
 
         result.Valid.Should().BeTrue();
-        client.ExplainCalls.Should().BeEmpty();
+        client.ExplainCalls.Should().BeEmpty("the owner's default select names nothing the caller wrote");
         result.Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked);
     }
 

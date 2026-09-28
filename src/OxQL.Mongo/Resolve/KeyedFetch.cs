@@ -95,8 +95,35 @@ public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Serv
 /// check): the target (<c>entity</c> or <c>entity#item</c>), the owner's service, the query with the
 /// check key, the caller index of its first continued stage, and the mapping of an owner error back
 /// to the caller (null for an error at the owner query's own stages).
+/// <para>
+/// A target is checked for its continued stages and for the paths the caller wrote under its
+/// aliases: its <c>select</c>, its <c>parentSelect</c>, and every path the last projection after the
+/// stage names under them, which the check query projects at <paramref name="ProjectAt"/> so the
+/// owner says which it lacks. <paramref name="Stage"/> is the resolve's caller index,
+/// <paramref name="ProjectStage"/> that projection's; <paramref name="Select"/> and
+/// <paramref name="ParentSelect"/> are what the caller wrote.
+/// </para>
 /// </summary>
-public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map);
+public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
+{
+    /// <summary>The resolve this target belongs to.</summary>
+    public BoundStage.Resolve? Resolve { get; init; }
+
+    /// <summary>The target as bound.</summary>
+    public BoundResolveTarget? Bound { get; init; }
+
+    /// <summary>The resolve's caller index.</summary>
+    public int? Stage { get; init; }
+
+    /// <summary>The caller index of the last projection after the resolve, when it names paths under its aliases.</summary>
+    public int? ProjectStage { get; init; }
+
+    /// <summary>The check query's projection stage, where an owner reports a path the target lacks.</summary>
+    public int ProjectAt { get; init; } = -1;
+
+    /// <summary>Whether the target is an item: its members travel under <see cref="BoundKeyedBy.Element"/>.</summary>
+    public bool Item { get; init; }
+}
 
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
 public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
@@ -996,15 +1023,51 @@ public sealed class KeyedFetch
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
 
+        var index = StageIndexOf(bound, stage);
+        var projected = ProjectedUnder(bound, index, stage.As) ?? [];
+        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, index, parentAs) ?? [] : [];
+        var project = index is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
+        var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
+
         return PlansOf(bound, stage, strict, Continuation.Of(bound, stage))
-            .Where(plan => plan.Target.IsRemote && !plan.Continued.IsEmpty)
+            .Where(plan => plan.Target.IsRemote && (!plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0))
             .Select(plan =>
             {
                 var query = plan.Query([CheckKey]);
+                var item = plan.Target.Declared.Item is not null;
+                var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
 
-                return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service));
+                // The paths the projection names under the aliases are asked too, so the owner says
+                // which of them this target lacks; a run sends only those under the select.
+                if (projectAt >= 0)
+                {
+                    var fields = new Dictionary<string, int>(query.Pipeline[projectAt].Project!.Fields, StringComparer.Ordinal);
+
+                    foreach (var path in projected)
+                        fields.TryAdd(item ? BoundKeyedBy.Element + "." + path : path, 1);
+
+                    foreach (var path in item ? parentProjected : [])
+                        fields.TryAdd(path, 1);
+
+                    var pipeline = query.Pipeline.ToList();
+                    pipeline[projectAt] = pipeline[projectAt] with { Project = pipeline[projectAt].Project! with { Fields = fields } };
+                    query = query with { Pipeline = pipeline };
+                }
+
+                return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.IsEmpty ? index ?? 0 : plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service))
+                {
+                    Resolve = stage,
+                    Bound = plan.Target,
+                    Stage = index,
+                    ProjectStage = projectStage,
+                    ProjectAt = projectAt,
+                    Item = item,
+                };
             })
             .ToList();
+
+        static bool Writes(BoundResolveTarget target) =>
+            target.RemoteSelect is { Count: > 0 } || target.RemoteParentSelect is { Count: > 0 };
     }
 
     /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>

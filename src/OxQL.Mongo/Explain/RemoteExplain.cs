@@ -137,7 +137,12 @@ public sealed class RemoteExplain : IDescribeOwners
         var notes = new List<Diagnostic>();
 
         foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote))
-            foreach (var check in KeyedFetch.Checks(bound, resolve, strict))
+        {
+            var checks = KeyedFetch.Checks(bound, resolve, strict);
+            var misses = new List<Miss>();
+            var answered = new HashSet<OwnerCheck>(ReferenceEqualityComparer.Instance);
+
+            foreach (var check in checks)
             {
                 if (skip)
                 {
@@ -154,10 +159,21 @@ public sealed class RemoteExplain : IDescribeOwners
                     continue;
                 }
 
+                answered.Add(check);
+
                 if (answer["errors"] is JsonArray owned)
                     foreach (var error in owned.OfType<JsonObject>())
-                        if (check.Map(error) is { } mapped && !errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && other.Path == mapped.Path))
-                            errors.Add(mapped);
+                    {
+                        if (check.Map(error) is { } mapped)
+                        {
+                            if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && other.Path == mapped.Path))
+                                errors.Add(mapped);
+                        }
+                        else if (MissOf(check, error) is { } miss)
+                        {
+                            misses.Add(miss);
+                        }
+                    }
 
                 if (answer["notes"] is JsonArray ownerNotes)
                     foreach (var note in ownerNotes.OfType<JsonObject>().Where(note => note["code"]?.GetValue<string>() == Notes.RemoteUnchecked))
@@ -172,7 +188,105 @@ public sealed class RemoteExplain : IDescribeOwners
                         });
             }
 
+            Judge(resolve, checks, answered, misses, errors, notes);
+        }
+
         return (errors, notes);
+    }
+
+    /// <summary>A path a remote target's owner said the target lacks, at the check query's projection: relative to the alias, or to the owning row.</summary>
+    private sealed record Miss(OwnerCheck Check, string Path, bool Parent, string OwnerPath);
+
+    /// <summary>An owner's <c>UNKNOWN_PATH</c> at the check query's projection as a path of the alias or of the owning row; null for any other error.</summary>
+    private static Miss? MissOf(OwnerCheck check, JsonObject error)
+    {
+        if (error["code"]?.ToString() != Codes.UnknownPath || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage) || stage != check.ProjectAt
+            || error["path"]?.ToString() is not { Length: > 0 } path)
+            return null;
+
+        var element = BoundKeyedBy.Element + ".";
+
+        if (!check.Item)
+            return new Miss(check, path, Parent: false, path);
+
+        return path.StartsWith(element, StringComparison.Ordinal)
+            ? new Miss(check, path[element.Length..], Parent: false, path)
+            : new Miss(check, path, Parent: true, path);
+    }
+
+    /// <summary>
+    /// What the owners' misses mean for one resolve (DESIGN §3.4.1 flat select, §4.3): a path some
+    /// target has is dropped for those that lack it (<c>SELECT_PATH_NOT_ON_TARGET</c>, as a run drops
+    /// it); a path no target has is this request's <c>UNKNOWN_PATH</c> where the caller wrote it (the
+    /// resolve's select, or the projection after it), with <c>params.owner</c> where the owner saw it.
+    /// A local target has what its entity (or item) has; a remote target nobody asked has every path.
+    /// </summary>
+    private static void Judge(BoundStage.Resolve resolve, IReadOnlyList<OwnerCheck> checks, HashSet<OwnerCheck> answered, List<Miss> misses, List<QueryValidationError> errors, List<Diagnostic> notes)
+    {
+        var targets = (resolve.Cases is { Count: > 0 } cases ? cases.SelectMany(selected => selected.Targets) : [])
+            .DistinctBy(target => (target.Declared.Entity, target.Declared.Field, target.Declared.Item))
+            .ToList();
+
+        foreach (var group in misses.GroupBy(miss => (miss.Path, miss.Parent)))
+        {
+            var (path, parent) = group.Key;
+            var lacking = group.Select(miss => miss.Check).ToList();
+            var first = group.First();
+            var written = parent ? first.Check.Bound?.RemoteParentSelect : first.Check.Bound?.RemoteSelect;
+            var stage = written?.Contains(path, StringComparer.Ordinal) == true ? first.Check.Stage : first.Check.ProjectStage ?? first.Check.Stage;
+            var alias = parent ? resolve.ParentAs ?? resolve.As : resolve.As;
+
+            bool Has(BoundResolveTarget target)
+            {
+                if (target.IsRemote)
+                {
+                    var check = checks.FirstOrDefault(each => each.Bound is { } other
+                        && other.Declared.Entity == target.Declared.Entity && other.Declared.Item == target.Declared.Item && other.Declared.Field == target.Declared.Field);
+
+                    return check is null || !answered.Contains(check) || !lacking.Contains(check);
+                }
+
+                if (target.Entity is not { } entity)
+                    return false;
+
+                var at = Shape.ForEntity(entity);
+
+                if (!parent && target.Declared.Item is { } item && at.Resolve(item, PathUsage.Unwind) is { Succeeded: true } collection)
+                    at = at.ForElement(collection.Path!);
+
+                return at.Resolve(path, PathUsage.Project).Succeeded;
+            }
+
+            if (targets.Count > 1 && targets.Any(Has))
+            {
+                foreach (var check in lacking.DistinctBy(check => check.Target))
+                    notes.Add(Notes.SelectPathDropped(stage, resolve.As, check.Target, path, parent));
+
+                continue;
+            }
+
+            if (errors.Any(other => other.Code == Codes.UnknownPath && other.Stage == stage && other.Path == alias + "." + path))
+                continue;
+
+            errors.Add(new QueryValidationError
+            {
+                Code = Codes.UnknownPath,
+                Message = $"'{alias}.{path}' is not a path of {(targets.Count > 1 ? "any target" : "the target")} of '{resolve.As}' ({string.Join(", ", lacking.Select(check => check.Target).Distinct(StringComparer.Ordinal))}).",
+                Stage = stage,
+                Path = alias + "." + path,
+                Params = new Dictionary<string, object?>
+                {
+                    ["owner"] = new Dictionary<string, object?>
+                    {
+                        ["service"] = first.Check.Service,
+                        ["entity"] = first.Check.Bound?.Declared.Entity,
+                        ["target"] = first.Check.Target,
+                        ["stage"] = first.Check.ProjectAt,
+                        ["path"] = first.OwnerPath,
+                    },
+                },
+            });
+        }
     }
 
     /// <summary>One forwarded body: from the cache, else from the owner within what is left of the budget.</summary>
@@ -219,8 +333,8 @@ public sealed class RemoteExplain : IDescribeOwners
     {
         Code = Notes.RemoteUnchecked,
         Message = reason == Skipped
-            ? $"The stages continued at '{check.Service}' for '{check.Target}' were not checked: the request asked for remote \"skip\"."
-            : $"The stages continued at '{check.Service}' for '{check.Target}' could not be checked at their owner ({reason}); the owner binds them when the query runs.",
+            ? $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) was not checked: the request asked for remote \"skip\"."
+            : $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
         Stage = check.FirstContinued,
         Params = new Dictionary<string, object?> { ["service"] = check.Service, ["target"] = check.Target, ["reason"] = reason },
     };

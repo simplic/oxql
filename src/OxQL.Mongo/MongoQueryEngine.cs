@@ -367,7 +367,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         {
             Notes = Ordered(notes),
             Describe = describe,
-            Bound = JsonNode.Parse(bound.Canonical)!,
+            Bound = JsonNode.Parse(bound.Canonical, documentOptions: Deep)!,
             Stages = compiled.PageStages.Select(Relaxed).ToList(),
             Count = compiled.CountStages?.Select(Relaxed).ToList(),
             Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
@@ -415,6 +415,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                     {
                         Executor = resolve.IsRemote ? "keyed-remote" : "keyed-local",
                         Phase = "afterPage",
+                        Creates = Created(step.Creates, resolve),
                         Owner = OwnerOf(explained),
                         Reference = ReferenceOf(resolve),
                         Continued = continued.Count == 0 ? null : continued.Select(stage => (JsonNode)new JsonObject { ["index"] = stage.OriginIndex, ["forTarget"] = stage.ForTarget }).ToList(),
@@ -445,6 +446,24 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
 
         return steps.Select(step => placed[step.Index]).ToList();
+    }
+
+    /// <summary>
+    /// The aliases a keyed resolve creates with every target they may hold (DESIGN §4.3): a remote
+    /// alias's shape names one owner entity, but a union's rows come from each target — the alias
+    /// holds <c>entity#item</c> or the entity per target, its <c>parentAs</c> the owning entities.
+    /// </summary>
+    private static IReadOnlyList<ExplainCreated> Created(IReadOnlyList<ExplainCreated> creates, BoundStage.Resolve resolve)
+    {
+        var targets = TargetsOf(resolve).Select(target => target.Declared).ToList();
+
+        return creates.Select(created => created.Node != "remote"
+            ? created
+            : created.Alias == resolve.As
+                ? created with { Entities = targets.Select(target => target.ToString()).Distinct(StringComparer.Ordinal).ToList() }
+                : created.Alias == resolve.ParentAs
+                    ? created with { Entities = targets.Select(target => target.Entity).Distinct(StringComparer.Ordinal).ToList() }
+                    : created).ToList();
     }
 
     /// <summary>
@@ -831,7 +850,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     }
 
     private static JsonNode Relaxed(BsonDocument stage) =>
-        JsonNode.Parse(stage.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }))!;
+        JsonNode.Parse(stage.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }), documentOptions: Deep)!;
+
+    /// <summary>Parses as deep as the wire writes (<see cref="OxQLJson.MaxDepth"/>): an emitted stage nests expressions in expressions.</summary>
+    private static readonly JsonDocumentOptions Deep = new() { MaxDepth = OxQLJson.MaxDepth };
 
     private CompileOptions CompileOptionsFor(RequestContext context)
     {

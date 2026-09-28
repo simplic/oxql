@@ -10,10 +10,19 @@ namespace OxQL.Core.Models;
 /// </summary>
 public static class OxQLJson
 {
+    /// <summary>
+    /// How deep an answer may nest. The default 64 (MVC's 32) is less than what the wire carries: a
+    /// stored document nests up to the database's 100 levels, and explain's emitted stages of a
+    /// <c>flatten</c> unwind or a chain of joins wrap expressions in expressions. Requests stay bounded
+    /// by their size limit.
+    /// </summary>
+    public const int MaxDepth = 256;
+
     /// <summary>camelCase member names, null members omitted.</summary>
     public static readonly JsonSerializerOptions Wire = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        MaxDepth = MaxDepth,
     };
 }

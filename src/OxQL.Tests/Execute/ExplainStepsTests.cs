@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
+using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
@@ -25,10 +26,10 @@ public class ExplainStepsTests
     /// <summary>The ERP source reference: shipment and tour lines here, a transport line remote; every target an item.</summary>
     private const string Union = """{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }""";
 
-    internal static async Task<ExplainResult> ExplainAsync(string pipeline, string entity = Invoice, bool strict = false, bool remote = true)
+    internal static async Task<ExplainResult> ExplainAsync(string pipeline, string entity = Invoice, bool strict = false, bool remote = true, FakeRemoteClient? client = null)
     {
         var options = BindHost.Options();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, remote ? new FakeRemoteClient() : null);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, remote ? client ?? new FakeRemoteClient() : null);
         var outcome = await engine.ExplainAsync(BindHost.Request(entity, pipeline) with { Strict = strict ? true : null }, BindHost.Context());
 
         return outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
@@ -173,6 +174,84 @@ public class ExplainStepsTests
         var json = JsonSerializer.SerializeToNode(step)!.AsObject();
 
         json.Select(pair => pair.Key).Should().Equal("index", "kind", "status", "executor", "phase", "owner", "creates", "shapeAfter");
+    }
+
+    [Fact]
+    public async Task A_remote_union_alias_creates_every_target_and_its_owning_row_every_owning_entity()
+    {
+        var creates = (await ExplainAsync($"[{Union}]")).Steps[0].Creates;
+
+        creates.Select(created => (created.Alias, created.Node)).Should().Equal(("line", "remote"), ("owner", "remote"));
+        creates[0].Entities.Should().Equal("rc.shipment#billingLines", "rc.tour#billingLines", "transport.shipment#billingLines");
+        creates[1].Entities.Should().Equal("rc.shipment", "rc.tour", "transport.shipment");
+    }
+
+    // ---- the remote check of the paths the caller wrote under a remote alias -----------------------
+
+    /// <summary>An owner whose internal explain refuses the named members at the check query's projection, as a real owner binds them.</summary>
+    private static FakeRemoteClient Owner(params string[] lacking) => new()
+    {
+        Explains = (_, request) =>
+        {
+            var pipeline = request.Query.Pipeline;
+            var at = pipeline.ToList().FindLastIndex(stage => stage.Project is not null);
+            var errors = new JsonArray(pipeline[at].Project!.Fields.Keys.Where(lacking.Contains)
+                .Select(path => (JsonNode)new JsonObject { ["code"] = Codes.UnknownPath, ["message"] = $"'{path}' is not a path.", ["stage"] = at, ["path"] = path }).ToArray());
+
+            return new JsonObject { ["valid"] = errors.Count == 0, ["errors"] = errors, ["notes"] = new JsonArray() };
+        },
+    };
+
+    [Fact]
+    public async Task A_projected_or_selected_path_the_remote_target_lacks_is_an_error_where_the_caller_wrote_it()
+    {
+        var client = Owner("statuz", "nope");
+        var explain = await ExplainAsync("""
+            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "nope"] } },
+             { "project": { "number": 1, "r.name": 1, "r.statuz": 1 } }]
+            """, client: client);
+
+        explain.Valid.Should().BeFalse();
+        explain.Errors.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal([(Codes.UnknownPath, (int?)1, "r.statuz")],
+            "the projection narrows the select to what it keeps, so 'nope' is never sent");
+
+        var owner = (IReadOnlyDictionary<string, object?>)explain.Errors.Single(error => error.Path == "r.statuz").Params!["owner"]!;
+        owner["service"].Should().Be("crm");
+        owner["target"].Should().Be("crm.contact");
+        owner["path"].Should().Be("statuz");
+        explain.Steps[1].Status.Should().Be("error");
+
+        client.ExplainCalls.Should().ContainSingle().Which.Request.Query.Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
+            .Should().Contain(["name", "statuz"], "the projected path is asked of the owner beside the select");
+
+        (await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "project": { "r.name": 1 } }]""", client: Owner("statuz"))).Valid.Should().BeTrue();
+
+        var selected = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "nope"] } }]""", client: Owner("nope"));
+        selected.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Stage == 0 && error.Path == "r.nope", "a select path is the resolve stage's");
+    }
+
+    [Fact]
+    public async Task On_a_union_a_path_some_target_has_is_dropped_for_the_others_and_one_no_target_has_is_an_error()
+    {
+        var dropped = await ExplainAsync("""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""", client: Owner("name"));
+
+        dropped.Valid.Should().BeTrue(string.Join("; ", dropped.Errors.Select(error => error.Message)));
+        dropped.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Path, (string)note.Params!["target"]!))
+            .Should().Contain(("name", "transport.shipment#billingLines"), "the tour's owning row has a name");
+
+        var none = await ExplainAsync($$"""[{{Union}}, { "project": { "line.statuz": 1, "owner": 1 } }]""", client: Owner("oxEl.statuz"));
+
+        none.Valid.Should().BeFalse();
+        none.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Stage == 1 && error.Path == "line.statuz");
+    }
+
+    [Fact]
+    public async Task A_written_path_whose_owner_does_not_answer_is_noted_unchecked()
+    {
+        var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""");
+
+        explain.Valid.Should().BeTrue();
+        explain.Notes.Should().ContainSingle(note => note.Code == Notes.RemoteUnchecked).Which.Stage.Should().Be(0);
     }
 
     // ---- result.columns ---------------------------------------------------------------------------------

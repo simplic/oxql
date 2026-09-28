@@ -3,7 +3,9 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson.Serialization;
 using OxQL.AspNetCore.Health;
+using OxQL.Core.Attributes;
 using OxQL.Core.Models;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
@@ -29,13 +31,22 @@ public class NonQueryTests
 
     /// <summary>
     /// The services a lab service's model reaches remotely, read off the model classes: every
-    /// <c>[OxQLReference]</c> at any depth whose target lives in another service and which names
-    /// the target field (a fieldless remote reference is a build finding, not a reference).
+    /// <c>[OxQLReference]</c> and <c>[OxQLReferenceWhen]</c> target at any depth of any of the
+    /// service's entities (their registered variants included) that lives in another service and
+    /// names the target field (a fieldless remote reference is a build finding, not a
+    /// reference), and every target of the service's host-side declarations.
     /// </summary>
     private static IReadOnlyList<string> RemoteServicesOf(LabService service)
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<Type>();
+        var variants = BsonClassMap.GetRegisteredClassMaps().Select(map => map.ClassType).ToList();
+
+        void Add(string target, string? field)
+        {
+            if (field is not null && target.Split('#')[0].Split('.')[0] is var key && key != service.Key)
+                found.Add(key);
+        }
 
         void Walk(Type type)
         {
@@ -44,18 +55,31 @@ public class NonQueryTests
 
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (property.GetCustomAttribute<OxQLReferenceAttribute>() is { Field: not null } reference
-                    && reference.Entity.Split('.')[0] is var target && target != service.Key)
-                    found.Add(target);
+                if (property.GetCustomAttribute<OxQLReferenceAttribute>() is { } reference)
+                    Add(reference.Entity, reference.Field);
+
+                foreach (var when in property.GetCustomAttributes<OxQLReferenceWhenAttribute>())
+                    foreach (var target in when.Targets)
+                        Add(target, when.Field);
 
                 var member = property.PropertyType;
                 var element = member.IsGenericType && typeof(IEnumerable).IsAssignableFrom(member) ? member.GetGenericArguments().Last() : member;
                 Walk(Nullable.GetUnderlyingType(element) ?? element);
             }
+
+            foreach (var variant in variants.Where(variant => variant != type && type.IsAssignableFrom(variant)))
+                Walk(variant);
         }
 
-        foreach (var entity in Corpus.Entities.Where(entity => entity.Service == service))
-            Walk(entity.ModelType);
+        var entities = typeof(LabService).Assembly.GetTypes()
+            .Where(type => type.GetCustomAttribute<OxQLTypeAttribute>() is { } declared && declared.TypeName.StartsWith(service.Key + ".", StringComparison.Ordinal));
+
+        foreach (var entity in entities)
+            Walk(entity);
+
+        foreach (var declaration in service.References?.All ?? [])
+            foreach (var target in declaration.Targets)
+                Add(target, declaration.Field);
 
         return found.ToList();
     }
@@ -153,7 +177,8 @@ public class NonQueryTests
             health.Body!["status"]!.GetValue<string>().Should().Be("healthy", "every reference reachable");
         }
 
-        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet"]);
+        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet", "staff"]);
+        RemoteServicesOf(LabService.Ledger).Should().Equal(["directory", "staff", "transport"]);
         RemoteServicesOf(LabService.Conformance).Should().Equal(["owner", "staff"]);
         RemoteServicesOf(LabService.Staff).Should().BeEmpty();
     }

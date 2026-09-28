@@ -36,6 +36,16 @@ public sealed record LookupFlag(string Field, int Stage, string Alias, int Limit
 /// </summary>
 public sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage, string? AmbiguityFlag = null, string? ExistsFlag = null);
 
+/// <summary>
+/// A strict request's check that no candidate row lost children to a truncation before a later
+/// match filtered it (DESIGN §3.4.3): <paramref name="Stages"/> run the pipeline up to the stage that
+/// sets the flag and keep one flagged row; any row means the page's answer may depend on what was
+/// cut. <paramref name="Code"/> is <c>LOOKUP_TRUNCATED</c> or <c>UNWIND_DEPTH_TRUNCATED</c>, and
+/// <paramref name="Stage"/>, <paramref name="Path"/> and <paramref name="Bound"/> (the limit or the
+/// depth) are the caller's, for the refusal.
+/// </summary>
+public sealed record TruncationProbe(string Code, int Stage, string Path, int Bound, IReadOnlyList<BsonDocument> Stages);
+
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
 public sealed record CompiledQuery
 {
@@ -98,6 +108,9 @@ public sealed record CompiledQuery
 
     /// <summary>The inline resolves whose effective <c>onMissing</c> is not <c>null</c> and whose alias the row shows; the executor reads their missing references off the page.</summary>
     public IReadOnlyList<InlineProbe> InlineProbes { get; init; } = [];
+
+    /// <summary>The truncation checks of a strict request whose truncated alias a later match reads.</summary>
+    public IReadOnlyList<TruncationProbe> TruncationProbes { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
@@ -250,6 +263,10 @@ public static class MongoCompiler
         var inlineProbes = new List<InlineProbe>();
         var probeKeys = new List<string>();
 
+        // A strict request refuses a truncation that a later match would hide by filtering the
+        // truncated row out: the rows up to the flag are checked apart from the page.
+        var truncationProbes = new List<TruncationProbe>();
+
         for (var index = 0; index < bound.Stages.Count; index++)
         {
             var stage = bound.Stages[index];
@@ -288,6 +305,9 @@ public static class MongoCompiler
                         rowFlags.Add(flag.Field);
 
                     emitted.AddRange(Lookup(lookup, semiJoins, collated, flag));
+
+                    if (flag is not null && bound.Strict && FilteredLater(bound.Stages, index, lookup.As))
+                        truncationProbes.Add(new TruncationProbe(Codes.LookupTruncated, lookup.Stage, lookup.As, lookup.Limit, Probing(stages, emitted, flag.Field)));
                     break;
 
                 // The keyed fetch's rows only ever reach the wire row; a projection that dropped
@@ -335,6 +355,9 @@ public static class MongoCompiler
 
                     if (unwind.As is not null)
                         emitted.Add(new BsonDocument("$set", new BsonDocument(unwind.As, "$" + unwind.Path.Storage)));
+
+                    if (unwind.Flatten is { } cut && bound.Strict && FilteredLater(bound.Stages, index, unwind.As ?? unwind.Path.Wire))
+                        truncationProbes.Add(new TruncationProbe(Codes.UnwindDepthTruncated, cut.Stage, unwind.Path.Wire, cut.Depth, Probing(stages, emitted, probes[^1].Field)));
                     break;
 
                 case BoundStage.Group group:
@@ -443,8 +466,23 @@ public static class MongoCompiler
             FlattenProbes = probes,
             LookupFlags = flags,
             InlineProbes = inlineProbes,
+            TruncationProbes = truncationProbes,
         };
     }
+
+    /// <summary>Whether a match after the stage at <paramref name="index"/> reads the alias: it may filter out a row the stage truncated.</summary>
+    private static bool FilteredLater(IReadOnlyList<BoundStage> stages, int index, string alias) =>
+        stages.Skip(index + 1).TakeWhile(stage => stage is not BoundStage.Group).Any(stage => stage is BoundStage.Match && Reads(stage, alias));
+
+    /// <summary>The stages so far, the stage's own, then one row carrying the truncation flag.</summary>
+    private static List<BsonDocument> Probing(IEnumerable<BsonDocument> before, IEnumerable<BsonDocument> emitted, string flag) =>
+    [
+        .. before.Select(stage => stage.DeepClone().AsBsonDocument),
+        .. emitted.Select(stage => stage.DeepClone().AsBsonDocument),
+        new("$match", new BsonDocument(flag, true)),
+        new("$limit", 1),
+        new("$project", new BsonDocument(KeyStorage, 1)),
+    ];
 
     /// <summary>
     /// Registers an inline resolve's outcome probe when the row shows its alias and something reads

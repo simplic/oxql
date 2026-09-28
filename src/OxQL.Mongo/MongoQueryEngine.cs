@@ -151,6 +151,11 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         losses.AddRange(OutcomePolicy.StrictLosses(diagnostics, strict));
         losses.AddRange(inline.Refusing);
 
+        // A truncated row a later match filtered out is not on the page, but the answer may depend
+        // on what was cut: a strict request checks the rows up to the truncation (DESIGN §3.4.3).
+        if (strict)
+            losses.AddRange(await HiddenTruncationsAsync(bound, compiled, runOptions, losses, cancellationToken).ConfigureAwait(false));
+
         // A strict request that neither continues nor jumps reads every matching row in its one
         // page, or refuses (DESIGN §3.4.3).
         if (strict && hasNextPage && IsReportPage(request))
@@ -264,6 +269,47 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         Log(compiled, timer, page.Count, timedOut, capped == true, context, null, resolveCalls, cacheHits);
 
         return QueryOutcome.Of(result);
+    }
+
+    /// <summary>
+    /// The truncations a strict request's page does not show because a later match filtered the
+    /// truncated rows out: one diagnostic per probe that finds a flagged candidate row, unless the
+    /// page already reported that stage.
+    /// </summary>
+    private async Task<IReadOnlyList<Diagnostic>> HiddenTruncationsAsync(BoundPipeline bound, CompiledQuery compiled, AggregateRunOptions runOptions, IReadOnlyList<Diagnostic> reported, CancellationToken cancellationToken)
+    {
+        var hidden = new List<Diagnostic>();
+
+        foreach (var probe in compiled.TruncationProbes)
+        {
+            if (reported.Any(diagnostic => diagnostic.Code == probe.Code && diagnostic.Stage == probe.Stage))
+                continue;
+
+            var rows = await runner.AggregateAsync(bound.Entity, probe.Stages, runOptions, cancellationToken).ConfigureAwait(false);
+
+            if (rows.Count == 0)
+                continue;
+
+            hidden.Add(probe.Code == Codes.LookupTruncated
+                ? new Diagnostic
+                {
+                    Code = Codes.LookupTruncated,
+                    Message = $"'{probe.Path}' holds the first {probe.Bound} children of a parent that has more, and a later match reads it, so a row it filtered out may have matched on a child that was cut.",
+                    Stage = probe.Stage,
+                    Path = probe.Path,
+                    Params = new Dictionary<string, object?> { ["alias"] = probe.Path, ["limit"] = probe.Bound, ["rows"] = 0, ["filtered"] = true },
+                }
+                : new Diagnostic
+                {
+                    Code = Codes.UnwindDepthTruncated,
+                    Message = $"'{probe.Path}' nests items deeper than {probe.Bound} levels, and a later match reads the items, so a row it filtered out may have matched on an item below the depth.",
+                    Stage = probe.Stage,
+                    Path = probe.Path,
+                    Params = new Dictionary<string, object?> { ["path"] = probe.Path, ["depth"] = probe.Bound, ["rows"] = 0, ["filtered"] = true },
+                });
+        }
+
+        return hidden;
     }
 
     /// <summary>The 422 of a request that would lose data (DESIGN §3.4.3, §3.6), logged like any refusal.</summary>

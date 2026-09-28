@@ -1,13 +1,15 @@
 namespace OxQL.Studio;
 
 /// <summary>
-/// Configuration options for the OxQL Studio query-builder UI.
+/// Configuration options for the OxQL Studio developer console: one service, one scratch query.
 /// </summary>
 public sealed class OxQLStudioOptions
 {
     /// <summary>
-    /// The route path where the Studio UI is served. Default: <c>/oxql</c>.
-    /// Must start with a leading slash and must not end with a trailing slash.
+    /// The route path where the console is served, relative to the request's path base
+    /// (<c>UsePathBase</c>): the shell at <c>{RoutePath}</c>, the assets at
+    /// <c>{RoutePath}/{asset}</c>. Default: <c>/oxql</c>. It may equal <see cref="ApiBasePath"/>;
+    /// the asset route never matches <c>health</c>, <c>query</c>, <c>batch</c> or <c>explain</c>.
     /// </summary>
     public string RoutePath { get; set; } = "/oxql";
 
@@ -19,10 +21,10 @@ public sealed class OxQLStudioOptions
     public string ApiBasePath { get; set; } = "/OxQL";
 
     /// <summary>
-    /// The base path of the schema the UI reads the entities from: <c>{SchemaBasePath}</c> is
-    /// the Ox Schema document, <c>{SchemaBasePath}/addons</c> the organisation's addon
-    /// definitions. Default: <c>/schema</c>, the base package's schema controller beside the
-    /// query controller. A host without a schema endpoint shows an empty explorer.
+    /// The base path of the Ox Schema document, relative to the path base. The console reads
+    /// only the entity names from it, to complete <c>entityType</c>. Default: <c>/schema</c>,
+    /// the base package's schema controller beside the query controller. A host without a
+    /// schema endpoint simply offers no completion.
     /// </summary>
     public string SchemaBasePath { get; set; } = "/schema";
 
@@ -38,12 +40,18 @@ public sealed class OxQLStudioOptions
     public string MonacoCdnBase { get; set; } = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min";
 
     /// <summary>
-    /// Shows the <c>Explain</c> button in the Studio UI, which calls <c>POST /explain</c> and
-    /// visualises the bound pipeline, the emitted stages and the index advisory. Should match
-    /// the engine's <c>OxQL:Explain:Enabled</c>; the endpoint answers 404 otherwise.
-    /// Default: <c>false</c>.
+    /// Shows the <c>Explain</c> and <c>Indexes</c> buttons, which call <c>POST /explain</c>. Should
+    /// match the engine's <c>OxQL:Explain:Enabled</c>, which is on by default; a difference is
+    /// logged as a warning when the console is mapped. The console also hides the buttons when
+    /// <c>/health</c> does not list the <c>explain</c> capability. Default: <c>true</c>.
     /// </summary>
-    public bool EnableExplain { get; set; }
+    public bool EnableExplain { get; set; } = true;
+
+    /// <summary>
+    /// An optional absolute or relative URL of the Angular OxQL Studio. When set, the console's
+    /// top bar links to it. Default: none.
+    /// </summary>
+    public string? StudioAppUrl { get; set; }
 
     /// <summary>
     /// Normalizes <see cref="RoutePath"/>, <see cref="ApiBasePath"/> and <see cref="SchemaBasePath"/>

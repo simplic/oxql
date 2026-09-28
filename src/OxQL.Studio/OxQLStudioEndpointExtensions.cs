@@ -17,7 +17,24 @@ public static class OxQLStudioEndpointExtensions
     private static readonly Assembly ThisAssembly = typeof(OxQLStudioEndpointExtensions).Assembly;
 
     /// <summary>
-    /// Maps the OxQL Studio UI at the configured route path (default <c>/oxql</c>).
+    /// The names the asset route never serves. The console usually sits beside the OxQL API
+    /// (OxS maps both at <c>/oxql</c>), so an asset with one of these names would shadow an API
+    /// route. The asset route only matches names with a file extension, which none of these has,
+    /// and an asset whose base name is one of these (<c>health.js</c>) is refused as well.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ReservedAssetNames = ["health", "query", "batch", "explain"];
+
+    /// <summary>
+    /// An asset name: word characters with dashes, a dot and a known extension. Written without a
+    /// character class, since route templates reserve brackets.
+    /// </summary>
+    private const string AssetConstraint = @"regex(^\w+(-\w+)*\.(js|css|svg)$)";
+
+    /// <summary>
+    /// Maps the OxQL Studio console at <see cref="OxQLStudioOptions.RoutePath"/> (default
+    /// <c>/oxql</c>), relative to the request's path base: the shell at <c>{RoutePath}</c>, the
+    /// assets at <c>{RoutePath}/{asset}</c>. Both are anonymous; the console asks for a
+    /// credential in the page and sends it only to the API.
     /// Requires <see cref="ServiceCollectionExtensions.AddOxQLStudio"/> to have been called.
     /// </summary>
     /// <param name="endpoints">The endpoint route builder.</param>
@@ -29,42 +46,47 @@ public static class OxQLStudioEndpointExtensions
 
         WarnWhenExplainDisagrees(endpoints.ServiceProvider, options);
 
-        var basePath = options.RoutePath;
-
-        // Shell: GET {routePath}  → index.html with injected runtime config
-        endpoints.MapGet("/oxql", (HttpContext ctx) =>
+        // Shell: GET {pathBase}{RoutePath} → index.html with the runtime config injected.
+        endpoints.MapGet(options.RoutePath, (HttpContext ctx) =>
         {
             var html = LoadTextResource("index.html");
             if (html is null)
                 return Results.NotFound();
 
+            var assetBasePath = WithPathBase(ctx, options.RoutePath);
             var config = new
             {
                 apiBasePath    = WithPathBase(ctx, options.ApiBasePath),
                 schemaBasePath = WithPathBase(ctx, options.SchemaBasePath),
-                assetBasePath  = basePath,
+                assetBasePath,
                 title          = options.Title,
                 monacoCdnBase  = options.MonacoCdnBase,
-                enableExplain  = options.EnableExplain
+                enableExplain  = options.EnableExplain,
+                studioAppUrl   = options.StudioAppUrl
             };
 
+            // The default encoder escapes '<', so nothing in the config can close its <script>.
             var json = JsonSerializer.Serialize(config);
             html = html
                 .Replace("__OXQL_CONFIG__", json)
                 .Replace("__OXQL_TITLE__", System.Net.WebUtility.HtmlEncode(options.Title))
-                .Replace("__OXQL_ASSET_BASE__", basePath);
+                .Replace("__OXQL_ASSET_BASE__", System.Net.WebUtility.HtmlEncode(assetBasePath));
 
             return Results.Content(html, "text/html; charset=utf-8");
-        });
+        }).AllowAnonymous();
 
-        // Static assets: GET {routePath}/{asset}
-        endpoints.MapGet($"oxql/{{asset}}", (string asset) =>
+        // Assets: GET {pathBase}{RoutePath}/{asset}
+        var assetRoute = options.RoutePath == "/"
+            ? "{asset:" + AssetConstraint + "}"
+            : options.RoutePath.TrimStart('/') + "/{asset:" + AssetConstraint + "}";
+
+        endpoints.MapGet(assetRoute, (string asset) =>
         {
             var (bytes, contentType) = LoadAsset(asset);
             return bytes is null
                 ? Results.NotFound()
                 : Results.File(bytes, contentType);
-        });
+        }).AllowAnonymous();
 
         return endpoints;
     }
@@ -84,6 +106,9 @@ public static class OxQLStudioEndpointExtensions
             return;
 
         var engineOptions = provider.GetService(optionsType);
+        if (engineOptions is null)
+            return;
+
         var explain = optionsType.GetProperty("Explain")?.GetValue(engineOptions);
         var enabled = explain?.GetType().GetProperty("Enabled")?.GetValue(explain) as bool?;
 
@@ -103,11 +128,13 @@ public static class OxQLStudioEndpointExtensions
 
     private static (byte[]? bytes, string contentType) LoadAsset(string asset)
     {
+        if (ReservedAssetNames.Contains(Path.GetFileNameWithoutExtension(asset), StringComparer.OrdinalIgnoreCase))
+            return (null, "application/octet-stream");
+
         var contentType = asset switch
         {
             _ when asset.EndsWith(".js",   StringComparison.OrdinalIgnoreCase) => "text/javascript; charset=utf-8",
             _ when asset.EndsWith(".css",  StringComparison.OrdinalIgnoreCase) => "text/css; charset=utf-8",
-            _ when asset.EndsWith(".html", StringComparison.OrdinalIgnoreCase) => "text/html; charset=utf-8",
             _ when asset.EndsWith(".svg",  StringComparison.OrdinalIgnoreCase) => "image/svg+xml",
             _ => "application/octet-stream"
         };

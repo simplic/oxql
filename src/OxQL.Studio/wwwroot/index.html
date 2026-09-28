@@ -9,16 +9,16 @@
 </head>
 <body>
     <div class="app">
-        <!-- Top bar -->
         <header class="topbar">
             <div class="brand">
                 <span class="logo"></span>
                 <span>__OXQL_TITLE__</span>
             </div>
-            <span class="engine-badge" id="engine-badge" title="GET /health">engine …</span>
+            <button class="badge" id="engine-badge" title="GET /health · click for the health panel">engine …</button>
+            <a class="studio-link" id="studio-link" target="_blank" rel="noopener noreferrer" hidden>Open OxQL Studio ↗</a>
             <div class="spacer"></div>
+            <button class="badge" id="claims-badge" title="The decoded credential · click for every claim" hidden></button>
             <div class="token-field">
-                <span class="dot" id="token-dot" title="Bearer token status"></span>
                 <label for="token-input">Bearer</label>
                 <input id="token-input" type="password" placeholder="paste token…" autocomplete="off" spellcheck="false" />
                 <button class="icon" id="token-toggle" title="Show / hide token">👁</button>
@@ -26,98 +26,31 @@
             </div>
         </header>
 
-        <!-- Body -->
-        <div class="body">
-            <!-- Entity explorer -->
-            <aside class="sidebar">
-                <div class="sidebar-header">
-                    <span>Entities</span>
-                    <button class="icon" id="types-refresh" title="Reload the schema">⟳</button>
-                </div>
-                <div class="sidebar-content" id="types-list">
-                    <div class="empty">Loading entities…</div>
-                </div>
-            </aside>
+        <section class="panel" id="claims-panel" hidden aria-label="Credential claims"></section>
+        <section class="panel" id="health-panel" hidden aria-label="Engine health"></section>
 
-            <!-- Main -->
-            <main class="main">
-                <!-- Tabs -->
-                <div class="tabbar" id="tabbar">
-                    <button class="tab-add" id="tab-add" title="New query tab">＋</button>
-                </div>
+        <div class="toolbar">
+            <button class="primary" id="run-btn" title="POST /query, or /batch for a { queries: [] } document (Ctrl+Enter)">▶ Run</button>
+            <button id="explain-btn" title="POST /explain: errors, steps, notes, owner queries and the compiled form (Ctrl+Shift+E)" hidden>Explain</button>
+            <button id="indexes-btn" title="POST /explain with include: [&quot;indexes&quot;]: adds the index advisory" hidden>Explain + indexes</button>
+            <button id="format-btn" title="Format JSON (Shift+Alt+F)">Format</button>
+            <button id="reset-btn" title="Replace the scratch query with the starter query">Reset</button>
+            <span class="hint" id="hint">One scratch query per service, saved in this browser · Ctrl+Enter to run</span>
+        </div>
 
-                <!-- Toolbar -->
-                <div class="toolbar">
-                    <button class="primary" id="run-btn" title="Execute (Ctrl+Enter)">▶ Run</button>
-                    <button id="batch-btn" title="Send every tab's query in one POST /batch">⧉ Batch tabs</button>
-                    <button id="explain-btn" title="Show the bound pipeline, the emitted stages and the index advisory (Ctrl+Shift+E)" hidden>⚙ Explain</button>
-                    <button id="wizard-btn" title="Build a new query step by step">🪄 Wizard</button>
-                    <button id="format-btn" title="Format JSON (Shift+Alt+F)">Format</button>
-                    <input class="entity-input" id="entity-input" placeholder="entityType" spellcheck="false" />
-                    <label class="contract-field" title="The X-OxQL-Contract header sent with every request">
-                        <span>contract</span>
-                        <select id="contract-select">
-                            <option value="2">2</option>
-                            <option value="1">1 (compat)</option>
-                        </select>
-                    </label>
-                    <span class="hint">Ctrl+Enter to run · Ctrl+Space for suggestions · saved in your browser</span>
+        <div class="split">
+            <div class="editor-pane"><div id="editor"></div></div>
+            <div class="results-pane">
+                <div class="results-header">
+                    <span class="status" id="status">Loading editor…</span>
                     <span class="spacer"></span>
-                    <button id="help-btn" title="Query help &amp; cheat sheet (F1)">? Help</button>
+                    <button class="icon" id="copy-result" title="Copy the raw JSON answer">Copy</button>
                 </div>
-
-                <!-- Editor + results -->
-                <div class="split">
-                    <div class="editor-pane">
-                        <div id="editor"></div>
-                    </div>
-                    <div class="results-pane">
-                        <div class="results-header">
-                            <span class="status" id="status">Ready</span>
-                            <span class="spacer"></span>
-                            <button class="icon" id="copy-result" title="Copy result">Copy</button>
-                        </div>
-                        <pre class="results-body" id="results"><span class="empty">Run a query to see results.</span></pre>
-                    </div>
-                </div>
-            </main>
+                <div class="results-body" id="results"><span class="empty">Run or explain a query to see the answer.</span></div>
+            </div>
         </div>
     </div>
 
-    <!-- Help / cheat-sheet drawer -->
-    <div class="help-overlay" id="help-overlay" hidden></div>
-    <aside class="help-drawer" id="help-drawer" hidden aria-label="Query help">
-        <div class="help-header">
-            <span>Query Help &amp; Cheat Sheet</span>
-            <button class="icon" id="help-close" title="Close (Esc)">✕</button>
-        </div>
-        <div class="help-search">
-            <input id="help-search-input" placeholder="Filter help…" spellcheck="false" />
-        </div>
-        <div class="help-body" id="help-body"></div>
-        <div class="help-footer">
-            <span class="hint">Click any item to insert it at the cursor. Ctrl+Space in the editor for inline suggestions.</span>
-        </div>
-    </aside>
-
-    <!-- Query wizard -->
-    <div class="wizard-overlay" id="wizard-overlay" hidden></div>
-    <div class="wizard" id="wizard" hidden role="dialog" aria-modal="true" aria-label="New query wizard">
-        <div class="wizard-header">
-            <span class="wizard-title">Build a Query</span>
-            <div class="wizard-steps" id="wizard-steps"></div>
-            <button class="icon" id="wizard-close" title="Cancel (Esc)">✕</button>
-        </div>
-        <div class="wizard-body" id="wizard-body"></div>
-        <div class="wizard-footer">
-            <span class="hint" id="wizard-hint"></span>
-            <span class="spacer"></span>
-            <button id="wizard-back">← Back</button>
-            <button class="primary" id="wizard-next">Next →</button>
-        </div>
-    </div>
-
-    <script src="__OXQL_ASSET_BASE__/oxql-lang.js"></script>
     <script src="__OXQL_ASSET_BASE__/app.js"></script>
 </body>
 </html>

@@ -23,6 +23,9 @@ public class GoldenRenderTests(ITestOutputHelper output)
 {
     private const string CursorFile = "cursors-2.0.json";
 
+    /// <summary>The golden of the §3.0 exception: a remote resolve filter holding a <c>$var</c>, rendered substituted.</summary>
+    private const string RemoteFilterVariable = "remote-filter-var";
+
     private static readonly string Directory = Path.Combine(AppContext.BaseDirectory, "Fixtures", "golden");
 
     private static readonly CompatBinder Compat = new(BindHost.Probe);
@@ -108,8 +111,13 @@ public class GoldenRenderTests(ITestOutputHelper output)
             semiJoin |= bound.HasSemiJoin;
             defaultedLookupLimit |= golden["pipeline"]!.AsArray().Any(stage => stage!["lookup"] is JsonObject lookup && lookup["limit"] is null);
 
+            // The one documented exception (DESIGN §3.0): a remote filter with a $var renders
+            // substituted, which its own golden pins; every other golden is a 2.0 render.
+            if (name == RemoteFilterVariable)
+                continue;
+
             foreach (var resolve in golden["pipeline"]!.AsArray().Select(stage => stage!["resolve"]).OfType<JsonObject>())
-                resolve["filter"]?.ToJsonString().Should().NotContain("$var", "E10b owns the remote-filter variable render (DESIGN §3.0 exception)");
+                resolve["filter"]?.ToJsonString().Should().NotContain("$var", "only remote-filter-var.json renders a remote filter with a variable (DESIGN §3.0 exception)");
         }
 
         output.WriteLine($"golden corpus: {names.Count} renders, {CursorEntries().Count} cursors");
@@ -121,6 +129,8 @@ public class GoldenRenderTests(ITestOutputHelper output)
         ]);
         stages.OfType<BoundStage.Resolve>().Should().Contain(resolve => resolve.IsRemote).And.Contain(resolve => !resolve.IsRemote);
         semiJoin.Should().BeTrue("a semi-join leaf is in the corpus");
+        names.Should().Contain(RemoteFilterVariable, "the substituted render of a remote filter variable is pinned");
+        Load(RemoteFilterVariable)["canonical"]!.GetValue<string>().Should().Be(Load("resolve-remote")["canonical"]!.GetValue<string>(), "a substituted variable renders as the value written literally");
         defaultedLookupLimit.Should().BeTrue("a lookup whose limit is the bound default is in the corpus");
     }
 

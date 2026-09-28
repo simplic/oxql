@@ -169,7 +169,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         if (compiled.KeyedResolves.Count > 0)
         {
-            var resolution = await fetch.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var resolution = await fetch.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), strict, cancellationToken).ConfigureAwait(false);
 
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;

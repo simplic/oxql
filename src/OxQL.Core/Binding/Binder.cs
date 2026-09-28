@@ -1245,6 +1245,13 @@ public sealed class Binder
             filterBoundOnce = false;
             reportedFilterError = false;
 
+            // The filter as every owner is sent it, local SelfOwner included: variables bound here,
+            // since an owner never receives them (DESIGN §3.5.5). A local target's own binding of the
+            // filter reports an unbound variable already; a remote-only one reports it below.
+            var substitution = new List<QueryValidationError>();
+
+            sentFilter = resolve.RawFilter is { } rawFilter ? coercer.SubstituteVariables(rawFilter, index, resolve.Path, substitution) : null;
+
             foreach (var declared in selected)
             {
                 var when = BindCaseCondition(declared.When, reference, collectionStorage, index);
@@ -1258,6 +1265,9 @@ public sealed class Binder
             }
 
             ReportUnboundSelect(resolve, cases, index);
+
+            if (substitution.Count > 0 && !reportedFilterError && cases.Any(bound => bound.Targets.Any(target => target.IsRemote)))
+                errors.AddRange(substitution);
 
             if (errors.Count > errorsBefore)
                 return;
@@ -1273,7 +1283,7 @@ public sealed class Binder
 
             var stage = new BoundStage.Resolve(reference, alias, first.Declared.Entity, first.Declared.Field, anyRemote,
                 first.Entity, first.FieldStorage, first.Select, first.Filter, first.Scope,
-                first.IsRemote ? resolve.Select : null, first.IsRemote ? resolve.RawFilter : null,
+                first.IsRemote ? resolve.Select : null, first.IsRemote ? sentFilter : null,
                 inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index);
 
             stages.Add(stage);
@@ -1403,7 +1413,7 @@ public sealed class Binder
             {
                 var remote = declared.IsRemote ? declared : declared with { IsRemote = true };
 
-                return new BoundResolveTarget(remote, null, null, null, null, resolve.Select, null, resolve.RawFilter, null, null,
+                return new BoundResolveTarget(remote, null, null, null, null, resolve.Select, null, sentFilter, null, null,
                     withParent ? resolve.ParentSelect : null, []);
             }
 
@@ -1470,7 +1480,7 @@ public sealed class Binder
 
             // The filter and the owning row's select also travel as written: the keyed fetch asks
             // this host's own SelfOwner with an ordinary owner query, which binds them again.
-            return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, resolve.RawFilter, scope, parentSelect,
+            return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, sentFilter, scope, parentSelect,
                 withParent && declared.Item is not null ? resolve.ParentSelect : null, dropped);
         }
 
@@ -1510,6 +1520,9 @@ public sealed class Binder
         }
 
         private bool filterBoundOnce, reportedFilterError;
+
+        /// <summary>The resolve filter being bound as it is sent to owners: its variables substituted.</summary>
+        private JsonElement? sentFilter;
 
         /// <summary>
         /// A select path no target of the resolve has is refused, with the reason its first local

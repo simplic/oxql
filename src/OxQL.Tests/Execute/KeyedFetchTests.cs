@@ -113,8 +113,11 @@ public class KeyedFetchTests
         client.Calls.Should().ContainSingle("the second page hits the cache");
         again.Items[0]!["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
 
-        // A different select is a different cache entry.
+        // A select that changes the owner query is another plan and another entry; one that only
+        // names the member the rows are keyed by (always projected) sends the same query.
         await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name", "number"] } }]""");
+        client.Calls.Should().ContainSingle("the owner would be sent the same query");
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name", "email"] } }]""");
         client.Calls.Should().HaveCount(2);
     }
 
@@ -429,26 +432,28 @@ public class KeyedFetchTests
     }
 
     [Fact]
-    public void The_cache_is_bounded_and_keyed_by_entity_field_organisation_key_select_and_filter()
+    public void The_cache_is_bounded_and_keyed_by_entity_item_field_organisation_key_and_plan()
     {
         var options = BindHost.Options(o => o.Cache.OwnerFetchCacheMaxEntries = 2);
         using var cache = new OwnerFetchCache(options);
         var row = new JsonObject { ["number"] = "c1" };
+        var answer = new OwnerAnswer([row]);
 
-        cache.Set(OwnerFetchCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "s", "f"), row);
-        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "s", "f"), out var hit).Should().BeTrue();
-        hit.Should().NotBeSameAs(row, "a hit is a clone: a node cannot have two parents");
-        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "id", Guid.NewGuid(), "c1", "s", "f"), out _).Should().BeFalse("another organisation never sees the row");
-        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "id", BindHost.Organisation, "c1", "other", "f"), out _).Should().BeFalse("another select is another entry");
+        cache.Set(OwnerFetchCache.KeyOf("crm.contact", null, "id", BindHost.Organisation, "c1", "p"), answer);
+        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "id", BindHost.Organisation, "c1", "p"), strict: false, out var hit).Should().BeTrue();
+        hit!.Rows.Should().ContainSingle().Which.Should().NotBeSameAs(row, "a hit is a clone: a node cannot have two parents");
+        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "id", Guid.NewGuid(), "c1", "p"), strict: false, out _).Should().BeFalse("another organisation never sees the row");
+        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "id", BindHost.Organisation, "c1", "other"), strict: false, out _).Should().BeFalse("another plan is another entry");
+        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "lines", "id", BindHost.Organisation, "c1", "p"), strict: false, out _).Should().BeFalse("an item target is another entry");
 
         // F-ENT-002: two references onto one entity through different members of it are two
         // sets of rows. Without the field in the key, whichever resolve ran first inside the
         // TTL answered for both and the other silently inherited its rows.
-        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "number", BindHost.Organisation, "c1", "s", "f"), out _)
+        cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "number", BindHost.Organisation, "c1", "p"), strict: false, out _)
             .Should().BeFalse("another target field is another join and another entry");
 
-        cache.Set("k2", row);
-        cache.Set("k3", row);
+        cache.Set("k2", answer);
+        cache.Set("k3", answer);
         cache.Count.Should().BeLessThanOrEqualTo(2, "the entry count is bounded");
     }
 

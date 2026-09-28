@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Xml;
 using MongoDB.Bson;
 using OxQL.Core.Engine;
@@ -385,6 +386,67 @@ public sealed class OperandCoercer
         JsonValueKind.Array => new BsonArray(element.EnumerateArray().Select(Literal)),
         _ => BsonNull.Value,
     };
+
+    /// <summary>
+    /// A raw JSON value another binder receives — a remote resolve's filter, a continued stage —
+    /// with every variable wrapper <c>{ "$var": name }</c> in it replaced by the bound value
+    /// (DESIGN §3.5.5): the owner never receives <c>variables</c>, so what it is sent must hold
+    /// none. A value without a wrapper comes back as it is, so its render is unchanged. An unbound
+    /// name is <c>UNBOUND_VARIABLE</c>, one holding an object <c>INVALID_VARIABLE</c>, both at
+    /// <paramref name="stage"/> and <paramref name="path"/>; the wrapper then stays in place.
+    /// </summary>
+    public JsonElement SubstituteVariables(JsonElement raw, int stage, string? path, List<QueryValidationError> errors)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+
+        if (!HoldsVariable(raw))
+            return raw;
+
+        return JsonSerializer.SerializeToElement(Substituted(raw, stage, path, errors));
+    }
+
+    /// <summary>Whether a raw JSON value holds a variable wrapper anywhere.</summary>
+    public static bool HoldsVariable(JsonElement raw) => raw.ValueKind switch
+    {
+        JsonValueKind.Object => TryVariable(raw, out _) || raw.EnumerateObject().Any(property => HoldsVariable(property.Value)),
+        JsonValueKind.Array => raw.EnumerateArray().Any(HoldsVariable),
+        _ => false,
+    };
+
+    private JsonNode? Substituted(JsonElement element, int stage, string? path, List<QueryValidationError> errors)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object when TryVariable(element, out var name):
+                if (!TryResolveVariable(name!, out var value))
+                {
+                    errors.Add(Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path));
+                    return JsonNode.Parse(element.GetRawText());
+                }
+
+                if (value.ValueKind == JsonValueKind.Object)
+                {
+                    errors.Add(Error(Codes.InvalidVariable, $"The variable '{name}' holds an object; a variable holds a value or an array.", stage, path));
+                    return JsonNode.Parse(element.GetRawText());
+                }
+
+                return JsonNode.Parse(value.GetRawText());
+
+            case JsonValueKind.Object:
+                var node = new JsonObject();
+
+                foreach (var property in element.EnumerateObject())
+                    node[property.Name] = Substituted(property.Value, stage, path, errors);
+
+                return node;
+
+            case JsonValueKind.Array:
+                return new JsonArray(element.EnumerateArray().Select(item => Substituted(item, stage, path, errors)).ToArray());
+
+            default:
+                return JsonNode.Parse(element.GetRawText());
+        }
+    }
 
     /// <summary>Resolves a variable for a group expression.</summary>
     public bool TryResolveVariable(string name, out JsonElement value)

@@ -10,8 +10,13 @@ namespace OxQL.Tests.Execute;
 /// (rows, a refusal, or a fault), records every call with its budget, and reports which
 /// services it knows.
 /// </summary>
-internal sealed class FakeRemoteClient : IRemoteQueryClient
+internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 {
+    /// <summary>What the client read of each owner's shallow health; an owner without an entry is unknown.</summary>
+    public Dictionary<string, RemoteOwnerInfo> Owners { get; } = new(StringComparer.Ordinal);
+
+    public RemoteOwnerInfo? OwnerOf(string serviceKey) => Owners.GetValueOrDefault(serviceKey);
+
     /// <summary>What one query is answered with.</summary>
     public abstract record Answer
     {

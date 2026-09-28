@@ -35,9 +35,16 @@ public static class OwnerQueryBuilder
     /// item collection and the element travels under <see cref="BoundKeyedBy.Element"/>, which the
     /// filter and the select are rebased onto and beside which the owning row's members travel
     /// when the resolve names <c>parentAs</c>. The projection always travels and always carries
-    /// the member the rows are keyed by.
+    /// the member the rows are keyed by. The filter travels as the binder left it: every variable
+    /// substituted (DESIGN §3.5.5), since an owner is never sent <c>variables</c>.
+    /// <para>
+    /// A <paramref name="probe"/> is the existence probe (DESIGN §3.5.2 step 3): the same query
+    /// without the target's filter, projecting only the member the rows are keyed by, so a key the
+    /// filtered query did not return tells <c>excluded</c> (the probe finds it) from
+    /// <c>not_found</c> (it does not).
+    /// </para>
     /// </summary>
-    public static QueryRequest ByKeys(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<string> keys, int? perKey)
+    public static QueryRequest ByKeys(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<string> keys, int? perKey, bool probe = false)
     {
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(target);
@@ -55,7 +62,7 @@ public static class OwnerQueryBuilder
                 Keys = ["match"],
             });
 
-        if (target.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
+        if (!probe && target.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
         {
             var match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!;
 
@@ -67,18 +74,19 @@ public static class OwnerQueryBuilder
         // display members — the pair the local half of this stage keeps — or, for an item, the
         // matched member. Without a projection the owner answers with whole documents,
         // organizationId and every other member included, to a caller that wanted a label.
+        // A probe projects the keyed member alone.
         IReadOnlyList<string>? select = target.IsRemote ? target.RemoteSelect : target.Select?.Select(path => path.Wire).ToList();
         var projection = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        if (select is { Count: > 0 })
+        if (!probe && select is { Count: > 0 })
             foreach (var path in select)
                 projection[element + path] = 1;
-        else if (item is null)
+        else if (!probe && item is null)
             projection["$default"] = 1;
 
         projection[element + field] = 1;
 
-        if (item is not null && stage.ParentAs is not null)
+        if (!probe && item is not null && stage.ParentAs is not null)
         {
             if (target.RemoteParentSelect is { Count: > 0 } parent)
                 foreach (var path in parent)

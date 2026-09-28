@@ -30,5 +30,5 @@ public sealed class RemoteResolver
 
     /// <inheritdoc cref="KeyedFetch.ByKeysAsync"/>
     public Task<ResolveResult> ResolveAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken) =>
-        fetch.ByKeysAsync(compiled, rows, context, remaining, cancellationToken);
+        fetch.ByKeysAsync(compiled, rows, context, remaining, strict: false, cancellationToken);
 }

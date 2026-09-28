@@ -101,7 +101,7 @@ public class KeyedFetchByKeysTests
         var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
         var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(BindHost.Options()), BindHost.Options());
 
-        return await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None);
+        return await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
     }
 
     // ---- SelfOwner: a local keyed target ------------------------------------------------------
@@ -130,6 +130,24 @@ public class KeyedFetchByKeysTests
     }
 
     [Fact]
+    public async Task A_local_keyed_filter_reaches_SelfOwner_with_its_variables_substituted()
+    {
+        var (engine, runner, _) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(row => row["CustomerId"] = Id(Customer1))];
+        runner.Rows["rc.customer"] = [CustomerRow(Customer1, "Alice")];
+
+        var outcome = await engine.ExecuteAsync(
+            BindHost.Request(Invoice, """[{ "resolve": { "path": "customerId", "as": "customer", "filter": { "name": { "eq": { "$var": "who" } } }, "onMissing": "report" } }]""", """{ "who": "Alice" }"""),
+            BindHost.Context());
+
+        var result = outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "").Subject.Result;
+
+        result.Items[0]!["customer"]!["name"]!.GetValue<string>().Should().Be("Alice");
+        runner.StagesOf("rc.customer").Should().ContainSingle("the filtered query found the key, so no probe follows")
+            .Which.Select(stage => stage.ToJson()).Should().Contain(json => json.Contains("Alice"), "SelfOwner binds the substituted value, never an unbound $var");
+    }
+
+    [Fact]
     public async Task Elements_all_collects_every_resolved_target_and_reports_the_rest_per_element()
     {
         var (engine, runner, client) = Host();
@@ -155,7 +173,7 @@ public class KeyedFetchByKeysTests
         var options = BindHost.Options(configure => configure.Limits.MaxLookupLimit = 2);
         var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(options), options);
 
-        var result = await fetch.ByKeysAsync(MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)), page, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None);
+        var result = await fetch.ByKeysAsync(MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)), page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
 
         result.Rows[0]["customers"]!.AsArray().Should().HaveCount(2);
         result.Truncations.Should().ContainSingle().Which.Should().Be(new KeyedTruncation(0, "customers", 0, 3));
@@ -337,7 +355,7 @@ public class KeyedFetchByKeysTests
         var options = BindHost.Options(configure => configure.Limits.MaxPageSize = 4);
         var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(options), options);
 
-        var result = await fetch.ByKeysAsync(MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)), page, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None);
+        var result = await fetch.ByKeysAsync(MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)), page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
 
         client.Calls.SelectMany(call => call.Request.Queries).Select(query => query.KeyedBy!.Keys!.Value.GetArrayLength()).Should().Equal(2, 2, 1);
         result.Outcomes.Should().HaveCount(5).And.AllSatisfy(outcome => outcome.Outcome.Should().Be(KeyedOutcome.NotFound));
@@ -371,8 +389,8 @@ public class KeyedFetchByKeysTests
         var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
         var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(BindHost.Options()), BindHost.Options());
 
-        var first = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None);
-        var again = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None);
+        var first = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
+        var again = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
 
         client.Calls.Should().ContainSingle("the second page is answered from the cache");
         first.Outcomes.Single().Outcome.Should().Be(KeyedOutcome.Ambiguous);

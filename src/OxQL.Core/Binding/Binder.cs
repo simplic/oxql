@@ -128,6 +128,9 @@ public sealed class Binder
 
         private readonly OperandCoercer coercer = new(context.Options, request.Variables, diagnostics);
         private readonly List<BoundStage> stages = [];
+
+        /// <summary>The caller's stage index of each bound stage, by position; null for a stage the binder supplied.</summary>
+        private readonly List<int?> callerIndexes = [];
         private readonly Dictionary<string, IReadOnlyList<AddonDefinition>> addons = new(StringComparer.Ordinal);
         private Shape shape = null!;
         private BoundStage.Sort? sort;
@@ -220,6 +223,7 @@ public sealed class Binder
                 }
 
                 var errorsBefore = errors.Count;
+                var boundBefore = stages.Count;
 
                 switch (stage.Kind)
                 {
@@ -242,6 +246,11 @@ public sealed class Binder
                 // without an error of its own, so one mistake is reported once (DESIGN §3.8).
                 if (errors.Count > errorsBefore)
                     PoisonAliases(stage);
+
+                // A caller stage may bind to no stage (an empty match) or to one; either way every
+                // bound stage keeps the caller's index, which diagnostics and explain name.
+                while (callerIndexes.Count < stages.Count)
+                    callerIndexes.Add(index);
 
                 traced.Add((index, stage.Kind, before, shape));
             }
@@ -279,6 +288,7 @@ public sealed class Binder
             {
                 page = new BoundStage.Page(options.Limits.DefaultPageSize, 0, null, false);
                 stages.Add(page);
+                callerIndexes.Add(null);
             }
         }
 
@@ -433,9 +443,15 @@ public sealed class Binder
 
             // The page stage is last when the caller wrote one, and stays last.
             if (page is not null)
+            {
                 stages.Insert(stages.Count - 1, stage);
+                callerIndexes.Insert(callerIndexes.Count - 1, null);
+            }
             else
+            {
                 stages.Add(stage);
+                callerIndexes.Add(null);
+            }
 
             sort = stage;
         }
@@ -500,6 +516,7 @@ public sealed class Binder
                 Organisation = scope.Organisation,
                 Scope = scope,
                 Stages = stages,
+                CallerIndexes = callerIndexes,
                 FinalShape = shape,
                 Sort = sort,
                 Page = page!,

@@ -98,10 +98,10 @@ public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Serv
 /// <para>
 /// A target is checked for its continued stages and for the paths the caller wrote under its
 /// aliases: its <c>select</c>, its <c>parentSelect</c>, and every path the last projection after the
-/// stage names under them, which the check query projects at <paramref name="ProjectAt"/> so the
-/// owner says which it lacks. <paramref name="Stage"/> is the resolve's caller index,
-/// <paramref name="ProjectStage"/> that projection's; <paramref name="Select"/> and
-/// <paramref name="ParentSelect"/> are what the caller wrote.
+/// stage names under them, which the check query projects at <see cref="ProjectAt"/> so the
+/// owner says which it lacks. <see cref="Stage"/> is the resolve's caller index,
+/// <see cref="ProjectStage"/> that projection's; <see cref="Select"/> and
+/// <see cref="ParentSelect"/> are what the caller wrote.
 /// </para>
 /// </summary>
 public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
@@ -601,7 +601,7 @@ public sealed class KeyedFetch
         var organisation = context.Organisation!.Value;
         var diagnostics = new List<Diagnostic>();
         var budget = new KeyBudget(options.Limits.MaxResolveKeys);
-        var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, StageIndexOf(compiled.Bound, stage), Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
+        var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
         var cacheHits = targets.Sum(target => target.CacheHits);
         var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
@@ -1024,9 +1024,10 @@ public sealed class KeyedFetch
         ArgumentNullException.ThrowIfNull(stage);
 
         var index = StageIndexOf(bound, stage);
-        var projected = ProjectedUnder(bound, index, stage.As) ?? [];
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, index, parentAs) ?? [] : [];
-        var project = index is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
+        var position = PositionOf(bound, stage);
+        var projected = ProjectedUnder(bound, position, stage.As) ?? [];
+        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) ?? [] : [];
+        var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
         var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
 
         return PlansOf(bound, stage, strict, Continuation.Of(bound, stage))
@@ -1073,11 +1074,11 @@ public sealed class KeyedFetch
     /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
     private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued)
     {
-        var index = StageIndexOf(bound, stage);
+        var position = PositionOf(bound, stage);
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
-        var projected = ProjectedUnder(bound, index, stage.As);
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, index, parentAs) : null;
+        var projected = ProjectedUnder(bound, position, stage.As);
+        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) : null;
         var plans = new List<TargetPlan>();
 
         foreach (var target in cases.SelectMany(selected => selected.Targets))
@@ -1487,13 +1488,14 @@ public sealed class KeyedFetch
     /// what the request's key budget leaves (<c>RESOLVE_PARTIAL</c>), in chunks the owner answers in
     /// one page each.
     /// </summary>
-    private StagePlan Plan(BoundPipeline bound, BoundStage.Resolve stage, int? index, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
+    private StagePlan Plan(BoundPipeline bound, BoundStage.Resolve stage, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
     {
-        var plan = new StagePlan(stage, index, continued);
+        var position = PositionOf(bound, stage);
+        var plan = new StagePlan(stage, StageIndexOf(bound, stage), continued);
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
-        var projected = ProjectedUnder(bound, index, stage.As);
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, index, parentAs) : null;
+        var projected = ProjectedUnder(bound, position, stage.As);
+        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) : null;
 
         foreach (var selected in cases)
             foreach (var target in selected.Targets)
@@ -1559,9 +1561,9 @@ public sealed class KeyedFetch
     /// the alias (DESIGN §3.5.3: a projected path under a keyed alias narrows its select); null when
     /// no inclusion projection follows, or it keeps the alias whole or not at all.
     /// </summary>
-    private static IReadOnlyList<string>? ProjectedUnder(BoundPipeline bound, int? index, string alias)
+    private static IReadOnlyList<string>? ProjectedUnder(BoundPipeline bound, int? position, string alias)
     {
-        if (index is not { } at || bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() is not { Inclusion: true } project
+        if (position is not { } at || bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() is not { Inclusion: true } project
             || project.Paths.Any(path => path.Wire == alias))
             return null;
 
@@ -2090,20 +2092,25 @@ public sealed class KeyedFetch
         return Refusal.NotExecutable(Codes.ResolveRefused, message, stage, [new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = stage }]);
     }
 
-    /// <summary>The caller's index of a bound stage: the bound stages are the caller's in order, the page appended when absent.</summary>
-    private static int? StageIndexOf(BoundPipeline bound, BoundStage stage)
-    {
-        var index = bound.Stages.ToList().IndexOf(stage);
+    /// <summary>The caller's index of a bound stage, which diagnostics and refusals name (a caller stage that bound to nothing leaves no position).</summary>
+    private static int? StageIndexOf(BoundPipeline bound, BoundStage stage) => bound.CallerIndexOf(stage);
 
-        return index < 0 ? null : index;
+    /// <summary>The position of a bound stage among the bound stages, for reading the stages after it.</summary>
+    private static int? PositionOf(BoundPipeline bound, BoundStage stage)
+    {
+        for (var position = 0; position < bound.Stages.Count; position++)
+            if (ReferenceEquals(bound.Stages[position], stage))
+                return position;
+
+        return null;
     }
 
     /// <summary>The caller's index of the match stage carrying a semi-join leaf.</summary>
     private static int? StageIndexOf(BoundPipeline bound, SemiJoinSlot slot)
     {
-        for (var index = 0; index < bound.Stages.Count; index++)
-            if (bound.Stages[index] is BoundStage.Match match && Contains(match.Condition, slot.Leaf))
-                return index;
+        for (var position = 0; position < bound.Stages.Count; position++)
+            if (bound.Stages[position] is BoundStage.Match match && Contains(match.Condition, slot.Leaf))
+                return bound.CallerIndexOf(position);
 
         return null;
     }

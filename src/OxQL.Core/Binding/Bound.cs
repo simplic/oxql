@@ -358,6 +358,30 @@ public sealed record BoundPipeline
     /// <summary>The caller's stages in order, bound; the scope is not among them.</summary>
     public required IReadOnlyList<BoundStage> Stages { get; init; }
 
+    /// <summary>
+    /// The caller's stage index of each bound stage, by position (null for a sort or page the binder
+    /// supplied). A caller stage that binds to no stage, such as an empty <c>match</c>, leaves no
+    /// position, so a position is not a caller index. Null when the pipeline was not built by the
+    /// binder; <see cref="CallerIndexOf(int)"/> then takes the position.
+    /// </summary>
+    public IReadOnlyList<int?>? CallerIndexes { get; init; }
+
+    /// <summary>The caller's index of the stage at <paramref name="position"/>, or null for a stage the binder supplied.</summary>
+    public int? CallerIndexOf(int position) =>
+        position < 0 || position >= Stages.Count ? null
+        : CallerIndexes is { } indexes ? position < indexes.Count ? indexes[position] : null
+        : position;
+
+    /// <summary>The caller's index of a bound stage, or null when it is not one of <see cref="Stages"/> or the binder supplied it.</summary>
+    public int? CallerIndexOf(BoundStage stage)
+    {
+        for (var position = 0; position < Stages.Count; position++)
+            if (ReferenceEquals(Stages[position], stage))
+                return CallerIndexOf(position);
+
+        return null;
+    }
+
     /// <summary>The shape the rows have after the last stage.</summary>
     public required Shape FinalShape { get; init; }
 

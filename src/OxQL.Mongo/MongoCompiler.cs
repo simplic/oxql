@@ -445,7 +445,7 @@ public static class MongoCompiler
         if (resolve.EffectiveOnMissing == ResolveOnMissing.Null || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
             return;
 
-        probes.Add(new InlineProbe(index, resolve, storage));
+        probes.Add(new InlineProbe(bound.CallerIndexOf(index) ?? index, resolve, storage));
 
         if (!keys.Contains(storage, StringComparer.Ordinal))
             keys.Add(storage);

@@ -1,10 +1,10 @@
 namespace OxQL.Model.Attributes;
 
 /// <summary>
-/// Declares one case of a typed reference: the id member names <paramref name="targets"/> when
-/// the sibling <paramref name="path"/> holds <paramref name="equals"/>, or, with
+/// Declares one case of a typed reference: the id member names <c>targets</c> when
+/// the sibling <c>path</c> holds <c>equals</c>, or, with
 /// <see cref="Variant"/> as the path, when the object holding the member is stored as the
-/// variant named <paramref name="equals"/>. Repeat the attribute once per case; every case of
+/// variant named <c>equals</c>. Repeat the attribute once per case; every case of
 /// one member names the same path.
 /// </summary>
 /// <remarks>

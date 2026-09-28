@@ -81,14 +81,19 @@ public static class Notes
     public static readonly IReadOnlyList<string> DataLossOutcomes = ["ambiguous", "not_found", "invalid_key", "owner_unanswered"];
 
     /// <summary>
-    /// The caller's stage index of each bound stage, by position: the bound stages are the caller's in
-    /// order, except a default sort the binder inserted (null, and every later stage one back) and a
-    /// default page it appended (null).
+    /// The caller's stage index of each bound stage, by position: as the binder recorded them, or for a
+    /// pipeline built without it the caller's stages in order, except a default sort the binder
+    /// inserted (null, and every later stage one back) and a default page it appended (null).
     /// </summary>
     public static IReadOnlyList<int?> CallerIndexes(BoundPipeline bound, QueryRequest request)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(request);
+
+        // The binder records each bound stage's caller index, which also holds when a caller stage
+        // bound to no stage (an empty match); a pipeline built elsewhere is read by position.
+        if (bound.CallerIndexes is { } recorded && recorded.Count == bound.Stages.Count)
+            return recorded;
 
         var written = request.Pipeline.Count;
         var defaultSort = bound.Sort is not null && !request.Pipeline.Any(stage => stage.Sort is not null) ? bound.Sort : null;

@@ -1,8 +1,10 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.Serializers;
 using OxQL.Model.Attributes;
 
@@ -25,7 +27,15 @@ namespace OxQL.Model.Build;
 /// declaration order within a type, the schema's rule. A member the registry has no
 /// serialization info for (<c>[BsonIgnore]</c>, get-only) is in the wire view with
 /// <see cref="MemberDef.Stored"/> false. A member whose serializer cannot describe members (a
-/// GeoJSON point, an interface, a custom scalar serializer) is <see cref="Kind.Unknown"/>.
+/// GeoJSON point, a custom scalar serializer) is <see cref="Kind.Unknown"/>.
+/// </para>
+/// <para>
+/// A polymorphic type's variants are the class maps the host registered (and the known types
+/// they and <c>[BsonKnownTypes]</c> name) that are concrete and assignable to it. Their members
+/// the type lacks are merged into it with <see cref="MemberDef.OnlyFor"/>; an interface or
+/// abstract type the driver cannot describe but that has variants becomes a pooled object of
+/// their members. A class map the build itself caused to be registered, by looking a type up,
+/// never counts: the answer must not depend on how often or in which order models are built.
 /// </para>
 /// </remarks>
 public sealed class ClrModelBuilder
@@ -36,14 +46,26 @@ public sealed class ClrModelBuilder
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> NoRetiredIds =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
+    /// <summary>The class maps a model build registered as a side effect of looking a type up; never variants.</summary>
+    private static readonly ConcurrentDictionary<Type, byte> RegisteredByBuild = new();
+
+    private static readonly Lock LookupGate = new();
+
     private readonly List<BuildFinding> findings = [];
     private readonly List<PendingReference> references = [];
     private readonly Dictionary<Type, TypeDef> pool = [];
     private readonly HashSet<string> reportedOpaque = new(StringComparer.Ordinal);
+    private readonly HashSet<string> reportedUnregistered = new(StringComparer.Ordinal);
     private readonly NullabilityInfoContext nullability = new();
+    private readonly List<(TypeDef Type, Type Owner, string Label, IReadOnlyList<Type> Variants)> pendingMerges = [];
+    private readonly HashSet<Type> registered;
+    private readonly IReadOnlyList<Assembly> candidateAssemblies;
+    private Dictionary<Type, List<Type>>? subclassIndex;
 
-    private ClrModelBuilder()
+    private ClrModelBuilder(IReadOnlyList<Assembly> candidateAssemblies)
     {
+        registered = RegisteredVariantCandidates();
+        this.candidateAssemblies = candidateAssemblies;
     }
 
     /// <summary>
@@ -55,7 +77,9 @@ public sealed class ClrModelBuilder
     {
         ArgumentNullException.ThrowIfNull(assemblies);
 
-        return new ClrModelBuilder().BuildCore(assemblies.ToList(), retiredIds ?? NoRetiredIds);
+        var list = assemblies.ToList();
+
+        return new ClrModelBuilder(list).BuildCore(list, retiredIds ?? NoRetiredIds);
     }
 
     /// <summary>Builds the model from already scanned declarations; the overload tests and tooling use.</summary>
@@ -63,7 +87,9 @@ public sealed class ClrModelBuilder
     {
         ArgumentNullException.ThrowIfNull(declarations);
 
-        return new ClrModelBuilder().BuildCore(declarations, retiredIds ?? NoRetiredIds);
+        var assemblies = declarations.Select(declaration => declaration.ClrType.Assembly).Distinct().ToList();
+
+        return new ClrModelBuilder(assemblies).BuildCore(declarations, retiredIds ?? NoRetiredIds);
     }
 
     private EntityModel BuildCore(IReadOnlyList<Assembly> assemblies, IReadOnlyDictionary<string, IReadOnlyList<string>> retiredIds) =>
@@ -95,6 +121,12 @@ public sealed class ClrModelBuilder
                 root));
         }
 
+        // Merged last, once every type reachable from the entities is described: a variant can
+        // reach its base through a member, and its own members must be complete when copied.
+        // Merging pools variants not seen yet, which can queue merges of their own.
+        for (var index = 0; index < pendingMerges.Count; index++)
+            Merge(pendingMerges[index].Type, pendingMerges[index].Owner, pendingMerges[index].Label, pendingMerges[index].Variants);
+
         StructuralIds.Assign(pool);
 
         return ModelAssembler.Finish(entities, pool.Values, retiredIds, references, findings);
@@ -124,8 +156,15 @@ public sealed class ClrModelBuilder
         var declaredTargets = DeclaredTargets(owner, label);
         var members = new List<MemberDef>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var variants = VariantsOf(owner, registered);
 
-        foreach (var property in PublishedProperties(owner))
+        // An interface, or an abstract type the driver cannot describe, is known only through
+        // its variants: its members are theirs, every one merged with `onlyFor`. The driver's
+        // interface serializer is a document serializer, but it stores none of the interface's
+        // own properties, so they would be unstored copies of what every variant stores.
+        var synthetic = variants.Count > 0 && (owner.IsInterface || documentSerializer is null);
+
+        foreach (var property in synthetic ? Enumerable.Empty<PropertyInfo>() : PublishedProperties(owner))
         {
             if (!property.CanRead || property.GetIndexParameters().Length > 0)
                 continue;
@@ -159,6 +198,272 @@ public sealed class ClrModelBuilder
 
         type.Members = members;
         type.Discriminator = DiscriminatorOf(owner);
+
+        if (variants.Count > 0)
+            pendingMerges.Add((type, owner, label, variants));
+
+        ReportUnregisteredSubtypes(owner, label);
+    }
+
+    /// <summary>
+    /// Appends every wire name some variant has and the type has not, as a nullable copy
+    /// carrying <see cref="MemberDef.OnlyFor"/>: variants in their ordinal order, members in the
+    /// variant's order. Variants that disagree on a member's shape or storage name make it
+    /// <see cref="Kind.Unknown"/>.
+    /// </summary>
+    private void Merge(TypeDef type, Type owner, string label, IReadOnlyList<Type> variants)
+    {
+        var members = type.Members.ToList();
+        var own = new HashSet<string>(members.Select(member => member.WireName), StringComparer.Ordinal);
+        var merged = new Dictionary<string, (MemberDef Copy, MemberDef First, List<string> Carriers)>(StringComparer.Ordinal);
+        var conflicts = new List<string>();
+        var variantDefs = new List<VariantDef>();
+
+        foreach (var variant in variants)
+        {
+            var name = VariantName(variant);
+            var variantType = PoolObject(variant, label);
+
+            variantDefs.Add(new VariantDef(name, DiscriminatorValueOf(variant), variantType));
+
+            // A variant's own members only: the members merged into it come from its own
+            // variants, which are variants of this type too and contribute themselves.
+            foreach (var member in variantType.Members)
+            {
+                if (member.OnlyFor is not null || own.Contains(member.WireName))
+                    continue;
+
+                if (merged.TryGetValue(member.WireName, out var entry))
+                {
+                    entry.Carriers.Add(name);
+
+                    if (!SameShape(entry.First, member) && !conflicts.Contains(member.WireName))
+                        conflicts.Add(member.WireName);
+
+                    continue;
+                }
+
+                var copy = CopyForVariants(member);
+
+                merged[member.WireName] = (copy, member, [name]);
+                members.Add(copy);
+
+                foreach (var pending in references.Where(pending => ReferenceEquals(pending.Member, member)).ToList())
+                    references.Add(pending with { Member = copy, OwnerLabel = $"{label}#{member.WireName}" });
+            }
+        }
+
+        foreach (var (copy, _, carriers) in merged.Values)
+            copy.OnlyFor = carriers;
+
+        foreach (var wire in conflicts)
+        {
+            var (copy, first, carriers) = merged[wire];
+            var storageDiffers = variantDefs
+                .Select(variant => variant.Type.Member(wire))
+                .Any(member => member is { OnlyFor: null } && (member.Stored != first.Stored || !string.Equals(member.StorageName, first.StorageName, StringComparison.Ordinal)));
+
+            copy.Kind = Kind.Unknown;
+            copy.Representation = Representation.None;
+            copy.Type = null;
+            copy.Of = null;
+            copy.Value = null;
+            copy.DictionaryRepresentation = null;
+            copy.SnapshotOf = null;
+
+            if (storageDiffers)
+            {
+                copy.Stored = false;
+                copy.StorageName = null;
+            }
+
+            references.RemoveAll(pending => ReferenceEquals(pending.Member, copy));
+
+            findings.Add(new BuildFinding(
+                BuildCodes.PolymorphicMemberConflict,
+                $"{label}#{wire}",
+                storageDiffers
+                    ? "The variants store the member under different element names, so the merged member is unknown and not stored."
+                    : "The variants describe the member with different kinds or representations, so the merged member is unknown: projectable, not filterable.",
+                string.Join(", ", carriers)));
+        }
+
+        type.Members = members;
+        type.Variants = variantDefs;
+        type.DiscriminatorElement = DiscriminatorElementOf(owner);
+        type.DiscriminatorForm = variants.Any(IsHierarchical) ? DiscriminatorForm.Hierarchical : DiscriminatorForm.Scalar;
+    }
+
+    private static MemberDef CopyForVariants(MemberDef member) => new(member.WireName)
+    {
+        ClrName = member.ClrName,
+        Stored = member.Stored,
+        StorageName = member.StorageName,
+        Nullable = true,
+        DisplayName = member.DisplayName,
+        Kind = member.Kind,
+        Representation = member.Representation,
+        Type = member.Type,
+        Of = member.Of,
+        Value = member.Value,
+        DictionaryRepresentation = member.DictionaryRepresentation,
+        SnapshotOf = member.SnapshotOf,
+    };
+
+    /// <summary>Whether two variants describe one wire name the same way: stored alike, and the same shape all the way down.</summary>
+    private static bool SameShape(MemberDef left, MemberDef right) =>
+        left.Stored == right.Stored
+        && string.Equals(left.StorageName, right.StorageName, StringComparison.Ordinal)
+        && SameShape((ShapeDef)left, (ShapeDef)right);
+
+    private static bool SameShape(ShapeDef? left, ShapeDef? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.Kind == right.Kind
+            && left.Representation == right.Representation
+            && ReferenceEquals(left.Type, right.Type)
+            && left.DictionaryRepresentation == right.DictionaryRepresentation
+            && SameShape(left.Of, right.Of)
+            && SameShape(left.Value, right.Value);
+    }
+
+    /// <summary>
+    /// The types whose class maps count as registered for variant discovery: every class map
+    /// registered other than by a model build's own lookups, and every known type such a map
+    /// names, transitively.
+    /// </summary>
+    internal static HashSet<Type> RegisteredVariantCandidates()
+    {
+        var candidates = new HashSet<Type>();
+        var queue = new Queue<BsonClassMap>();
+
+        foreach (var map in BsonClassMap.GetRegisteredClassMaps())
+            if (!RegisteredByBuild.ContainsKey(map.ClassType) && candidates.Add(map.ClassType))
+                queue.Enqueue(map);
+
+        while (queue.Count > 0)
+            foreach (var known in queue.Dequeue().KnownTypes)
+                if (candidates.Add(known) && BsonClassMap.IsClassMapRegistered(known))
+                    queue.Enqueue(BsonClassMap.LookupClassMap(known));
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// The variants of a type: the concrete classes among <paramref name="registered"/>, and the
+    /// <c>[BsonKnownTypes]</c> the type, its bases and those known types declare, that are
+    /// assignable to it; the type itself excluded; ordinally by name.
+    /// </summary>
+    internal static IReadOnlyList<Type> VariantsOf(Type owner, IReadOnlySet<Type> registered)
+    {
+        if (!(owner.IsClass || owner.IsInterface) || owner == typeof(object) || owner == typeof(string) || owner.ContainsGenericParameters)
+            return [];
+
+        var candidates = new HashSet<Type>(registered.Where(owner.IsAssignableFrom));
+        var queue = new Queue<Type>();
+        var visited = new HashSet<Type>();
+
+        for (var current = owner; current is not null && current != typeof(object); current = current.BaseType)
+            queue.Enqueue(current);
+
+        while (queue.Count > 0)
+        {
+            var type = queue.Dequeue();
+
+            if (!visited.Add(type))
+                continue;
+
+            foreach (var attribute in type.GetCustomAttributes<BsonKnownTypesAttribute>(inherit: false))
+                foreach (var known in attribute.KnownTypes)
+                    if (owner.IsAssignableFrom(known) && candidates.Add(known))
+                        queue.Enqueue(known);
+        }
+
+        return candidates
+            .Where(type => type != owner && type is { IsClass: true, IsAbstract: false, ContainsGenericParameters: false })
+            .OrderBy(VariantName, StringComparer.Ordinal)
+            .ThenBy(StructuralIds.ClrIdentity, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>A variant's name: its CLR name without a generic arity suffix.</summary>
+    internal static string VariantName(Type type)
+    {
+        var name = type.Name;
+        var arity = name.IndexOf('`', StringComparison.Ordinal);
+
+        return arity > 0 ? name[..arity] : name;
+    }
+
+    /// <summary>
+    /// Reports every concrete subclass (or implementation) of a described type, found in the
+    /// scanned assemblies, that is not a variant because the host registered no class map for it.
+    /// </summary>
+    private void ReportUnregisteredSubtypes(Type owner, string label)
+    {
+        if (!(owner.IsClass || owner.IsInterface) || owner == typeof(object) || !reportedUnregistered.Add(label))
+            return;
+
+        subclassIndex ??= SubclassIndex(candidateAssemblies);
+
+        if (!subclassIndex.TryGetValue(owner, out var subtypes))
+            return;
+
+        var variants = VariantsOf(owner, registered);
+
+        foreach (var subtype in subtypes.Where(subtype => !variants.Contains(subtype)).OrderBy(StructuralIds.ClrIdentity, StringComparer.Ordinal))
+            findings.Add(new BuildFinding(
+                BuildCodes.PolymorphicSubtypeUnregistered,
+                label,
+                $"The subtype '{VariantName(subtype)}' has no registered class map, so its members are not described as a variant. Register its class map before the model is built.",
+                subtype.FullName));
+    }
+
+    /// <summary>Every concrete, closed class of the assemblies under each base class and interface it has.</summary>
+    internal static Dictionary<Type, List<Type>> SubclassIndex(IEnumerable<Assembly> assemblies)
+    {
+        var index = new Dictionary<Type, List<Type>>();
+
+        foreach (var assembly in assemblies.Distinct())
+        {
+            Type[] types;
+
+            try
+            {
+                types = assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException exception)
+            {
+                types = [.. exception.Types.Where(type => type is not null).Select(type => type!)];
+            }
+
+            foreach (var type in types)
+            {
+                if (type is not { IsClass: true, IsAbstract: false } || type.ContainsGenericParameters)
+                    continue;
+
+                foreach (var supertype in Supertypes(type))
+                {
+                    if (!index.TryGetValue(supertype, out var list))
+                        index[supertype] = list = [];
+
+                    list.Add(type);
+                }
+            }
+        }
+
+        return index;
+    }
+
+    private static IEnumerable<Type> Supertypes(Type type)
+    {
+        for (var current = type.BaseType; current is not null && current != typeof(object) && current != typeof(ValueType); current = current.BaseType)
+            yield return current;
+
+        foreach (var contract in type.GetInterfaces())
+            yield return contract;
     }
 
     /// <summary>Describes one shape. <c>Nullable&lt;T&gt;</c> and the driver's nullable serializer are unwrapped first; composites recurse, scalars stop.</summary>
@@ -223,6 +528,18 @@ public sealed class ClrModelBuilder
 
         if (effective is not IBsonDocumentSerializer)
         {
+            // An interface or abstract type the host registered implementations of: described
+            // as the pooled union of its variants.
+            if ((type.IsInterface || type.IsAbstract) && VariantsOf(type, registered).Count > 0)
+            {
+                var pooled = PoolObject(type, label);
+
+                shape.Kind = Kind.Object;
+                shape.Type = pooled;
+                shape.SnapshotOf = pooled.IsEntity ? pooled.PoolId : null;
+                return;
+            }
+
             shape.Kind = Kind.Unknown;
 
             if (reportedOpaque.Add(label))
@@ -296,7 +613,7 @@ public sealed class ClrModelBuilder
     {
         try
         {
-            return BsonSerializer.LookupSerializer(type);
+            return Tracked(() => BsonSerializer.LookupSerializer(type));
         }
         catch (Exception exception)
         {
@@ -349,6 +666,57 @@ public sealed class ClrModelBuilder
                 return Representation.None;
         }
     }
+
+    /// <summary>
+    /// Runs a registry call and records every class map it registered as a build's own, so no
+    /// build reads it as a registration of the host's. The gate keeps concurrent builds' records
+    /// apart; a registration by other code inside that window is recorded too, which can only
+    /// ever leave a variant out.
+    /// </summary>
+    private static T Tracked<T>(Func<T> call)
+    {
+        lock (LookupGate)
+        {
+            var before = BsonClassMap.GetRegisteredClassMaps().Select(map => map.ClassType).ToHashSet();
+
+            try
+            {
+                return call();
+            }
+            finally
+            {
+                foreach (var map in BsonClassMap.GetRegisteredClassMaps())
+                    if (!before.Contains(map.ClassType))
+                        RegisteredByBuild.TryAdd(map.ClassType, 0);
+            }
+        }
+    }
+
+    /// <summary>The discriminator value the driver writes for a registered variant.</summary>
+    private static string DiscriminatorValueOf(Type variant) =>
+        Tracked(() => BsonClassMap.LookupClassMap(variant).Discriminator) ?? VariantName(variant);
+
+    /// <summary>The element a polymorphic type's discriminator is stored under, by the convention the driver looks up for it.</summary>
+    private static string DiscriminatorElementOf(Type type)
+    {
+        try
+        {
+            return Tracked(() => BsonSerializer.LookupDiscriminatorConvention(type)).ElementName;
+        }
+        catch (Exception)
+        {
+            return "_t";
+        }
+    }
+
+    /// <summary>Whether a variant is stored in the hierarchical form: its class map or one above it is a root class.</summary>
+    private static bool IsHierarchical(Type variant) =>
+        Tracked(() =>
+        {
+            var map = BsonClassMap.LookupClassMap(variant);
+
+            return map.IsRootClass || map.HasRootClass;
+        });
 
     /// <summary>The discriminator value of a polymorphic type: abstract, or derived from a class other than <c>object</c>.</summary>
     private static string? DiscriminatorOf(Type type)

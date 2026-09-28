@@ -7,7 +7,11 @@ namespace OxQL.Model.Build;
 /// <summary>One entity declaration found by the scan.</summary>
 /// <param name="Id">The normalised id: trimmed and lower-cased.</param>
 /// <param name="DeclaredId">The id as the attribute spelled it, trimmed.</param>
-/// <param name="ClrType">The type the entity is read from: the most derived concrete subclass of the declaring type.</param>
+/// <param name="ClrType">
+/// The type the entity is read from: the declaring type when the host registered class maps of
+/// subclasses of it (they are merged into it as variants), otherwise the most derived concrete
+/// subclass of the declaring type.
+/// </param>
 /// <param name="Collection">The collection name.</param>
 /// <param name="Database">The database override, or null.</param>
 /// <param name="Extendable">Whether the entity carries an addon bag.</param>
@@ -20,7 +24,8 @@ public sealed record EntityDeclaration(string Id, string DeclaredId, Type ClrTyp
 /// <remarks>
 /// The rules are the v1 registry's: when the attribute sits on a base class, the most derived
 /// concrete subclass found in the scanned assemblies is the entity's type, so every member is
-/// visible; and the schema's: an id more than one declaration claims is dropped for every
+/// visible, unless the host registered class maps of its subclasses, which makes the declared
+/// class the root and its subclasses variants merged into it; and the schema's: an id more than one declaration claims is dropped for every
 /// claimant, and a type claimed under two ids is described under the first.
 /// </remarks>
 public static class EntityScanner
@@ -82,6 +87,7 @@ public static class EntityScanner
 
         var declarations = new List<EntityDeclaration>();
         var claimedTypes = new Dictionary<Type, string>();
+        var registered = ClrModelBuilder.RegisteredVariantCandidates();
 
         foreach (var (id, claimants) in claims.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
@@ -97,9 +103,19 @@ public static class EntityScanner
             }
 
             var (type, attribute) = claimants[0];
-            var representative = subclasses.TryGetValue(type, out var derived) && derived.Count > 0
-                ? derived.OrderByDescending(InheritanceDepth).ThenBy(candidate => candidate.FullName, StringComparer.Ordinal).First()
-                : type;
+            var representative = type;
+
+            if (subclasses.TryGetValue(type, out var derived) && derived.Count > 0 && ClrModelBuilder.VariantsOf(type, registered).Count == 0)
+            {
+                representative = derived.OrderByDescending(InheritanceDepth).ThenBy(candidate => candidate.FullName, StringComparer.Ordinal).First();
+
+                foreach (var subclass in derived.OrderBy(candidate => candidate.FullName, StringComparer.Ordinal))
+                    findings.Add(new BuildFinding(
+                        BuildCodes.PolymorphicSubtypeUnregistered,
+                        id,
+                        $"The subclass '{ClrModelBuilder.VariantName(subclass)}' has no registered class map, so the entity is read as its most derived subclass '{ClrModelBuilder.VariantName(representative)}' instead of as its declared class with variants. Register the subclasses' class maps before the model is built.",
+                        subclass.FullName));
+            }
 
             if (!claimedTypes.TryAdd(representative, id))
             {

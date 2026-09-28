@@ -187,7 +187,12 @@ internal static class ModelAssembler
         }
     }
 
-    /// <summary>A SHA-256 over one line per entity, path and pooled type; the same model text-serialises to the same lines.</summary>
+    /// <summary>
+    /// A SHA-256 over one line per entity, path and pooled type; the same model text-serialises to
+    /// the same lines. A path's <c>onlyFor</c> and a type's variants and discriminator are appended
+    /// only where present, so a model without polymorphism keeps the fingerprint it had before
+    /// they existed. Descriptions stay out.
+    /// </summary>
     private static string Fingerprint(IEnumerable<EntityDef> entities, IEnumerable<TypeDef> pool)
     {
         var text = new StringBuilder();
@@ -200,19 +205,31 @@ internal static class ModelAssembler
                 .Append(string.Join(",", entity.RetiredIds)).Append('\n');
 
             foreach (var path in entity.Paths)
+            {
                 text.Append("path\t").Append(path.Wire).Append('\t').Append(path.Storage).Append('\t')
                     .Append(Kinds.NameOf(path.Kind)).Append('\t').Append(Kinds.NameOf(path.LeafKind)).Append('\t')
                     .Append(path.Shape.Leaf.Representation).Append('\t').Append(path.Member.Nullable).Append('\t')
                     .Append(path.Depth).Append('\t').Append(path.CollectionAncestors).Append('\t')
                     .Append(path.Filterable).Append('\t').Append(path.Sortable).Append('\t')
                     .Append(path.Shape.Type?.PoolId).Append('\t')
-                    .Append(path.Reference is { } reference ? $"{reference.TargetEntity}#{reference.TargetField}#{reference.IsRemote}" : "")
-                    .Append('\n');
+                    .Append(path.Reference is { } reference ? $"{reference.TargetEntity}#{reference.TargetField}#{reference.IsRemote}" : "");
+
+                if (path.Member.OnlyFor is { } onlyFor)
+                    text.Append("\tonlyFor=").Append(string.Join(",", onlyFor));
+
+                text.Append('\n');
+            }
         }
 
         foreach (var type in pool)
         {
-            text.Append("type\t").Append(type.PoolId).Append('\t').Append(type.IsEnum).Append('\t').Append(type.EnumFlags).Append('\n');
+            text.Append("type\t").Append(type.PoolId).Append('\t').Append(type.IsEnum).Append('\t').Append(type.EnumFlags);
+
+            if (type.Variants.Count > 0)
+                text.Append("\tdiscriminator=").Append(type.DiscriminatorElement).Append('/').Append(type.DiscriminatorForm)
+                    .Append("\tvariants=").Append(string.Join(",", type.Variants.Select(variant => $"{variant.Name}:{variant.Discriminator}:{variant.Type.PoolId}")));
+
+            text.Append('\n');
 
             foreach (var value in type.EnumValues)
                 text.Append("enum\t").Append(value.Name).Append('\t').Append(value.Value).Append('\t').Append(value.Active).Append('\n');

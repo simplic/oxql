@@ -104,7 +104,10 @@ public sealed class DocumentModelBuilder
 
         foreach (var entry in types.EnumerateObject())
             if (!pool[entry.Name].IsEnum)
+            {
                 pool[entry.Name].Members = DescribeMembers(entry.Name, entry.Value);
+                DescribeVariants(pool[entry.Name], entry.Value);
+            }
 
         var entities = new List<EntityDef>();
         var retired = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -195,6 +198,13 @@ public sealed class DocumentModelBuilder
 
             FillShape(member, descriptor, label);
 
+            if (descriptor.TryGetProperty("onlyFor", out var onlyFor) && onlyFor.ValueKind == JsonValueKind.Array)
+                member.OnlyFor = onlyFor
+                    .EnumerateArray()
+                    .Where(name => name.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(name.GetString()))
+                    .Select(name => name.GetString()!)
+                    .ToList();
+
             if (member.Kind == Kind.Dictionary && options.DictionaryRepresentations is not null
                 && options.DictionaryRepresentations.TryGetValue(label, out var representation))
                 member.DictionaryRepresentation = representation;
@@ -212,6 +222,56 @@ public sealed class DocumentModelBuilder
         }
 
         return members;
+    }
+
+    /// <summary>
+    /// A polymorphic entry's <c>discriminator</c> and <c>variants</c> (format 1.1). A document
+    /// carries no discriminator value per variant, so the variant's name stands in for it; a
+    /// variant whose pointer has no target is a dangling pointer and left out.
+    /// </summary>
+    private void DescribeVariants(TypeDef type, JsonElement entry)
+    {
+        if (!entry.TryGetProperty("variants", out var variants) || variants.ValueKind != JsonValueKind.Array)
+            return;
+
+        var described = new List<VariantDef>();
+
+        foreach (var variant in variants.EnumerateArray())
+        {
+            var name = ReadString(variant, "name");
+            var pointer = ReadString(variant, "type");
+
+            if (string.IsNullOrEmpty(name))
+                continue;
+
+            if (pointer is null || !pool.TryGetValue(StripPointer(pointer), out var target))
+            {
+                findings.Add(new BuildFinding(
+                    BuildCodes.DanglingTypePointer,
+                    $"{type.PoolId}@{name}",
+                    $"The variant's pointer '{pointer}' has no target in the pool, so the variant is left out."));
+
+                continue;
+            }
+
+            described.Add(new VariantDef(name, name, target));
+        }
+
+        if (described.Count == 0)
+            return;
+
+        type.Variants = described;
+
+        if (entry.TryGetProperty("discriminator", out var discriminator) && discriminator.ValueKind == JsonValueKind.Object)
+        {
+            type.DiscriminatorElement = ReadString(discriminator, "element") ?? "_t";
+            type.DiscriminatorForm = ReadString(discriminator, "form") == "hierarchical" ? DiscriminatorForm.Hierarchical : DiscriminatorForm.Scalar;
+        }
+        else
+        {
+            type.DiscriminatorElement = "_t";
+            type.DiscriminatorForm = DiscriminatorForm.Scalar;
+        }
     }
 
     private void FillShape(ShapeDef shape, JsonElement descriptor, string label)

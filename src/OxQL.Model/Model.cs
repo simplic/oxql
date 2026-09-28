@@ -184,6 +184,20 @@ public sealed class TypeDef
     /// </summary>
     public string? Discriminator { get; internal set; }
 
+    /// <summary>
+    /// The concrete types a value of this type can hold, by the class maps the host registered:
+    /// every registered, non-abstract class assignable to this type other than itself, ordinally
+    /// by name. Their members that this type lacks are merged into <see cref="Members"/> with
+    /// <see cref="MemberDef.OnlyFor"/> set. Empty when the type is not polymorphic.
+    /// </summary>
+    public IReadOnlyList<VariantDef> Variants { get; internal set; } = [];
+
+    /// <summary>The element the driver stores the discriminator under (<c>_t</c> by default); null when the type has no variants.</summary>
+    public string? DiscriminatorElement { get; internal set; }
+
+    /// <summary>How the discriminator is stored; null when the type has no variants.</summary>
+    public DiscriminatorForm? DiscriminatorForm { get; internal set; }
+
     /// <summary>The member with the given wire name, or null.</summary>
     public MemberDef? Member(string wireName)
     {
@@ -193,6 +207,22 @@ public sealed class TypeDef
 
         return null;
     }
+}
+
+/// <summary>One concrete type a polymorphic type's values can hold.</summary>
+/// <param name="Name">The variant's name: the CLR type name without a generic arity suffix; what <c>onlyFor</c> lists.</param>
+/// <param name="Discriminator">The discriminator value the driver writes for the variant; the name when the model came from a document.</param>
+/// <param name="Type">The variant's pooled type.</param>
+public sealed record VariantDef(string Name, string Discriminator, TypeDef Type);
+
+/// <summary>How a polymorphic type's discriminator is stored.</summary>
+public enum DiscriminatorForm
+{
+    /// <summary>One value: the concrete type's discriminator.</summary>
+    Scalar,
+
+    /// <summary>An array of the discriminators from the root class down to the concrete type.</summary>
+    Hierarchical,
 }
 
 /// <summary>One enum member.</summary>
@@ -291,6 +321,12 @@ public sealed class MemberDef : ShapeDef
 
     /// <summary>The declared reference this member carries, when it is a foreign key.</summary>
     public ReferenceDef? Reference { get; internal set; }
+
+    /// <summary>
+    /// The variants that carry the member, when it is merged into a polymorphic type from its
+    /// variants rather than declared by the type itself; null on a member every value has.
+    /// </summary>
+    public IReadOnlyList<string>? OnlyFor { get; internal set; }
 }
 
 /// <summary>One reachable wire path of an entity with everything the binder needs at that path.</summary>
@@ -457,4 +493,10 @@ public static class BuildCodes
 
     /// <summary>A schema document pointer has no target; the member is <c>unknown</c>.</summary>
     public const string DanglingTypePointer = "dangling-type-pointer";
+
+    /// <summary>Variants of one polymorphic type carry a member under one wire name with a different kind, storage name or representation; the merged member is <c>unknown</c>.</summary>
+    public const string PolymorphicMemberConflict = "polymorphic-member-conflict";
+
+    /// <summary>A concrete subclass of a polymorphic type has no registered class map, so the model does not describe it as a variant.</summary>
+    public const string PolymorphicSubtypeUnregistered = "polymorphic-subtype-unregistered";
 }

@@ -1363,6 +1363,11 @@ public sealed class Binder
             if (substitution.Count > 0 && !reportedFilterError && cases.Any(bound => bound.Targets.Any(target => target.IsRemote)))
                 errors.AddRange(substitution);
 
+            // An option the wire form cannot carry is lost on the way to a remote owner, which would
+            // then compare without it; a local target's binding refuses it already.
+            if (cases.Any(bound => bound.Targets.Any(target => target.IsRemote)) && !cases.Any(bound => bound.Targets.Any(target => !target.IsRemote)))
+                RefuseUnknownOptions(resolve.Filter?.Condition, index);
+
             if (errors.Count > errorsBefore)
                 return;
 
@@ -1496,6 +1501,10 @@ public sealed class Binder
                 added.Add(checkedAlias);
             }
 
+            // What the wire form cannot carry to the owner is refused here, not dropped on the way.
+            if (RefuseUnknownOptions(raw.Resolve?.Filter?.Condition ?? raw.Lookup?.Filter?.Condition, index))
+                return;
+
             // The stage as the owner is sent it: every variable bound here.
             var substitution = new List<QueryValidationError>();
             var written = JsonSerializer.SerializeToElement(raw, OxQLJson.Wire);
@@ -1521,6 +1530,39 @@ public sealed class Binder
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(raw.Lookup?.From ?? raw.Resolve?.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false));
                 anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many);
             }
+        }
+
+        /// <summary>
+        /// Refuses every option of a condition the engine does not know, or wrote with a value that is
+        /// not a boolean, at <paramref name="index"/> (DESIGN §3.5.3): the wire form carries only the
+        /// options it knows, so an owner would otherwise compare without what the caller asked for.
+        /// True when something was refused.
+        /// </summary>
+        private bool RefuseUnknownOptions(FilterCondition? condition, int index)
+        {
+            var refused = false;
+
+            void Walk(FilterCondition? node)
+            {
+                if (node is null)
+                    return;
+
+                if (node.Options?.Unknown is { Count: > 0 } unknown)
+                {
+                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; an option is ignoreCase or caseSensitive, written true or false.", index, node.Path));
+                    refused = true;
+                }
+
+                foreach (var inner in (node.And ?? []).Concat(node.Or ?? []))
+                    Walk(inner);
+
+                Walk(node.Not);
+                Walk(node.Any);
+            }
+
+            Walk(condition);
+
+            return refused;
         }
 
         /// <summary>The target entities of a keyed stage's selected cases, in declaration order.</summary>

@@ -126,28 +126,61 @@ public static class WireEncoder
         return result;
     }
 
+    /// <summary>
+    /// A polymorphic value's members by the variant its discriminator names: each member of the
+    /// type in the type's order, read as the variant describes it (a member the variants
+    /// disagree on is unknown, or unstored, on the merged type and typed on the variant), then
+    /// any member only the variant has. A value with no discriminator, or one naming no
+    /// registered variant, is read by the type itself.
+    /// </summary>
     private static void EncodeMembers(BsonDocument document, TypeDef type, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit, EntityDef? entity = null)
     {
+        var variant = VariantOf(document, type);
+
         foreach (var member in type.Members)
-        {
-            if (!member.Stored || member.StorageName is null || !document.TryGetValue(member.StorageName, out var value))
-                continue;
+            EncodeMember(document, variant?.Member(member.WireName) ?? member, into, wirePrefix, shape, root, unfit, entity);
 
-            var wire = wirePrefix + member.WireName;
+        if (variant is null)
+            return;
 
-            if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
-                continue;
+        foreach (var member in variant.Members)
+            if (type.Member(member.WireName) is null)
+                EncodeMember(document, member, into, wirePrefix, shape, root, unfit, entity);
+    }
 
-            var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(root, WithoutRoot(wire, root)))
-                ? ElementShapeOf(member)
-                : member;
+    /// <summary>The variant a stored value's discriminator names (the last one of a hierarchical discriminator), or null.</summary>
+    private static TypeDef? VariantOf(BsonDocument document, TypeDef type)
+    {
+        if (type.Variants.Count == 0 || type.DiscriminatorElement is not { } element || !document.TryGetValue(element, out var stored))
+            return null;
 
-            into[member.WireName] = EncodeValue(value, memberShape, wire, shape, root, unfit);
+        var discriminator = stored is BsonArray { Count: > 0 } hierarchy ? hierarchy[^1] : stored;
 
-            if (entity is not null && member.WireName == WireNames.AddonWire && entity.Path(WireNames.AddonWire) is { IsAddonRoot: true }
-                && value is BsonDocument bag && into[member.WireName] is JsonObject encodedBag)
-                EncodeDefinedDates(bag, encodedBag, entity, wire, shape, unfit);
-        }
+        if (discriminator is not BsonString { Value: var name })
+            return null;
+
+        return type.Variants.FirstOrDefault(candidate => string.Equals(candidate.Discriminator, name, StringComparison.Ordinal))?.Type;
+    }
+
+    private static void EncodeMember(BsonDocument document, MemberDef member, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit, EntityDef? entity)
+    {
+        if (!member.Stored || member.StorageName is null || !document.TryGetValue(member.StorageName, out var value))
+            return;
+
+        var wire = wirePrefix + member.WireName;
+
+        if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
+            return;
+
+        var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(root, WithoutRoot(wire, root)))
+            ? ElementShapeOf(member)
+            : member;
+
+        into[member.WireName] = EncodeValue(value, memberShape, wire, shape, root, unfit);
+
+        if (entity is not null && member.WireName == WireNames.AddonWire && entity.Path(WireNames.AddonWire) is { IsAddonRoot: true }
+            && value is BsonDocument bag && into[member.WireName] is JsonObject encodedBag)
+            EncodeDefinedDates(bag, encodedBag, entity, wire, shape, unfit);
     }
 
     /// <summary>

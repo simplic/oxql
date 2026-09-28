@@ -32,6 +32,7 @@ public class RefusalsCatalogueTests
     {
         "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED", "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE",
         "RESOLVE_PARTIAL", "SORT_ON_ADDON", "REGEX_UNANCHORED", "DECIMAL_TEXT_EXCLUDED",
+        "UNWIND_DEPTH_TRUNCATED",
     };
 
     /// <summary>Every error code and the case that provokes it outside the V table.</summary>
@@ -45,6 +46,8 @@ public class RefusalsCatalogueTests
         ["QUERY_TOO_EXPENSIVE"] = nameof(V57_a_push_that_builds_a_value_above_the_document_limit_is_refused_as_too_expensive),
         ["INTERNAL_ERROR"] = nameof(V58_an_exception_escaping_a_seam_is_a_coded_500_that_names_the_correlation_id),
         ["RESOLVE_NOT_FILTERABLE"] = nameof(RefusalsServerTests.V35_a_condition_on_the_remote_alias_itself_is_refused_with_RESOLVE_NOT_FILTERABLE_before_the_owner_is_called),
+        ["UNKNOWN_VARIANT"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
+        ["FLATTEN_NOT_RECURSIVE"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -75,13 +78,14 @@ public class RefusalsCatalogueTests
     }
 
     [Fact]
-    public void V60_the_catalogue_holds_sixty_error_codes_and_eight_diagnostics()
+    public void V60_the_catalogue_holds_its_counted_error_codes_and_diagnostics()
     {
         var catalogue = Catalogue();
 
-        catalogue.Should().HaveCount(68);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(60);
-        catalogue.Count(DiagnosticCodes.Contains).Should().Be(8);
+        // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED.
+        catalogue.Should().HaveCount(71);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(62);
+        catalogue.Count(DiagnosticCodes.Contains).Should().Be(9);
     }
 
     [Fact]

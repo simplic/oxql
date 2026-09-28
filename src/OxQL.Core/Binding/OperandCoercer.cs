@@ -35,7 +35,7 @@ public sealed class OperandCoercer
     /// <summary>The operators, case-sensitive.</summary>
     public static readonly IReadOnlySet<string> Operators = new HashSet<string>(StringComparer.Ordinal)
     {
-        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex",
+        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is",
     };
 
     private static readonly IReadOnlySet<string> StringOperators = new HashSet<string>(StringComparer.Ordinal) { "contains", "startsWith", "endsWith", "regex" };
@@ -235,6 +235,143 @@ public sealed class OperandCoercer
             return null;
 
         return scalar.Count == 1 ? new BoundOperand.Single(scalar[0]) : new BoundOperand.Tolerant(scalar);
+    }
+
+    /// <summary>
+    /// The pooled type whose variant an <c>is</c> tests at <paramref name="path"/>: the object the
+    /// path holds, the element type of a collection of objects, or the entity of a local join
+    /// alias. Null for a scalar, a remote path, or a path whose type is not known here. Whether
+    /// the type has variants is the caller's check.
+    /// </summary>
+    public static TypeDef? VariantHolder(ResolvedPath path)
+    {
+        if (path is null || path.IsRemote)
+            return null;
+
+        if (path.Shape is { } shape)
+            return shape.Leaf is { Kind: Kind.Object, Type: { IsEnum: false } type } ? type : null;
+
+        if (path.Path is not null)
+            return null;
+
+        return path.Root switch
+        {
+            ShapeNode.Entity entity => entity.Def.Root,
+            ShapeNode.Array array => array.Target.Root,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The name <c>is</c> accepts for a polymorphic type's own values: the type's name when it is
+    /// a concrete class, whose values are stored without a discriminator under their own nominal
+    /// type. Null for an abstract class, an interface, or a type the model read from a document.
+    /// </summary>
+    public static string? ConcreteBaseName(TypeDef type)
+    {
+        if (type.ClrType is not { IsAbstract: false, IsInterface: false } clr)
+            return null;
+
+        var arity = clr.Name.IndexOf('`', StringComparison.Ordinal);
+
+        return arity > 0 ? clr.Name[..arity] : clr.Name;
+    }
+
+    /// <summary>
+    /// The operand of an <c>is</c>: the discriminator values of every named variant and of every
+    /// registered descendant of it, in the type's variant order, as a set. A named concrete base
+    /// adds its own discriminator where the stored form is hierarchical, and <see cref="BsonNull"/>,
+    /// which stands for a value stored without a discriminator (the compiler matches it as a
+    /// missing discriminator element on an object). Null with errors added when a name is not
+    /// one of the type's.
+    /// </summary>
+    public BoundOperand? CoerceVariants(JsonElement? raw, ResolvedPath path, TypeDef type, int stage, List<QueryValidationError> errors)
+    {
+        var element = raw ?? JsonNull;
+
+        if (element.ValueKind == JsonValueKind.Object && TryVariable(element, out var variable))
+        {
+            if (!TryResolveVariable(variable!, out element))
+            {
+                errors.Add(Error(Codes.UnboundVariable, $"The variable '{variable}' is not bound.", stage, path.Wire));
+                return null;
+            }
+        }
+
+        var names = new List<string>();
+
+        if (element.ValueKind == JsonValueKind.String)
+            names.Add(element.GetString()!);
+        else if (element.ValueKind == JsonValueKind.Array && element.GetArrayLength() > 0 && element.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String))
+            names.AddRange(element.EnumerateArray().Select(item => item.GetString()!));
+        else
+        {
+            errors.Add(Error(Codes.InvalidOperand, "'is' takes a variant name or a non-empty array of variant names.", stage, path.Wire));
+            return null;
+        }
+
+        var baseName = ConcreteBaseName(type);
+        var selected = new HashSet<string>(StringComparer.Ordinal);
+        var includeBase = false;
+        var failed = false;
+
+        foreach (var name in names)
+        {
+            if (baseName is not null && string.Equals(name, baseName, StringComparison.Ordinal))
+            {
+                includeBase = true;
+                selected.UnionWith(type.Variants.Select(variant => variant.Name));
+                continue;
+            }
+
+            var named = type.Variants.FirstOrDefault(variant => string.Equals(variant.Name, name, StringComparison.Ordinal));
+
+            if (named is null)
+            {
+                var known = type.Variants.Select(variant => variant.Name);
+
+                if (baseName is not null)
+                    known = known.Prepend(baseName);
+
+                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{path.Wire}'; its variants are {string.Join(", ", known)}.", stage, path.Wire));
+                failed = true;
+                continue;
+            }
+
+            selected.Add(named.Name);
+
+            foreach (var descendant in type.Variants.Where(candidate => IsDescendant(candidate, named)))
+                selected.Add(descendant.Name);
+        }
+
+        if (failed)
+            return null;
+
+        var values = new List<BsonValue>();
+
+        if (includeBase && type.DiscriminatorForm == DiscriminatorForm.Hierarchical)
+            values.Add(new BsonString(type.Discriminator ?? baseName!));
+
+        foreach (var variant in type.Variants)
+            if (selected.Contains(variant.Name) && !values.Contains(new BsonString(variant.Discriminator)))
+                values.Add(new BsonString(variant.Discriminator));
+
+        if (includeBase)
+            values.Add(BsonNull.Value);
+
+        return new BoundOperand.Set(values);
+    }
+
+    /// <summary>Whether <paramref name="candidate"/> derives from <paramref name="ancestor"/>: by the CLR types, or by the ancestor's own variants when the model came from a document.</summary>
+    private static bool IsDescendant(VariantDef candidate, VariantDef ancestor)
+    {
+        if (ReferenceEquals(candidate, ancestor))
+            return false;
+
+        if (ancestor.Type.ClrType is { } ancestorType && candidate.Type.ClrType is { } candidateType)
+            return candidateType != ancestorType && ancestorType.IsAssignableFrom(candidateType);
+
+        return ancestor.Type.Variants.Any(variant => string.Equals(variant.Name, candidate.Name, StringComparison.Ordinal));
     }
 
     /// <summary>The literal of a group expression, converted by JSON kind alone: it is not compared against a member.</summary>

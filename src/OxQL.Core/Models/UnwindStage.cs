@@ -34,6 +34,14 @@ public sealed record UnwindStage
     public string? IncludeIndex { get; init; }
 
     /// <summary>
+    /// A member of the element that nests the same kind of element (a group item's items): the
+    /// unwind then yields one row per element and per descendant, in pre-order, each without
+    /// its nested collection, down to the host's <c>MaxFlattenDepth</c>. Contract 2 only.
+    /// </summary>
+    [JsonPropertyName("flatten")]
+    public string? Flatten { get; init; }
+
+    /// <summary>
     /// Member names the caller wrote that the stage does not have. System.Text.Json skips an
     /// unmapped member by default, so they are recorded here and the binder refuses them:
     /// <c>preserveNulls</c> for <c>preserveNull</c> is an error, not the default applied.
@@ -61,6 +69,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
                 case "as": stage = stage with { As = property.Value.GetString() }; break;
                 case "preserveNull": stage = stage with { PreserveNull = property.Value.ValueKind == JsonValueKind.True }; break;
                 case "includeIndex": stage = stage with { IncludeIndex = property.Value.GetString() }; break;
+                case "flatten": stage = stage with { Flatten = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : property.Value.GetRawText() }; break;
                 default: unknown.Add(property.Name); break;
             }
         }
@@ -75,6 +84,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
         if (value.As is not null) writer.WriteString("as", value.As);
         if (value.PreserveNull) writer.WriteBoolean("preserveNull", true);
         if (value.IncludeIndex is not null) writer.WriteString("includeIndex", value.IncludeIndex);
+        if (value.Flatten is not null) writer.WriteString("flatten", value.Flatten);
         writer.WriteEndObject();
     }
 }

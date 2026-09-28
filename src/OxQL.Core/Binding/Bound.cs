@@ -144,7 +144,8 @@ public abstract record BoundStage
         EntityDef? Target, string? TargetFieldStorage, IReadOnlyList<ResolvedPath>? Select, BoundCondition? Filter, Scope? TargetScope,
         IReadOnlyList<string>? RemoteSelect, JsonElement? RemoteFilter) : BoundStage;
 
-    public sealed record Unwind(ResolvedPath Path, string? As, bool PreserveNull, string? IncludeIndex) : BoundStage;
+    /// <summary>An unwind; <paramref name="Flatten"/> when it also descends a nested collection of the same items.</summary>
+    public sealed record Unwind(ResolvedPath Path, string? As, bool PreserveNull, string? IncludeIndex, BoundFlatten? Flatten = null) : BoundStage;
 
     public sealed record Group(IReadOnlyList<GroupKey> Keys, IReadOnlyList<Aggregate> Fields) : BoundStage;
 
@@ -155,6 +156,14 @@ public abstract record BoundStage
     /// <summary>The page; <paramref name="CountCap"/> is the request's own count cap, already under the host's, or null for the host's.</summary>
     public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount, int? CountCap = null) : BoundStage;
 }
+
+/// <summary>
+/// The descent of an <c>unwind</c> with <c>flatten</c>: the nested collection's wire name and its
+/// storage name on the element, and how many levels are taken (the unwound collection is level
+/// 1). <paramref name="Stage"/> is the request's stage index, for the diagnostic; it is bound-only
+/// and never rendered.
+/// </summary>
+public sealed record BoundFlatten(string Member, string Storage, int Depth, int Stage);
 
 /// <summary>One group key.</summary>
 public sealed record GroupKey(string As, ResolvedPath? Path, DateTrunc? Trunc, Kind OutputKind, ShapeDef? OutputShape);

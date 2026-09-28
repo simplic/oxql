@@ -125,6 +125,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var hasNextPage = rows.Count > compiled.Limit;
         var page = hasNextPage ? rows.Take(compiled.Limit).ToList() : rows;
 
+        // A flattening unwind marks the rows whose collection nests deeper than it descends.
+        diagnostics.AddRange(MongoCompiler.DepthTruncations(compiled, page));
+
         // Remote resolves run over the trimmed page; an owner that does not answer yields null rows and a diagnostic, never a failed page.
         IReadOnlyList<IReadOnlyDictionary<string, JsonNode?>>? resolved = null;
 

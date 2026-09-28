@@ -2,6 +2,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Options;
 using OxQL.Core.Binding;
 using OxQL.Core.Cursor;
+using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
 
@@ -9,6 +10,13 @@ namespace OxQL.Mongo;
 
 /// <summary>A slot in the page filter that a semi-join fills with the owner's ids before execution.</summary>
 public sealed record SemiJoinSlot(BoundCondition.Leaf Leaf, BsonArray Ids);
+
+/// <summary>
+/// The field a flattening unwind writes into every row it produces: true when the collection the
+/// row came from had items nested deeper than <paramref name="Depth"/> levels, which are not in
+/// the rows. <paramref name="Stage"/> and <paramref name="Path"/> are the caller's, for the diagnostic.
+/// </summary>
+public sealed record FlattenProbe(string Field, int Stage, string Path, int Depth);
 
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
 public sealed record CompiledQuery
@@ -59,6 +67,9 @@ public sealed record CompiledQuery
     /// in the pipeline folds case, in which case the aggregates run as they always have.
     /// </summary>
     public BsonDocument? Collation { get; init; }
+
+    /// <summary>The depth probes of the flattening unwinds, in stage order; the executor turns a set probe into <c>UNWIND_DEPTH_TRUNCATED</c>.</summary>
+    public IReadOnlyList<FlattenProbe> FlattenProbes { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
@@ -77,6 +88,9 @@ public static class MongoCompiler
 
     /// <summary>The prefix of an unwind index the compiler adds for paging and removes again; no caller alias starts with it.</summary>
     private const string ReservedIndex = Aliases.ReservedPrefix + "oxIx";
+
+    /// <summary>The prefix of a flattening unwind's depth probe; the row keeps it through projections and groups, and the wire row never shows it.</summary>
+    private const string ReservedFlatten = Aliases.ReservedPrefix + "oxFlat";
 
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
@@ -123,6 +137,7 @@ public static class MongoCompiler
         // complete, and an index injected here would reach the rows with nothing to remove it.
         var unwoundOffsetPaging = bound.PagingMode == PagingMode.Offset && !bound.FinalShape.Grouped && bound.Sort is not null;
         var reservedIndexes = new List<string>();
+        var probes = new List<FlattenProbe>();
         IReadOnlyList<BoundSortField>? pagingSort = null;
 
         // The key orders and identifies a page. A projection that drops it leaves the sort and
@@ -223,6 +238,14 @@ public static class MongoCompiler
                     else if (unwoundOffsetPaging)
                         reservedIndexes.Add(indexField!);
 
+                    if (unwind.Flatten is { } flatten)
+                    {
+                        var probe = new FlattenProbe(ReservedFlatten + probes.Count, flatten.Stage, unwind.Path.Wire, flatten.Depth);
+
+                        probes.Add(probe);
+                        emitted.AddRange(Flatten(unwind.Path.Storage!, flatten, probe.Field));
+                    }
+
                     emitted.Add(new BsonDocument("$unwind", new BsonDocument
                     {
                         ["path"] = "$" + unwind.Path.Storage,
@@ -234,11 +257,11 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Group group:
-                    emitted.AddRange(Group(group));
+                    emitted.AddRange(Group(group, probes));
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, remote, lateJoinKeys, keepKey, reservedIndexes, sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, remote, lateJoinKeys, keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field)], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -330,7 +353,40 @@ public static class MongoCompiler
             KeyKeptAgainstProjection = keyKeptAgainstProjection,
             SortKeptAgainstProjection = sortKeptAgainstProjection,
             Collation = collated ? CollationDocument(options.Collation ?? new CollationOptions()) : null,
+            FlattenProbes = probes,
         };
+    }
+
+    /// <summary>
+    /// The <c>UNWIND_DEPTH_TRUNCATED</c> diagnostics of a page: one per flattening unwind when
+    /// some row of the page came from a collection whose items nest deeper than the unwind
+    /// descends. <c>rows</c> counts the page's rows that carry the probe.
+    /// </summary>
+    public static IReadOnlyList<Diagnostic> DepthTruncations(CompiledQuery compiled, IReadOnlyList<BsonDocument> page)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+        ArgumentNullException.ThrowIfNull(page);
+
+        var diagnostics = new List<Diagnostic>();
+
+        foreach (var probe in compiled.FlattenProbes)
+        {
+            var rows = page.Count(row => row.TryGetValue(probe.Field, out var set) && set is BsonBoolean { Value: true });
+
+            if (rows == 0)
+                continue;
+
+            diagnostics.Add(new Diagnostic
+            {
+                Code = Codes.UnwindDepthTruncated,
+                Message = $"'{probe.Path}' nests items deeper than {probe.Depth} levels; the items below are not in the rows ({rows} {(rows == 1 ? "row" : "rows")} of this page affected).",
+                Stage = probe.Stage,
+                Path = probe.Path,
+                Params = new Dictionary<string, object?> { ["path"] = probe.Path, ["depth"] = probe.Depth, ["rows"] = rows },
+            });
+        }
+
+        return diagnostics;
     }
 
     /// <summary>The scope equality: one typed comparison on one indexed member.</summary>
@@ -394,6 +450,9 @@ public static class MongoCompiler
             return new BsonDocument(reference.Storage!, new BsonDocument("$in", ids));
         }
 
+        if (leaf.Op == "is")
+            return Is(leaf);
+
         var storage = leaf.Path.Storage!;
 
         // A decimal under the addon bag is written wrapped by the bag serializer: match both places.
@@ -401,6 +460,44 @@ public static class MongoCompiler
             return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated), LeafAt(storage + "._v", leaf, collated) });
 
         return LeafAt(storage, leaf, collated);
+    }
+
+    /// <summary>
+    /// A variant test: the discriminator element <c>$in</c> the admitted values. A null among
+    /// them is a concrete base's own value, stored without a discriminator: an object without
+    /// the element. On a collection both forms are one element's (<c>$elemMatch</c>); on an
+    /// object the base form also needs the member to be an object, since a null or missing
+    /// member has no discriminator either.
+    /// </summary>
+    private static BsonDocument Is(BoundCondition.Leaf leaf)
+    {
+        var element = OperandCoercer.VariantHolder(leaf.Path)?.DiscriminatorElement ?? "_t";
+        var storage = leaf.Path.Storage;
+        var discriminator = storage is null ? element : storage + "." + element;
+        var values = leaf.Operand is BoundOperand.Set set ? set.Values : [];
+        var named = new BsonArray(values.Where(value => !value.IsBsonNull));
+        var withBase = values.Any(value => value.IsBsonNull);
+
+        if (!withBase)
+            return new BsonDocument(discriminator, new BsonDocument("$in", named));
+
+        if (leaf.Path.Kind == Kind.Array && storage is not null)
+        {
+            var either = new BsonArray();
+
+            if (named.Count > 0)
+                either.Add(new BsonDocument(element, new BsonDocument("$in", named)));
+
+            either.Add(new BsonDocument(element, new BsonDocument("$exists", false)));
+
+            return new BsonDocument(storage, new BsonDocument("$elemMatch", either.Count == 1 ? either[0].AsBsonDocument : new BsonDocument("$or", either)));
+        }
+
+        var bare = storage is null
+            ? new BsonDocument(discriminator, new BsonDocument("$exists", false))
+            : new BsonDocument { [storage] = new BsonDocument("$type", "object"), [discriminator] = new BsonDocument("$exists", false) };
+
+        return named.Count == 0 ? bare : new BsonDocument("$or", new BsonArray { new BsonDocument(discriminator, new BsonDocument("$in", named)), bare });
     }
 
     /// <summary>
@@ -502,6 +599,73 @@ public static class MongoCompiler
         BsonInt32 code => ((char)code.Value).ToString(),
         _ => value.ToString() ?? "",
     };
+
+    // ---- flatten ----------------------------------------------------------------------------
+
+    /// <summary>
+    /// The stages that replace the collection at <paramref name="storage"/> by its items and
+    /// their descendants in pre-order, each without its nested collection, before the
+    /// <c>$unwind</c>: a <c>$set</c> of nested <c>$reduce</c>s of fixed depth, then a
+    /// <c>$set</c> that writes the probe (an item at the last level still nests some) and
+    /// removes the nested collection the last level kept for it.
+    /// </summary>
+    private static IEnumerable<BsonDocument> Flatten(string storage, BoundFlatten flatten, string probe)
+    {
+        yield return new BsonDocument("$set", new BsonDocument(storage, FlattenLevel("$" + storage, flatten, 1)));
+
+        yield return new BsonDocument("$set", new BsonDocument
+        {
+            [probe] = new BsonDocument("$anyElementTrue", new BsonArray
+            {
+                new BsonDocument("$map", new BsonDocument
+                {
+                    ["input"] = "$" + storage,
+                    ["as"] = "item",
+                    ["in"] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", ArrayOrEmpty("$$item." + flatten.Storage)), 0 }),
+                }),
+            }),
+            [storage] = new BsonDocument("$map", new BsonDocument
+            {
+                ["input"] = "$" + storage,
+                ["as"] = "item",
+                ["in"] = Without("$$item", flatten.Storage),
+            }),
+        });
+    }
+
+    /// <summary>
+    /// One level of the descent over <paramref name="input"/>: each item (bound with
+    /// <c>$let</c>, since the nested <c>$reduce</c> rebinds <c>$$this</c>) followed by the next
+    /// level over its nested collection. The last level keeps the nested collection for the probe.
+    /// </summary>
+    private static BsonDocument FlattenLevel(BsonValue input, BoundFlatten flatten, int level)
+    {
+        var item = "l" + level;
+        var last = level >= flatten.Depth;
+        var parts = new BsonArray { "$$value", new BsonArray { last ? "$$" + item : Without("$$" + item, flatten.Storage) } };
+
+        if (!last)
+            parts.Add(FlattenLevel("$$" + item + "." + flatten.Storage, flatten, level + 1));
+
+        return new BsonDocument("$reduce", new BsonDocument
+        {
+            ["input"] = ArrayOrEmpty(input),
+            ["initialValue"] = new BsonArray(),
+            ["in"] = new BsonDocument("$let", new BsonDocument
+            {
+                ["vars"] = new BsonDocument(item, "$$this"),
+                ["in"] = new BsonDocument("$concatArrays", parts),
+            }),
+        });
+    }
+
+    /// <summary>The value when it is an array, otherwise the empty array.</summary>
+    private static BsonDocument ArrayOrEmpty(BsonValue value) =>
+        new("$cond", new BsonArray { new BsonDocument("$isArray", value), value, new BsonArray() });
+
+    /// <summary>An item without one of its fields.</summary>
+    private static BsonDocument Without(BsonValue item, string field) =>
+        new("$unsetField", new BsonDocument { ["field"] = new BsonDocument("$literal", field), ["input"] = item });
 
     // ---- joins ------------------------------------------------------------------------------
 
@@ -617,9 +781,13 @@ public static class MongoCompiler
 
     // ---- group ------------------------------------------------------------------------------
 
-    private static IEnumerable<BsonDocument> Group(BoundStage.Group group)
+    private static IEnumerable<BsonDocument> Group(BoundStage.Group group, IReadOnlyList<FlattenProbe> probes)
     {
         var groupDocument = new BsonDocument { ["_id"] = GroupId(group.Keys) };
+
+        // A group of rows some flattened item's truncation reached is reached by it too.
+        foreach (var probe in probes)
+            groupDocument[probe.Field] = new BsonDocument("$max", "$" + probe.Field);
         var distinct = new List<string>();
 
         foreach (var field in group.Fields)
@@ -649,6 +817,9 @@ public static class MongoCompiler
 
         foreach (var field in group.Fields)
             reshape[field.As] = 1;
+
+        foreach (var probe in probes)
+            reshape[probe.Field] = 1;
 
         reshape["_id"] = 0;
 

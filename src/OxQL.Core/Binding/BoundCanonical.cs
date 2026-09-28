@@ -80,16 +80,7 @@ public static class BoundCanonical
                     : (resolve.Filter is null ? null : RenderCondition(resolve.Filter)),
             },
         },
-        BoundStage.Unwind unwind => new JsonObject
-        {
-            ["unwind"] = new JsonObject
-            {
-                ["path"] = unwind.Path.Storage,
-                ["as"] = unwind.As,
-                ["preserveNull"] = unwind.PreserveNull,
-                ["includeIndex"] = unwind.IncludeIndex,
-            },
-        },
+        BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind) },
         BoundStage.Group group => new JsonObject
         {
             ["group"] = new JsonObject
@@ -140,6 +131,29 @@ public static class BoundCanonical
         _ => new JsonObject { ["unknown"] = stage.GetType().Name },
     };
 
+    /// <summary>
+    /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an
+    /// unwind without it renders as it did under 2.0 and its cursors stay valid.
+    /// </summary>
+    private static JsonObject RenderUnwind(BoundStage.Unwind unwind)
+    {
+        var node = new JsonObject
+        {
+            ["path"] = unwind.Path.Storage,
+            ["as"] = unwind.As,
+            ["preserveNull"] = unwind.PreserveNull,
+            ["includeIndex"] = unwind.IncludeIndex,
+        };
+
+        if (unwind.Flatten is { } flatten)
+        {
+            node["flatten"] = flatten.Storage;
+            node["flattenDepth"] = flatten.Depth;
+        }
+
+        return node;
+    }
+
     /// <summary>The count request as the caller wrote it: the request's own cap as a number, otherwise the boolean.</summary>
     private static JsonNode IncludeTotalCount(BoundStage.Page page) =>
         page.CountCap is { } cap ? JsonValue.Create(cap) : JsonValue.Create(page.IncludeTotalCount);
@@ -154,6 +168,15 @@ public static class BoundCanonical
         BoundCondition.Or or => new JsonObject { ["or"] = new JsonArray(or.Conditions.Select(RenderCondition).ToArray()) },
         BoundCondition.Not not => new JsonObject { ["not"] = RenderCondition(not.Condition) },
         BoundCondition.Any any => new JsonObject { ["any"] = new JsonObject { ["path"] = any.Path.Storage, ["inner"] = RenderCondition(any.Inner) } },
+        // A variant test: the discriminator element and the stored values it admits, the null
+        // standing for a value stored without one.
+        BoundCondition.Leaf { Op: "is", IsSemiJoin: false } leaf => new JsonObject
+        {
+            ["path"] = leaf.Path.Storage ?? leaf.Path.Wire,
+            ["op"] = leaf.Op,
+            ["element"] = OperandCoercer.VariantHolder(leaf.Path)?.DiscriminatorElement,
+            ["operand"] = RenderOperand(leaf.Operand),
+        },
         BoundCondition.Leaf leaf => new JsonObject
         {
             ["path"] = leaf.Path.Storage ?? leaf.Path.Wire,

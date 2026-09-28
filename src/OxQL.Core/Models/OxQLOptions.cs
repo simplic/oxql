@@ -92,6 +92,13 @@ public sealed class OxQLOptions
         Limits.MaxBatchQueries = AtLeast(1, Limits.MaxBatchQueries, nameof(LimitOptions.MaxBatchQueries), adjustments);
         Limits.RegexMaxLength = AtLeast(1, Limits.RegexMaxLength, nameof(LimitOptions.RegexMaxLength), adjustments);
         Limits.MaxLookupLimit = AtLeast(1, Limits.MaxLookupLimit, nameof(LimitOptions.MaxLookupLimit), adjustments);
+        Limits.MaxFlattenDepth = AtLeast(1, Limits.MaxFlattenDepth, nameof(LimitOptions.MaxFlattenDepth), adjustments);
+
+        if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
+        {
+            adjustments.Add($"OxQL:Limits:MaxFlattenDepth was {Limits.MaxFlattenDepth}, above {LimitOptions.MaxFlattenDepthCeiling}; it is clamped, because every level is one more nested expression in each flattening stage.");
+            Limits.MaxFlattenDepth = LimitOptions.MaxFlattenDepthCeiling;
+        }
 
         if (Limits.MaxSemiJoinIds > Limits.MaxOffset)
         {
@@ -230,6 +237,16 @@ public sealed class LimitOptions
 
     /// <summary>The most rows one lookup returns per parent.</summary>
     public int MaxLookupLimit { get; set; } = 100;
+
+    /// <summary>The ceiling <see cref="MaxFlattenDepth"/> is clamped to.</summary>
+    public const int MaxFlattenDepthCeiling = 16;
+
+    /// <summary>
+    /// How many levels an <c>unwind</c> with <c>flatten</c> descends: the collection itself is
+    /// level 1. Elements nested deeper are not in the rows, and the response carries an
+    /// <c>UNWIND_DEPTH_TRUNCATED</c> diagnostic when a row had any.
+    /// </summary>
+    public int MaxFlattenDepth { get; set; } = 5;
 }
 
 /// <summary>Time and memory bounds on the aggregate.</summary>

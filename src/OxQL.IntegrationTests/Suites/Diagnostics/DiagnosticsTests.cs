@@ -220,12 +220,14 @@ public class DiagnosticsTests
     }
 
     [Fact]
-    public void W12_the_engine_declares_exactly_the_eight_diagnostics_and_this_suite_provokes_each_live()
+    public void W12_the_engine_declares_exactly_the_diagnostics_that_are_provoked_live()
     {
+        // UNWIND_DEPTH_TRUNCATED is provoked in RowsVariantsTests, every other one in this suite.
         var provoked = new[]
         {
             "SORT_ON_ADDON", "REGEX_UNANCHORED", "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED",
             "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE", "RESOLVE_PARTIAL", "DECIMAL_TEXT_EXCLUDED",
+            "UNWIND_DEPTH_TRUNCATED",
         };
         var catalogue = typeof(OxQL.Core.Binding.Codes).GetFields()
             .Where(field => field.IsLiteral)
@@ -233,10 +235,10 @@ public class DiagnosticsTests
             .ToList();
 
         // Every other code of the catalogue is an error, each provoked in the refusal suites
-        // (RefusalsCatalogueTests checks that half), so these eight are the diagnostics.
+        // (RefusalsCatalogueTests checks that half), so these are the diagnostics.
         provoked.Should().BeSubsetOf(catalogue);
         RefusalsCatalogueTests.DiagnosticCodes.Should().BeEquivalentTo(provoked);
-        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 8 + provoked.Length,
-            "52 codes of the V table, 8 provoked outside it (7 in the catalogue suite and RESOLVE_NOT_FILTERABLE in V35) and the 8 diagnostics");
+        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 10 + provoked.Length,
+            "52 codes of the V table, 10 provoked outside it (7 in the catalogue suite, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests) and the 9 diagnostics");
     }
 }

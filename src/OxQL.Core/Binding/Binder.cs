@@ -367,6 +367,13 @@ public sealed class Binder
                 return null;
             }
 
+            // The variant test is a contract 2 operator; contract 1 never had it.
+            if (op == "is" && !contract2)
+            {
+                errors.Add(Error(Codes.UnknownOperator, "'is' is not an operator.", index, condition.Path));
+                return null;
+            }
+
             // The alias of a remote resolve is the owner's row, not a path of the owner: only a
             // member of it travels as a semi-join, so a condition on the alias itself stops here
             // instead of reaching the owner as a match on a name it does not have.
@@ -376,6 +383,11 @@ public sealed class Binder
                     $"'{condition.Path}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
                 return null;
             }
+
+            // A variant test is on an object, which no other comparison can filter; under a remote
+            // alias the owner binds it like any other condition.
+            if (op == "is" && !path.IsRemote)
+                return BindIs(condition, path, index);
 
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
@@ -458,6 +470,41 @@ public sealed class Binder
                 diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, IsSemiJoin: false);
+        }
+
+        /// <summary>
+        /// A variant test: <c>{ "pet": { "is": "Dog" } }</c>. It applies to an object, or a
+        /// collection of objects (some element), whose pooled type has variants, on the row, an
+        /// unwound element, a join alias or inside <c>any</c>. Under a collection that is not
+        /// unwound it would need the collection's own correlation, which <c>any</c> is.
+        /// </summary>
+        private BoundCondition? BindIs(FilterCondition condition, ResolvedPath path, int index)
+        {
+            var type = OperandCoercer.VariantHolder(path);
+
+            if (type is null || type.Variants.Count == 0)
+            {
+                var what = type is null ? Kinds.WithArticle(path.LeafKind) : "an object of one type only";
+
+                errors.Add(Error(Codes.InvalidOperand, $"'is' applies to a member that holds one of several variants; '{condition.Path}' is {what}.", index, condition.Path));
+                return null;
+            }
+
+            if (path.CollectionAncestors > 0)
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path));
+                return null;
+            }
+
+            if (condition.Options is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, "'is' takes no options.", index, condition.Path));
+                return null;
+            }
+
+            var operand = coercer.CoerceVariants(condition.Value, path, type, index, errors);
+
+            return operand is null ? null : new BoundCondition.Leaf(path, "is", operand, IgnoreCase: false, IsSemiJoin: false);
         }
 
         /// <summary>
@@ -805,7 +852,10 @@ public sealed class Binder
 
         private void BindUnwind(UnwindStage unwind, int index)
         {
-            if (!CheckStageMembers(unwind.Unknown, "unwind", "path, as, preserveNull, includeIndex", index))
+            // flatten is a contract 2 member; under contract 1 it is one the stage does not have.
+            IReadOnlyList<string> unknown = !contract2 && unwind.Flatten is not null ? [.. unwind.Unknown, "flatten"] : unwind.Unknown;
+
+            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten" : "path, as, preserveNull, includeIndex", index))
                 return;
 
             if (unwind.Path is null)
@@ -866,8 +916,49 @@ public sealed class Binder
                 ? firstSegment
                 : Shape.ImplicitRoot;
 
-            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias));
+            BoundFlatten? flatten = null;
+
+            if (unwind.Flatten is not null && (flatten = BindFlatten(unwind, path, index)) is null)
+                return;
+
+            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten));
             shape = shape.WithUnwound(path, rootName, alias, indexAlias);
+        }
+
+        /// <summary>
+        /// The descent of <c>unwind.flatten</c>: a member of the element type, merged variant
+        /// members included, that is an array of the element's pooled type or of a base of it.
+        /// </summary>
+        private BoundFlatten? BindFlatten(UnwindStage unwind, ResolvedPath path, int index)
+        {
+            var name = unwind.Flatten!;
+            var element = path.Kind == Kind.Array && path.Shape?.Of is { Kind: Kind.Object, Type: { } type } ? type : null;
+
+            if (element is null)
+            {
+                errors.Add(Error(Codes.FlattenNotRecursive, $"'{unwind.Path}' is not a collection of objects; flatten follows a member that nests the same kind of element.", index, unwind.Path));
+                return null;
+            }
+
+            var member = element.Member(name);
+
+            if (member is null)
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{name}' is not a member of the elements of '{unwind.Path}'.", index, unwind.Path + "." + name));
+                return null;
+            }
+
+            var nested = member is { Kind: Kind.Array, Of: { Kind: Kind.Object, Type: { } of } } ? of : null;
+            var recursive = nested is not null
+                && (ReferenceEquals(nested, element) || nested.Variants.Any(variant => ReferenceEquals(variant.Type, element)));
+
+            if (!recursive || !member.Stored || member.StorageName is null)
+            {
+                errors.Add(Error(Codes.FlattenNotRecursive, $"'{name}' is not a collection of the same items as '{unwind.Path}'; flatten follows a member that nests the same kind of element.", index, unwind.Path + "." + name));
+                return null;
+            }
+
+            return new BoundFlatten(name, member.StorageName, options.Limits.MaxFlattenDepth, index);
         }
 
         // ---- group ---------------------------------------------------------------------------

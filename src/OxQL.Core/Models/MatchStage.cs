@@ -7,6 +7,8 @@ namespace OxQL.Core.Models;
 /// A match stage: one condition, which may be a logical group. The wire form
 /// <c>{ "a": { "eq": 1 }, "b": { "gt": 2, "lt": 5 } }</c> is an <c>and</c> of every path
 /// and every operator; <c>and</c>, <c>or</c>, <c>not</c> nest freely; <c>{}</c> matches everything.
+/// <c>{ "pet": { "is": "Dog" } }</c> (or an array of names) is a condition on the variant a
+/// polymorphic member holds; it reads like any other operator and the binder checks it.
 /// </summary>
 [JsonConverter(typeof(MatchStageConverter))]
 public sealed record MatchStage

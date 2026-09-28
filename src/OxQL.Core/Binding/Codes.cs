@@ -39,9 +39,15 @@ public static class Codes
     public const string RegexTooLong = "REGEX_TOO_LONG";
     public const string AnyNotApplicable = "ANY_NOT_APPLICABLE";
 
+    /// <summary>An <c>is</c> names a type that is neither a variant of the member's type nor its concrete base.</summary>
+    public const string UnknownVariant = "UNKNOWN_VARIANT";
+
     // stage
     public const string UnknownStage = "UNKNOWN_STAGE";
     public const string UnknownStageMember = "UNKNOWN_STAGE_MEMBER";
+
+    /// <summary>An unwind's <c>flatten</c> names a member that is not a collection of the same items as the unwound collection.</summary>
+    public const string FlattenNotRecursive = "FLATTEN_NOT_RECURSIVE";
     public const string StageAfterPage = "STAGE_AFTER_PAGE";
     public const string MultiplePageStages = "MULTIPLE_PAGE_STAGES";
     public const string MixedProjection = "MIXED_PROJECTION";
@@ -113,4 +119,7 @@ public static class Codes
 
     /// <summary>An ordered comparison on a decimal member covered the numerically stored rows only; rows still stored as text are outside it.</summary>
     public const string DecimalTextExcluded = "DECIMAL_TEXT_EXCLUDED";
+
+    /// <summary>An unwind with <c>flatten</c> met items nested deeper than <see cref="Models.LimitOptions.MaxFlattenDepth"/>; they are not in the rows.</summary>
+    public const string UnwindDepthTruncated = "UNWIND_DEPTH_TRUNCATED";
 }

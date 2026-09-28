@@ -30,5 +30,6 @@ internal static class ModelTestSetup
         // never a variant, so registering lazily from parallel test classes is flaky.
         Fixtures.Polymorphism.PolymorphismRegistrations.Ensure();
         Fixtures.References.ReferenceModel.Register();
+        Fixtures.Variants.VariantRegistrations.Ensure();
     }
 }

@@ -33,6 +33,7 @@ public class BillingLine : Line
     [OxQLReference("poly.billing_line")]
     public Guid BillingLineId { get; set; }
 
+    [System.ComponentModel.Description("The billing line's note.")]
     public string Note { get; set; } = "";
 }
 

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Reflection;
 using MongoDB.Bson;
@@ -188,6 +189,10 @@ public sealed class ClrModelBuilder
 
             FillShape(member, property.PropertyType, stored ? info!.Serializer : null, $"{label}#{wire}");
 
+            member.Description = XmlDocs.Beside.Description(property);
+            member.Deprecated = DeprecationOf(property);
+            member.Constraints = ConstraintsOf(property, member.Kind);
+
             if (property.GetCustomAttribute<OxQLReferenceAttribute>(inherit: false) is { } declared)
                 references.Add(new PendingReference(member, $"{label}#{wire}", declared.Entity, declared.Field, ReferenceSource.Attribute));
             else if (declaredTargets.TryGetValue(wire, out var target))
@@ -198,6 +203,7 @@ public sealed class ClrModelBuilder
 
         type.Members = members;
         type.Discriminator = DiscriminatorOf(owner);
+        type.Description = XmlDocs.Beside.Description(owner);
 
         if (variants.Count > 0)
             pendingMerges.Add((type, owner, label, variants));
@@ -301,6 +307,9 @@ public sealed class ClrModelBuilder
         StorageName = member.StorageName,
         Nullable = true,
         DisplayName = member.DisplayName,
+        Description = member.Description,
+        Deprecated = member.Deprecated,
+        Constraints = member.Constraints,
         Kind = member.Kind,
         Representation = member.Representation,
         Type = member.Type,
@@ -582,6 +591,7 @@ public sealed class ClrModelBuilder
         {
             IsEnum = true,
             EnumFlags = type.IsDefined(typeof(FlagsAttribute), inherit: false),
+            Description = XmlDocs.Beside.Description(type),
             EnumValues =
             [
                 .. type
@@ -591,7 +601,8 @@ public sealed class ClrModelBuilder
                     .Select(field => new EnumValueDef(
                         field.Name,
                         ConstantValue(field),
-                        !field.IsDefined(typeof(ObsoleteAttribute), inherit: false))),
+                        !field.IsDefined(typeof(ObsoleteAttribute), inherit: false),
+                        XmlDocs.Beside.Description(field))),
             ],
         };
 
@@ -599,6 +610,55 @@ public sealed class ClrModelBuilder
 
         return entry;
     }
+
+    /// <summary>The member's deprecation from <c>[Obsolete]</c>, its message as the note.</summary>
+    private static DeprecationDef? DeprecationOf(PropertyInfo property) =>
+        property.GetCustomAttribute<ObsoleteAttribute>(inherit: false) is { } obsolete
+            ? new DeprecationDef { Note = string.IsNullOrWhiteSpace(obsolete.Message) ? null : obsolete.Message.Trim() }
+            : null;
+
+    /// <summary>
+    /// The member's DataAnnotations constraints: the smaller of <c>[MaxLength]</c> and
+    /// <c>[StringLength]</c> on a string member, the <c>[Range]</c> bounds (a non-finite bound is
+    /// no bound) and the <c>[RegularExpression]</c> pattern. Null when there are none.
+    /// </summary>
+    private static ConstraintsDef? ConstraintsOf(PropertyInfo property, Kind kind)
+    {
+        int? maxLength = null;
+
+        if (kind == Kind.String)
+        {
+            if (property.GetCustomAttribute<MaxLengthAttribute>(inherit: false) is { Length: > 0 } max)
+                maxLength = max.Length;
+
+            if (property.GetCustomAttribute<StringLengthAttribute>(inherit: false) is { MaximumLength: > 0 } length)
+                maxLength = maxLength is { } other ? Math.Min(other, length.MaximumLength) : length.MaximumLength;
+        }
+
+        var range = property.GetCustomAttribute<RangeAttribute>(inherit: false);
+        var pattern = property.GetCustomAttribute<RegularExpressionAttribute>(inherit: false)?.Pattern;
+
+        var constraints = new ConstraintsDef
+        {
+            MaxLength = maxLength,
+            Min = range is null ? null : Bound(range.Minimum),
+            Max = range is null ? null : Bound(range.Maximum),
+            Pattern = string.IsNullOrEmpty(pattern) ? null : pattern,
+        };
+
+        return constraints is { MaxLength: null, Min: null, Max: null, Pattern: null } ? null : constraints;
+    }
+
+    /// <summary>A <c>[Range]</c> bound as invariant text: a number formatted round-trippably, a string bound as written.</summary>
+    private static string? Bound(object? bound) => bound switch
+    {
+        null => null,
+        double number when !double.IsFinite(number) => null,
+        double number => number.ToString("R", CultureInfo.InvariantCulture),
+        string text => string.IsNullOrWhiteSpace(text) ? null : text.Trim(),
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        var other => other.ToString(),
+    };
 
     /// <summary>The declared value of an enum member as a signed 64-bit integer; a value past <c>long.MaxValue</c> wraps.</summary>
     private static long ConstantValue(FieldInfo field) =>

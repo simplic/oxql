@@ -198,6 +198,9 @@ public sealed class TypeDef
     /// <summary>How the discriminator is stored; null when the type has no variants.</summary>
     public DiscriminatorForm? DiscriminatorForm { get; internal set; }
 
+    /// <summary>The normalised English description of the type (see <see cref="Build.XmlDocs"/>); null when nothing describes it. Outside the fingerprint.</summary>
+    public string? Description { get; internal set; }
+
     /// <summary>The member with the given wire name, or null.</summary>
     public MemberDef? Member(string wireName)
     {
@@ -226,7 +229,11 @@ public enum DiscriminatorForm
 }
 
 /// <summary>One enum member.</summary>
-public sealed record EnumValueDef(string Name, long Value, bool Active);
+/// <param name="Name">The member's name.</param>
+/// <param name="Value">The declared value.</param>
+/// <param name="Active">False when the member is <c>[Obsolete]</c>.</param>
+/// <param name="Description">The normalised English description; null when nothing describes it. Outside the fingerprint.</param>
+public sealed record EnumValueDef(string Name, long Value, bool Active, string? Description = null);
 
 /// <summary>
 /// A shape without member facts: the kind, its storage representation, and what it contains.
@@ -327,6 +334,48 @@ public sealed class MemberDef : ShapeDef
     /// variants rather than declared by the type itself; null on a member every value has.
     /// </summary>
     public IReadOnlyList<string>? OnlyFor { get; internal set; }
+
+    /// <summary>The normalised English description (see <see cref="Build.XmlDocs"/>); null when nothing describes it. Outside the fingerprint.</summary>
+    public string? Description { get; internal set; }
+
+    /// <summary>The member's deprecation, from <c>[Obsolete]</c>; null when it is not deprecated. Outside the fingerprint.</summary>
+    public DeprecationDef? Deprecated { get; internal set; }
+
+    /// <summary>The value constraints the member declares through DataAnnotations; null when it declares none. Outside the fingerprint.</summary>
+    public ConstraintsDef? Constraints { get; internal set; }
+}
+
+/// <summary>A member's deprecation: the schema's <c>deprecated</c> member.</summary>
+public sealed record DeprecationDef
+{
+    /// <summary>The version the member was deprecated in; a CLR build never knows it.</summary>
+    public string? Since { get; init; }
+
+    /// <summary>The path that replaces the member; a CLR build never knows it.</summary>
+    public string? ReplacedBy { get; init; }
+
+    /// <summary>A note for the reader: the <c>[Obsolete]</c> message.</summary>
+    public string? Note { get; init; }
+}
+
+/// <summary>
+/// A member's value constraints: the schema's <c>constraints</c> member, read from
+/// <c>[MaxLength]</c>/<c>[StringLength]</c>, <c>[Range]</c> and <c>[RegularExpression]</c>.
+/// Bounds are strings, invariant culture, because a JSON number is a double.
+/// </summary>
+public sealed record ConstraintsDef
+{
+    /// <summary>The longest string the member accepts; the smaller of <c>[MaxLength]</c> and <c>[StringLength]</c>, on string members only.</summary>
+    public int? MaxLength { get; init; }
+
+    /// <summary>The smallest value the member accepts.</summary>
+    public string? Min { get; init; }
+
+    /// <summary>The largest value the member accepts.</summary>
+    public string? Max { get; init; }
+
+    /// <summary>A regular expression the member's value satisfies.</summary>
+    public string? Pattern { get; init; }
 }
 
 /// <summary>One reachable wire path of an entity with everything the binder needs at that path.</summary>

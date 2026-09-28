@@ -147,7 +147,10 @@ public sealed class DocumentModelBuilder
     private static TypeDef CreateEntry(string id, JsonElement entry)
     {
         var isEntity = ReadBool(entry, "entity");
-        var type = new TypeDef(id, clrType: null, isEntity);
+        var type = new TypeDef(id, clrType: null, isEntity)
+        {
+            Description = ReadString(entry, "description"),
+        };
 
         if (ReadString(entry, "kind") == Kinds.NameOf(Kind.Enum))
         {
@@ -158,7 +161,8 @@ public sealed class DocumentModelBuilder
                 type.EnumValues = values.EnumerateArray().Select(value => new EnumValueDef(
                     ReadString(value, "name") ?? "",
                     ReadLong(value, "value"),
-                    !value.TryGetProperty("active", out var active) || active.ValueKind != JsonValueKind.False)).ToList();
+                    !value.TryGetProperty("active", out var active) || active.ValueKind != JsonValueKind.False,
+                    ReadString(value, "description"))).ToList();
         }
 
         return type;
@@ -183,6 +187,9 @@ public sealed class DocumentModelBuilder
             {
                 Nullable = ReadBool(descriptor, "nullable"),
                 DisplayName = ReadString(descriptor, "displayName"),
+                Description = ReadString(descriptor, "description"),
+                Deprecated = ReadDeprecation(descriptor),
+                Constraints = ReadConstraints(descriptor),
             };
 
             if (options.MemberStorage is not null && options.MemberStorage.TryGetValue(label, out var overridden))
@@ -317,6 +324,34 @@ public sealed class DocumentModelBuilder
             default:
                 return;
         }
+    }
+
+    /// <summary>A property's <c>deprecated</c> member: <c>{ since, replacedBy, note }</c>.</summary>
+    private static DeprecationDef? ReadDeprecation(JsonElement descriptor) =>
+        descriptor.TryGetProperty("deprecated", out var deprecated) && deprecated.ValueKind == JsonValueKind.Object
+            ? new DeprecationDef
+            {
+                Since = ReadString(deprecated, "since"),
+                ReplacedBy = ReadString(deprecated, "replacedBy"),
+                Note = ReadString(deprecated, "note"),
+            }
+            : null;
+
+    /// <summary>A property's <c>constraints</c> member: <c>{ maxLength, min, max, pattern }</c>, bounds as strings.</summary>
+    private static ConstraintsDef? ReadConstraints(JsonElement descriptor)
+    {
+        if (!descriptor.TryGetProperty("constraints", out var constraints) || constraints.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return new ConstraintsDef
+        {
+            MaxLength = constraints.TryGetProperty("maxLength", out var maxLength) && maxLength.ValueKind == JsonValueKind.Number && maxLength.TryGetInt32(out var length)
+                ? length
+                : null,
+            Min = ReadString(constraints, "min"),
+            Max = ReadString(constraints, "max"),
+            Pattern = ReadString(constraints, "pattern"),
+        };
     }
 
     private static string StripPointer(string pointer) =>

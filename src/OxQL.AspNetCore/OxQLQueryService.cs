@@ -125,10 +125,15 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         var results = new List<System.Text.Json.Nodes.JsonNode?>(batch.Queries.Count);
 
+        // A batch's maxTimeMs bounds the whole batch, not each query: the queries run one after
+        // another, each under what is left, so an owner answers within the time its caller waits.
+        var deadline = batch.MaxTimeMs is { } ceiling ? DateTime.UtcNow.AddMilliseconds(ceiling) : (DateTime?)null;
+
         // Sequential per host: the parallelism of a batch is across services, not within one.
         foreach (var query in batch.Queries)
         {
-            var outcome = await ExecuteAsync(query, batch.MaxTimeMs, internalCall, cancellationToken);
+            var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
+            var outcome = await ExecuteAsync(query, left, internalCall, cancellationToken);
 
             results.Add(outcome switch
             {

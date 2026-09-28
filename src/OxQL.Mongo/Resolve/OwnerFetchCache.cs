@@ -51,7 +51,18 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 /// <para>
 /// Each mode keeps its own budget of <c>Cache:OwnerFetchCacheMaxEntries</c>: an answer costs one unit, a
 /// list of ids one unit per id, and a semi-join answer of several thousand ids never evicts the rows
-/// of the resolves beside it.
+/// of the resolves beside it. An empty by-condition answer lives as long as a negative by-keys one.
+/// </para>
+/// <para>
+/// Beside the answers, the select paths an owner said one target of a union lacks are kept per
+/// organisation, service and plan (<see cref="DropsKeyOf"/>), so a later request drops them before
+/// it asks and reports them from the cache too: the answer does not depend on what is cached.
+/// </para>
+/// <para>
+/// Entries are keyed by organisation, not by user: the cache assumes an owner answers every user of
+/// one organisation alike, as the fleet's owners do (they scope by organisation). An owner that
+/// filters rows per user must not be reached through a host that caches (set
+/// <c>Cache:ResolveTtlSeconds</c> as low as it takes).
 /// </para>
 /// </summary>
 public sealed class OwnerFetchCache : IDisposable
@@ -152,9 +163,43 @@ public sealed class OwnerFetchCache : IDisposable
         return false;
     }
 
-    /// <summary>Stores one by-condition answer for the TTL, at a size of one per id.</summary>
-    public void SetKeys(string key, IReadOnlyList<string> values) =>
-        keys.Set(key, values.ToArray(), new MemoryCacheEntryOptions { Size = Math.Max(1, values.Count), AbsoluteExpirationRelativeToNow = ttl });
+    /// <summary>
+    /// Stores one by-condition answer at a size of one per id: for the TTL, or an empty one for the
+    /// negative TTL (not at all when that is 0), since a row created a moment ago must not stay
+    /// unselected for a minute.
+    /// </summary>
+    public void SetKeys(string key, IReadOnlyList<string> values)
+    {
+        var lifetime = values.Count == 0 ? negativeTtl : ttl;
+
+        if (lifetime <= TimeSpan.Zero)
+            return;
+
+        keys.Set(key, values.ToArray(), new MemoryCacheEntryOptions { Size = Math.Max(1, values.Count), AbsoluteExpirationRelativeToNow = lifetime });
+    }
+
+    /// <summary>The key of the select paths an owner said one union target lacks, per organisation, service and plan.</summary>
+    public static string DropsKeyOf(Guid organisation, string service, string planHash) =>
+        string.Join('|', "Drops", organisation.ToString("D"), service, planHash);
+
+    /// <summary>The select paths (<c>Select</c>) and owning-row paths (<c>Parent</c>) an owner said the target lacks, or false.</summary>
+    public bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
+    {
+        if (rows.TryGetValue(key, out Drops? cached) && cached is not null && time.GetUtcNow() < cached.Expires)
+        {
+            select = cached.Select;
+            parent = cached.Parent;
+            return true;
+        }
+
+        select = [];
+        parent = [];
+        return false;
+    }
+
+    /// <summary>Keeps the paths an owner said the target lacks for the TTL.</summary>
+    public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent) =>
+        rows.Set(key, new Drops([.. select], [.. parent], time.GetUtcNow() + ttl), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
 
     /// <summary>How many entries the cache holds, both modes together.</summary>
     public int Count => rows.Count + keys.Count;
@@ -171,4 +216,7 @@ public sealed class OwnerFetchCache : IDisposable
 
     /// <summary>A stored answer with the instant it expires on this cache's clock.</summary>
     private sealed record Entry(OwnerAnswer Answer, DateTimeOffset Expires);
+
+    /// <summary>The paths an owner said one union target lacks, with the instant they expire.</summary>
+    private sealed record Drops(string[] Select, string[] Parent, DateTimeOffset Expires);
 }

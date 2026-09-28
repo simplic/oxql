@@ -385,15 +385,21 @@ public sealed class KeyedFetch
         var plans = pending.ToDictionary(slot => slot, slot => new SlotPlan(ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))));
 
         // Round one: the first page of every pending slot, with the count that decides whether
-        // asking for the rest is worth a round trip at all.
-        foreach (var group in pending.GroupBy(slot => plans[slot].Service, StringComparer.Ordinal))
+        // asking for the rest is worth a round trip at all; owners in parallel.
+        var firsts = pending.GroupBy(slot => plans[slot].Service, StringComparer.Ordinal).Select(async group =>
         {
             var members = group.ToList();
             var queries = members.Select(slot => OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true)).ToList();
-            var outcome = await CallInBatchesAsync(client!, group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false);
 
+            return (Service: group.Key, Members: members, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, cancellationToken).ConfigureAwait(false));
+        }).ToList();
+
+        await Task.WhenAll(firsts).ConfigureAwait(false);
+
+        foreach (var (service, members, outcome) in firsts.Select(task => task.Result))
+        {
             if (outcome.Failure is not null)
-                return Unanswered(group.Key, outcome);
+                return Unanswered(service, outcome);
 
             for (var index = 0; index < members.Count; index++)
             {
@@ -454,7 +460,7 @@ public sealed class KeyedFetch
                 var entries = group.ToList();
                 var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
 
-                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false));
+                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, cancellationToken).ConfigureAwait(false));
             }).ToList();
 
             await Task.WhenAll(calls).ConfigureAwait(false);
@@ -607,6 +613,16 @@ public sealed class KeyedFetch
         var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
         var calls = 0;
 
+        // This host answers its own targets through its engine; a fetch built without one (the
+        // obsolete RemoteResolver forwarder) cannot resolve a local target.
+        if (self is null && targets.FirstOrDefault(target => target.Service == SelfService && target.Chunks.Count > 0) is { } local)
+            return new ResolveResult
+            {
+                Refusal = Refusal.NotExecutable(Codes.ResolveUnavailable,
+                    $"'{local.Stage.As}' resolves a target of this host, which this keyed fetch has no engine to ask; build it with the host's engine.", StageIndexOf(compiled.Bound, local.Stage)),
+                CacheHits = cacheHits,
+            };
+
         // An owner known to run an engine before 2.1 cannot bind what a chain sends it.
         if (Incapable(compiled.Bound, targets) is { } incapable)
             return new ResolveResult { Refusal = incapable, CacheHits = cacheHits };
@@ -619,7 +635,7 @@ public sealed class KeyedFetch
         for (var attempt = 0; pending.Count > 0; attempt++)
         {
             var retry = new List<Sent>();
-            var round = await SendAsync(pending, context, attempt == 0 ? remaining : deadline - DateTime.UtcNow, cancellationToken).ConfigureAwait(false);
+            var round = await SendAsync(pending, context, deadline, cancellationToken).ConfigureAwait(false);
 
             foreach (var call in round)
             {
@@ -679,7 +695,7 @@ public sealed class KeyedFetch
         // Round two: the existence probe of the keys a filtered query did not return.
         var probes = targets.Where(target => target.Probed).SelectMany(target => target.ProbeChunks(ChunkOf(target)).Select(chunk => new Sent(target, chunk, target.Probe(chunk)))).ToList();
 
-        foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline - DateTime.UtcNow, cancellationToken).ConfigureAwait(false))
+        foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline, cancellationToken).ConfigureAwait(false))
         {
             calls += call.Service == SelfService ? 0 : 1;
 
@@ -708,11 +724,17 @@ public sealed class KeyedFetch
             }
         }
 
-        // What the owners answered in full is kept for the next page.
+        // What the owners answered in full is kept for the next page, and so is what an owner said a
+        // union target lacks.
         foreach (var target in targets)
+        {
             foreach (var key in target.Chunks.SelectMany(chunk => chunk))
                 if (!target.Unanswered.Contains(key) && !target.Uncached.Contains(key))
                     cache.Set(target.CacheKey(key), target.Cached(key));
+
+            if (target.DroppedSelect.Count > 0 || target.DroppedParent.Count > 0)
+                cache.SetDrops(target.DropsKey, target.DroppedSelect, target.DroppedParent);
+        }
 
         var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
         var outcomes = new List<KeyedRowOutcome>();
@@ -745,15 +767,14 @@ public sealed class KeyedFetch
     /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a 2.1 target
     /// form) under the chain ceiling, any other under the per-resolve one (DESIGN §3.5.4).
     /// </summary>
-    private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, DateTime deadline, CancellationToken cancellationToken)
     {
         var tasks = sends.GroupBy(sent => sent.Target.Service, StringComparer.Ordinal).Select(async group =>
         {
             var sent = group.ToList();
             var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
-            var budget = sent.Any(entry => entry.Target.Chain) ? ChainBudget(remaining) : Budget(remaining);
 
-            return new OwnerCall(group.Key, sent, await CallInBatchesAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), budget, cancellationToken).ConfigureAwait(false));
+            return new OwnerCall(group.Key, sent, await CallInBatchesAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), deadline, sent.Any(entry => entry.Target.Chain), cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -777,7 +798,7 @@ public sealed class KeyedFetch
         {
             Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
             Message = failure == Failure.Timeout
-                ? $"{owner} did not answer within {options.Execution.EffectiveResolveTimeoutMs} ms; '{string.Join("', '", aliases)}' is null on this page."
+                ? $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; '{string.Join("', '", aliases)}' is null on this page."
                 : call.Outcome.Status is { } status
                     ? $"{owner} answered with HTTP {status}; '{string.Join("', '", aliases)}' is null on this page."
                     : $"{owner} could not be reached; '{string.Join("', '", aliases)}' is null on this page.",
@@ -1320,7 +1341,9 @@ public sealed class KeyedFetch
         /// <summary>
         /// A remote union target's owner refused its query only because select paths are not paths of
         /// this target: they are dropped for it and the query is asked again. Anything else in the
-        /// refusal is the refusal. True when something new was dropped.
+        /// refusal is the refusal. True when the query as sent projected every refused path, so the
+        /// query asked again does not: newly learned, or learned from another chunk of the same round
+        /// that was sent before the drop (RE-5).
         /// </summary>
         public bool DropUnknown(JsonNode? result, QueryRequest sent)
         {
@@ -1328,6 +1351,11 @@ public sealed class KeyedFetch
                 return false;
 
             var projectAt = sent.Pipeline.ToList().FindLastIndex(stage => stage.Project is not null);
+
+            if (projectAt < 0)
+                return false;
+
+            var sentFields = sent.Pipeline[projectAt].Project!.Fields;
             var element = BoundKeyedBy.Element + ".";
             var select = new List<string>();
             var parent = new List<string>();
@@ -1353,15 +1381,24 @@ public sealed class KeyedFetch
             if (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal)))
                 return false;
 
-            var dropped = false;
+            // The query asked again leaves every refused path out, so asking again cannot loop.
+            if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
+                return false;
 
-            foreach (var path in select)
-                dropped |= DroppedSelect.Add(path);
+            DroppedSelect.UnionWith(select);
+            DroppedParent.UnionWith(parent);
 
-            foreach (var path in parent)
-                dropped |= DroppedParent.Add(path);
+            return true;
+        }
 
-            return dropped;
+        /// <summary>The cache key of the paths an owner said this target lacks, per organisation, service and plan.</summary>
+        public string DropsKey => OwnerFetchCache.DropsKeyOf(organisation, Service, planHash);
+
+        /// <summary>Takes the paths an owner said this target lacks, learned by an earlier request: they are not sent again.</summary>
+        public void Learned(IEnumerable<string> select, IEnumerable<string> parent)
+        {
+            DroppedSelect.UnionWith(select);
+            DroppedParent.UnionWith(parent);
         }
 
         /// <summary>The keys the filtered query was sent and answered without a row, in chunks of <paramref name="size"/>.</summary>
@@ -1518,8 +1555,15 @@ public sealed class KeyedFetch
                 var shared = plan.Targets.FirstOrDefault(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item);
 
                 if (shared is null)
+                {
                     plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, projected, parentProjected,
                         legacyOwner: target.IsRemote && IsBefore21(ServiceKeyOf(target.Declared.Entity))));
+
+                    // What an owner said this union target lacks, an earlier request learned: not
+                    // asked again, and reported whether or not this page reaches the owner (RE-6).
+                    if (target.IsRemote && union && cache.TryGetDrops(shared.DropsKey, out var select, out var parent))
+                        shared.Learned(select, parent);
+                }
 
                 plan.ByTarget[target] = shared;
             }
@@ -1861,11 +1905,14 @@ public sealed class KeyedFetch
         Unreachable,
     }
 
-    /// <summary>The results of a call, or why there are none; <see cref="Status"/> is set when the owner was reached and answered with an HTTP error.</summary>
-    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null);
-
-    /// <summary>What is left of a phase for one call, under the per-call ceiling.</summary>
-    private TimeSpan Budget(DateTime deadline) => Budget(deadline - DateTime.UtcNow);
+    /// <summary>
+    /// The results of a call, or why there are none; <see cref="Status"/> is set when the owner was
+    /// reached and answered with an HTTP error, <see cref="Budget"/> is the time the failing call had.
+    /// </summary>
+    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null)
+    {
+        public TimeSpan Budget { get; init; }
+    }
 
     /// <summary>
     /// What one call carrying a chain may take (DESIGN §3.5.4): the time left less 50 ms, so the
@@ -1897,25 +1944,41 @@ public sealed class KeyedFetch
 
     /// <summary>
     /// The queries for one owner, in batches no larger than the owner's batch cap (DESIGN §3.5.2
-    /// step 4), each within the budget, results concatenated in order.
+    /// step 4), results concatenated in order. The batches go out one after another, each under what
+    /// is left before <paramref name="deadline"/> (the chain ceiling for a <paramref name="chain"/>,
+    /// else the per-resolve one; DESIGN §3.5.4), so split batches share one budget instead of each
+    /// taking the whole of it.
     /// </summary>
-    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, CancellationToken cancellationToken)
     {
         var size = BatchCapOf(owner, service);
         var results = new List<JsonNode?>(queries.Count);
 
         for (var start = 0; start < queries.Count; start += size)
         {
-            var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = (int)budget.TotalMilliseconds };
+            var left = deadline - DateTime.UtcNow;
+            var budget = chain ? ChainBudget(left) : Budget(left);
+            var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
             var outcome = await CallAsync(owner, service, request, budget, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
-                return outcome;
+                return outcome with { Budget = budget };
 
             results.AddRange(outcome.Results);
         }
 
         return new CallOutcome(results, null);
+    }
+
+    /// <summary>
+    /// The batch ceiling an owner is sent: the call's budget less a margin (a tenth, at most 250 ms),
+    /// so the owner stops and answers before this host stops waiting, never less than a millisecond.
+    /// </summary>
+    public static int OwnerCeilingMs(TimeSpan budget)
+    {
+        var milliseconds = Math.Max(1, (int)budget.TotalMilliseconds);
+
+        return Math.Max(1, milliseconds - Math.Min(250, milliseconds / 10));
     }
 
     /// <summary>

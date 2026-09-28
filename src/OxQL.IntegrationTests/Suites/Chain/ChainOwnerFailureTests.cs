@@ -201,7 +201,7 @@ public class ChainOwnerFailureTests : IClassFixture<ScriptedOwnerFleet>
         strict.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(3_000));
     }
 
-    [Fact(Skip = "Engine defect found by E14b: KeyedFetch.Failed words a chain batch's RESOLVE_TIMEOUT with Execution.EffectiveResolveTimeoutMs (4000 ms here), though the batch ran under the chain ceiling ChainTimeoutMs (300 ms).")]
+    [Fact]
     public async Task F07b_the_RESOLVE_TIMEOUT_of_a_chain_batch_names_the_chain_ceiling_it_ran_under()
     {
         Owner.Delay = TimeSpan.FromSeconds(30);

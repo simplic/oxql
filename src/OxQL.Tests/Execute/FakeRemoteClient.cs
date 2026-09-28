@@ -53,6 +53,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 
     public List<(string Service, BatchRequest Request, TimeSpan Budget)> Calls { get; } = [];
 
+    /// <summary>How long every batch takes before it answers; the caller's budget still cuts it.</summary>
+    public TimeSpan Delay { get; set; }
+
     public async Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
     {
         Calls.Add((serviceKey, request, budget));
@@ -65,6 +68,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new OperationCanceledException(cancellationToken);
         }
+
+        if (Delay > TimeSpan.Zero)
+            await Task.Delay(Delay, cancellationToken);
 
         var results = new List<JsonNode?>();
 

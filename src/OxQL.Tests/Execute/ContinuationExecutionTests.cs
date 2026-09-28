@@ -139,7 +139,7 @@ public class ContinuationExecutionTests
         var (_, request, budget) = client.Calls.Single();
         budget.Should().BeGreaterThan(TimeSpan.FromMilliseconds(options.Execution.EffectiveResolveTimeoutMs))
             .And.BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(options.Execution.EffectiveChainTimeoutMs));
-        request.MaxTimeMs.Should().Be((int)budget.TotalMilliseconds, "the owner applies it as its ceiling and budgets its own owners from it");
+        request.MaxTimeMs.Should().Be(KeyedFetch.OwnerCeilingMs(budget), "the owner applies the budget less a margin as its ceiling and budgets its own owners from it");
     }
 
     // ---- forTarget -------------------------------------------------------------------------------------

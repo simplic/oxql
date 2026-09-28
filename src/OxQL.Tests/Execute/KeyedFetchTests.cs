@@ -88,7 +88,7 @@ public class KeyedFetchTests
 
         service.Should().Be("crm", "the service key is the target's namespace");
         budget.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(2000), "the resolve timeout caps the budget");
-        request.MaxTimeMs.Should().Be((int)budget.TotalMilliseconds, "the owner gets the remaining budget as its ceiling");
+        request.MaxTimeMs.Should().Be(KeyedFetch.OwnerCeilingMs(budget), "the owner gets the remaining budget less a margin as its ceiling, so it answers before this host stops waiting");
 
         var query = request.Queries.Should().ContainSingle().Subject;
 

@@ -10,7 +10,10 @@ public sealed record BatchRequest
     [JsonPropertyName("queries")]
     public required IReadOnlyList<QueryRequest> Queries { get; init; }
 
-    /// <summary>A ceiling on every query's aggregate, under the host's.</summary>
+    /// <summary>
+    /// A ceiling on the whole batch, under the host's own per query: the queries run one after
+    /// another, each under what is left of it, so the batch ends within it.
+    /// </summary>
     [JsonPropertyName("maxTimeMs")]
     public int? MaxTimeMs { get; init; }
 }

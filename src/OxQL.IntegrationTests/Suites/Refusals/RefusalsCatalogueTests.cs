@@ -53,6 +53,7 @@ public class RefusalsCatalogueTests
         ["RESOLVE_ON_COLLECTION"] = nameof(Joins.JoinsResolveMembersTests.A_resolve_through_items_that_are_not_unwound_is_RESOLVE_ON_COLLECTION),
         ["RESOLVE_TARGET_NOT_DECLARED"] = nameof(Joins.JoinsResolveMembersTests.A_target_that_is_not_a_target_of_the_reference_is_RESOLVE_TARGET_NOT_DECLARED),
         ["RESOLVE_PARENT_NOT_ITEM"] = nameof(Joins.JoinsResolveMembersTests.ParentAs_on_an_entity_target_is_RESOLVE_PARENT_NOT_ITEM),
+        ["UNKNOWN_REQUEST_MEMBER"] = nameof(RefusalsRequestMembersTests.An_unknown_top_level_member_under_contract_2_is_UNKNOWN_REQUEST_MEMBER),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -89,9 +90,9 @@ public class RefusalsCatalogueTests
 
         // 2.0: 60 errors and 8 diagnostics; 2.1 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and UNWIND_DEPTH_TRUNCATED,
         // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
-        // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM.
-        catalogue.Should().HaveCount(77);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(67);
+        // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER.
+        catalogue.Should().HaveCount(78);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(68);
         catalogue.Count(DiagnosticCodes.Contains).Should().Be(10);
     }
 

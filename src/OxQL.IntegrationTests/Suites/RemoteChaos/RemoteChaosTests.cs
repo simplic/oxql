@@ -432,7 +432,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         lowered["maxResolveKeys"]!.GetValue<int>().Should().Be(2);
         lowered["resolveKeyChunk"]!.GetValue<int>().Should().Be(1);
         lowered["countCap"]!.GetValue<int>().Should().Be(2);
-        standard["maxResolveKeys"]!.GetValue<int>().Should().Be(2_000);
+        standard["maxResolveKeys"]!.GetValue<int>().Should().Be(10_000);
         standard["countCap"]!.GetValue<int>().Should().Be(100_000);
     }
 

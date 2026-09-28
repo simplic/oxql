@@ -206,7 +206,15 @@ public class HostTests
         limits["countCap"]!.GetValue<int>().Should().Be(100_000);
         limits["maxSemiJoinIds"]!.GetValue<int>().Should().Be(5_000, "the cap stays within the offset range so every page of ids is reachable");
         limits["maxLookupLimit"]!.GetValue<int>().Should().Be(100);
-        limits.Count.Should().Be(19, "health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["maxResolveStages"]!.GetValue<int>().Should().Be(8);
+        limits["maxResolveKeys"]!.GetValue<int>().Should().Be(10_000);
+        limits["maxFlattenDepth"]!.GetValue<int>().Should().Be(5);
+        limits["maxContinuedStages"]!.GetValue<int>().Should().Be(8);
+        limits["maxReportPageSize"]!.GetValue<int>().Should().Be(5_000);
+        limits["maxReportedRows"]!.GetValue<int>().Should().Be(50);
+        limits["chainTimeoutMs"]!.GetValue<int>().Should().Be(6_000);
+        limits["negativeResolveTtlSeconds"]!.GetValue<int>().Should().Be(10);
+        limits.Count.Should().Be(25, "health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin"], "the Sample host installs no remote query client");
     }
 

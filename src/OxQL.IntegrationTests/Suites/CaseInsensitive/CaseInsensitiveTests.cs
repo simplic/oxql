@@ -278,7 +278,7 @@ public class CaseInsensitiveTests
         // The Turkish pair stays apart under a regex.
         (await V1Ids(v1, """{ "MatchCode": { "eq": "istanbul", "options": { "ignoreCase": true } } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code) == "istanbul")).And.Equal([Employee("turkish-lower")]);
 
-        (await Leaf(v1, """{ "MatchCode": { "eq": "x", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'caseSensitive' is not an option.");
+        (await Leaf(v1, """{ "MatchCode": { "eq": "x", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'caseSensitive' is not an option under contract 1; it is a contract 2 option. This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.");
     }
 
     [Fact]

@@ -22,6 +22,17 @@ public sealed class Binder
     private static readonly IReadOnlySet<string> Aggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg", "min", "max", "first", "last", "push", "count", "countDistinct" };
     private static readonly IReadOnlySet<string> NumericAggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg" };
 
+    /// <summary>
+    /// The sentence that ends every refusal a contract 1 request receives for a contract 2
+    /// construct (DESIGN §3.12): a request without the contract header is read as contract 1
+    /// while compatibility is on, which is the likeliest mistake when a query is pasted into a
+    /// report data source. It begins with a space, so it is appended to a finished sentence.
+    /// </summary>
+    public const string Contract1Hint = " This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.";
+
+    /// <summary>The top-level members a request carries.</summary>
+    public const string RequestMembers = "entityType, variables, pipeline, strict";
+
     private readonly EntityModel model;
     private readonly CursorCodec cursors;
 
@@ -127,6 +138,8 @@ public sealed class Binder
             await LoadAddonsAsync(entity);
             shape = Shape.ForEntity(entity, addons);
 
+            BindRequestMembers();
+
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
                 errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
 
@@ -213,6 +226,30 @@ public sealed class Binder
                 stages.Add(page);
             }
         }
+
+        /// <summary>
+        /// The top-level members (DESIGN §3.0, §3.12). Under contract 2 a member a request does
+        /// not have is refused, since an engine that dropped it would run the request without
+        /// what it asked for. Contract 1 ignores unknown members as it always has, but refuses
+        /// <c>strict</c>: dropping it would hand a report the rows strict exists to refuse.
+        /// </summary>
+        private void BindRequestMembers()
+        {
+            if (!contract2)
+            {
+                if (request.Strict is not null)
+                    errors.Add(Error(Codes.LegacyStageUnsupported, "'strict' is a contract 2 member of a request; contract 1 has no strict mode." + Contract1Hint, null, null));
+
+                return;
+            }
+
+            if (request.Unknown is { Count: > 0 } unknown)
+                errors.Add(Error(Codes.UnknownRequestMember,
+                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {RequestMembers}.", null, null));
+        }
+
+        /// <summary>The contract 1 hint when <paramref name="contract2Construct"/> is what a contract 1 request was refused for; empty otherwise.</summary>
+        private string Hint(bool contract2Construct) => !contract2 && contract2Construct ? Contract1Hint : "";
 
         /// <summary>The aliases a failed stage would have created, each poisoned when its name is still free.</summary>
         private void PoisonAliases(PipelineStage stage)
@@ -396,7 +433,7 @@ public sealed class Binder
             // The variant test is a contract 2 operator; contract 1 never had it.
             if (op == "is" && !contract2)
             {
-                errors.Add(Error(Codes.UnknownOperator, "'is' is not an operator.", index, condition.Path));
+                errors.Add(Error(Codes.UnknownOperator, "'is' is not an operator under contract 1; the variant test is a contract 2 operator." + Contract1Hint, index, condition.Path));
                 return null;
             }
 
@@ -562,7 +599,7 @@ public sealed class Binder
             if (conditionOptions.CaseSensitive is { } sensitive)
             {
                 if (!contract2)
-                    errors.Add(Error(Codes.OptionNotApplicable, "'caseSensitive' is not an option.", index, condition.Path));
+                    errors.Add(Error(Codes.OptionNotApplicable, "'caseSensitive' is not an option under contract 1; it is a contract 2 option." + Contract1Hint, index, condition.Path));
                 else if (!applies)
                     errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
                 else
@@ -711,7 +748,8 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget" : "from, path, as, select, filter, limit")}.", index, null));
+                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget" : "from, path, as, select, filter, limit")}."
+                    + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
                 return;
             }
 
@@ -958,7 +996,8 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, parentSelect, onMissing, forTarget" : "path, as, select, filter")}.", index, null));
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, parentSelect, onMissing, forTarget" : "path, as, select, filter")}."
+                    + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
                 return;
             }
 
@@ -1111,7 +1150,8 @@ public sealed class Binder
                 "refuse" => ResolveOnMissing.Refuse,
                 _ => (ResolveOnMissing?)null,
             };
-            var effectiveOnMissing = onMissing ?? ResolveOnMissing.Null;
+            // A strict request refuses a missing reference unless the stage says otherwise (DESIGN §3.4.3).
+            var effectiveOnMissing = onMissing ?? (contract2 && request.IsStrict ? ResolveOnMissing.Refuse : ResolveOnMissing.Null);
 
             // The cases with their targets bound; every target is bound, whichever executor runs it.
             var cases = new List<BoundResolveCase>();
@@ -1410,7 +1450,7 @@ public sealed class Binder
             // flatten is a contract 2 member; under contract 1 it is one the stage does not have.
             IReadOnlyList<string> unknown = !contract2 && unwind.Flatten is not null ? [.. unwind.Unknown, "flatten"] : unwind.Unknown;
 
-            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten" : "path, as, preserveNull, includeIndex", index))
+            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten" : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null)))
                 return;
 
             if (unwind.Path is null)
@@ -1997,7 +2037,7 @@ public sealed class Binder
                 // The object form is contract 2; under contract 1 a direction is a string.
                 if (!contract2 && field.ObjectForm)
                 {
-                    errors.Add(Error(Codes.InvalidSortDirection, "A sort entry is a path and a direction string, asc or desc; the object form is a contract 2 form.", index, field.Path));
+                    errors.Add(Error(Codes.InvalidSortDirection, "A sort entry is a path and a direction string, asc or desc; the object form is a contract 2 form." + Contract1Hint, index, field.Path));
                     continue;
                 }
 
@@ -2093,13 +2133,13 @@ public sealed class Binder
         /// <c>preserveNulls</c>, is refused rather than bound with the member dropped and the
         /// default applied.
         /// </summary>
-        private bool CheckStageMembers(IReadOnlyList<string> unknown, string stage, string members, int index)
+        private bool CheckStageMembers(IReadOnlyList<string> unknown, string stage, string members, int index, string hint = "")
         {
             if (unknown.Count == 0)
                 return true;
 
             errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.", index, null));
+                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.{hint}", index, null));
 
             return false;
         }
@@ -2119,10 +2159,17 @@ public sealed class Binder
 
             var limit = stage.Limit ?? options.Limits.DefaultPageSize;
 
+            // A report page (DESIGN §3.4.3): a strict request that neither continues nor jumps
+            // reads its rows in one page, up to MaxReportPageSize, and refuses rather than cut them.
+            var report = contract2 && request.IsStrict && stage.Cursor is null && stage.Offset is null;
+            var maximum = report ? Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize) : options.Limits.MaxPageSize;
+
             if (limit < 1)
                 errors.Add(Error(Codes.InvalidPageLimit, $"The page limit {limit} is not positive.", index, null));
-            else if (limit > options.Limits.MaxPageSize)
-                errors.Add(Error(Codes.PageSizeExceeded, $"The page limit {limit} exceeds the maximum of {options.Limits.MaxPageSize}.", index, null));
+            else if (limit > maximum)
+                errors.Add(Error(Codes.PageSizeExceeded, report
+                    ? $"The page limit {limit} exceeds the report page maximum of {maximum}."
+                    : $"The page limit {limit} exceeds the maximum of {maximum}." + ReportPageNote(), index, null));
 
             var offset = stage.Offset ?? 0;
 
@@ -2141,7 +2188,7 @@ public sealed class Binder
             if (stage.TotalCountCap is { } cap)
             {
                 if (context.Contract == 1)
-                    errors.Add(Error(Codes.LegacyStageUnsupported, "'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2).", index, null));
+                    errors.Add(Error(Codes.LegacyStageUnsupported, "'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2)." + Contract1Hint, index, null));
                 else if (cap < 1)
                     errors.Add(Error(Codes.InvalidPageLimit, $"The count cap {cap} is not a positive integer; includeTotalCount is true, false or a positive integer.", index, null));
                 else
@@ -2152,6 +2199,12 @@ public sealed class Binder
             pageIndex = index;
             stages.Add(page);
         }
+
+        /// <summary>Where a larger page is available: a strict contract 2 request without cursor or offset reads up to <c>MaxReportPageSize</c>.</summary>
+        private string ReportPageNote() =>
+            contract2 && options.Limits.MaxReportPageSize > options.Limits.MaxPageSize
+                ? $" A strict request without cursor or offset may ask for up to {options.Limits.MaxReportPageSize}."
+                : "";
 
         // ---- helpers -------------------------------------------------------------------------
 

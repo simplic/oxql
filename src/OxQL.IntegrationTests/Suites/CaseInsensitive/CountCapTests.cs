@@ -63,7 +63,7 @@ public class CountCapTests
         var v1 = await Transport(contract: 1);
 
         (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "includeTotalCount": 10 } } ]""")).ShouldRefuseExactly("LEGACY_STAGE_UNSUPPORTED")
-            .Should().Be("'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2).");
+            .Should().Be("'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2). This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.");
 
         // Contract 1's boolean is untouched.
         (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldBeOk().TotalCount.Should().Be(Corpus.TemplateVolume);

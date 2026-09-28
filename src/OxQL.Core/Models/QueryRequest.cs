@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace OxQL.Core.Models;
@@ -24,6 +25,29 @@ public sealed record QueryRequest
     /// </summary>
     [JsonPropertyName("pipeline")]
     public required IReadOnlyList<PipelineStage> Pipeline { get; init; }
+
+    /// <summary>
+    /// Whether a condition that loses data refuses the request instead of travelling as a
+    /// diagnostic: a missing or ambiguous reference, a truncated lookup, resolve or flatten, an
+    /// owner that did not answer, a page that holds fewer rows than match. A strict request
+    /// without <c>cursor</c> or <c>offset</c> may ask for a page up to <c>MaxReportPageSize</c>.
+    /// Contract 2 only; it never changes rows, so it is not part of the cursor fingerprint.
+    /// </summary>
+    [JsonPropertyName("strict")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Strict { get; init; }
+
+    /// <summary>Whether the request is strict: <see cref="Strict"/> written as true.</summary>
+    [JsonIgnore]
+    public bool IsStrict => Strict == true;
+
+    /// <summary>
+    /// The top-level members the caller wrote that a request does not have. The binder refuses
+    /// them under contract 2 (<c>UNKNOWN_REQUEST_MEMBER</c>): a member an older engine drops,
+    /// such as <c>strict</c>, would otherwise run the request without what it asked for.
+    /// </summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Unknown { get; init; }
 }
 
 /// <summary>

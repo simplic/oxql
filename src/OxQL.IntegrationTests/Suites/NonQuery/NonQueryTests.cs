@@ -131,9 +131,10 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y8_the_limits_member_publishes_all_nineteen_limits_with_the_values_the_host_runs_under()
+    public async Task Y8_the_limits_member_publishes_all_twenty_five_limits_with_the_values_the_host_runs_under()
     {
         var defaults = new LimitOptions();
+        var options = new OxQLOptions();
         var expected = new Dictionary<string, int>
         {
             ["maxPageSize"] = defaults.MaxPageSize, ["defaultPageSize"] = defaults.DefaultPageSize, ["maxPipelineStages"] = defaults.MaxPipelineStages,
@@ -143,8 +144,12 @@ public class NonQueryTests
             ["maxSemiJoinIds"] = defaults.MaxSemiJoinIds, ["resolveKeyChunk"] = defaults.ResolveKeyChunk, ["maxResolveKeys"] = defaults.MaxResolveKeys,
             ["maxRequestBytes"] = defaults.MaxRequestBytes, ["maxBatchQueries"] = defaults.MaxBatchQueries, ["regexMaxLength"] = defaults.RegexMaxLength,
             ["maxLookupLimit"] = defaults.MaxLookupLimit,
+            // 2.1 (DESIGN §3.7)
+            ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
+            ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
+            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
         };
-        expected.Should().HaveCount(19);
+        expected.Should().HaveCount(25);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

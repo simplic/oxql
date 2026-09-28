@@ -283,7 +283,7 @@ public class CaseInsensitiveBindingTests
         folded.Collated.Should().BeFalse("contract 1 folds with a pattern, never with the collation");
         Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": false } } } }]""", Contract1)).IgnoreCase.Should().BeFalse();
 
-        (await Error("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable, Contract1)).Message.Should().Be("'caseSensitive' is not an option.");
+        (await Error("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable, Contract1)).Message.Should().Be("'caseSensitive' is not an option under contract 1; it is a contract 2 option." + Binder.Contract1Hint);
         await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable, Contract1);
         await Error("""[{ "sort": [{ "number": { "direction": "asc", "caseSensitive": true } }] }]""", Codes.InvalidSortDirection, Contract1);
         (await Bound("""[{ "group": { "by": [{ "path": "number", "as": "n" }], "fields": { "c": { "count": true } } } }]""", Contract1)).Collated.Should().BeFalse();

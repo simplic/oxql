@@ -42,6 +42,11 @@ public static class Codes
     /// <summary>An <c>is</c> names a type that is neither a variant of the member's type nor its concrete base.</summary>
     public const string UnknownVariant = "UNKNOWN_VARIANT";
 
+    // request
+
+    /// <summary>A contract 2 request carries a top-level member a request does not have.</summary>
+    public const string UnknownRequestMember = "UNKNOWN_REQUEST_MEMBER";
+
     // stage
     public const string UnknownStage = "UNKNOWN_STAGE";
     public const string UnknownStageMember = "UNKNOWN_STAGE_MEMBER";
@@ -124,9 +129,9 @@ public static class Codes
     public const string ResolveUnreachable = "RESOLVE_UNREACHABLE";
     /// <summary>
     /// Dormant at the shipped defaults rather than dead: one resolve stage cannot need more
-    /// distinct keys than the page has rows, and <c>MaxPageSize</c> (500) is below
-    /// <c>MaxResolveKeys</c> (2 000), so it cannot fire until a host raises the page size past
-    /// the resolve cap. <see cref="Models.LimitOptions.MaxResolveKeys"/> says so where an
+    /// distinct keys than the page has rows, and <c>MaxPageSize</c> (500) and
+    /// <c>MaxReportPageSize</c> (5 000) are below <c>MaxResolveKeys</c> (10 000), so it cannot
+    /// fire until a host raises a page size past the resolve cap. <see cref="Models.LimitOptions.MaxResolveKeys"/> says so where an
     /// operator will read it.
     /// </summary>
     public const string ResolvePartial = "RESOLVE_PARTIAL";

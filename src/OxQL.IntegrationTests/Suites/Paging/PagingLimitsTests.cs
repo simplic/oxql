@@ -23,7 +23,7 @@ namespace OxQL.IntegrationTests.Suites.Paging;
 [Trait("Category", "Integration")]
 public class PagingLimitsTests
 {
-    /// <summary>The defaults every host runs with, as <c>LimitOptions</c> documents them; nineteen names.</summary>
+    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; twenty-five names since 2.1.</summary>
     private static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>
     {
         ["maxPageSize"] = 500,
@@ -31,7 +31,7 @@ public class PagingLimitsTests
         ["maxPipelineStages"] = 20,
         ["maxLookupStages"] = 5,
         ["maxUnwindStages"] = 5,
-        ["maxResolveStages"] = 2,
+        ["maxResolveStages"] = 8,
         ["maxGroupFields"] = 20,
         ["maxProjectionFields"] = 500,
         ["maxConditions"] = 200,
@@ -40,11 +40,17 @@ public class PagingLimitsTests
         ["countCap"] = 100_000,
         ["maxSemiJoinIds"] = 5_000,
         ["resolveKeyChunk"] = 500,
-        ["maxResolveKeys"] = 2_000,
+        ["maxResolveKeys"] = 10_000,
         ["maxRequestBytes"] = 262_144,
         ["maxBatchQueries"] = 10,
         ["regexMaxLength"] = 200,
         ["maxLookupLimit"] = 100,
+        ["maxFlattenDepth"] = 5,
+        ["maxContinuedStages"] = 8,
+        ["maxReportPageSize"] = 5_000,
+        ["maxReportedRows"] = 50,
+        ["chainTimeoutMs"] = 6_000,
+        ["negativeResolveTtlSeconds"] = 10,
     };
 
     private static int Limit(string name) => Defaults[name];
@@ -67,7 +73,7 @@ public class PagingLimitsTests
     // ── U25 — where the numbers come from ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task U25_every_host_publishes_all_nineteen_limits_on_health_at_their_defaults()
+    public async Task U25_every_host_publishes_all_twenty_five_limits_on_health_at_their_defaults()
     {
         // The legacy half that compared them with the generated TypeScript modules is the client's.
         foreach (var service in LabService.All)
@@ -202,7 +208,7 @@ public class PagingLimitsTests
     }
 
     [Fact]
-    public async Task U06_max_resolve_stages_two_resolves_run_and_three_are_refused()
+    public async Task U06_max_resolve_stages_eight_resolves_run_and_nine_are_refused()
     {
         var client = await Transport();
         static string Resolves(int count) => Repeat(count, index => $$"""{ "resolve": { "path": "createUserId", "as": "r{{index}}" } }""");

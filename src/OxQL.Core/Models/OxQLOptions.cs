@@ -93,6 +93,11 @@ public sealed class OxQLOptions
         Limits.RegexMaxLength = AtLeast(1, Limits.RegexMaxLength, nameof(LimitOptions.RegexMaxLength), adjustments);
         Limits.MaxLookupLimit = AtLeast(1, Limits.MaxLookupLimit, nameof(LimitOptions.MaxLookupLimit), adjustments);
         Limits.MaxFlattenDepth = AtLeast(1, Limits.MaxFlattenDepth, nameof(LimitOptions.MaxFlattenDepth), adjustments);
+        Limits.MaxContinuedStages = AtLeast(1, Limits.MaxContinuedStages, nameof(LimitOptions.MaxContinuedStages), adjustments);
+        Limits.MaxReportPageSize = AtLeast(1, Limits.MaxReportPageSize, nameof(LimitOptions.MaxReportPageSize), adjustments);
+        Limits.MaxReportedRows = AtLeast(1, Limits.MaxReportedRows, nameof(LimitOptions.MaxReportedRows), adjustments);
+        Execution.ChainTimeoutMs = AtLeast(1, Execution.ChainTimeoutMs, nameof(ExecutionOptions.ChainTimeoutMs), adjustments, "Execution");
+        Cache.NegativeResolveTtlSeconds = AtLeast(0, Cache.NegativeResolveTtlSeconds, nameof(CacheOptions.NegativeResolveTtlSeconds), adjustments, "Cache");
 
         if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
         {
@@ -110,6 +115,12 @@ public sealed class OxQLOptions
         {
             adjustments.Add($"OxQL:Limits:ResolveKeyChunk was {Limits.ResolveKeyChunk}, above MaxPageSize ({Limits.MaxPageSize}); it is clamped, because a resolve chunk is asked for as one page of the owner.");
             Limits.ResolveKeyChunk = Limits.MaxPageSize;
+        }
+
+        if (Limits.MaxContinuedStages > Limits.MaxPipelineStages)
+        {
+            adjustments.Add($"OxQL:Limits:MaxContinuedStages was {Limits.MaxContinuedStages}, above MaxPipelineStages ({Limits.MaxPipelineStages}); it is clamped, because no pipeline carries more stages to continue.");
+            Limits.MaxContinuedStages = Limits.MaxPipelineStages;
         }
 
         if (Limits.DefaultPageSize > Limits.MaxPageSize)
@@ -137,12 +148,12 @@ public sealed class OxQLOptions
         return adjustments;
     }
 
-    private static int AtLeast(int minimum, int value, string name, List<string> adjustments)
+    private static int AtLeast(int minimum, int value, string name, List<string> adjustments, string section = "Limits")
     {
         if (value >= minimum)
             return value;
 
-        adjustments.Add($"OxQL:Limits:{name} was {value}; it is raised to {minimum}, the least the engine can work with.");
+        adjustments.Add($"OxQL:{section}:{name} was {value}; it is raised to {minimum}, the least the engine can work with.");
 
         return minimum;
     }
@@ -180,8 +191,8 @@ public sealed class LimitOptions
     /// <summary>How many unwind stages one pipeline may carry.</summary>
     public int MaxUnwindStages { get; set; } = 5;
 
-    /// <summary>How many resolve stages one pipeline may carry.</summary>
-    public int MaxResolveStages { get; set; } = 2;
+    /// <summary>How many resolve stages one pipeline may carry on this host; stages continued at an owner count there.</summary>
+    public int MaxResolveStages { get; set; } = 8;
 
     /// <summary>How many keys and aggregates one group stage may carry.</summary>
     public int MaxGroupFields { get; set; } = 20;
@@ -220,11 +231,11 @@ public sealed class LimitOptions
     /// page carries a <c>RESOLVE_PARTIAL</c> diagnostic.
     /// <para>
     /// One resolve stage cannot need more distinct keys than the page has rows, so while this
-    /// is at or above <see cref="MaxPageSize"/> the cap — and its diagnostic — cannot be
-    /// reached. Raising <c>MaxPageSize</c> past it is what brings it into play.
+    /// is at or above <see cref="MaxPageSize"/> and <see cref="MaxReportPageSize"/> the cap —
+    /// and its diagnostic — cannot be reached. Raising either past it is what brings it into play.
     /// </para>
     /// </summary>
-    public int MaxResolveKeys { get; set; } = 2_000;
+    public int MaxResolveKeys { get; set; } = 10_000;
 
     /// <summary>The largest request body.</summary>
     public int MaxRequestBytes { get; set; } = 262_144;
@@ -247,6 +258,20 @@ public sealed class LimitOptions
     /// <c>UNWIND_DEPTH_TRUNCATED</c> diagnostic when a row had any.
     /// </summary>
     public int MaxFlattenDepth { get; set; } = 5;
+
+    /// <summary>How many stages one keyed alias may continue at its owner, counting every stage forwarded under it.</summary>
+    public int MaxContinuedStages { get; set; } = 8;
+
+    /// <summary>
+    /// The largest page a strict request without <c>cursor</c> or <c>offset</c> may ask for: a
+    /// report reads its rows in one page and refuses rather than cut them. A value below
+    /// <see cref="MaxPageSize"/> gives strict requests no larger page, never a smaller one;
+    /// every other request stays under <see cref="MaxPageSize"/>.
+    /// </summary>
+    public int MaxReportPageSize { get; set; } = 5_000;
+
+    /// <summary>How many rows one diagnostic lists (a missing or ambiguous reference names the rows it met, up to this many).</summary>
+    public int MaxReportedRows { get; set; } = 50;
 }
 
 /// <summary>Time and memory bounds on the aggregate.</summary>
@@ -260,6 +285,9 @@ public sealed class ExecutionOptions
 
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;
+
+    /// <summary>The budget of one owner call that carries continued stages or typed/item targets, which the owner may pass on.</summary>
+    public int ChainTimeoutMs { get; set; } = 6_000;
 
     /// <summary>
     /// <c>allowDiskUse</c> on every aggregate. True by default: a sort or a group that outgrows
@@ -282,6 +310,9 @@ public sealed class ExecutionOptions
 
     /// <summary>The effective resolve budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
     public int EffectiveResolveTimeoutMs => Math.Clamp(ResolveTimeoutMs, 1, EffectiveMaxTimeMs);
+
+    /// <summary>The effective chain budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
+    public int EffectiveChainTimeoutMs => Math.Clamp(ChainTimeoutMs, 1, EffectiveMaxTimeMs);
 
     /// <summary>The effective slow-query threshold: the configured value, never negative; 0 is off.</summary>
     public int EffectiveSlowQueryMs => Math.Max(0, SlowQueryMs);
@@ -332,6 +363,9 @@ public sealed class CacheOptions
 {
     /// <summary>How long a resolved remote row stays cached.</summary>
     public int ResolveTtlSeconds { get; set; } = 60;
+
+    /// <summary>How long a key the owner answered as missing stays cached; a strict request bypasses such entries. 0 caches no missing key.</summary>
+    public int NegativeResolveTtlSeconds { get; set; } = 10;
 
     /// <summary>The most resolved rows the cache holds.</summary>
     public int ResolveCacheMaxEntries { get; set; } = 50_000;

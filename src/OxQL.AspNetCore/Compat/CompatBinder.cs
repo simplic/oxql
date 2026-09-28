@@ -111,7 +111,7 @@ public sealed class CompatBinder
                             Refusal = Refusal.Validation([new QueryValidationError
                             {
                                 Code = Codes.LegacyStageUnsupported,
-                                Message = $"The v1 '{stage.Kind}' stage has no equivalent under contract 1; send the request under contract 2 (X-OxQL-Contract: 2) with the v2 '{stage.Kind}' form.",
+                                Message = $"The v1 '{stage.Kind}' stage has no equivalent under contract 1; send the request under contract 2 (X-OxQL-Contract: 2) with the v2 '{stage.Kind}' form." + Binder.Contract1Hint,
                                 Stage = index,
                             }]),
                         };

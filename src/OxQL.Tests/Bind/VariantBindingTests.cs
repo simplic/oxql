@@ -139,7 +139,7 @@ public class VariantBindingTests
     {
         var error = await Error("""[ { "match": { "pet": { "is": "Cat" } } } ]""", Codes.UnknownOperator, BindHost.Context(contract: 1));
 
-        error.Message.Should().Be("'is' is not an operator.");
+        error.Message.Should().Be("'is' is not an operator under contract 1; the variant test is a contract 2 operator." + Binder.Contract1Hint);
     }
 
     [Fact]
@@ -206,7 +206,7 @@ public class VariantBindingTests
     {
         var error = await Error("""[ { "unwind": { "path": "nodes", "flatten": "children" } } ]""", Codes.LegacyStageUnsupported, BindHost.Context(contract: 1));
 
-        error.Message.Should().Be("'flatten' is not a member of unwind; unwind carries path, as, preserveNull, includeIndex.");
+        error.Message.Should().Be("'flatten' is not a member of unwind; unwind carries path, as, preserveNull, includeIndex." + Binder.Contract1Hint);
     }
 
     [Fact]

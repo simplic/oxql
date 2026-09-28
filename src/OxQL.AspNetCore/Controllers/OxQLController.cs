@@ -102,37 +102,49 @@ public class OxQLController : ControllerBase
                 contract = EngineCapabilities.Contract,
             },
             capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
-            limits = Limits(options.Limits),
+            limits = Limits(options),
             remote = services,
         });
     }
 
     /// <summary>
     /// Every limit the engine enforces. The schema document publishes the ones a caller checks a
-    /// request against before sending it; this is the whole set, for diagnosis.
+    /// request against before sending it; this is the whole set, for diagnosis, the chain
+    /// budget and the negative cache lifetime among them (DESIGN §3.7).
     /// </summary>
-    private static object Limits(Core.Models.LimitOptions limits) => new
+    private static object Limits(Core.Models.OxQLOptions options)
     {
-        maxPageSize = limits.MaxPageSize,
-        defaultPageSize = limits.DefaultPageSize,
-        maxPipelineStages = limits.MaxPipelineStages,
-        maxLookupStages = limits.MaxLookupStages,
-        maxUnwindStages = limits.MaxUnwindStages,
-        maxResolveStages = limits.MaxResolveStages,
-        maxGroupFields = limits.MaxGroupFields,
-        maxProjectionFields = limits.MaxProjectionFields,
-        maxConditions = limits.MaxConditions,
-        maxVariables = limits.MaxVariables,
-        maxOffset = limits.MaxOffset,
-        countCap = limits.CountCap,
-        maxSemiJoinIds = limits.MaxSemiJoinIds,
-        resolveKeyChunk = limits.ResolveKeyChunk,
-        maxResolveKeys = limits.MaxResolveKeys,
-        maxRequestBytes = limits.MaxRequestBytes,
-        maxBatchQueries = limits.MaxBatchQueries,
-        regexMaxLength = limits.RegexMaxLength,
-        maxLookupLimit = limits.MaxLookupLimit,
-    };
+        var limits = options.Limits;
+
+        return new
+        {
+            maxPageSize = limits.MaxPageSize,
+            defaultPageSize = limits.DefaultPageSize,
+            maxPipelineStages = limits.MaxPipelineStages,
+            maxLookupStages = limits.MaxLookupStages,
+            maxUnwindStages = limits.MaxUnwindStages,
+            maxResolveStages = limits.MaxResolveStages,
+            maxGroupFields = limits.MaxGroupFields,
+            maxProjectionFields = limits.MaxProjectionFields,
+            maxConditions = limits.MaxConditions,
+            maxVariables = limits.MaxVariables,
+            maxOffset = limits.MaxOffset,
+            countCap = limits.CountCap,
+            maxSemiJoinIds = limits.MaxSemiJoinIds,
+            resolveKeyChunk = limits.ResolveKeyChunk,
+            maxResolveKeys = limits.MaxResolveKeys,
+            maxRequestBytes = limits.MaxRequestBytes,
+            maxBatchQueries = limits.MaxBatchQueries,
+            regexMaxLength = limits.RegexMaxLength,
+            maxLookupLimit = limits.MaxLookupLimit,
+            maxFlattenDepth = limits.MaxFlattenDepth,
+            maxContinuedStages = limits.MaxContinuedStages,
+            maxReportPageSize = limits.MaxReportPageSize,
+            maxReportedRows = limits.MaxReportedRows,
+            chainTimeoutMs = options.Execution.EffectiveChainTimeoutMs,
+            negativeResolveTtlSeconds = options.Cache.NegativeResolveTtlSeconds,
+        };
+    }
 
     private static Model.EntityModel? ModelOrNull(IEntityModelProvider models)
     {

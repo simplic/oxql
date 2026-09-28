@@ -238,7 +238,7 @@ public class JoinsResolveTests
     [InlineData("M08", """[ { "resolve": { "path": "vehicle.id", "as": "name" } }, { "page": { "limit": 1 } } ]""", "ALIAS_COLLISION", null)]
     [InlineData("M49", """[ { "resolve": { "path": "vehicle.id", "as": "veh", "limit": 2 } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_STAGE_MEMBER", "path, as, select, filter")]
     [InlineData("M07", """[ { "group": { "by": [ { "path": "name", "as": "n" } ], "fields": { "c": { "count": true } } } }, { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_PATH", "not an output of the group stage")]
-    [InlineData("M47", """[ { "resolve": { "path": "vehicle.id", "as": "a" } }, { "resolve": { "path": "vehicle.id", "as": "b" } }, { "resolve": { "path": "vehicle.id", "as": "c" } }, { "page": { "limit": 1 } } ]""", "MAX_RESOLVE_STAGES_EXCEEDED", null)]
+    [InlineData("M47", """[ { "resolve": { "path": "vehicle.id", "as": "a" } }, { "resolve": { "path": "vehicle.id", "as": "b" } }, { "resolve": { "path": "vehicle.id", "as": "c" } }, { "resolve": { "path": "vehicle.id", "as": "d" } }, { "resolve": { "path": "vehicle.id", "as": "e" } }, { "resolve": { "path": "vehicle.id", "as": "f" } }, { "resolve": { "path": "vehicle.id", "as": "g" } }, { "resolve": { "path": "vehicle.id", "as": "h" } }, { "resolve": { "path": "vehicle.id", "as": "i" } }, { "page": { "limit": 1 } } ]""", "MAX_RESOLVE_STAGES_EXCEEDED", "more than 8 resolve stages")]
     public async Task M02_M07_M08_M47_M49_the_engine_refuses_the_local_resolve_shapes_it_cannot_serve(string caseId, string pipeline, string code, string? contains)
     {
         var answer = await (await FleetClient()).SendAsync(Corpus.Equipment, pipeline);

@@ -82,7 +82,7 @@ public class RemoteAliasFilterTests
         var runner = new FakeAggregateRunner();
         var client = new FakeRemoteClient();
         var options = BindHost.Options();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new ResolveCache(options));
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
 
         var outcome = await engine.ExecuteAsync(
             BindHost.Request(Order, $$"""[{{Resolve}}, { "match": { "contact": { "eq": null } } }, { "page": { "limit": 5 } }]"""), BindHost.Context());

@@ -48,7 +48,7 @@ public class HostHardeningOwnerStatusTests
                 },
             ],
         };
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, new AnsweringWith(status), cache: new ResolveCache(options));
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, new AnsweringWith(status), cache: new OwnerFetchCache(options));
 
         return await engine.ExecuteAsync(BindHost.Request("probe.order", pipeline), BindHost.Context());
     }

@@ -26,7 +26,7 @@ public class CaseInsensitiveEngineTests
         var client = new FakeRemoteClient { Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString())) };
         var options = BindHost.Options(configure);
 
-        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new ResolveCache(options)), runner, client);
+        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options)), runner, client);
     }
 
     private static async Task<QueryResult> Success(MongoQueryEngine engine, string pipeline)

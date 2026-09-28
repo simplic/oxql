@@ -17,7 +17,7 @@ namespace OxQL.Tests.Execute;
 /// remote entity, each storing its reference member its own way or pointing at another member
 /// of the target, and they share one engine and therefore one cache.
 /// </summary>
-public class HostHardeningSemiJoinCacheTests
+public class OwnerFetchCacheTests
 {
     private const string ByMatchCode = """[{ "resolve": { "path": "PATH", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1" } } }, { "page": { "limit": 10 } }]""";
 
@@ -39,7 +39,7 @@ public class HostHardeningSemiJoinCacheTests
             Script = (_, _, _) => new FakeRemoteClient.Answer.Counted(1, false, false, FakeRemoteClient.Row("id", Vehicle.ToString(), ("number", "N-7"))),
         };
         var options = BindHost.Options();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(Model), runner, BindHost.Cursors, options, client, cache: new ResolveCache(options));
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
 
         return (engine, runner, client);
     }
@@ -104,8 +104,8 @@ public class HostHardeningSemiJoinCacheTests
         var organisation = BindHost.Organisation;
         var query = BindHost.Request("vehicle.vehicle", """[{ "match": { "matchCode": { "eq": "V-1" } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""");
 
-        SemiJoinCache.KeyOf(organisation, query).Should().Be(SemiJoinCache.KeyOf(organisation, query with { }));
-        SemiJoinCache.KeyOf(Guid.NewGuid(), query).Should().NotBe(SemiJoinCache.KeyOf(organisation, query), "another organisation never sees the list");
+        OwnerFetchCache.KeyOf(organisation, query).Should().Be(OwnerFetchCache.KeyOf(organisation, query with { }));
+        OwnerFetchCache.KeyOf(Guid.NewGuid(), query).Should().NotBe(OwnerFetchCache.KeyOf(organisation, query), "another organisation never sees the list");
 
         foreach (var other in new[]
         {
@@ -115,9 +115,9 @@ public class HostHardeningSemiJoinCacheTests
             """[{ "match": { "matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
             """[{ "match": { "matchCode": { "eq": "V-1" } } }, { "project": { "number": 1 } }, { "page": { "limit": 500 } }]""",
         })
-            SemiJoinCache.KeyOf(organisation, BindHost.Request("vehicle.vehicle", other)).Should().NotBe(SemiJoinCache.KeyOf(organisation, query), other);
+            OwnerFetchCache.KeyOf(organisation, BindHost.Request("vehicle.vehicle", other)).Should().NotBe(OwnerFetchCache.KeyOf(organisation, query), other);
 
-        SemiJoinCache.KeyOf(organisation, query with { EntityType = "crm.contact" }).Should().NotBe(SemiJoinCache.KeyOf(organisation, query));
+        OwnerFetchCache.KeyOf(organisation, query with { EntityType = "crm.contact" }).Should().NotBe(OwnerFetchCache.KeyOf(organisation, query));
     }
 
     private sealed class BinaryReference

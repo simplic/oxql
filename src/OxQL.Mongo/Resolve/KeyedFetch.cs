@@ -28,30 +28,35 @@ public sealed record ResolveResult
 }
 
 /// <summary>
-/// The remote half of resolve: after the page is fixed, one batch per owning
-/// service carrying one query per resolve stage and key chunk, cached per key for a TTL;
-/// and, before the page runs, the semi-join that asks an owner for the ids a condition on
-/// its rows selects, refusing above the cap rather than truncating.
+/// The one cross-record fetch through an owner (DESIGN §3.5.8), in two modes that share the
+/// owner query builder (<see cref="OwnerQueryBuilder"/>), the owner client, batching at
+/// <c>MaxBatchQueries</c>, budgeting, error mapping and the cache (<see cref="OwnerFetchCache"/>):
+/// <list type="bullet">
+///   <item><b>by keys</b> (<see cref="ByKeysAsync"/>): after the page is fixed, one batch per owning
+///   service carrying one query per resolve stage and key chunk, cached per key for a TTL;</item>
+///   <item><b>by condition</b> (<see cref="ByConditionAsync"/>): before the page runs, the semi-join
+///   that asks an owner for the ids a condition on its rows selects, refusing above the cap rather
+///   than truncating.</item>
+/// </list>
 /// </summary>
-public sealed class RemoteResolver
+public sealed class KeyedFetch
 {
     private readonly IRemoteQueryClient client;
-    private readonly ResolveCache cache;
-    private readonly SemiJoinCache semiJoinIds;
+    private readonly OwnerFetchCache cache;
     private readonly OxQLOptions options;
 
-    public RemoteResolver(IRemoteQueryClient client, ResolveCache cache, OxQLOptions options, SemiJoinCache? semiJoinIds = null)
+    /// <summary>A keyed fetch through <paramref name="client"/>, caching owner answers in <paramref name="cache"/>.</summary>
+    public KeyedFetch(IRemoteQueryClient client, OwnerFetchCache cache, OxQLOptions options)
     {
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.semiJoinIds = semiJoinIds ?? new SemiJoinCache(this.options);
     }
 
     /// <summary>The service key a target entity is owned by: its namespace, the host's <c>InternalHosts</c> key.</summary>
     public static string ServiceKeyOf(string targetEntity) => targetEntity.Split('.')[0];
 
-    // ---- semi-join (before the page) --------------------------------------------------------
+    // ---- by condition: the semi-join, before the page ---------------------------------------
 
     /// <summary>
     /// Fills every semi-join slot with the ids the owner selects for the leaf's condition.
@@ -65,7 +70,7 @@ public sealed class RemoteResolver
     /// executes something else instead.
     /// </para>
     /// </summary>
-    public async Task<Refusal?> SemiJoinAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    public async Task<Refusal?> ByConditionAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
         var slots = compiled.SemiJoins;
 
@@ -84,7 +89,7 @@ public sealed class RemoteResolver
 
         foreach (var slot in slots)
         {
-            if (semiJoinIds.TryGet(CacheKeyOf(slot, organisation, pageSize), out var cached))
+            if (cache.TryGetKeys(CacheKeyOf(slot, organisation, pageSize), out var cached))
                 Fill(slot, cached);
             else
                 pending.Add(slot);
@@ -93,15 +98,15 @@ public sealed class RemoteResolver
         if (pending.Count == 0)
             return null;
 
-        var plans = pending.ToDictionary(slot => slot, slot => new SlotPlan(ServiceKeyOf(TargetOf(slot))));
+        var plans = pending.ToDictionary(slot => slot, slot => new SlotPlan(ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))));
 
         // Round one: the first page of every pending slot, with the count that decides whether
         // asking for the rest is worth a round trip at all.
         foreach (var group in pending.GroupBy(slot => plans[slot].Service, StringComparer.Ordinal))
         {
             var members = group.ToList();
-            var queries = members.Select(slot => SemiJoinQuery(slot, pageSize, offset: 0, count: true)).ToList();
-            var outcome = await CallInBatchesAsync(group.Key, queries, DeadlineBudget(deadline), cancellationToken).ConfigureAwait(false);
+            var queries = members.Select(slot => OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true)).ToList();
+            var outcome = await CallInBatchesAsync(group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
                 return Unanswered(group.Key, outcome);
@@ -113,7 +118,7 @@ public sealed class RemoteResolver
                 var result = index < outcome.Results.Count ? outcome.Results[index] : null;
 
                 if (result is null || !Succeeded(result))
-                    return Refused(result, TargetOf(slot), StageIndexOf(compiled.Bound, slot));
+                    return Refused(result, OwnerQueryBuilder.TargetOf(slot), StageIndexOf(compiled.Bound, slot));
 
                 var total = CountOf(result);
 
@@ -125,7 +130,7 @@ public sealed class RemoteResolver
                 var full = Take(plan, result, slot, pageSize);
 
                 if (full is null)
-                    return WithoutKey(TargetOf(slot), TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+                    return WithoutKey(OwnerQueryBuilder.TargetOf(slot), OwnerQueryBuilder.TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
 
                 if (full == false)
                     continue;
@@ -163,9 +168,9 @@ public sealed class RemoteResolver
             var calls = wave.GroupBy(entry => plans[entry.Slot].Service, StringComparer.Ordinal).Select(async group =>
             {
                 var entries = group.ToList();
-                var queries = entries.Select(entry => SemiJoinQuery(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
+                var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
 
-                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(group.Key, queries, DeadlineBudget(deadline), cancellationToken).ConfigureAwait(false));
+                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(group.Key, queries, Budget(deadline), cancellationToken).ConfigureAwait(false));
             }).ToList();
 
             await Task.WhenAll(calls).ConfigureAwait(false);
@@ -182,7 +187,7 @@ public sealed class RemoteResolver
                     var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
 
                     if (result is null || !Succeeded(result))
-                        return Refused(result, TargetOf(slot), StageIndexOf(compiled.Bound, slot));
+                        return Refused(result, OwnerQueryBuilder.TargetOf(slot), StageIndexOf(compiled.Bound, slot));
 
                     if (plan.Ids.Count > cap)
                         return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
@@ -190,7 +195,7 @@ public sealed class RemoteResolver
                     var full = Take(plan, result, slot, pageSize);
 
                     if (full is null)
-                        return WithoutKey(TargetOf(slot), TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+                        return WithoutKey(OwnerQueryBuilder.TargetOf(slot), OwnerQueryBuilder.TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
 
                     if (full == true && plan.Indeterminate && offset + pageSize <= lastOffset)
                         plan.Queue.Enqueue(offset + pageSize);
@@ -204,7 +209,7 @@ public sealed class RemoteResolver
                 return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
 
             Fill(slot, plan.Ids);
-            semiJoinIds.Set(CacheKeyOf(slot, organisation, pageSize), plan.Ids);
+            cache.SetKeys(CacheKeyOf(slot, organisation, pageSize), plan.Ids);
         }
 
         return null;
@@ -224,7 +229,6 @@ public sealed class RemoteResolver
         public bool Indeterminate { get; set; }
     }
 
-    /// <summary>Adds one owner page to a plan; true when the page was full, so another may follow.</summary>
     /// <summary>Adds the owner's page of ids to the plan; true when the page was full, null when a row lacks the target field.</summary>
     private static bool? Take(SlotPlan plan, JsonNode result, SemiJoinSlot slot, int pageSize)
     {
@@ -238,15 +242,12 @@ public sealed class RemoteResolver
         return page.Count >= pageSize;
     }
 
-    private static string TargetFieldOf(SemiJoinSlot slot) =>
-        ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference.Path?.Reference?.TargetField ?? "id";
-
     /// <summary>
     /// The cache key of a slot: the organisation and the first-page query the owner is sent, which
     /// between them determine every wire value the owner answers with.
     /// </summary>
     private static string CacheKeyOf(SemiJoinSlot slot, Guid organisation, int pageSize) =>
-        SemiJoinCache.KeyOf(organisation, SemiJoinQuery(slot, pageSize, offset: 0, count: true));
+        OwnerFetchCache.KeyOf(organisation, OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true));
 
     /// <summary>Fills a slot with the owner's wire values, encoded as this slot's reference member is stored.</summary>
     private static void Fill(SemiJoinSlot slot, IReadOnlyList<string> values)
@@ -257,25 +258,13 @@ public sealed class RemoteResolver
             slot.Ids.Add(OwnerValueToBson(value, reference));
     }
 
-    /// <summary>The target entity a semi-join leaf reaches through.</summary>
-    private static string TargetOf(SemiJoinSlot slot) => ((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity;
-
-    /// <summary>What is left of the phase for one call, under the per-call ceiling.</summary>
-    private TimeSpan DeadlineBudget(DateTime deadline)
-    {
-        var left = deadline - DateTime.UtcNow;
-        var ceiling = TimeSpan.FromMilliseconds(options.Execution.EffectiveResolveTimeoutMs);
-
-        return left <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : left < ceiling ? left : ceiling;
-    }
-
     private static Refusal Unanswered(string service, CallOutcome outcome) =>
         Refusal.NotExecutable(Codes.ResolveUnavailable, outcome.Status is { } status
             ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
             : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.");
 
     private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
-        Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{TargetOf(slot)}'; narrow it.", stage);
+        Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{OwnerQueryBuilder.TargetOf(slot)}'; narrow it.", stage);
 
     /// <summary>The count an owner reported for a page, when one was asked for.</summary>
     private static (long Value, bool Capped)? CountOf(JsonNode result)
@@ -286,11 +275,10 @@ public sealed class RemoteResolver
         return (total.GetValue<long>(), info["totalCountCapped"]?.GetValue<bool>() == true);
     }
 
-    /// <summary>The target field's wire values of one owner page.</summary>
     /// <summary>The owner's ids in wire form, or null when a row does not carry the target field the host projected.</summary>
     private static List<string>? IdsOf(JsonNode result, SemiJoinSlot slot)
     {
-        var field = TargetFieldOf(slot);
+        var field = OwnerQueryBuilder.TargetFieldOf(slot);
         var values = new List<string>();
 
         foreach (var item in result["items"]!.AsArray())
@@ -305,44 +293,10 @@ public sealed class RemoteResolver
         return values;
     }
 
-    private static QueryRequest SemiJoinQuery(SemiJoinSlot slot, int pageSize, int offset, bool count)
-    {
-        var remote = (ShapeNode.Remote)slot.Leaf.Path.Root;
-        var alias = remote.StoragePrefix;
-        var relative = slot.Leaf.Path.Wire.StartsWith(alias + ".", StringComparison.Ordinal) ? slot.Leaf.Path.Wire[(alias.Length + 1)..] : slot.Leaf.Path.Wire;
-        var field = remote.Reference.Path?.Reference?.TargetField ?? "id";
-        var operand = slot.Leaf.Operand is BoundOperand.Raw raw ? raw.Value : JsonSerializer.SerializeToElement((object?)null);
-
-        var condition = new FilterCondition
-        {
-            Path = relative,
-            Op = slot.Leaf.Op,
-            Value = operand,
-            // The owner binds the comparison under its own default; only what the caller wrote travels.
-            Options = slot.Leaf.IgnoreCase switch
-            {
-                true => new FilterConditionOptions { IgnoreCase = true },
-                false => new FilterConditionOptions { CaseSensitive = true },
-                null => null,
-            },
-        };
-
-        return new QueryRequest
-        {
-            EntityType = remote.TargetEntity,
-            Pipeline =
-            [
-                new PipelineStage { Match = new MatchStage { Condition = condition }, Keys = ["match"] },
-                new PipelineStage { Project = new ProjectStage { Fields = new Dictionary<string, int>(StringComparer.Ordinal) { [field] = 1 } }, Keys = ["project"] },
-                new PipelineStage { Page = new PageStage { Limit = pageSize, Offset = offset == 0 ? null : offset, IncludeTotalCount = count }, Keys = ["page"] },
-            ],
-        };
-    }
-
-    // ---- resolve (after the page) -----------------------------------------------------------
+    // ---- by keys: the resolve, after the page -----------------------------------------------
 
     /// <summary>Resolves every remote stage over the trimmed page rows.</summary>
-    public async Task<ResolveResult> ResolveAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    public async Task<ResolveResult> ByKeysAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
         var stages = compiled.RemoteResolves;
         var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
@@ -370,7 +324,7 @@ public sealed class RemoteResolver
             foreach (var plan in group)
                 foreach (var chunk in plan.Chunks)
                 {
-                    queries.Add(ResolveQuery(plan.Stage, chunk));
+                    queries.Add(OwnerQueryBuilder.ByKeys(plan.Stage, chunk));
                     owners.Add((plan, chunk));
                 }
 
@@ -455,15 +409,15 @@ public sealed class RemoteResolver
 
         public int CacheHits { get; set; }
 
-        public string CacheKey(string key) => ResolveCache.KeyOf(Stage.TargetEntity, Stage.TargetField, organisation, key, selectHash, filterHash);
+        public string CacheKey(string key) => OwnerFetchCache.KeyOf(Stage.TargetEntity, Stage.TargetField, organisation, key, selectHash, filterHash);
     }
 
     private StagePlan Plan(BoundStage.Resolve stage, IReadOnlyList<BsonDocument> rows, Guid organisation, List<Diagnostic> diagnostics)
     {
         // The select is hashed as a JSON array: a joined string would give two different lists
         // whose paths contain the separator the same hash.
-        var selectHash = ResolveCache.HashOf(stage.RemoteSelect is null ? null : JsonSerializer.Serialize(stage.RemoteSelect));
-        var filterHash = ResolveCache.HashOf(stage.RemoteFilter?.GetRawText());
+        var selectHash = OwnerFetchCache.HashOf(stage.RemoteSelect is null ? null : JsonSerializer.Serialize(stage.RemoteSelect));
+        var filterHash = OwnerFetchCache.HashOf(stage.RemoteFilter?.GetRawText());
         var plan = new StagePlan(stage, selectHash, filterHash, organisation);
         var misses = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -507,37 +461,6 @@ public sealed class RemoteResolver
             plan.Chunks.Add(misses.Skip(start).Take(chunk).ToList());
 
         return plan;
-    }
-
-    private static QueryRequest ResolveQuery(BoundStage.Resolve stage, IReadOnlyList<string> keys)
-    {
-        var pipeline = new List<PipelineStage>
-        {
-            new()
-            {
-                Match = new MatchStage { Condition = new FilterCondition { Path = stage.TargetField, Op = "in", Value = JsonSerializer.SerializeToElement(keys) } },
-                Keys = ["match"],
-            },
-        };
-
-        if (stage.RemoteFilter is { } filter && filter.ValueKind == JsonValueKind.Object)
-            pipeline.Add(new PipelineStage { Match = JsonSerializer.Deserialize<MatchStage>(filter.GetRawText(), OxQLJson.Wire)!, Keys = ["match"] });
-
-        // A projection always travels. With a select it is the caller's; without one it is
-        // the reserved $default key, which the owner expands to its own entity's key and
-        // display members — the pair the local half of this stage keeps. Without a projection
-        // the owner answers with whole documents, organizationId and every other member
-        // included, to a caller that wanted a label.
-        var projection = stage.RemoteSelect is { Count: > 0 } select
-            ? select.ToDictionary(path => path, _ => 1, StringComparer.Ordinal)
-            : new Dictionary<string, int>(StringComparer.Ordinal) { ["$default"] = 1 };
-
-        projection[stage.TargetField] = 1;
-        pipeline.Add(new PipelineStage { Project = new ProjectStage { Fields = projection }, Keys = ["project"] });
-
-        pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count }, Keys = ["page"] });
-
-        return new QueryRequest { EntityType = stage.TargetEntity, Pipeline = pipeline };
     }
 
     // ---- values ---------------------------------------------------------------------------
@@ -607,6 +530,10 @@ public sealed class RemoteResolver
     /// <summary>The results of a call, or why there are none; <see cref="Status"/> is set when the owner was reached and answered with an HTTP error.</summary>
     private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null);
 
+    /// <summary>What is left of a phase for one call, under the per-call ceiling.</summary>
+    private TimeSpan Budget(DateTime deadline) => Budget(deadline - DateTime.UtcNow);
+
+    /// <summary>What one call may take: the time left, under the per-call ceiling, never less than a millisecond.</summary>
     private TimeSpan Budget(TimeSpan remaining)
     {
         var ceiling = TimeSpan.FromMilliseconds(options.Execution.EffectiveResolveTimeoutMs);

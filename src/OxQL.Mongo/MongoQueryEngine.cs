@@ -25,7 +25,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IAggregateRunner runner;
     private readonly CursorCodec cursors;
     private readonly OxQLOptions options;
-    private readonly RemoteResolver? remote;
+    private readonly KeyedFetch? remote;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -39,13 +39,13 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         ILogger<MongoQueryEngine>? logger = null,
         bool includeErrorDetails = false,
         IIndexSource? indexes = null,
-        ResolveCache? cache = null)
+        OwnerFetchCache? cache = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.remote = remote is null ? null : new RemoteResolver(remote, cache ?? new ResolveCache(this.options), this.options);
+        this.remote = remote is null ? null : new KeyedFetch(remote, cache ?? new OwnerFetchCache(this.options), this.options);
         this.indexes = indexes;
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
@@ -81,9 +81,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
         if (compiled.SemiJoins.Count > 0)
         {
-            var refused = await remote!.SemiJoinAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var refused = await remote!.ByConditionAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
-            resolveCalls += compiled.SemiJoins.Select(slot => RemoteResolver.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
+            resolveCalls += compiled.SemiJoins.Select(slot => KeyedFetch.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
 
             if (refused is not null)
             {
@@ -140,7 +140,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         if (compiled.RemoteResolves.Count > 0)
         {
-            var resolution = await remote!.ResolveAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var resolution = await remote!.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;
@@ -314,7 +314,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// there is a member the row does not hold — which is a null, and orders with one.
     /// </summary>
     private static BsonValue ValueAt(BsonDocument document, string storage) =>
-        RemoteResolver.ValueAt(document, storage) ?? BsonNull.Value;
+        KeyedFetch.ValueAt(document, storage) ?? BsonNull.Value;
 
     /// <summary>Removes a dotted storage path from a document; a contract 1 row loses what only the paging read.</summary>
     private static void RemoveAt(BsonDocument document, string storage)

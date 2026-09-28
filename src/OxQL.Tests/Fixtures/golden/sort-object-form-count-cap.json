@@ -1,0 +1,30 @@
+{
+  "description": "A sort in both forms with a case-sensitive entry, and a page with a numeric count cap.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "sort": [
+        {
+          "number": {
+            "direction": "desc",
+            "caseSensitive": true
+          }
+        },
+        {
+          "when": "desc"
+        },
+        {
+          "amount": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 5,
+        "includeTotalCount": 500
+      }
+    }
+  ],
+  "fingerprint": "sha256:1d7ac3bd2a615a207f5c1c920d859035f4460004a4adeaf67eadbcfc63a3fa4f",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"sort\":[{\"path\":\"Number\",\"direction\":\"desc\",\"caseSensitive\":true},{\"path\":\"When\",\"direction\":\"desc\",\"caseSensitive\":true},{\"path\":\"Amount\",\"direction\":\"asc\",\"caseSensitive\":true}]},{\"page\":{\"limit\":5,\"offset\":0,\"includeTotalCount\":500}}],\"paging\":\"keyset\",\"page\":{\"limit\":5,\"offset\":0,\"cursor\":null,\"includeTotalCount\":500}}"
+}

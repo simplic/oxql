@@ -1,0 +1,15 @@
+{
+  "description": "A lookup with no select, filter or limit: the bound default limit and select are rendered.",
+  "entity": "probe.customer",
+  "pipeline": [
+    {
+      "lookup": {
+        "from": "probe.order",
+        "path": "customerId",
+        "as": "orders"
+      }
+    }
+  ],
+  "fingerprint": "sha256:f68b07c94587c093d7a8a9db36e49eebe142eed7212227684b431297dd55ea9f",
+  "canonical": "{\"entity\":\"probe.customer\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"lookup\":{\"from\":\"probe.order\",\"localField\":\"_id\",\"foreignField\":\"CustomerId\",\"as\":\"orders\",\"select\":[\"_id\",\"Number\"],\"filter\":null,\"limit\":100}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

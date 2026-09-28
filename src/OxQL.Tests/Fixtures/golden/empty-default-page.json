@@ -1,0 +1,7 @@
+{
+  "description": "No stages: the scope and the default keyset page.",
+  "entity": "probe.order",
+  "pipeline": [],
+  "fingerprint": "sha256:9bcdf0c824c19f844f2b30f37aa144a6acfa45698708bb9f148295522919fca3",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

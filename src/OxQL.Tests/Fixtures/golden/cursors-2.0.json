@@ -1,0 +1,122 @@
+{
+  "description": "Cursors minted by OxQL 2.0 (signing key BindHost.SigningKey) over the fingerprints of the named golden renders. 2.1 must decode every one.",
+  "cursors": [
+    {
+      "case": "empty-default-page",
+      "cursor": "eyJmIjoic2hhMjU2OjliY2RmMGM4MjRjMTlmODQ0ZjJiMzBmMzdhYTE0NGE2YWNmYTQ1Njk4NzA4YmI5ZjE0ODI5NTUyMjkxOWZjYTMiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.TTz-Kh-DLZesGG12DtDJCQ8WVn8TaCk2QrUwJjjbMAw",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    },
+    {
+      "case": "sort-object-form-count-cap",
+      "cursor": "eyJmIjoic2hhMjU2OjFkN2FjM2JkMmE2MTVhMjA3ZjVjMWM5MjBkODU5MDM1ZjQ0NjAwMDRhNGFkZWFmNjdlYWRiY2ZjNjNhM2ZhNGYiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJudW1iZXIiLCJkIjoiZGVzYyIsImIiOiJcdTAwMjJhYmNcdTAwMjIifSx7InAiOiJ3aGVuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkZGF0ZVx1MDAyMiA6IHsgXHUwMDIyJG51bWJlckxvbmdcdTAwMjIgOiBcdTAwMjIxNzY3MzIzMDQ1MDAwXHUwMDIyIH0gfSJ9LHsicCI6ImFtb3VudCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkbnVtYmVyRGVjaW1hbFx1MDAyMiA6IFx1MDAyMjEyLjUwXHUwMDIyIH0ifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.X5V3RPZlVRRNmXkjFJvCfwQ1wK-hVAbOSVHG2QQb6J8",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "number",
+          "direction": "desc",
+          "value": "\"abc\""
+        },
+        {
+          "path": "when",
+          "direction": "desc",
+          "value": "{ \"$date\" : { \"$numberLong\" : \"1767323045000\" } }"
+        },
+        {
+          "path": "amount",
+          "direction": "asc",
+          "value": "{ \"$numberDecimal\" : \"12.50\" }"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    },
+    {
+      "case": "resolve-local",
+      "cursor": "eyJmIjoic2hhMjU2OmFhZGVhMTQ3ZDY4MzMxZTg1YTBhNzM0NGIxMWM5NmM0N2Q2ZmU1OTVlNGE5Y2YxY2JlY2VhMzJmNTU5ZmY5MGUiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJjdXN0Lm5hbWUiLCJkIjoiYXNjIiwiYiI6Im51bGwifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.cjjBZ10sZojEZPtAUKt6yo_FSBOyCDEhjoH5kF9rlAk",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "cust.name",
+          "direction": "asc",
+          "value": "null"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    },
+    {
+      "case": "lookup-full",
+      "cursor": "eyJmIjoic2hhMjU2OmFmMDcyNThkNDkyNjlkMDBiOTNjYTNiMmZmZjhiYmE2OWQzZmY5M2E0ZDVhZDRmYzZkMDMzZmJmYWM0NTU0N2IiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.kLGqk5Eq6Z-7nXzTlQalT22H6sAGs_BwAEw28SrwV0c",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    },
+    {
+      "case": "resolve-remote-semi-join",
+      "cursor": "eyJmIjoic2hhMjU2OjJlNzMzZWFhNmY0MzUxNmZiYmJhNWYzYmIzMjRiZDQ4Njc2NWI2OGNjOGZhOWVhMTg3MzE1ZGY3ZmYyY2Q5YmUiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.jxc5Sma5euKdXz81AsnMQUcj4aKRiucCuJN9EnhjOik",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    },
+    {
+      "case": "unwind-offset-paging",
+      "cursor": "eyJmIjoic2hhMjU2OjlhYjNmMTc3OWI3NTg0YzVkMjY3NTg2MjI3ZDgyNDZhZTk1MDdkMzk4ZjQzZWE1YzJlYjljYTA5NjIzYzA0NGMiLCJtIjoibyIsIm8iOjMwLCJ2IjpbXX0.YZmoP9dRQL5QUYrNTTQF5q77utVVXbAIyYP902CUHl8",
+      "mode": "offset",
+      "offset": 30,
+      "fields": []
+    },
+    {
+      "case": "group-composite",
+      "cursor": "eyJmIjoic2hhMjU2OmNhZmI2NTY1ZWUwOTZhNjU1YWFkNzEwMDI2N2JhOTgwNGE0YjMyMjRiMGY3NDMxNzZiODczMjBiYjg2OTAwMDIiLCJtIjoibyIsIm8iOjUsInYiOltdfQ.MXh9SFOEG2iRT9O-3nt7_Ga5sRu_AjBihu42J6AEUrA",
+      "mode": "offset",
+      "offset": 5,
+      "fields": []
+    },
+    {
+      "case": "contract-1-match-sort",
+      "cursor": "eyJmIjoic2hhMjU2OmViMTRhYWZlYjZiODUzY2E4Y2ExYzBjMjZmNTEyZTU1N2JhZjBmZjI3MDQ1MGQ1ZjI5MjA2NTFjZDU4OTRkODMiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJOdW1iZXIiLCJkIjoiYXNjIiwiYiI6Ilx1MDAyMnhcdTAwMjIifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.sBQyn8HrpFw8BTtlTBb039dFTI1VDG0bJDcZKniuAM8",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "Number",
+          "direction": "asc",
+          "value": "\"x\""
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    }
+  ]
+}

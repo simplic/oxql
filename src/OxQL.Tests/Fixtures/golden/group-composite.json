@@ -1,0 +1,58 @@
+{
+  "description": "A group over a path and a dateTrunc key with every accumulator form, sorted and counted.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "group": {
+        "by": [
+          {
+            "path": "state",
+            "as": "st"
+          },
+          {
+            "dateTrunc": {
+              "path": "when",
+              "unit": "week",
+              "timezone": "Europe/Berlin"
+            },
+            "as": "wk"
+          }
+        ],
+        "fields": {
+          "n": {
+            "count": true
+          },
+          "total": {
+            "sum": "amount"
+          },
+          "kinds": {
+            "countDistinct": "number"
+          },
+          "x": {
+            "max": {
+              "add": [
+                "ratio",
+                1
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "n": "desc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 5,
+        "includeTotalCount": true
+      }
+    }
+  ],
+  "fingerprint": "sha256:cafb6565ee096a655aad7100267ba9804a4b3224b0f743176b87320bb8690002",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"group\":{\"by\":[{\"as\":\"st\",\"path\":\"State\",\"dateTrunc\":null},{\"as\":\"wk\",\"path\":null,\"dateTrunc\":{\"path\":\"When\",\"unit\":\"week\",\"timezone\":\"Europe/Berlin\",\"weekStart\":\"monday\"}}],\"fields\":[{\"as\":\"n\",\"function\":\"count\",\"argument\":null},{\"as\":\"total\",\"function\":\"sum\",\"argument\":{\"path\":\"Amount\"}},{\"as\":\"kinds\",\"function\":\"countDistinct\",\"argument\":{\"path\":\"Number\"}},{\"as\":\"x\",\"function\":\"max\",\"argument\":{\"add\":[{\"path\":\"Ratio\"},{\"literal\":{\"$numberLong\":\"1\"}}]}}]}},{\"sort\":[{\"path\":\"n\",\"direction\":\"desc\",\"caseSensitive\":true},{\"path\":\"st\",\"direction\":\"asc\",\"caseSensitive\":true},{\"path\":\"wk\",\"direction\":\"asc\",\"caseSensitive\":true}]},{\"page\":{\"limit\":5,\"offset\":0,\"includeTotalCount\":true}}],\"paging\":\"offset\",\"page\":{\"limit\":5,\"offset\":0,\"cursor\":null,\"includeTotalCount\":true}}"
+}

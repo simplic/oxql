@@ -1,0 +1,14 @@
+{
+  "description": "A local resolve through a reference id with no select or filter.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "resolve": {
+        "path": "supplierId",
+        "as": "sup"
+      }
+    }
+  ],
+  "fingerprint": "sha256:deb06bd995a41e6aad7b85f9e4cca0b1c29dd7923475ac09a96bd3fd7620022a",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"resolve\":{\"path\":\"SupplierId\",\"as\":\"sup\",\"target\":\"probe.supplier\",\"targetField\":\"id\",\"remote\":false,\"select\":[\"_id\",\"MatchCode\"],\"filter\":null}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

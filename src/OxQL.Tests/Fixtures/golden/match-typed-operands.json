@@ -1,0 +1,53 @@
+{
+  "description": "A match over every operand form: typed scalars, a set, the decimal tolerant pair, null and exists, a case-sensitive option.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "195fb742-82b3-405e-b77b-42838eb0aaa9"
+        },
+        "state": {
+          "nin": [
+            "Open"
+          ]
+        },
+        "flag": {
+          "eq": false
+        },
+        "when": {
+          "gte": "2026-09-05T00:00:00Z"
+        },
+        "day": {
+          "lt": "2026-10-01"
+        },
+        "big": {
+          "in": [
+            "1",
+            2
+          ]
+        },
+        "amount": {
+          "eq": "12.50"
+        },
+        "note": {
+          "eq": null
+        },
+        "link": {
+          "exists": false
+        },
+        "number": {
+          "startsWith": "A",
+          "options": {
+            "caseSensitive": true
+          }
+        },
+        "qrCode": {
+          "contains": "q"
+        }
+      }
+    }
+  ],
+  "fingerprint": "sha256:41c8ad161e71c40661530b36096b11a69ebfc0fa412849840cd622f8cf833b89",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"match\":{\"and\":[{\"path\":\"_id\",\"op\":\"eq\",\"operand\":{\"$binary\":{\"base64\":\"GV\\u002B3QoKzQF63e0KDjrCqqQ==\",\"subType\":\"04\"}},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"State\",\"op\":\"nin\",\"operand\":{\"set\":[{\"$numberInt\":\"0\"}]},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":false,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"When\",\"op\":\"gte\",\"operand\":{\"$date\":{\"$numberLong\":\"1788566400000\"}},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Day\",\"op\":\"lt\",\"operand\":{\"$date\":{\"$numberLong\":\"1790812800000\"}},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Big\",\"op\":\"in\",\"operand\":{\"set\":[{\"$numberLong\":\"1\"},{\"$numberLong\":\"2\"}]},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Amount\",\"op\":\"eq\",\"operand\":{\"tolerant\":[{\"$numberDecimal\":\"12.50\"},{\"$regularExpression\":{\"pattern\":\"^12\\\\.50*$\",\"options\":\"\"}}]},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Note\",\"op\":\"eq\",\"operand\":null,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Link\",\"op\":\"exists\",\"operand\":false,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Number\",\"op\":\"startsWith\",\"operand\":\"A\",\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"QRCode\",\"op\":\"contains\",\"operand\":\"q\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}]}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

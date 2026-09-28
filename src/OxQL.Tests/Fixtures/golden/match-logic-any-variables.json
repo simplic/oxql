@@ -1,0 +1,50 @@
+{
+  "description": "Logical groups, an any over an array and a variable in a local condition.",
+  "entity": "probe.order",
+  "variables": {
+    "max": 5
+  },
+  "pipeline": [
+    {
+      "match": {
+        "or": [
+          {
+            "flag": {
+              "eq": true
+            }
+          },
+          {
+            "not": {
+              "and": [
+                {
+                  "count": {
+                    "gt": 1
+                  }
+                },
+                {
+                  "count": {
+                    "lt": {
+                      "$var": "max"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "items": {
+          "any": {
+            "quantity": {
+              "gt": 1
+            },
+            "price.currency": {
+              "eq": "EUR"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "fingerprint": "sha256:c0dc6dc27a0d5dc2677ace46eeedc10df9abe640f86eedd170973c0fe7ca4251",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"match\":{\"and\":[{\"or\":[{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":true,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"not\":{\"and\":[{\"path\":\"Count\",\"op\":\"gt\",\"operand\":{\"$numberLong\":\"1\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Count\",\"op\":\"lt\",\"operand\":{\"$numberLong\":\"5\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false}]}}]},{\"any\":{\"path\":\"Items\",\"inner\":{\"and\":[{\"path\":\"Quantity\",\"op\":\"gt\",\"operand\":{\"$numberLong\":\"1\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Price.Currency\",\"op\":\"eq\",\"operand\":\"EUR\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}]}}}]}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

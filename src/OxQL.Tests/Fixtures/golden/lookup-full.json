@@ -1,0 +1,36 @@
+{
+  "description": "A lookup with select, filter and limit, read by a later match, with a counted page.",
+  "entity": "probe.customer",
+  "pipeline": [
+    {
+      "lookup": {
+        "from": "probe.order",
+        "path": "customerId",
+        "as": "orders",
+        "select": [
+          "number"
+        ],
+        "filter": {
+          "flag": {
+            "eq": true
+          }
+        },
+        "limit": 5
+      }
+    },
+    {
+      "match": {
+        "orders.number": {
+          "eq": "x"
+        }
+      }
+    },
+    {
+      "page": {
+        "includeTotalCount": true
+      }
+    }
+  ],
+  "fingerprint": "sha256:af07258d49269d00b93ca3b2fff8bba69d3ff93a4d5ad4fc6d033fbfac45547b",
+  "canonical": "{\"entity\":\"probe.customer\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"lookup\":{\"from\":\"probe.order\",\"localField\":\"_id\",\"foreignField\":\"CustomerId\",\"as\":\"orders\",\"select\":[\"_id\",\"Number\"],\"filter\":{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":true,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},\"limit\":5}},{\"match\":{\"path\":\"orders.Number\",\"op\":\"eq\",\"operand\":\"x\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":true}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":true}}"
+}

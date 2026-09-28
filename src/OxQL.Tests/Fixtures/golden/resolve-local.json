@@ -1,0 +1,36 @@
+{
+  "description": "A local resolve with select and filter, sorted by the resolved member.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "resolve": {
+        "path": "customerId",
+        "as": "cust",
+        "select": [
+          "name"
+        ],
+        "filter": {
+          "matchCode": {
+            "eq": "m"
+          }
+        }
+      }
+    },
+    {
+      "match": {
+        "cust.name": {
+          "eq": "x"
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "cust.name": "asc"
+        }
+      ]
+    }
+  ],
+  "fingerprint": "sha256:aadea147d68331e85a0a7344b11c96c47d6fe595e4a9cf1cbecea32f559ff90e",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"resolve\":{\"path\":\"CustomerId\",\"as\":\"cust\",\"target\":\"probe.customer\",\"targetField\":\"id\",\"remote\":false,\"select\":[\"_id\",\"Name\"],\"filter\":{\"path\":\"MatchCode\",\"op\":\"eq\",\"operand\":\"m\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}}},{\"match\":{\"path\":\"cust.Name\",\"op\":\"eq\",\"operand\":\"x\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}},{\"sort\":[{\"path\":\"cust.Name\",\"direction\":\"asc\",\"caseSensitive\":false}]},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":false}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":false}}"
+}

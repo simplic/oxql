@@ -7,7 +7,7 @@
     <RootNamespace>OxQL.Model</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>2.0.126.924</Version>
+    <Version>2.1.0.0</Version>
     <Description>The OxQL entity model: one immutable description of every queryable entity, built from the MongoDB driver's serializer registry or from an Ox Schema document.</Description>
   </PropertyGroup>
 

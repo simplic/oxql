@@ -25,7 +25,7 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any"];
+    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "oxql.2.1"];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
 
@@ -102,31 +102,31 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_four_plus_exactly_the_features_a_host_has_switched_on()
+    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_five_plus_exactly_the_features_a_host_has_switched_on()
     {
-        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "compat.v1"]).ToList();
+        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "explain", "compat.v1"]).ToList();
 
         foreach (var service in LabService.All)
             Strings((await (await Lab.ClientAsync(service)).HealthAsync()).Body!["capabilities"]).Should().Equal(expectedFleet, service.Key);
 
         var shared = await CorpusFleet.SharedAsync();
 
-        // Y5: explain is published exactly when it is on, and the route answers to match.
-        var explain = await shared.Fleet.VariantAsync(LabService.Transport, "explain", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "true" });
-        using (var client = explain.Server.CreateClient())
+        // Y5: explain is published exactly when it is on (the default), and the route answers to match.
+        var explainOff = await shared.Fleet.VariantAsync(LabService.Transport, "explain-off", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "false" });
+        using (var client = explainOff.Server.CreateClient())
         {
             var body = JsonNode.Parse(await client.GetStringAsync("OxQL/health"))!;
-            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "explain", "compat.v1"]));
+            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "compat.v1"]));
         }
 
         // Y6: compat.v1 is published exactly when the compat binder is on.
         var noCompat = shared.Variant(LabService.Staff, "b5-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
-        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin"]));
+        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "explain"]));
 
-        // Y4: resolve.remote and semiJoin need a remote query client.
+        // Y4: resolve.remote, semiJoin and resolve.chain need a remote query client.
         await using var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport));
         var bareHealth = await bare.GetAsync("OxQL/health");
-        Strings(bareHealth.Body!["capabilities"]).Should().Equal(Universal.Concat(["compat.v1"]));
+        Strings(bareHealth.Body!["capabilities"]).Should().Equal(Universal.Concat(["explain", "compat.v1"]));
         bareHealth.Body!.AsObject().ContainsKey("remote").Should().BeFalse("a host with no remote client has no remote state to report");
     }
 
@@ -228,17 +228,21 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y22_explain_is_404_while_disabled_and_answers_the_bound_pipeline_without_rows_when_enabled()
+    public async Task Y22_explain_answers_the_bound_pipeline_without_rows_by_default_and_is_404_on_a_host_that_switches_it_off()
     {
         var transport = await Lab.ClientAsync(LabService.Transport);
         var request = """{ "entityType": "transport.shipment", "pipeline": [{ "match": { "shipmentNumber": { "eq": "S-0001" } } }, { "page": { "limit": 1 } }] }""";
 
-        var off = await transport.ExplainHereAsync(request);
-        off.StatusCode.Should().Be(404);
-
-        var on = await transport.ExplainAsync(request);
+        var on = await transport.ExplainHereAsync(request);
         on.StatusCode.Should().Be(200, on.ToString());
         ((JsonObject)on.Body!).ContainsKey("items").Should().BeFalse("explain returns no rows");
+        on.Body!["valid"]!.GetValue<bool>().Should().BeTrue(on.ToString());
+
+        var shared = await CorpusFleet.SharedAsync();
+        var off = await shared.Fleet.VariantAsync(LabService.Transport, "explain-off", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "false" });
+        using var client = off.Server.CreateClient();
+
+        (await client.PostAsync("OxQL/explain", new StringContent(request, System.Text.Encoding.UTF8, "application/json"))).StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
     }
 
     [Fact]

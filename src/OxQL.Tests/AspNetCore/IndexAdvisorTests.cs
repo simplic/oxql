@@ -6,7 +6,7 @@ using Xunit;
 
 namespace OxQL.Tests.AspNetCore;
 
-/// <summary>The index advisory over listIndexes and the two <c>$lookup</c> explain shapes.</summary>
+/// <summary>The static index advisory: the leading match, the sort and every join field matched against index lists.</summary>
 public class IndexAdvisorTests
 {
     private static BsonDocument Index(string name, params (string Field, int Direction)[] keys)
@@ -87,55 +87,68 @@ public class IndexAdvisorTests
     }
 
     [Fact]
-    public void Lookups_are_read_from_both_explain_shapes()
+    public void A_join_is_served_by_an_index_of_the_joined_collection_reached_through_its_scope_equality()
     {
         var stages = new[]
         {
             new BsonDocument("$match", new BsonDocument("OrganizationId", Org)),
-            new BsonDocument("$lookup", new BsonDocument { ["from"] = "customers", ["as"] = "customer__arr" }),
-            new BsonDocument("$lookup", new BsonDocument { ["from"] = "suppliers", ["as"] = "supplier" }),
+            Lookup("orders", "customers", "CustomerId", "orders"),
+            Lookup("suppliers", "suppliers", "_id", "supplier"),
         };
-
-        // The slot-based form reports strategy and indexName inside the winning plan; the pipelined form reports indexesUsed on the stage.
-        var explain = new BsonDocument
+        var joined = new Dictionary<string, IReadOnlyList<BsonDocument>>
         {
-            ["queryPlanner"] = new BsonDocument("winningPlan", new BsonDocument
-            {
-                ["stage"] = "EQ_LOOKUP",
-                ["strategy"] = "IndexedLoopJoin",
-                ["indexName"] = "_id_",
-                ["inputStage"] = new BsonDocument("stage", "IXSCAN"),
-            }),
-            ["stages"] = new BsonArray
-            {
-                new BsonDocument { ["$lookup"] = new BsonDocument("from", "suppliers"), ["indexesUsed"] = new BsonArray { "_id_" } },
-            },
+            ["orders"] = [Index("_id_", ("_id", 1)), Index("org_customer", ("OrganizationId", 1), ("CustomerId", 1))],
+            ["suppliers"] = [Index("_id_", ("_id", 1))],
         };
-        var advisory = IndexAdvisor.Advise(stages, [Index("_id_", ("_id", 1))], explain);
+        var advisory = IndexAdvisor.Advise(stages, [Index("_id_", ("_id", 1))], joined);
 
-        var first = Entry(advisory, "lookup:customer__arr");
+        var orders = Entry(advisory, "lookup:orders");
 
-        first["used"]!.GetValue<bool>().Should().BeTrue();
-        first["index"]!.GetValue<string>().Should().Be("_id_");
-        first["note"]!.GetValue<string>().Should().Contain("IndexedLoopJoin");
+        orders["used"]!.GetValue<bool>().Should().BeTrue("CustomerId is reached through the join's own OrganizationId equality");
+        orders["index"]!.GetValue<string>().Should().Be("org_customer");
+        orders["note"]!.GetValue<string>().Should().Contain("orders.CustomerId");
 
-        var second = Entry(advisory, "lookup:supplier");
+        var supplier = Entry(advisory, "lookup:supplier");
 
-        second["used"]!.GetValue<bool>().Should().BeTrue();
-        second["note"]!.GetValue<string>().Should().Contain("pipelined");
+        supplier["used"]!.GetValue<bool>().Should().BeTrue();
+        supplier["index"]!.GetValue<string>().Should().Be("_id_");
     }
 
     [Fact]
-    public void Without_a_server_explain_a_lookup_is_reported_as_unknown()
+    public void A_join_without_an_index_on_its_field_scans_and_one_whose_indexes_were_not_read_is_unknown()
     {
         var stages = new[]
         {
             new BsonDocument("$match", new BsonDocument("OrganizationId", Org)),
-            new BsonDocument("$lookup", new BsonDocument { ["from"] = "customers", ["as"] = "customer" }),
+            Lookup("orders", "customers", "CustomerId", "orders"),
+            Lookup("notes", "customers", "CustomerId", "notes"),
         };
-        var entry = Entry(IndexAdvisor.Advise(stages, [], null), "lookup:customer");
+        var joined = new Dictionary<string, IReadOnlyList<BsonDocument>> { ["orders"] = [Index("_id_", ("_id", 1)), Index("customer_org", ("CustomerId", 1), ("OrganizationId", 1))] };
+        var advisory = IndexAdvisor.Advise(stages, [], joined);
 
-        entry["used"].Should().BeNull();
-        entry["note"]!.GetValue<string>().Should().Contain("unavailable");
+        Entry(advisory, "lookup:orders")["used"]!.GetValue<bool>().Should().BeTrue("an index that starts with the join field serves it");
+
+        var unknown = Entry(advisory, "lookup:notes");
+
+        unknown["used"].Should().BeNull();
+        unknown["note"]!.GetValue<string>().Should().Contain("not known");
+
+        var scanned = Entry(IndexAdvisor.Advise(stages.Take(2).ToList(), [], new Dictionary<string, IReadOnlyList<BsonDocument>> { ["orders"] = [Index("_id_", ("_id", 1))] }), "lookup:orders");
+
+        scanned["used"]!.GetValue<bool>().Should().BeFalse();
+        scanned["note"]!.GetValue<string>().Should().Contain("scans 'orders'");
+        IndexAdvisor.Advise(stages, [], null).Where(line => line["field"]!.GetValue<string>().StartsWith("lookup:", StringComparison.Ordinal))
+            .Should().HaveCount(2).And.OnlyContain(line => line["used"] == null, "without index lists nothing about a join is known");
     }
+
+    /// <summary>A <c>$lookup</c> as the compiler emits it: the scoped sub-pipeline, then the join on <paramref name="foreignField"/>.</summary>
+    private static BsonDocument Lookup(string from, string localField, string foreignField, string alias) =>
+        new("$lookup", new BsonDocument
+        {
+            ["from"] = from,
+            ["localField"] = localField,
+            ["foreignField"] = foreignField,
+            ["pipeline"] = new BsonArray { new BsonDocument("$match", new BsonDocument("OrganizationId", Org)), new BsonDocument("$limit", 101) },
+            ["as"] = alias,
+        });
 }

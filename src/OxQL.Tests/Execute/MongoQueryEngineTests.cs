@@ -221,14 +221,28 @@ public class MongoQueryEngineTests
         var outcome = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]"""), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        explain.Bound["entity"]!.GetValue<string>().Should().Be(Order);
+        explain.Valid.Should().BeTrue();
+        explain.Bound!["entity"]!.GetValue<string>().Should().Be(Order);
         explain.Stages.Should().HaveCount(4);
         explain.Count.Should().HaveCount(4);
+        explain.Steps.Select(step => (step.Index, step.Kind, step.Status)).Should().Equal([(0, "match", "ok"), (1, "page", "ok")]);
         runner.Calls.Should().BeEmpty();
 
-        var refused = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]"""), BindHost.Context());
+        // A binding failure is an answer, not a refusal: every error, the steps, no bound form.
+        var invalid = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]"""), BindHost.Context());
+        var answer = invalid.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        refused.Should().BeOfType<ExplainOutcome.Refused>();
+        answer.Valid.Should().BeFalse();
+        answer.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.UnknownPath);
+        answer.Steps.Should().ContainSingle().Which.Status.Should().Be("error");
+        answer.Bound.Should().BeNull();
+        answer.Stages.Should().BeNull();
+        runner.Calls.Should().BeEmpty();
+
+        // Only what stops binding before the stages stays a refusal.
+        var denied = await engine.ExplainAsync(BindHost.Request(Order, "[]"), BindHost.Context(organisation: Guid.Empty));
+
+        denied.Should().BeOfType<ExplainOutcome.Refused>().Which.Refusal.Status.Should().Be(403);
     }
 
     [Fact]

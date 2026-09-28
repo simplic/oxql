@@ -165,7 +165,7 @@ public class CountCapTests
         var outcome = await engine.ExplainAsync(BindHost.Request(Order, Page("500")), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        explain.Bound["page"]!["includeTotalCount"]!.GetValue<int>().Should().Be(500);
+        explain.Bound!["page"]!["includeTotalCount"]!.GetValue<int>().Should().Be(500);
         explain.Count![^2]!["$limit"]!.GetValue<int>().Should().Be(501);
     }
 

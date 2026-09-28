@@ -142,12 +142,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
     }
 
     /// <inheritdoc/>
-    public Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
+    public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, CancellationToken cancellationToken = default) =>
         Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, cancellationToken), cancellationToken);
 
-    private async Task<ExplainOutcome> RunExplainAsync(QueryRequest request, CancellationToken cancellationToken)
+    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, CancellationToken cancellationToken)
     {
-        if (request is null)
+        if (request?.Query is null)
             return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
             {
                 Code = Codes.UnknownStage,
@@ -158,16 +158,26 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         if (context.Contract == 1)
         {
-            var rewrite = Compat(request, context);
+            var rewrite = Compat(request.Query, context);
 
+            // A contract 1 request that does not rewrite is an answer too (DESIGN §4.1): valid false with the errors.
             if (rewrite.Refusal is not null)
-                return new ExplainOutcome.Refused(rewrite.Refusal);
+                return rewrite.Refusal.Status == 400
+                    ? new ExplainOutcome.Success(ExplainResult.Invalid(context.Contract, EngineOf(), rewrite.Refusal.Errors ?? []))
+                    : new ExplainOutcome.Refused(rewrite.Refusal);
 
-            request = rewrite.Request;
+            request = request with { Query = rewrite.Request! };
         }
 
         return await engine.ExplainAsync(request, context, cancellationToken);
     }
+
+    /// <summary>The engine block of an explain answer: the version and this host's capabilities.</summary>
+    private ExplainEngine EngineOf() => new()
+    {
+        Version = EngineCapabilities.Version,
+        Capabilities = EngineCapabilities.Of(engine is IEngineFeatures features && features.RemoteResolve, options.Compat.Enabled, options.Explain.Enabled),
+    };
 
     /// <summary>
     /// Runs <paramref name="work"/> and turns anything it throws into a coded refusal of the

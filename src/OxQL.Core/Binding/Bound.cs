@@ -409,10 +409,53 @@ public sealed record BoundKeyedBy(ResolvedPath Path, IReadOnlyList<BsonValue> Ke
     public string PartitionStorage => ItemStorage is null ? Path.Storage! : ElementAlias + "." + ElementFieldStorage;
 }
 
-/// <summary>The outcome of binding: a pipeline, or the errors.</summary>
+/// <summary>
+/// The outcome of binding: a pipeline, or the errors. Either carries the <see cref="BindTrace"/> of
+/// the stage loop once the entity bound (DESIGN §4.6), so explain answers the shapes of the part
+/// that binds; a refusal before the stage loop (no organisation, unknown entity) carries none.
+/// </summary>
 public abstract record BindOutcome
 {
+    /// <summary>The shape after each stage, when the stage loop ran.</summary>
+    public BindTrace? Trace { get; init; }
+
+    /// <summary>The request bound: <paramref name="Pipeline"/> is what the compiler reads.</summary>
     public sealed record Bound(BoundPipeline Pipeline) : BindOutcome;
 
+    /// <summary>The request did not bind: <paramref name="Refusal"/> carries every error.</summary>
     public sealed record Failed(Refusal Refusal) : BindOutcome;
+}
+
+/// <summary>How a caller stage bound (DESIGN §4.3 <c>steps[].status</c>).</summary>
+public enum StageStatus
+{
+    /// <summary>It bound.</summary>
+    Ok,
+
+    /// <summary>It carries an error of its own.</summary>
+    Error,
+
+    /// <summary>It failed only under an alias an earlier stage failed to create (DESIGN §3.8).</summary>
+    Skipped,
+}
+
+/// <summary>
+/// One caller stage of the stage loop: its kind (null when it names none), its status, and the
+/// shape before and after it. Shapes are immutable, so these are the very instances the binder
+/// folded through; after a failed stage, <see cref="After"/> holds its aliases poisoned.
+/// </summary>
+public sealed record StageTrace(int Index, string? Kind, StageStatus Status, Shape Before, Shape After);
+
+/// <summary>
+/// The stage loop as it ran: the entry shape, every caller stage in order, and the final shape.
+/// The shape before pipeline index <c>at</c> is <see cref="ShapeAt"/> (0 the entry, the pipeline
+/// length the final shape), which describe reads (DESIGN §4.2).
+/// </summary>
+public sealed record BindTrace(Shape Entry, IReadOnlyList<StageTrace> Stages, Shape Final)
+{
+    /// <summary>The shape before pipeline index <paramref name="at"/>; past the last stage, the final shape.</summary>
+    public Shape ShapeAt(int at) =>
+        at <= 0 ? Entry
+        : at <= Stages.Count ? Stages[at - 1].After
+        : Final;
 }

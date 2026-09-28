@@ -126,7 +126,8 @@ public class KeyedFetchByKeysTests
 
         var explained = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "customerIds", "as": "customer", "elements": "first" } }]"""), BindHost.Context());
 
-        explained.Should().BeOfType<ExplainOutcome.Success>("the keyed fetch exists, so a keyed resolve is no longer refused at explain");
+        explained.Should().BeOfType<ExplainOutcome.Success>("the keyed fetch exists, so a keyed resolve is no longer refused at explain")
+            .Which.Result.Valid.Should().BeTrue();
     }
 
     [Fact]

@@ -169,8 +169,11 @@ public sealed class CompatOptions
 /// <summary>The explain endpoint.</summary>
 public sealed class ExplainOptions
 {
-    /// <summary>Whether <c>POST /oxql/explain</c> answers; 404 otherwise.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>
+    /// Whether <c>POST /oxql/explain</c> answers; 404 otherwise. On by default (DESIGN §4.1): explain
+    /// never executes the query and reads the index list only when a request asks for it.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>Every cap a request is checked against. All are published on <c>/oxql/health</c>; the schema publishes the ones a caller can act on in advance.</summary>

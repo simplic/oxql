@@ -98,7 +98,7 @@ public class OxQLController : ControllerBase
             service = "oxql",
             engine = new
             {
-                version = typeof(OxQLController).Assembly.GetName().Version?.ToString(),
+                version = EngineCapabilities.Version,
                 contract = EngineCapabilities.Contract,
             },
             capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
@@ -159,15 +159,20 @@ public class OxQLController : ControllerBase
     }
 
     /// <summary>
-    /// The bound pipeline, the emitted stages, the count stages and the index advisory; 404 unless
-    /// <c>Explain:Enabled</c>. No rows are returned and the count never runs, but for a pipeline
-    /// with a lookup the advisory reads the server's own explain, which executes the page pipeline
-    /// once under the query's time ceiling.
+    /// Everything about a query without running it (DESIGN §4): the body is a plain query or the
+    /// envelope <c>{ query, describe?, remote?, include? }</c>. A query that does not bind is 200
+    /// with <c>valid: false</c> and every error; the bound form and the emitted stages come with a
+    /// valid one. Explain never executes the query; the index advisory reads only the index lists,
+    /// and only with <c>include: ["indexes"]</c>. On by default; 404 while <c>Explain:Enabled</c>
+    /// is off. A malformed body is 400, no organisation 403, a body over the limit 413.
     /// </summary>
     [HttpPost("explain")]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Explain([FromBody] QueryRequest request, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status413PayloadTooLarge)]
+    public async Task<IActionResult> Explain([FromBody] ExplainRequest request, CancellationToken cancellationToken)
     {
         if (!options.Explain.Enabled)
             return NotFound();

@@ -391,14 +391,14 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     // ── leg E: the release-train switches ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task E01_the_default_posture_carries_the_contract_1_binder_and_no_explain_route()
+    public async Task E01_the_default_posture_carries_the_contract_1_binder_and_the_explain_route()
     {
         var client = Conformance();
 
         OwnerFleet.Capabilities(await client.HealthAsync(shallow: true)).Should().Contain("compat.v1");
         (await client.Contract(null).SendAsync(Corpus.Conformance, """[ { "match": { "_id": { "neq": null } } }, { "page": { "limit": 1 } } ]""")).StatusCode
             .Should().Be(200, "a header-less request binds as contract 1, where _id is the key");
-        (await client.ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "page": { "limit": 1 } } ]"""))).StatusCode.Should().Be(404, "explain is off unless a host turns it on");
+        (await client.ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "page": { "limit": 1 } } ]"""))).StatusCode.Should().Be(200, "explain is on unless a host turns it off");
     }
 
     [Fact]
@@ -414,12 +414,17 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
-    public async Task E03_with_explain_on_the_explain_route_answers_the_stages_and_an_advisory()
+    public async Task E03_the_explain_route_answers_the_stages_and_the_advisory_only_when_asked_for_it()
     {
-        var answer = await LoweredPosture().ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "match": { "name": { "eq": "Alpha" } } }, { "page": { "limit": 5 } } ]"""));
+        var query = Json.Request(Corpus.Conformance, """[ { "match": { "name": { "eq": "Alpha" } } }, { "page": { "limit": 5 } } ]""");
 
-        answer.StatusCode.Should().Be(200, answer.ToString());
-        answer.Body!.AsObject().Select(pair => pair.Key).Should().Contain(["stages", "advisory"]);
+        var plain = await LoweredPosture().ExplainHereAsync(query);
+        plain.StatusCode.Should().Be(200, plain.ToString());
+        plain.Body!.AsObject().Select(pair => pair.Key).Should().Contain("stages").And.NotContain("advisory");
+
+        var asked = await LoweredPosture().ExplainHereAsync(new JsonObject { ["query"] = query.DeepClone(), ["include"] = new JsonArray("indexes") });
+        asked.StatusCode.Should().Be(200, asked.ToString());
+        asked.Body!.AsObject().Select(pair => pair.Key).Should().Contain(["stages", "advisory"]);
     }
 
     [Fact]

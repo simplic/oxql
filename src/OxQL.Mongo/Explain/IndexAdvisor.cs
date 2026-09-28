@@ -22,12 +22,13 @@ public sealed record IndexAdvice(string Field, bool? Used, string? Index, string
 }
 
 /// <summary>
-/// The index advisory of an explain: the leading <c>$match</c> fields (the organisation scope,
-/// the cursor predicate and the caller's first match, which the server coalesces) and the
-/// <c>$sort</c> prefix matched against <c>listIndexes</c>, and every <c>$lookup</c> read from
-/// the server's explain in both shapes it takes (<c>EQ_LOOKUP</c> with <c>strategy</c> and
-/// <c>indexName</c>; the pipelined stage with <c>indexesUsed</c>). Pure: the server is read
-/// through <see cref="IIndexSource"/> before this runs.
+/// The opt-in index advisory of an explain (DESIGN §4.1), static: the leading <c>$match</c> fields
+/// (the organisation scope and the caller's first match, which the server coalesces) and the
+/// <c>$sort</c> prefix matched against the collection's <c>listIndexes</c>, and every
+/// <c>$lookup</c>'s join field (<c>foreignField</c>) matched against the joined collection's
+/// <c>listIndexes</c> through the equalities of the join's own leading match (its organisation
+/// scope). Nothing runs on the server: the index lists are read through
+/// <see cref="IIndexSource"/> before this runs.
 /// </summary>
 public static class IndexAdvisor
 {
@@ -47,10 +48,13 @@ public static class IndexAdvisor
 
     private sealed record IndexDef(string Name, IReadOnlyList<(string Field, int Direction)> Keys);
 
-    private sealed record LookupFinding(string? Index, string? Strategy, IReadOnlyList<string>? IndexesUsed);
-
-    /// <summary>The advisory for a compiled page pipeline; <paramref name="collation"/> when the aggregate carries one.</summary>
-    public static IReadOnlyList<JsonNode> Advise(IReadOnlyList<BsonDocument> pageStages, IReadOnlyList<BsonDocument> indexes, BsonDocument? explain, BsonDocument? collation = null)
+    /// <summary>
+    /// The advisory for a compiled page pipeline: <paramref name="indexes"/> are the entity
+    /// collection's, <paramref name="joined"/> the index lists of the collections a <c>$lookup</c>
+    /// joins, by collection name (a collection missing there is reported as not known);
+    /// <paramref name="collation"/> when the aggregate carries one.
+    /// </summary>
+    public static IReadOnlyList<JsonNode> Advise(IReadOnlyList<BsonDocument> pageStages, IReadOnlyList<BsonDocument> indexes, IReadOnlyDictionary<string, IReadOnlyList<BsonDocument>>? joined = null, BsonDocument? collation = null)
     {
         ArgumentNullException.ThrowIfNull(pageStages);
         ArgumentNullException.ThrowIfNull(indexes);
@@ -69,15 +73,8 @@ public static class IndexAdvisor
         if (sort is not null)
             advice.Add(AdviseSort(sort, defs, equalities));
 
-        var lookups = pageStages.Where(stage => stage.Contains("$lookup")).Select(stage => stage["$lookup"].AsBsonDocument).ToList();
-
-        if (lookups.Count > 0)
-        {
-            var findings = explain is null ? [] : LookupFindings(explain);
-
-            for (var index = 0; index < lookups.Count; index++)
-                advice.Add(AdviseLookup(lookups[index], index < findings.Count ? findings[index] : null, explain is null));
-        }
+        foreach (var lookup in pageStages.Where(stage => stage.Contains("$lookup")).Select(stage => stage["$lookup"].AsBsonDocument))
+            advice.Add(AdviseLookup(lookup, joined));
 
         // An index serves a collated string comparison only when it was built with the same
         // collation; the advisory cannot tell a string field from another, so it says so once.
@@ -347,54 +344,30 @@ public static class IndexAdvisor
 
     // ---- lookups ----------------------------------------------------------------------------
 
-    private static List<LookupFinding> LookupFindings(BsonDocument explain)
-    {
-        var findings = new List<LookupFinding>();
-
-        Walk(explain);
-
-        return findings;
-
-        void Walk(BsonValue value)
-        {
-            switch (value)
-            {
-                case BsonDocument document:
-                    if (document.Contains("$lookup") && document.TryGetValue("indexesUsed", out var used) && used is BsonArray usedArray)
-                        findings.Add(new LookupFinding(usedArray.Count > 0 ? usedArray[0].ToString() : null, null, usedArray.Select(item => item.ToString() ?? "").ToList()));
-                    else if (document.TryGetValue("stage", out var stage) && stage.IsString && stage.AsString is "EQ_LOOKUP" or "EQ_LOOKUP_UNWIND")
-                        findings.Add(new LookupFinding(
-                            document.TryGetValue("indexName", out var indexName) ? indexName.ToString() : null,
-                            document.TryGetValue("strategy", out var strategy) ? strategy.ToString() : null,
-                            null));
-
-                    foreach (var element in document)
-                        Walk(element.Value);
-                    break;
-
-                case BsonArray array:
-                    foreach (var item in array)
-                        Walk(item);
-                    break;
-            }
-        }
-    }
-
-    private static IndexAdvice AdviseLookup(BsonDocument lookup, LookupFinding? finding, bool explainUnavailable)
+    /// <summary>
+    /// A join: its <c>foreignField</c> served by an index of the joined collection that starts with
+    /// it or reaches it through the equalities of the join's leading match (the scope). Without one,
+    /// every parent row scans the joined collection.
+    /// </summary>
+    private static IndexAdvice AdviseLookup(BsonDocument lookup, IReadOnlyDictionary<string, IReadOnlyList<BsonDocument>>? joined)
     {
         var alias = lookup.TryGetValue("as", out var name) ? name.ToString() ?? "" : "";
+        var from = lookup.TryGetValue("from", out var collection) ? collection.ToString() ?? "" : "";
+        var field = lookup.TryGetValue("foreignField", out var foreign) ? foreign.ToString() : null;
         var label = "lookup:" + alias;
 
-        if (finding is null)
-            return new IndexAdvice(label, null, null, explainUnavailable
-                ? "the server explain is unavailable; the join's index use is not known"
-                : "the server explain reported no plan for this lookup");
+        if (field is null || joined is null || !joined.TryGetValue(from, out var listed))
+            return new IndexAdvice(label, null, null, $"the indexes of '{from}' are not known; the join's index use is not known");
 
-        if (finding.IndexesUsed is not null)
-            return new IndexAdvice(label, finding.IndexesUsed.Count > 0, finding.Index, finding.IndexesUsed.Count > 0
-                ? "pipelined lookup; indexes used: " + string.Join(", ", finding.IndexesUsed)
-                : "pipelined lookup without an index: every parent row scans the child collection");
+        var defs = listed.Select(Parse).Where(index => index is not null).Select(index => index!).ToList();
+        var inner = lookup.TryGetValue("pipeline", out var pipeline) && pipeline is BsonArray stages
+            ? LeadingMatch(stages.OfType<BsonDocument>().ToList())
+            : [];
+        var equalities = inner.Where(predicate => predicate.Kind == PredicateKind.Equality && !predicate.InOr).Select(predicate => predicate.Field).ToHashSet(StringComparer.Ordinal);
+        var serving = Serving(field, defs, equalities);
 
-        return new IndexAdvice(label, finding.Index is not null, finding.Index, finding.Strategy is null ? "EQ_LOOKUP" : "EQ_LOOKUP strategy " + finding.Strategy);
+        return serving is not null
+            ? new IndexAdvice(label, true, serving.Name, $"join on '{from}.{field}': each parent row seeks the index")
+            : new IndexAdvice(label, false, null, $"join on '{from}.{field}' without an index: every parent row scans '{from}'");
     }
 }

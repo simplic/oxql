@@ -49,7 +49,14 @@ public sealed class Binder
     }
 
     /// <summary>Binds one request.</summary>
-    public async ValueTask<BindOutcome> BindAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken)
+    public ValueTask<BindOutcome> BindAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken) =>
+        BindAsync(request, context, explain: false, cancellationToken);
+
+    /// <summary>
+    /// Binds one request. With <paramref name="explain"/> the page's cursor is not decoded (explain
+    /// ignores it, DESIGN §4.2), so a request binds the same with or without one.
+    /// </summary>
+    public async ValueTask<BindOutcome> BindAsync(QueryRequest request, RequestContext context, bool explain, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
@@ -80,16 +87,18 @@ public sealed class Binder
 
         await session.RunAsync();
 
+        var trace = session.Trace();
+
         if (errors.Count > 0)
-            return new BindOutcome.Failed(Refusal.Validation(errors));
+            return new BindOutcome.Failed(Refusal.Validation(errors)) { Trace = trace };
 
         try
         {
-            return new BindOutcome.Bound(session.Result(scope));
+            return new BindOutcome.Bound(session.Result(scope, decodeCursor: !explain)) { Trace = trace };
         }
         catch (CursorException)
         {
-            return new BindOutcome.Failed(Refusal.Validation([Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null)]));
+            return new BindOutcome.Failed(Refusal.Validation([Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null)])) { Trace = trace };
         }
     }
 
@@ -127,6 +136,13 @@ public sealed class Binder
         private int lookups, unwinds, resolves, conditions;
         private bool hasSemiJoin;
 
+        /// <summary>The shape the pipeline entered with, and each caller stage's kind and shapes around it (DESIGN §4.6).</summary>
+        private Shape entry = null!;
+        private readonly List<(int Index, string? Kind, Shape Before, Shape After)> traced = [];
+
+        /// <summary>The stages that failed only under a poisoned alias: their errors were dropped, their status is <c>skipped</c>.</summary>
+        private readonly HashSet<int> poisonedStages = [];
+
         /// <summary>
         /// The aliases a stage continues under (DESIGN §3.5.3): every keyed or remote resolve's alias and
         /// owning row, and every alias a continued stage added, each with the keyed stage whose owner
@@ -160,6 +176,7 @@ public sealed class Binder
         {
             await LoadAddonsAsync(entity);
             shape = Shape.ForEntity(entity, addons);
+            entry = shape;
 
             BindRequestMembers();
             BindKeyedBy();
@@ -177,9 +194,12 @@ public sealed class Binder
                 var stage = pipeline[index];
 
                 // A null element is a caller error, not a fault, and is refused with a code.
+                var before = shape;
+
                 if (stage is null)
                 {
                     errors.Add(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null));
+                    traced.Add((index, null, before, shape));
                     continue;
                 }
 
@@ -188,12 +208,14 @@ public sealed class Binder
                 if (stage.Kind is { } kind && !HasMember(stage, kind))
                 {
                     errors.Add(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null));
+                    traced.Add((index, kind, before, shape));
                     continue;
                 }
 
                 if (page is not null && stage.Kind != "page")
                 {
                     errors.Add(Error(Codes.StageAfterPage, "No stage may follow the page stage.", index, null));
+                    traced.Add((index, stage.Kind, before, shape));
                     continue;
                 }
 
@@ -220,9 +242,15 @@ public sealed class Binder
                 // without an error of its own, so one mistake is reported once (DESIGN §3.8).
                 if (errors.Count > errorsBefore)
                     PoisonAliases(stage);
+
+                traced.Add((index, stage.Kind, before, shape));
             }
 
-            // What failed only because it lay under a poisoned alias was reported where the alias failed.
+            // What failed only because it lay under a poisoned alias was reported where the alias
+            // failed; explain shows such a stage as skipped.
+            foreach (var poisoned in errors.Where(error => error.Code == Shape.PoisonedCode && error.Stage is not null))
+                poisonedStages.Add(poisoned.Stage!.Value);
+
             errors.RemoveAll(error => error.Code == Shape.PoisonedCode);
 
             if (errors.Count == 0)
@@ -429,13 +457,33 @@ public sealed class Binder
             return fields;
         }
 
-        public BoundPipeline Result(BoundStage.Scope scope)
+        /// <summary>
+        /// The stage loop as it ran. A stage carrying an error of its own is <c>error</c> (errors the
+        /// binder adds after the loop, such as an exact sort in a collated request, count for their
+        /// stage); one that failed only under a poisoned alias is <c>skipped</c>.
+        /// </summary>
+        public BindTrace Trace()
+        {
+            var failed = errors.Where(error => error.Stage is not null).Select(error => error.Stage!.Value).ToHashSet();
+            var steps = traced
+                .Select(step => new StageTrace(
+                    step.Index,
+                    step.Kind,
+                    failed.Contains(step.Index) ? StageStatus.Error : poisonedStages.Contains(step.Index) ? StageStatus.Skipped : StageStatus.Ok,
+                    step.Before,
+                    step.After))
+                .ToList();
+
+            return new BindTrace(entry ?? shape, steps, shape);
+        }
+
+        public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
         {
             var mode = shape.IsRootShape ? PagingMode.Keyset : PagingMode.Offset;
             var fingerprint = BoundCanonical.Fingerprint(scope, stages, mode, keyedByBound);
 
-            // The cursor is verified against the finished fingerprint.
-            if (pageIndex >= 0 && request.Pipeline![pageIndex].Page!.Cursor is { } cursor)
+            // The cursor is verified against the finished fingerprint; explain ignores it.
+            if (decodeCursor && pageIndex >= 0 && request.Pipeline![pageIndex].Page!.Cursor is { } cursor)
             {
                 var payload = binder.cursors.Decode(cursor, fingerprint);
 

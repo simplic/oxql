@@ -10,8 +10,14 @@ public interface IQueryEngine
     /// <summary>Executes one request. Never throws for a caller error; a refusal is an outcome.</summary>
     Task<QueryOutcome> ExecuteAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default);
 
-    /// <summary>Binds and compiles one request without executing it.</summary>
-    Task<ExplainOutcome> ExplainAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Everything about one request without executing it (DESIGN §4): binds, compiles when it binds,
+    /// and answers the errors, the shape after each stage and the compiled form. A request that
+    /// does not bind is an answer with <c>valid: false</c>. Reads Mongo only for the addon
+    /// definitions and, when <see cref="ExplainRequest.IncludesIndexes"/>, the index lists.
+    /// A plain <see cref="QueryRequest"/> converts to a request without describe or include.
+    /// </summary>
+    Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Where the engine gets the host's entity model: built once, after every service registration, before the first request.</summary>

@@ -186,7 +186,7 @@ public class HostTests
     [Fact]
     public async Task Health_publishes_the_contract_and_the_capabilities_of_this_host()
     {
-        using var host = new SampleHost(options => options.Explain.Enabled = true);
+        using var host = new SampleHost();
 
         var response = await host.CreateClient().GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);
@@ -198,7 +198,7 @@ public class HostTests
 
         var capabilities = body["capabilities"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
-        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "explain", "compat.v1"]);
+        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "oxql.2.1", "explain", "compat.v1"], "explain is on by default and 2.1 is announced");
 
         var limits = body["limits"]!.AsObject();
 
@@ -215,15 +215,15 @@ public class HostTests
         limits["chainTimeoutMs"]!.GetValue<int>().Should().Be(6_000);
         limits["negativeResolveTtlSeconds"]!.GetValue<int>().Should().Be(10);
         limits.Count.Should().Be(25, "health publishes every limit the engine enforces, not only the ones the document carries");
-        capabilities.Should().NotContain(["resolve.remote", "semiJoin"], "the Sample host installs no remote query client");
+        capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 
     [Fact]
-    public async Task Explain_is_404_unless_enabled_and_carries_the_advisory_when_it_is()
+    public async Task Explain_is_404_when_switched_off_and_carries_the_advisory_only_when_asked()
     {
         var request = """{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "a" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }] }""";
 
-        using (var disabled = new SampleHost())
+        using (var disabled = new SampleHost(options => options.Explain.Enabled = false))
         {
             var response = await disabled.Client().PostAsync("/OxQL/explain", SampleHost.Json(request));
 
@@ -231,14 +231,19 @@ public class HostTests
             disabled.Indexes.IndexCalls.Should().Be(0);
         }
 
-        using var host = new SampleHost(options => options.Explain.Enabled = true);
+        using var host = new SampleHost();
         host.Indexes.IndexDocuments =
         [
             new BsonDocument { ["name"] = "_id_", ["key"] = new BsonDocument("_id", 1) },
             new BsonDocument { ["name"] = "org_number", ["key"] = new BsonDocument { ["OrganizationId"] = 1, ["Number"] = 1 } },
         ];
 
-        var enabled = await host.Client().PostAsync("/OxQL/explain", SampleHost.Json(request));
+        var plain = await SampleHost.Body(await host.Client().PostAsync("/OxQL/explain", SampleHost.Json(request)));
+
+        plain!.AsObject().ContainsKey("advisory").Should().BeFalse("the advisory is opt-in");
+        host.Indexes.IndexCalls.Should().Be(0);
+
+        var enabled = await host.Client().PostAsync("/OxQL/explain", SampleHost.Json($$"""{ "query": {{request}}, "include": ["indexes"] }"""));
         var body = await SampleHost.Body(enabled);
 
         enabled.StatusCode.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
@@ -246,7 +251,7 @@ public class HostTests
         body["stages"]!.AsArray().Should().NotBeEmpty();
         body["count"]!.AsArray().Last()!.AsObject().ContainsKey("$count").Should().BeTrue();
         host.Runner.Calls.Should().BeEmpty("explain never executes");
-        host.Indexes.ExplainCalls.Should().Be(0, "the server explain is only read for a lookup");
+        host.Indexes.Asked.Should().Equal(["probe.order"], "the index list of the entity alone: no join");
 
         var advisory = body["advisory"]!.AsArray().Select(node => node!.AsObject()).ToList();
 

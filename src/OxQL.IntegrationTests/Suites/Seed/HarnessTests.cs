@@ -37,11 +37,11 @@ public class HarnessTests
     }
 
     [Fact]
-    public async Task Explain_runs_on_the_explain_variant_and_health_reports_the_contract()
+    public async Task Explain_runs_on_the_standard_host_and_the_explain_variant_and_health_reports_the_contract()
     {
         var staff = await Lab.ClientAsync(LabService.Staff);
 
-        (await staff.ExplainHereAsync(Json.Request(Corpus.Employee, "[]"))).Status.Should().Be(HttpStatusCode.NotFound, "explain is off on the standard host");
+        (await staff.ExplainHereAsync(Json.Request(Corpus.Employee, "[]"))).Status.Should().Be(HttpStatusCode.OK, "explain is on by default");
         (await staff.ExplainAsync(Json.Request(Corpus.Employee, "[]"))).Status.Should().Be(HttpStatusCode.OK);
         (await staff.HealthAsync(shallow: true)).Body!["engine"]!["contract"]!.GetValue<int>().Should().Be(2);
     }

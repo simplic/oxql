@@ -282,38 +282,169 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
 
     /// <inheritdoc/>
-    public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
+    public async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
-        var binding = await new Binder(models.Model, cursors).BindAsync(request, context, cancellationToken);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var binding = await new Binder(models.Model, cursors).BindAsync(request.Query, context, explain: true, cancellationToken);
+        var steps = Steps(binding.Trace);
+        var result = binding.Trace is { } trace ? ResultOf(trace.Final) : null;
 
         if (binding is BindOutcome.Failed failed)
-            return new ExplainOutcome.Refused(failed.Refusal);
+        {
+            // What stops explain before binding stays a refusal: a request without an organisation.
+            if (failed.Refusal.Status != 400)
+                return new ExplainOutcome.Refused(failed.Refusal);
+
+            return new ExplainOutcome.Success(Answer(context, valid: false, failed.Refusal.Errors ?? [], [], steps, result, request));
+        }
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
+        var diagnostics = bound.Diagnostics.ToList();
 
-        return new ExplainOutcome.Success(new ExplainResult
+        // A request this host cannot run is not valid, though it binds: the same refusal the query
+        // path gives, as an error.
+        if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
+            return new ExplainOutcome.Success(Answer(context, valid: false,
+                [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }],
+                diagnostics, steps, result, request));
+
+        return new ExplainOutcome.Success(Answer(context, valid: true, [], diagnostics, steps, result, request) with
         {
             Bound = JsonNode.Parse(bound.Canonical)!,
             Stages = compiled.PageStages.Select(Relaxed).ToList(),
             Count = compiled.CountStages?.Select(Relaxed).ToList(),
             Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
-            Advisory = await AdviseAsync(bound.Entity, compiled, cancellationToken).ConfigureAwait(false),
-            Diagnostics = bound.Diagnostics.Count > 0 ? bound.Diagnostics : null,
+            Advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null,
         });
     }
 
-    /// <summary>The index advisory: listIndexes matched against the leading match and the sort, the server's explain for every lookup.</summary>
-    private async Task<IReadOnlyList<JsonNode>?> AdviseAsync(EntityDef entity, CompiledQuery compiled, CancellationToken cancellationToken)
+    /// <summary>The members every explain answer carries, valid or not.</summary>
+    private ExplainResult Answer(RequestContext context, bool valid, IReadOnlyList<QueryValidationError> errors, IReadOnlyList<Diagnostic> diagnostics, IReadOnlyList<ExplainStep> steps, ExplainShapeResult? result, ExplainRequest request) => new()
+    {
+        Valid = valid,
+        Contract = context.Contract,
+        Engine = new ExplainEngine
+        {
+            Version = EngineCapabilities.Version,
+            Capabilities = EngineCapabilities.Of(remoteClient, options.Compat.Enabled, options.Explain.Enabled),
+        },
+        Errors = errors,
+        Diagnostics = diagnostics,
+        Notes = [],
+        Steps = steps,
+        Result = result,
+        // Describe is answered from the shapes of the trace (DESIGN §4.2, §4.5); until then every
+        // request is answered by nothing rather than guessed at.
+        Describe = [],
+    };
+
+    /// <summary>One step per caller stage: kind, status, the aliases it created and the shape after it (DESIGN §4.3).</summary>
+    private static IReadOnlyList<ExplainStep> Steps(BindTrace? trace) =>
+        trace is null ? [] : trace.Stages.Select(stage => new ExplainStep
+        {
+            Index = stage.Index,
+            Kind = stage.Kind,
+            Status = stage.Status switch
+            {
+                StageStatus.Error => "error",
+                StageStatus.Skipped => "skipped",
+                _ => "ok",
+            },
+            Creates = Created(stage.Before, stage.After),
+            ShapeAfter = Summary(stage.After),
+        }).ToList();
+
+    /// <summary>The roots <paramref name="after"/> has that <paramref name="before"/> did not, or holds differently; poisoned ones are not created.</summary>
+    private static IReadOnlyList<ExplainCreated> Created(Shape before, Shape after)
+    {
+        var created = new List<ExplainCreated>();
+
+        foreach (var (alias, node) in after.Roots)
+        {
+            if (alias == Shape.ImplicitRoot || node is ShapeNode.Poisoned)
+                continue;
+
+            if (before.Roots.TryGetValue(alias, out var earlier) && Equals(earlier, node))
+                continue;
+
+            created.Add(node switch
+            {
+                ShapeNode.Entity entity => new ExplainCreated { Alias = alias, Node = "entity", Entity = entity.Def.Id },
+                ShapeNode.Element element => new ExplainCreated { Alias = alias, Node = "element", Entity = element.Def.Id, Source = element.Source.Wire },
+                ShapeNode.Array array => new ExplainCreated { Alias = alias, Node = "array", Entity = array.Target.Id },
+                ShapeNode.Remote remote => new ExplainCreated { Alias = alias, Node = "remote", Entities = [remote.TargetEntity] },
+                ShapeNode.Keyed keyed => new ExplainCreated
+                {
+                    Alias = alias,
+                    Node = "keyed",
+                    Entities = keyed.Targets.Select(target => target.Item is null ? target.Entity.Id : target.Entity.Id + "#" + target.Item.Wire).ToList(),
+                },
+                ShapeNode.Scalar scalar => new ExplainCreated { Alias = alias, Node = "scalar", Kind = Kinds.NameOf(scalar.Kind) },
+                ShapeNode.GroupOutput output => new ExplainCreated { Alias = alias, Node = "group", Kind = Kinds.NameOf(output.Kind) },
+                _ => new ExplainCreated { Alias = alias, Node = "unknown" },
+            });
+        }
+
+        return created;
+    }
+
+    /// <summary>A shape as explain reports it: paging, grouped, the unwound collections, the inclusion projection.</summary>
+    private static ExplainShapeSummary Summary(Shape shape) => new()
+    {
+        Paging = Paging(shape),
+        Grouped = shape.Grouped,
+        Unwound = shape.Unwound
+            .Select(key => key.Split('|', 2))
+            .Select(parts => parts[0].Length == 0 ? parts[1] : parts[0] + "." + parts[1])
+            .Order(StringComparer.Ordinal)
+            .ToList(),
+        Projection = shape.Included?.Order(StringComparer.Ordinal).ToList(),
+    };
+
+    /// <summary>The final shape. Its columns are the visible members and roots (E12b fills them).</summary>
+    private static ExplainShapeResult ResultOf(Shape shape) => new() { Paging = Paging(shape), Columns = [] };
+
+    private static string Paging(Shape shape) => shape.IsRootShape ? "cursor" : "offset";
+
+    /// <summary>
+    /// The opt-in index advisory (DESIGN §4.1): the index lists of the entity's collection and of
+    /// every collection a <c>$lookup</c> joins, matched statically against the leading match, the
+    /// sort and each join field. It reads <c>listIndexes</c> only (cached by the index source) and
+    /// never runs the pipeline.
+    /// </summary>
+    private async Task<IReadOnlyList<JsonNode>?> AdviseAsync(BoundPipeline bound, CompiledQuery compiled, CancellationToken cancellationToken)
     {
         if (indexes is null)
             return null;
 
-        var listed = await indexes.IndexesAsync(entity, cancellationToken).ConfigureAwait(false);
-        var hasLookup = compiled.PageStages.Any(stage => stage.Contains("$lookup"));
-        var explain = hasLookup ? await indexes.ExplainAsync(entity, compiled.PageStages, compiled.MaxTimeMs, cancellationToken).ConfigureAwait(false) : null;
+        var listed = await indexes.IndexesAsync(bound.Entity, cancellationToken).ConfigureAwait(false);
+        var joined = new Dictionary<string, IReadOnlyList<BsonDocument>>(StringComparer.Ordinal);
 
-        return IndexAdvisor.Advise(compiled.PageStages, listed, explain, compiled.Collation);
+        foreach (var target in JoinedEntities(bound))
+            if (!joined.ContainsKey(target.Collection))
+                joined[target.Collection] = await indexes.IndexesAsync(target, cancellationToken).ConfigureAwait(false);
+
+        return IndexAdvisor.Advise(compiled.PageStages, listed, joined, compiled.Collation);
+    }
+
+    /// <summary>The entities the aggregate joins with <c>$lookup</c>: every lookup's child and every inline resolve's target.</summary>
+    private static IEnumerable<EntityDef> JoinedEntities(BoundPipeline bound)
+    {
+        foreach (var stage in bound.Stages)
+        {
+            switch (stage)
+            {
+                case BoundStage.Lookup lookup:
+                    yield return lookup.From;
+                    break;
+
+                case BoundStage.Resolve { IsRemote: false, Executor: ResolveExecutor.Inline, Target: { } target }:
+                    yield return target;
+                    break;
+            }
+        }
     }
 
     private static JsonNode Relaxed(BsonDocument stage) =>

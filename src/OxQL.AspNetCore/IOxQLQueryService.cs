@@ -30,6 +30,9 @@ public interface IOxQLQueryService
     /// </summary>
     Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default);
 
-    /// <summary>Binds and compiles one request without executing it.</summary>
-    Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Everything about one request without executing it (DESIGN §4): a plain query or the explain
+    /// envelope. A request that does not bind is an answer with <c>valid: false</c>.
+    /// </summary>
+    Task<ExplainOutcome> ExplainAsync(ExplainRequest request, CancellationToken cancellationToken = default);
 }

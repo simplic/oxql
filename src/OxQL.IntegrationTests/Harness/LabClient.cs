@@ -83,11 +83,11 @@ public sealed class LabClient
     /// <summary><c>POST OxQL/batch</c> with a whole body, for a malformed batch.</summary>
     public Task<WireAnswer> BatchBodyAsync(object body) => PostAsync("OxQL/batch", Json.Text(body));
 
-    /// <summary><c>POST OxQL/explain</c> on the service's explain-enabled variant (explain is off by default).</summary>
+    /// <summary><c>POST OxQL/explain</c> on the service's explain variant, which sets <c>OxQL:Explain:Enabled</c> explicitly; explain is on by default, so it answers as the standard host does.</summary>
     public async Task<WireAnswer> ExplainAsync(object request) =>
         await SendAsync(await Fleet.ExplainHostAsync(Service), HttpMethod.Post, "OxQL/explain", Json.Text(request), "application/json");
 
-    /// <summary><c>POST OxQL/explain</c> on this client's own host: 404 unless it is a variant with explain enabled.</summary>
+    /// <summary><c>POST OxQL/explain</c> on this client's own host: explain is on by default, 404 only on a variant that switches it off.</summary>
     public Task<WireAnswer> ExplainHereAsync(object request) => PostAsync("OxQL/explain", Json.Text(request));
 
     /// <summary><c>GET OxQL/health</c>; <paramref name="shallow"/> leaves the remote services out.</summary>

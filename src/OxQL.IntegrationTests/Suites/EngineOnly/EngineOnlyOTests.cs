@@ -204,16 +204,14 @@ public class EngineOnlyOTests
     }
 
     [Fact]
-    public async Task O20_explain_answers_404_while_disabled_and_200_on_a_host_that_enables_it()
+    public async Task O20_explain_answers_on_every_host_by_default_with_the_bound_pipeline()
     {
         var body = Json.Request(Corpus.Shipment, """[ { "page": { "limit": 1 } } ]""");
-        var transport = await Transport();
 
-        (await transport.ExplainHereAsync(body)).StatusCode.Should().Be(404, "Explain:Enabled is off by default");
-
-        var enabled = await transport.ExplainAsync(body);
-        enabled.StatusCode.Should().Be(200, enabled.ToString());
-        enabled.Body!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
+        var answer = await (await Transport()).ExplainHereAsync(body);
+        answer.StatusCode.Should().Be(200, "Explain:Enabled is on by default: " + answer);
+        answer.Body!["valid"]!.GetValue<bool>().Should().BeTrue(answer.ToString());
+        answer.Body!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
     }
 
     [Fact]

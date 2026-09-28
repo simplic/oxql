@@ -51,23 +51,7 @@ public static class BoundCanonical
     {
         BoundStage.Match match => new JsonObject { ["match"] = RenderCondition(match.Condition) },
         BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
-        BoundStage.Resolve resolve => new JsonObject
-        {
-            ["resolve"] = new JsonObject
-            {
-                ["path"] = resolve.Reference.Storage,
-                ["as"] = resolve.As,
-                ["target"] = resolve.TargetEntity,
-                ["targetField"] = resolve.TargetField,
-                ["remote"] = resolve.IsRemote,
-                ["select"] = resolve.IsRemote
-                    ? new JsonArray((resolve.RemoteSelect ?? []).Select(path => (JsonNode)path).ToArray())
-                    : new JsonArray((resolve.Select ?? []).Select(path => (JsonNode)path.Storage!).ToArray()),
-                ["filter"] = resolve.IsRemote
-                    ? (resolve.RemoteFilter is { } raw ? JsonNode.Parse(raw.GetRawText()) : null)
-                    : (resolve.Filter is null ? null : RenderCondition(resolve.Filter)),
-            },
-        },
+        BoundStage.Resolve resolve => new JsonObject { ["resolve"] = RenderResolve(resolve) },
         BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind) },
         BoundStage.Group group => new JsonObject
         {
@@ -154,6 +138,77 @@ public static class BoundCanonical
 
         return node;
     }
+
+    /// <summary>
+    /// A resolve. The 2.0 members describe the first target of the first case. <c>elements</c>,
+    /// <c>collection</c>, <c>narrowedTo</c>, <c>parentAs</c> and <c>cases</c> are written only when
+    /// they differ from what a 2.0 resolve did (one simple case, one value per row, no owning row),
+    /// so a 2.0 resolve renders as it did and its cursors stay valid. The executor, the stage index
+    /// and <c>onMissing</c> never change rows and are never written.
+    /// </summary>
+    private static JsonObject RenderResolve(BoundStage.Resolve resolve)
+    {
+        var firstIsRemote = resolve.Cases is [{ Targets: [{ IsRemote: true }, ..] }, ..] || (resolve.Cases is null && resolve.IsRemote);
+        var node = new JsonObject
+        {
+            ["path"] = resolve.Reference.Storage,
+            ["as"] = resolve.As,
+            ["target"] = resolve.TargetEntity,
+            ["targetField"] = resolve.TargetField,
+            ["remote"] = resolve.IsRemote,
+            ["select"] = firstIsRemote
+                ? new JsonArray((resolve.RemoteSelect ?? []).Select(path => (JsonNode)path).ToArray())
+                : new JsonArray((resolve.Select ?? []).Select(path => (JsonNode)path.Storage!).ToArray()),
+            ["filter"] = firstIsRemote
+                ? (resolve.RemoteFilter is { } raw ? JsonNode.Parse(raw.GetRawText()) : null)
+                : (resolve.Filter is null ? null : RenderCondition(resolve.Filter)),
+        };
+
+        if (resolve.Elements is { } elements)
+        {
+            node["elements"] = elements == ResolveElements.First ? "first" : "all";
+            node["collection"] = resolve.CollectionStorage;
+        }
+
+        if (resolve.NarrowedTo is not null)
+            node["narrowedTo"] = resolve.NarrowedTo;
+
+        if (resolve.ParentAs is not null)
+            node["parentAs"] = resolve.ParentAs;
+
+        if (resolve.Cases is { } cases && !(cases is [{ Declared.IsSimple: true }] && resolve.ParentAs is null))
+            node["cases"] = new JsonArray(cases.Select(bound => (JsonNode)RenderCase(bound)).ToArray());
+
+        return node;
+    }
+
+    /// <summary>One case of a resolve: its condition in stored form, its conversion, and each target as bound.</summary>
+    private static JsonObject RenderCase(BoundResolveCase bound) => new()
+    {
+        ["when"] = bound.When is null ? null : new JsonObject
+        {
+            ["path"] = bound.When.Storage,
+            ["variant"] = bound.When.IsVariant,
+            ["values"] = new JsonArray(bound.When.Values.Select(value => JsonNode.Parse(value.ToJson(Canonical))).ToArray()),
+        },
+        ["keyAs"] = bound.KeyAs == Model.KeyAs.Guid ? "guid" : null,
+        ["targets"] = new JsonArray(bound.Targets.Select(target => (JsonNode)new JsonObject
+        {
+            ["entity"] = target.Declared.Entity,
+            ["item"] = target.ItemStorage ?? target.Declared.Item,
+            ["field"] = target.FieldStorage ?? target.Declared.Field,
+            ["remote"] = target.IsRemote,
+            ["select"] = target.IsRemote
+                ? new JsonArray((target.RemoteSelect ?? []).Select(path => (JsonNode)path).ToArray())
+                : new JsonArray((target.Select ?? []).Select(path => (JsonNode)path.Storage!).ToArray()),
+            ["filter"] = target.IsRemote
+                ? (target.RemoteFilter is { } raw ? JsonNode.Parse(raw.GetRawText()) : null)
+                : (target.Filter is null ? null : RenderCondition(target.Filter)),
+            ["parentSelect"] = target.IsRemote
+                ? (target.RemoteParentSelect is null ? null : new JsonArray(target.RemoteParentSelect.Select(path => (JsonNode)path).ToArray()))
+                : (target.ParentSelect is null ? null : new JsonArray(target.ParentSelect.Select(path => (JsonNode)path.Storage!).ToArray())),
+        }).ToArray()),
+    };
 
     /// <summary>
     /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an

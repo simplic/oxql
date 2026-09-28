@@ -562,12 +562,14 @@ public class JoinsResolveTests
     [Fact]
     public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_is_refused()
     {
+        // It would continue the chain at the owner (DESIGN §3.5.3), which this host does not do:
+        // NOT_CONTINUABLE, no longer the misleading RESOLVE_NOT_DECLARED.
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, """
             [ { "resolve": { "path": "createUserId", "as": "veh" } }, { "resolve": { "path": "veh.department.id", "as": "dep" } }, { "page": { "limit": 1 } } ]
             """);
 
-        answer.ShouldRefuse("RESOLVE_NOT_DECLARED", 400);
-        answer.ErrorCodes.Should().Equal("RESOLVE_NOT_DECLARED");
+        answer.ShouldRefuse("NOT_CONTINUABLE", 400);
+        answer.ErrorCodes.Should().Equal("NOT_CONTINUABLE");
     }
 
     [Fact]

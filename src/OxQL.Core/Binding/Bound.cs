@@ -64,8 +64,27 @@ public abstract record ShapeNode(string StoragePrefix)
     /// <summary>A lookup alias: an array of the target entity.</summary>
     public sealed record Array(EntityDef Target, string StoragePrefix) : ShapeNode(StoragePrefix);
 
-    /// <summary>A resolved remote target under its alias: its shape lives on another host.</summary>
-    public sealed record Remote(string TargetEntity, ResolvedPath Reference, string StoragePrefix) : ShapeNode(StoragePrefix);
+    /// <summary>
+    /// A resolved remote target under its alias: its shape lives on another host. A condition on
+    /// a member of it is a semi-join on the owner only when <paramref name="SemiJoinable"/>: a plain
+    /// remote resolve, whose key set is one <c>$in</c> on one local member. The alias of a typed,
+    /// item, converted or element-wise resolve is not.
+    /// </summary>
+    public sealed record Remote(string TargetEntity, ResolvedPath Reference, string StoragePrefix, bool SemiJoinable = true) : ShapeNode(StoragePrefix);
+
+    /// <summary>
+    /// The rows a keyed fetch joins after the page is taken, from local targets (DESIGN §3.4.1
+    /// step 6): an entity, or an item of one, per target. Paths under it are checked against the
+    /// targets here; they can be projected, never filtered or sorted. <paramref name="Many"/> for
+    /// <c>elements: "all"</c>, where the alias holds an array of them.
+    /// </summary>
+    public sealed record Keyed(IReadOnlyList<KeyedTarget> Targets, bool Many, string StoragePrefix) : ShapeNode(StoragePrefix);
+
+    /// <summary>
+    /// The alias of a stage that failed to bind (DESIGN §3.8). A path under it fails without an
+    /// error of its own, so one mistake yields one error rather than one per later use.
+    /// </summary>
+    public sealed record Poisoned(string StoragePrefix) : ShapeNode(StoragePrefix);
 
     /// <summary>A scalar root: an unwind index.</summary>
     public sealed record Scalar(Kind Kind, string StoragePrefix) : ShapeNode(StoragePrefix);
@@ -76,6 +95,88 @@ public abstract record ShapeNode(string StoragePrefix)
     /// instead, and the encoder renders each element the way a row renders the member.
     /// </summary>
     public sealed record GroupOutput(Kind Kind, ShapeDef? Shape, string StoragePrefix, Kind ElementKind = Kind.Unknown, ShapeDef? ElementShape = null) : ShapeNode(StoragePrefix);
+}
+
+/// <summary>One target a keyed alias may hold: the entity, or the element of <paramref name="Item"/> on it.</summary>
+public sealed record KeyedTarget(EntityDef Entity, PathDef? Item);
+
+/// <summary>Which executor runs a resolve (DESIGN §3.4.1 step 5).</summary>
+public enum ResolveExecutor
+{
+    /// <summary>The in-aggregate <c>$lookup</c>: one unconditional case, one local entity target, no item, no conversion.</summary>
+    Inline,
+
+    /// <summary>The keyed fetch after the page: every other resolve, remote ones included.</summary>
+    Keyed,
+}
+
+/// <summary>How a resolve through a collection that is not unwound picks its elements.</summary>
+public enum ResolveElements
+{
+    /// <summary>The first element, in stored order, whose case is selected and whose key resolves.</summary>
+    First,
+
+    /// <summary>Every resolved target, as an array.</summary>
+    All,
+}
+
+/// <summary>What a resolve does with data loss (DESIGN §3.6).</summary>
+public enum ResolveOnMissing
+{
+    /// <summary>The alias is null; only owner failures are reported.</summary>
+    Null,
+
+    /// <summary>One <c>RESOLVE_MISSING</c> diagnostic per stage.</summary>
+    Report,
+
+    /// <summary>A 422 refusal.</summary>
+    Refuse,
+}
+
+/// <summary>
+/// One case of a resolve's reference as bound: the declaration, the stored value that selects it
+/// (null for an unconditional case), and its targets after <c>target</c> narrowed them, in
+/// declaration order.
+/// </summary>
+public sealed record BoundResolveCase(ReferenceDef Declared, BoundCaseCondition? When, IReadOnlyList<BoundResolveTarget> Targets)
+{
+    /// <summary>How the stored value becomes the targets' key.</summary>
+    public KeyAs KeyAs => Declared.KeyAs;
+}
+
+/// <summary>
+/// What selects a case in a row: the stored value at <paramref name="Storage"/> is one of
+/// <paramref name="Values"/>. For a sibling condition <paramref name="Path"/> is the sibling and the
+/// values are its stored form; for a variant condition it is the holding object and
+/// <paramref name="Storage"/> its discriminator element, the values the discriminators of the
+/// named variants and their descendants (<see cref="BsonNull"/> for a value stored without one).
+/// Storage is absolute in the row; under <c>elements</c> it lies under the collection crossed.
+/// </summary>
+public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IReadOnlyList<BsonValue> Values, bool IsVariant);
+
+/// <summary>
+/// One target of a case as bound. A local target carries its entity, the storage of the matched
+/// field (relative to the element for an item target) and of the item collection, its select,
+/// filter, scope and owning-row select; a remote target carries what the owner binds, as written.
+/// <paramref name="DroppedSelect"/> lists the select paths this target does not have, which the
+/// target leaves out (a union's select is flat).
+/// </summary>
+public sealed record BoundResolveTarget(
+    ReferenceTarget Declared,
+    EntityDef? Entity,
+    string? FieldStorage,
+    string? ItemStorage,
+    IReadOnlyList<ResolvedPath>? Select,
+    IReadOnlyList<string>? RemoteSelect,
+    BoundCondition? Filter,
+    JsonElement? RemoteFilter,
+    BoundStage.Scope? Scope,
+    IReadOnlyList<ResolvedPath>? ParentSelect,
+    IReadOnlyList<string>? RemoteParentSelect,
+    IReadOnlyList<string> DroppedSelect)
+{
+    /// <summary>True when the target lives on another host.</summary>
+    public bool IsRemote => Declared.IsRemote;
 }
 
 /// <summary>A coerced operand: one value, a set, alternatives to match tolerantly, null, or a raw operand for a remote owner.</summary>
@@ -149,9 +250,44 @@ public abstract record BoundStage
     public sealed record Lookup(EntityDef From, ResolvedPath ChildReference, string As, IReadOnlyList<ResolvedPath> Select, BoundCondition? Filter, int Limit, Scope ChildScope, string ParentKeyStorage, string ChildKeyStorage,
         IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage;
 
+    /// <summary>
+    /// A resolve. The members up to <paramref name="RemoteFilter"/> describe the first target of
+    /// the first case as 2.0 did, and are all an inline or a plain remote resolve needs;
+    /// <paramref name="Cases"/> holds every selected case with its bound targets.
+    /// <paramref name="IsRemote"/> is true when some target lives on another host.
+    /// <paramref name="Elements"/> is set on a path through one collection that is not unwound,
+    /// whose storage is <paramref name="CollectionStorage"/>. <paramref name="NarrowedTo"/> is the
+    /// <c>target</c> that excluded other targets; <paramref name="ParentAs"/> the alias of an item
+    /// target's owning row. <paramref name="OnMissing"/> is what the caller wrote,
+    /// <paramref name="EffectiveOnMissing"/> what applies. <paramref name="Executor"/>,
+    /// <paramref name="EffectiveOnMissing"/> and <paramref name="Stage"/> are bound-only and never
+    /// rendered.
+    /// </summary>
     public sealed record Resolve(ResolvedPath Reference, string As, string TargetEntity, string TargetField, bool IsRemote,
         EntityDef? Target, string? TargetFieldStorage, IReadOnlyList<ResolvedPath>? Select, BoundCondition? Filter, Scope? TargetScope,
-        IReadOnlyList<string>? RemoteSelect, JsonElement? RemoteFilter) : BoundStage;
+        IReadOnlyList<string>? RemoteSelect, JsonElement? RemoteFilter,
+        ResolveExecutor Executor = ResolveExecutor.Inline,
+        IReadOnlyList<BoundResolveCase>? Cases = null,
+        ResolveElements? Elements = null,
+        string? CollectionStorage = null,
+        string? NarrowedTo = null,
+        string? ParentAs = null,
+        ResolveOnMissing? OnMissing = null,
+        ResolveOnMissing EffectiveOnMissing = ResolveOnMissing.Null,
+        int Stage = -1) : BoundStage
+    {
+        /// <summary>
+        /// The 2.0 form: one simple case, no <c>elements</c>, no narrowing, no owning row. Such a
+        /// resolve renders as 2.0 did.
+        /// </summary>
+        public bool IsPlain => Cases is null or [{ Declared.IsSimple: true }] && Elements is null && NarrowedTo is null && ParentAs is null;
+
+        /// <summary>
+        /// Whether the resolve needs the keyed fetch of OxQL 2.1 (DESIGN §3.5): a keyed resolve other
+        /// than a plain remote one, which the remote resolver runs as it did under 2.0.
+        /// </summary>
+        public bool NeedsKeyedFetch => Executor == ResolveExecutor.Keyed && !(IsRemote && IsPlain);
+    }
 
     /// <summary>An unwind; <paramref name="Flatten"/> when it also descends a nested collection of the same items.</summary>
     public sealed record Unwind(ResolvedPath Path, string? As, bool PreserveNull, string? IncludeIndex, BoundFlatten? Flatten = null) : BoundStage;

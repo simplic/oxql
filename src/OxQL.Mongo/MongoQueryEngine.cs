@@ -64,6 +64,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return QueryOutcome.Of(failed.Refusal);
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
+
+        if (KeyedFetchPending(bound) is { } pending)
+            return QueryOutcome.Of(pending);
+
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
 
         if ((compiled.RemoteResolves.Count > 0 || compiled.SemiJoins.Count > 0) && remote is null)
@@ -224,6 +228,18 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private static TimeSpan Remaining(CompiledQuery compiled, Stopwatch timer) =>
         TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
 
+    /// <summary>
+    /// E07a, temporary until the keyed fetch (E09): a resolve that binds to the keyed fetch other
+    /// than a plain remote one (typed, item, converted, element-wise, narrowed, with an owning
+    /// row, or a filter told apart from a missing record) has no executor on this engine yet, so
+    /// it is refused rather than compiled as the inline join it is not.
+    /// </summary>
+    private static Refusal? KeyedFetchPending(BoundPipeline bound) =>
+        bound.Stages.OfType<BoundStage.Resolve>().FirstOrDefault(resolve => resolve.NeedsKeyedFetch) is { } keyed
+            ? Refusal.NotExecutable(Codes.ResolveUnavailable,
+                $"The resolve of '{keyed.Reference.Wire}' as '{keyed.As}' needs the keyed fetch, which this engine does not run yet.", keyed.Stage >= 0 ? keyed.Stage : null)
+            : null;
+
     /// <inheritdoc/>
     public async Task<ExplainOutcome> ExplainAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
@@ -233,6 +249,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return new ExplainOutcome.Refused(failed.Refusal);
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
+
+        if (KeyedFetchPending(bound) is { } pending)
+            return new ExplainOutcome.Refused(pending);
+
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
 
         return new ExplainOutcome.Success(new ExplainResult

@@ -31,5 +31,6 @@ internal static class ModelTestSetup
         Fixtures.Polymorphism.PolymorphismRegistrations.Ensure();
         Fixtures.References.ReferenceModel.Register();
         Fixtures.Variants.VariantRegistrations.Ensure();
+        Bind.Fixtures.Resolve.ResolveModel.Register();
     }
 }

@@ -71,6 +71,31 @@ public sealed record ResolveStage
     [JsonIgnore]
     public JsonElement? RawFilter { get; init; }
 
+    /// <summary>
+    /// <c>"first"</c> or <c>"all"</c>: how a path that crosses one collection which is not unwound
+    /// resolves, to the first element whose key resolves or to every resolved target. Contract 2.
+    /// </summary>
+    public string? Elements { get; init; }
+
+    /// <summary>The one target entity of a typed or union reference to resolve to; the others are excluded. Contract 2.</summary>
+    public string? Target { get; init; }
+
+    /// <summary>The alias the owning row of an item target is placed under. Contract 2.</summary>
+    public string? ParentAs { get; init; }
+
+    /// <summary>Wire paths of the owning row to keep under <see cref="ParentAs"/>; its key and display members by default. Contract 2.</summary>
+    public IReadOnlyList<string>? ParentSelect { get; init; }
+
+    /// <summary><c>"null"</c>, <c>"report"</c> or <c>"refuse"</c>: what a reference that names nothing does. Contract 2.</summary>
+    public string? OnMissing { get; init; }
+
+    /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
+    public string? ForTarget { get; init; }
+
+    /// <summary>Members the caller wrote with a value of the wrong JSON kind or outside their values, such as an <c>elements</c> of <c>"some"</c>.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Malformed { get; init; } = [];
+
     /// <summary>Member names the caller wrote that the stage does not have: the v1 <c>source</c>, <c>localPath</c> among them.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
@@ -152,6 +177,7 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         var root = doc.RootElement;
         var stage = new ResolveStage();
         var unknown = new List<string>();
+        var malformed = new List<string>();
 
         foreach (var property in root.EnumerateObject())
         {
@@ -167,11 +193,47 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
                         RawFilter = property.Value.Clone(),
                     };
                     break;
+                case "elements":
+                    if (StageJson.OneOf(property.Value, "first", "all") is { } elements)
+                        stage = stage with { Elements = elements };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "onMissing":
+                    if (StageJson.OneOf(property.Value, "null", "report", "refuse") is { } onMissing)
+                        stage = stage with { OnMissing = onMissing };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "target":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { Target = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "parentAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ParentAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "parentSelect":
+                    if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Array)
+                        stage = stage with { ParentSelect = StageJson.ReadStrings(property.Value) };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "forTarget":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ForTarget = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Malformed = malformed };
     }
 
     public override void Write(Utf8JsonWriter writer, ResolveStage value, JsonSerializerOptions options)
@@ -181,6 +243,12 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         if (value.As is not null) writer.WriteString("as", value.As);
         if (value.Select is not null) { writer.WritePropertyName("select"); JsonSerializer.Serialize(writer, value.Select, options); }
         if (value.Filter is not null) { writer.WritePropertyName("filter"); JsonSerializer.Serialize(writer, value.Filter, options); }
+        if (value.Elements is not null) writer.WriteString("elements", value.Elements);
+        if (value.Target is not null) writer.WriteString("target", value.Target);
+        if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
+        if (value.ParentSelect is not null) { writer.WritePropertyName("parentSelect"); JsonSerializer.Serialize(writer, value.ParentSelect, options); }
+        if (value.OnMissing is not null) writer.WriteString("onMissing", value.OnMissing);
+        if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
         writer.WriteEndObject();
     }
 }
@@ -197,4 +265,8 @@ internal static class StageJson
 
         return element.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : item.GetRawText()).ToList();
     }
+
+    /// <summary>The string when the element is one of <paramref name="values"/>, compared exactly; null otherwise.</summary>
+    public static string? OneOf(JsonElement element, params string[] values) =>
+        element.ValueKind == JsonValueKind.String && element.GetString() is { } text && values.Contains(text, StringComparer.Ordinal) ? text : null;
 }

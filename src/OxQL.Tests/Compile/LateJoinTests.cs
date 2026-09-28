@@ -244,7 +244,12 @@ public class LateJoinTests
     [Fact]
     public async Task A_join_a_later_resolve_reads_stays_before_the_resolve()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]""", Customer);
+        // A resolve through the lookup's array needs 'elements' (RESOLVE_ON_COLLECTION); through
+        // its first child it reads one row, as the 2.0 form of this case meant.
+        var compiled = await Compile("""
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number", "customerId"], "first": true } },
+             { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]
+            """, Customer);
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$sort", "$limit", "$lookup", "$set", "$unset");
         compiled.PageStages[1]["$lookup"]["as"].AsString.Should().Be("orders", "the lookup that is read stays before the page");

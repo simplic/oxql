@@ -38,6 +38,13 @@ public sealed class Shape
     public const string ImplicitRoot = "";
 
     /// <summary>
+    /// The code of a path under a poisoned alias (DESIGN §3.8). It is not a code of the catalogue:
+    /// the binder drops every error carrying it, since the stage that failed to create the alias
+    /// already reported why.
+    /// </summary>
+    internal const string PoisonedCode = "$poisoned";
+
+    /// <summary>
     /// The most segments a path may have. A segment below an addon bag and the key of a
     /// dictionary are the caller's text and become part of a field name in storage, so the
     /// whole path is held to what the database accepts as one, with room to spare: no model
@@ -282,6 +289,8 @@ public sealed class Shape
             ShapeNode.Element element => ResolveElement(element, rootName, rest, wire, usage),
             ShapeNode.Array array => ResolveInEntity(array.Target, rootName, node, rest, array.StoragePrefix, sourcePath: null, ancestorsBase: 1, wire, usage),
             ShapeNode.Remote remote => ResolveRemote(remote, rest, wire, usage),
+            ShapeNode.Keyed keyed => ResolveKeyed(keyed, rootName, rest, wire, usage),
+            ShapeNode.Poisoned => PathResolution.Fail(PoisonedCode, $"'{wire}' lies under '{rootName}', whose stage failed."),
             ShapeNode.Scalar scalar => rest.Count == 0
                 ? PathResolution.Ok(new ResolvedPath
                 {
@@ -344,6 +353,12 @@ public sealed class Shape
         if (usage is PathUsage.Unwind or PathUsage.GroupKey or PathUsage.Aggregate)
             return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is under a remote resolve and cannot be used here.");
 
+        // Only a plain remote resolve's keys are one $in on one local member; the alias of a
+        // typed, item, converted or element-wise one cannot be narrowed by the owner beforehand.
+        if (usage == PathUsage.Match && !remote.SemiJoinable)
+            return PathResolution.Fail(Codes.ResolveNotFilterable,
+                $"'{wire}' is joined after the page is taken, from typed, item, converted or element-wise targets; it cannot filter the rows.");
+
         return PathResolution.Ok(new ResolvedPath
         {
             Wire = wire,
@@ -355,6 +370,51 @@ public sealed class Shape
             Root = remote,
             IsRemote = true,
         });
+    }
+
+    /// <summary>
+    /// A path under a keyed alias: checked against the targets here, since they are local, and
+    /// usable where the rows are already taken (a projection, the stages that continue a chain).
+    /// A path some target has resolves on the first such target; one no target has is unknown.
+    /// </summary>
+    private static PathResolution ResolveKeyed(ShapeNode.Keyed keyed, string rootName, ArraySegment<string> rest, string wire, PathUsage usage)
+    {
+        if (usage == PathUsage.Sort)
+            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is joined after the page is taken; it cannot order the page.");
+
+        if (usage == PathUsage.Match)
+            return PathResolution.Fail(Codes.ResolveNotFilterable, $"'{wire}' is joined after the page is taken; it cannot filter the rows.");
+
+        if (usage is PathUsage.Unwind or PathUsage.GroupKey or PathUsage.Aggregate)
+            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is joined after the page is taken and cannot be used here.");
+
+        if (rest.Count == 0)
+            return PathResolution.Ok(new ResolvedPath
+            {
+                Wire = wire, Storage = null, Kind = keyed.Many ? Kind.Array : Kind.Object, CollectionAncestors = 0,
+                Filterable = false, Sortable = false, Root = keyed,
+            });
+
+        var relative = string.Join('.', (IEnumerable<string>)rest);
+
+        foreach (var target in keyed.Targets)
+        {
+            var at = ForEntity(target.Entity);
+
+            if (target.Item is { } item && at.Resolve(item.Wire, PathUsage.Unwind) is { Succeeded: true } collection)
+                at = at.ForElement(collection.Path!);
+
+            var resolution = at.Resolve(relative, PathUsage.Project);
+
+            if (resolution.Succeeded)
+                return PathResolution.Ok(resolution.Path! with
+                {
+                    Wire = wire, Storage = null, CollectionAncestors = 0, Filterable = false, Sortable = false, Root = keyed,
+                });
+        }
+
+        return PathResolution.Fail(Codes.UnknownPath,
+            $"'{wire}' is not a path of any target of '{rootName}' ({string.Join(", ", keyed.Targets.Select(target => target.Item is null ? target.Entity.Id : $"{target.Entity.Id}#{target.Item.Wire}"))}).");
     }
 
     private PathResolution ResolveInEntity(

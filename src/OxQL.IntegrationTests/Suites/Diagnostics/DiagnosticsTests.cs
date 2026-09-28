@@ -238,7 +238,7 @@ public class DiagnosticsTests
         // (RefusalsCatalogueTests checks that half), so these are the diagnostics.
         provoked.Should().BeSubsetOf(catalogue);
         RefusalsCatalogueTests.DiagnosticCodes.Should().BeEquivalentTo(provoked);
-        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 12 + provoked.Length,
-            "52 codes of the V table, 12 provoked outside it (7 in the catalogue suite, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY and NOT_CONTINUABLE in JoinsLookupMembersTests) and the 10 diagnostics");
+        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 15 + provoked.Length,
+            "52 codes of the V table, 15 provoked outside it (7 in the catalogue suite, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY and NOT_CONTINUABLE in JoinsLookupMembersTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 10 diagnostics");
     }
 }

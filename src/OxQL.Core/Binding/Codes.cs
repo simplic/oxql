@@ -65,6 +65,16 @@ public static class Codes
     /// <summary>A stage cannot run on an alias whose rows come from an owner after the page.</summary>
     public const string NotContinuable = "NOT_CONTINUABLE";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
+
+    /// <summary>A resolve's path lies under a collection that is not unwound, and the stage does not say which elements it resolves (<c>elements</c>).</summary>
+    public const string ResolveOnCollection = "RESOLVE_ON_COLLECTION";
+
+    /// <summary>A resolve's <c>target</c> names an entity that is not a target of any case of the reference.</summary>
+    public const string ResolveTargetNotDeclared = "RESOLVE_TARGET_NOT_DECLARED";
+
+    /// <summary>A resolve's <c>parentAs</c> asks for the owning row of a target that is an entity, not an item of one.</summary>
+    public const string ResolveParentNotItem = "RESOLVE_PARENT_NOT_ITEM";
+
     /// <summary>
     /// A condition on the alias of a remote resolve itself (<c>{"veh":{"eq":null}}</c>,
     /// <c>{"veh":{"exists":true}}</c>): the alias is the owner's row, not a path of the owner, so

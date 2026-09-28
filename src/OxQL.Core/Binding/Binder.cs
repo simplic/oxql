@@ -160,6 +160,8 @@ public sealed class Binder
                     continue;
                 }
 
+                var errorsBefore = errors.Count;
+
                 switch (stage.Kind)
                 {
                     case "match": BindMatch(stage.Match!, index); break;
@@ -176,7 +178,15 @@ public sealed class Binder
                             : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page.", index, null));
                         break;
                 }
+
+                // A stage that failed leaves its aliases poisoned: a later path under one fails
+                // without an error of its own, so one mistake is reported once (DESIGN §3.8).
+                if (errors.Count > errorsBefore)
+                    PoisonAliases(stage);
             }
+
+            // What failed only because it lay under a poisoned alias was reported where the alias failed.
+            errors.RemoveAll(error => error.Code == Shape.PoisonedCode);
 
             if (conditions > options.Limits.MaxConditions)
                 errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
@@ -202,6 +212,22 @@ public sealed class Binder
                 page = new BoundStage.Page(options.Limits.DefaultPageSize, 0, null, false);
                 stages.Add(page);
             }
+        }
+
+        /// <summary>The aliases a failed stage would have created, each poisoned when its name is still free.</summary>
+        private void PoisonAliases(PipelineStage stage)
+        {
+            IEnumerable<string?> aliases = stage.Kind switch
+            {
+                "lookup" => [stage.Lookup!.As],
+                "resolve" => [stage.Resolve!.As, stage.Resolve.ParentAs],
+                "unwind" => [stage.Unwind!.As, stage.Unwind.IncludeIndex],
+                _ => [],
+            };
+
+            foreach (var alias in aliases)
+                if (alias is not null && Aliases.Problem(alias) is null && !shape.IsTaken(alias))
+                    shape = shape.WithRoot(alias, new ShapeNode.Poisoned(alias));
         }
 
         /// <summary>
@@ -857,6 +883,15 @@ public sealed class Binder
                         $"'lookup' cannot run on '{on}', which comes from the owner of '{remote.TargetEntity}' after the page; this host does not continue a chain at the owner.", index, on));
                     return false;
 
+                case ShapeNode.Keyed:
+                    errors.Add(Error(Codes.NotContinuable,
+                        $"'lookup' cannot run on '{on}', which is joined after the page is taken; this host does not continue a chain there.", index, on));
+                    return false;
+
+                case ShapeNode.Poisoned:
+                    errors.Add(Error(Shape.PoisonedCode, $"'{on}' failed to bind.", index, on));
+                    return false;
+
                 default:
                     var what = node switch
                     {
@@ -901,22 +936,94 @@ public sealed class Binder
 
         // ---- resolve -------------------------------------------------------------------------
 
+        /// <summary>
+        /// A resolve (DESIGN §3.4.1): the members, the collection guard, the declared cases with
+        /// <c>target</c> and <c>parentAs</c>, the executor, and the shape of the alias. A resolve
+        /// under a keyed or remote alias would continue a chain at the owner, which this host does
+        /// not do yet: <c>NOT_CONTINUABLE</c>.
+        /// </summary>
         private async Task BindResolveAsync(ResolveStage resolve, int index)
         {
-            if (resolve.Unknown.Count > 0)
+            // Step 1: the members. The 2.1 members are contract 2; under contract 1 they are
+            // members the stage does not have, as is any of them written with the wrong kind.
+            var contract2Members = new (string Name, bool Written)[]
+            {
+                ("elements", resolve.Elements is not null), ("target", resolve.Target is not null), ("parentAs", resolve.ParentAs is not null),
+                ("parentSelect", resolve.ParentSelect is not null), ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null),
+            };
+            IReadOnlyList<string> unknown = contract2
+                ? resolve.Unknown
+                : [.. resolve.Unknown, .. contract2Members.Where(member => member.Written).Select(member => member.Name), .. resolve.Malformed];
+
+            if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", resolve.Unknown)}' is not a member of resolve; a resolve carries path, as, select, filter.", index, null));
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, parentSelect, onMissing, forTarget" : "path, as, select, filter")}.", index, null));
+                return;
+            }
+
+            if (resolve.Malformed.Count > 0)
+            {
+                foreach (var name in resolve.Malformed)
+                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    {
+                        "elements" => "A resolve's 'elements' is \"first\" or \"all\".",
+                        "onMissing" => "A resolve's 'onMissing' is \"null\", \"report\" or \"refuse\".",
+                        "parentSelect" => "A resolve's 'parentSelect' is an array of paths.",
+                        _ => $"A resolve's '{name}' is a string.",
+                    }, index, null));
                 return;
             }
 
             if (++resolves > options.Limits.MaxResolveStages)
                 errors.Add(Error(Codes.MaxResolveStagesExceeded, $"The pipeline has more than {options.Limits.MaxResolveStages} resolve stages.", index, null));
 
+            // forTarget picks one target of a union alias a stage continues under; no stage this
+            // host binds is continued.
+            if (resolve.ForTarget is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable,
+                    "'forTarget' applies to a stage continued under a remote alias with several targets; this resolve runs on this host.", index, null));
+                return;
+            }
+
             if (!CheckAlias(resolve.As, index, out var alias))
                 return;
 
-            var resolution = shape.Resolve(resolve.Path ?? "", PathUsage.Match);
+            string? parentAs = null;
+
+            if (resolve.ParentAs is not null)
+            {
+                if (!CheckAlias(resolve.ParentAs, index, out var checkedParent))
+                    return;
+
+                if (checkedParent == alias)
+                {
+                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent));
+                    return;
+                }
+
+                parentAs = checkedParent;
+            }
+            else if (resolve.ParentSelect is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, "'parentSelect' applies with 'parentAs', which names the owning row it selects from.", index, null));
+                return;
+            }
+
+            // Step 3: under a keyed or remote alias the stage would continue at the owner.
+            var path = resolve.Path ?? "";
+            var head = path.Split('.')[0];
+
+            if (head != Shape.ImplicitRoot && shape.Roots.TryGetValue(head, out var headNode) && headNode is ShapeNode.Remote or ShapeNode.Keyed)
+            {
+                errors.Add(Error(Codes.NotContinuable, headNode is ShapeNode.Remote remoteHead
+                    ? $"'resolve' cannot run on '{head}', which comes from the owner of '{remoteHead.TargetEntity}' after the page; this host does not continue a chain at the owner."
+                    : $"'resolve' cannot run on '{head}', which is joined after the page is taken; this host does not continue a chain there.", index, resolve.Path));
+                return;
+            }
+
+            var resolution = shape.Resolve(path, PathUsage.Match);
 
             if (!resolution.Succeeded)
             {
@@ -926,45 +1033,374 @@ public sealed class Binder
 
             var reference = resolution.Path!;
 
-            if (reference.IsRemote || reference.Reference() is not { } declared)
+            // Step 4: the declared cases.
+            if (reference.Path?.References is not { Count: > 0 } declaredCases)
             {
-                errors.Add(Error(Codes.ResolveNotDeclared, $"'{resolve.Path}' declares no reference.", index, resolve.Path));
+                errors.Add(Error(Codes.ResolveNotDeclared, $"'{resolve.Path}' declares no reference; it is {Kinds.WithArticle(reference.Kind)}.", index, resolve.Path));
                 return;
             }
 
-            if (declared.IsRemote || !binder.model.Entities.TryGetValue(declared.TargetEntity, out var target))
+            // Step 2: the collection guard. A path through a collection that is not unwound names
+            // one key per element; without 'elements' the join would pick one silently.
+            var elements = resolve.Elements switch { "first" => ResolveElements.First, "all" => ResolveElements.All, _ => (ResolveElements?)null };
+            var crossed = CollectionsCrossed(path);
+            string? collectionStorage = null;
+
+            if (crossed.Count > 1)
             {
-                stages.Add(new BoundStage.Resolve(reference, alias, declared.TargetEntity, declared.TargetField, IsRemote: true,
-                    null, null, null, null, null, resolve.Select, resolve.RawFilter));
-                shape = shape.WithRoot(alias, new ShapeNode.Remote(declared.TargetEntity, reference, alias));
+                errors.Add(Error(Codes.UnwindOrder,
+                    $"'{resolve.Path}' crosses {crossed.Count} collections that are not unwound here ({string.Join(", ", crossed.Select(collection => $"'{collection.Wire}'"))}); unwind the outer ones first, so at most one is left for 'elements'.", index, resolve.Path));
                 return;
+            }
+
+            if (crossed.Count == 1)
+            {
+                if (elements is null)
+                {
+                    errors.Add(Error(Codes.ResolveOnCollection,
+                        $"'{resolve.Path}' lies under the collection '{crossed[0].Wire}', which is not unwound here; unwind it first, or set 'elements' to 'first' or 'all'.", index, resolve.Path));
+                    return;
+                }
+
+                collectionStorage = crossed[0].Storage;
+            }
+            else if (elements is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable,
+                    $"'elements' applies to a path through a collection that is not unwound; '{resolve.Path}' holds one value per row.", index, resolve.Path));
+                return;
+            }
+
+            // 'target' narrows the cases to one target entity; it must be one of them.
+            IReadOnlyList<ReferenceDef> selected = declaredCases;
+            string? narrowedTo = null;
+
+            if (resolve.Target is { } wanted)
+            {
+                var targets = declaredCases.SelectMany(declared => declared.Targets).Select(target => target.Entity).Distinct(StringComparer.Ordinal).ToList();
+
+                if (!targets.Contains(wanted, StringComparer.Ordinal))
+                {
+                    errors.Add(Error(Codes.ResolveTargetNotDeclared,
+                        $"'{wanted}' is not a target of '{resolve.Path}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, resolve.Path));
+                    return;
+                }
+
+                if (targets.Count > 1)
+                {
+                    selected = declaredCases
+                        .Select(declared => declared with { Targets = declared.Targets.Where(target => target.Entity == wanted).ToList() })
+                        .Where(declared => declared.Targets.Count > 0)
+                        .ToList();
+                    narrowedTo = wanted;
+                }
+            }
+
+            // 'parentAs' is the owning row of an item target; an entity target is its own row.
+            if (parentAs is not null && selected.SelectMany(declared => declared.Targets).FirstOrDefault(target => target.Item is null) is { } entityTarget)
+            {
+                errors.Add(Error(Codes.ResolveParentNotItem,
+                    $"'parentAs' names the row that owns an item target; '{resolve.Path}' resolves to the entity '{entityTarget.Entity}' itself.", index, resolve.Path));
+                return;
+            }
+
+            var onMissing = resolve.OnMissing switch
+            {
+                "null" => ResolveOnMissing.Null,
+                "report" => ResolveOnMissing.Report,
+                "refuse" => ResolveOnMissing.Refuse,
+                _ => (ResolveOnMissing?)null,
+            };
+            var effectiveOnMissing = onMissing ?? ResolveOnMissing.Null;
+
+            // The cases with their targets bound; every target is bound, whichever executor runs it.
+            var cases = new List<BoundResolveCase>();
+            var errorsBefore = errors.Count;
+
+            filterBoundOnce = false;
+            reportedFilterError = false;
+
+            foreach (var declared in selected)
+            {
+                var when = BindCaseCondition(declared.When, reference, index);
+                var targets = new List<BoundResolveTarget>();
+
+                foreach (var target in declared.Targets)
+                    if (await BindResolveTargetAsync(target, resolve, parentAs is not null, index) is { } bound)
+                        targets.Add(bound);
+
+                cases.Add(new BoundResolveCase(declared, when, targets));
+            }
+
+            ReportUnboundSelect(resolve, cases, index);
+
+            if (errors.Count > errorsBefore)
+                return;
+
+            // Step 5: the executor. The in-aggregate $lookup runs one unconditional case on one
+            // local entity, without conversion; a filter it would need to tell apart from a
+            // missing record (onMissing other than null) takes the keyed fetch's probe.
+            var first = cases[0].Targets[0];
+            var inline = cases is [{ Declared: { When: null, KeyAs: KeyAs.None }, Targets: [{ IsRemote: false, Declared.Item: null }] }]
+                && elements is null
+                && !(resolve.Filter?.Condition is not null && effectiveOnMissing != ResolveOnMissing.Null);
+            var anyRemote = cases.Any(bound => bound.Targets.Any(target => target.IsRemote));
+
+            var stage = new BoundStage.Resolve(reference, alias, first.Declared.Entity, first.Declared.Field, anyRemote,
+                first.Entity, first.FieldStorage, first.Select, first.Filter, first.Scope,
+                first.IsRemote ? resolve.Select : null, first.IsRemote ? resolve.RawFilter : null,
+                inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index);
+
+            stages.Add(stage);
+
+            // Step 6: the shape. An inline alias is a row of the aggregate; a keyed local one is
+            // joined after the page and checked here; a remote one is the owner's.
+            if (inline)
+                shape = shape.WithRoot(alias, new ShapeNode.Entity(first.Entity!, alias));
+            else if (anyRemote)
+                shape = shape.WithRoot(alias, new ShapeNode.Remote(first.Declared.Entity, reference, alias, SemiJoinable: stage.IsPlain));
+            else
+                shape = shape.WithRoot(alias, new ShapeNode.Keyed(
+                    cases.SelectMany(bound => bound.Targets).Select(target => new KeyedTarget(target.Entity!, target.Declared.Item is { } item ? target.Entity!.Path(item) : null)).Distinct().ToList(),
+                    elements == ResolveElements.All, alias));
+
+            if (parentAs is not null)
+                shape = shape.WithRoot(parentAs, anyRemote
+                    ? new ShapeNode.Remote(first.Declared.Entity, reference, parentAs, SemiJoinable: false)
+                    : new ShapeNode.Keyed(
+                        cases.SelectMany(bound => bound.Targets).Select(target => new KeyedTarget(target.Entity!, null)).Distinct().ToList(),
+                        elements == ResolveElements.All, parentAs));
+        }
+
+        /// <summary>
+        /// The collections a path crosses that are not unwound here, outermost first: a lookup
+        /// array it starts under, an array member on the way, or the member itself when it is one.
+        /// </summary>
+        private List<ResolvedPath> CollectionsCrossed(string wire)
+        {
+            var crossed = new List<ResolvedPath>();
+            var segments = wire.Split('.');
+
+            for (var length = 1; length <= segments.Length; length++)
+            {
+                var prefix = string.Join('.', segments.Take(length));
+
+                if (shape.Resolve(prefix, PathUsage.Project) is { Succeeded: true, Path: { Kind: Kind.Array } collection })
+                    crossed.Add(collection);
+            }
+
+            return crossed;
+        }
+
+        /// <summary>
+        /// What selects a case in a row: the sibling of the reference member, or the variant of
+        /// the object holding it, with the stored values the declaration names. The model build
+        /// checked both, so a failure here is the model's, reported like a path the model lacks.
+        /// </summary>
+        private BoundCaseCondition? BindCaseCondition(ReferenceCondition? condition, ResolvedPath reference, int index)
+        {
+            if (condition is null)
+                return null;
+
+            var dot = reference.Wire.LastIndexOf('.');
+            var holder = dot < 0 ? "" : reference.Wire[..dot];
+
+            switch (condition)
+            {
+                case ReferenceCondition.PathEquals equals:
+                {
+                    var siblingWire = holder.Length == 0 ? equals.Path : holder + "." + equals.Path;
+                    var sibling = shape.Resolve(siblingWire, PathUsage.Project);
+
+                    if (!sibling.Succeeded || sibling.Path!.Storage is null)
+                    {
+                        errors.Add(Error(Codes.ResolveNotDeclared, $"The reference on '{reference.Wire}' tests '{siblingWire}', which is not stored here.", index, reference.Wire));
+                        return null;
+                    }
+
+                    var operand = coercer.Coerce(JsonSerializer.SerializeToElement(equals.Values), sibling.Path, "in", index, errors);
+
+                    return operand is null ? null : new BoundCaseCondition(sibling.Path, sibling.Path.Storage, ValuesOf(operand), IsVariant: false);
+                }
+
+                case ReferenceCondition.Variant variant:
+                {
+                    // The object holding the member: a member path, or the entity row itself.
+                    var holding = holder.Length == 0 ? null : shape.Resolve(holder, PathUsage.Project);
+                    var type = holding is { Succeeded: true } ? OperandCoercer.VariantHolder(holding.Path!) : holder.Length == 0 ? reference.Entity?.Root : null;
+
+                    if (type?.DiscriminatorElement is not { } element)
+                    {
+                        errors.Add(Error(Codes.ResolveNotDeclared, $"The reference on '{reference.Wire}' tests the variant of an object whose variants are not known here.", index, reference.Wire));
+                        return null;
+                    }
+
+                    var holderStorage = holding?.Path?.Storage;
+                    var storage = string.IsNullOrEmpty(holderStorage) ? element : holderStorage + "." + element;
+                    var probe = holding?.Path ?? reference;
+                    var operand = coercer.CoerceVariants(JsonSerializer.SerializeToElement(variant.Names), probe, type, index, errors);
+
+                    return operand is null ? null : new BoundCaseCondition(probe, storage, ValuesOf(operand), IsVariant: true);
+                }
+
+                default:
+                    return null;
+            }
+        }
+
+        private static IReadOnlyList<BsonValue> ValuesOf(BoundOperand operand) => operand switch
+        {
+            BoundOperand.Set set => set.Values,
+            BoundOperand.Tolerant tolerant => tolerant.Alternatives,
+            BoundOperand.Single single => [single.Value],
+            _ => [BsonNull.Value],
+        };
+
+        /// <summary>
+        /// One target of a case. A remote target carries what the owner binds, as written. A local
+        /// one is bound against its entity, or against the element of its item collection: the
+        /// matched field (stored), the organisation scope, the select (paths it lacks are dropped
+        /// for it), the filter, and the owning row's select when <c>parentAs</c> asks for it.
+        /// Null with errors added when the target cannot be joined at all.
+        /// </summary>
+        private async Task<BoundResolveTarget?> BindResolveTargetAsync(ReferenceTarget declared, ResolveStage resolve, bool withParent, int index)
+        {
+            if (declared.IsRemote || !binder.model.Entities.TryGetValue(declared.Entity, out var target))
+            {
+                var remote = declared.IsRemote ? declared : declared with { IsRemote = true };
+
+                return new BoundResolveTarget(remote, null, null, null, null, resolve.Select, null, resolve.RawFilter, null, null,
+                    withParent ? resolve.ParentSelect : null, []);
             }
 
             await LoadAddonsAsync(target);
 
-            var targetShape = Shape.ForEntity(target, addons);
-            var targetField = targetShape.Resolve(declared.TargetField, PathUsage.Match);
+            var entityShape = Shape.ForEntity(target, addons);
+            var at = entityShape;
+            string? itemStorage = null;
 
-            if (!targetField.Succeeded || targetField.Path!.Storage is null)
+            if (declared.Item is not null)
             {
-                errors.Add(Error(Codes.ResolveNotDeclared, $"The reference targets '{target.Id}#{declared.TargetField}', which is not stored.", index, resolve.Path));
-                return;
+                var collection = entityShape.Resolve(declared.Item, PathUsage.Unwind);
+
+                if (!collection.Succeeded || collection.Path!.Storage is null)
+                {
+                    errors.Add(Error(Codes.ResolveNotDeclared, $"The reference targets the items '{declared.Item}' of '{target.Id}', which are not stored.", index, resolve.Path));
+                    return null;
+                }
+
+                itemStorage = collection.Path.Storage;
+                at = entityShape.ForElement(collection.Path!);
             }
 
-            var targetScope = ScopeOf(target, context.Organisation!.Value);
+            var field = at.Resolve(declared.Field, PathUsage.Match);
 
-            if (targetScope is null)
+            if (!field.Succeeded || field.Path!.Storage is null)
+            {
+                errors.Add(Error(Codes.ResolveNotDeclared, $"The reference targets '{declared}#{declared.Field}', which is not stored.", index, resolve.Path));
+                return null;
+            }
+
+            var scope = ScopeOf(target, context.Organisation!.Value);
+
+            if (scope is null)
             {
                 errors.Add(Error(Codes.AccessDenied, $"'{target.Id}' has no organisation member; it cannot be resolved.", index, null));
-                return;
+                return null;
             }
 
-            var select = BindSelect(resolve.Select, target, targetShape, index);
-            var filter = resolve.Filter?.Condition is null ? null : BindCondition(resolve.Filter.Condition, targetShape, index);
+            // An entity's default select is its key and display; an item's is its matched field.
+            var wanted = resolve.Select is { Count: > 0 } written
+                ? written
+                : declared.Item is null
+                    ? new[] { target.Key?.Wire, target.Display?.Wire }.Where(wire => wire is not null).Select(wire => wire!).ToList()
+                    : [declared.Field];
+            var select = new List<ResolvedPath>();
+            var dropped = new List<string>();
 
-            stages.Add(new BoundStage.Resolve(reference, alias, target.Id, declared.TargetField, IsRemote: false,
-                target, targetField.Path.Storage, select, filter, targetScope, null, null));
-            shape = shape.WithRoot(alias, new ShapeNode.Entity(target, alias));
+            foreach (var wire in wanted)
+            {
+                if (at.Resolve(wire, PathUsage.Select) is { Succeeded: true } kept)
+                    select.Add(kept.Path!);
+                else
+                    dropped.Add(wire);
+            }
+
+            var keyWire = declared.Item is null ? target.Key?.Wire : declared.Field;
+
+            if (keyWire is not null && select.All(kept => kept.Wire != keyWire) && at.Resolve(keyWire, PathUsage.Select) is { Succeeded: true } key)
+                select.Insert(0, key.Path!);
+
+            var filter = resolve.Filter?.Condition is null ? null : BindTargetFilter(resolve.Filter.Condition, at, index);
+            var parentSelect = withParent && declared.Item is not null ? BindSelect(resolve.ParentSelect, target, entityShape, index) : null;
+
+            return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, null, scope, parentSelect, null, dropped);
+        }
+
+        /// <summary>
+        /// The filter on one local target. It binds once per target; only the first binding counts
+        /// towards the request's conditions and diagnostics, and only the first failure is
+        /// reported, so a union whose targets share the filtered member reports a mistake once.
+        /// </summary>
+        private BoundCondition? BindTargetFilter(FilterCondition condition, Shape at, int index)
+        {
+            if (!filterBoundOnce)
+            {
+                var before = errors.Count;
+                var once = BindCondition(condition, at, index);
+
+                filterBoundOnce = true;
+                reportedFilterError = errors.Count > before;
+
+                return once;
+            }
+
+            var (conditionsBefore, diagnosticsBefore, exactBefore) = (conditions, diagnostics.Count, exactTexts.Count);
+            var errorsBefore = errors.Count;
+            var bound = BindCondition(condition, at, index);
+
+            conditions = conditionsBefore;
+            diagnostics.RemoveRange(diagnosticsBefore, diagnostics.Count - diagnosticsBefore);
+            exactTexts.RemoveRange(exactBefore, exactTexts.Count - exactBefore);
+
+            // The same mistake on another target of the union is the one already reported.
+            if (errors.Count > errorsBefore && reportedFilterError)
+                errors.RemoveRange(errorsBefore, errors.Count - errorsBefore);
+
+            reportedFilterError |= errors.Count > errorsBefore;
+
+            return bound;
+        }
+
+        private bool filterBoundOnce, reportedFilterError;
+
+        /// <summary>
+        /// A select path no target of the resolve has is refused, with the reason its first local
+        /// target gives; a path some target has is only dropped for the others. A remote target
+        /// has every path as far as this host knows: its owner binds them.
+        /// </summary>
+        private void ReportUnboundSelect(ResolveStage resolve, IReadOnlyList<BoundResolveCase> cases, int index)
+        {
+            var targets = cases.SelectMany(bound => bound.Targets).ToList();
+
+            if (targets.Count == 0 || targets.Any(target => target.IsRemote))
+                return;
+
+            foreach (var wire in targets[0].DroppedSelect)
+            {
+                if (!targets.All(target => target.DroppedSelect.Contains(wire, StringComparer.Ordinal)))
+                    continue;
+
+                var first = targets[0];
+                var at = Shape.ForEntity(first.Entity!, addons);
+
+                if (first.Declared.Item is not null && at.Resolve(first.Declared.Item, PathUsage.Unwind) is { Succeeded: true } collection)
+                    at = at.ForElement(collection.Path!);
+
+                var failure = at.Resolve(wire, PathUsage.Select);
+
+                errors.Add(Error(failure.Code ?? Codes.UnknownPath, failure.Message ?? $"'{wire}' is not a path of '{first.Declared}'.", index, wire));
+            }
         }
 
         // ---- unwind --------------------------------------------------------------------------

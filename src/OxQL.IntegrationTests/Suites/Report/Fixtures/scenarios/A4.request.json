@@ -1,0 +1,147 @@
+{
+  "entityType": "ledger.transaction",
+  "variables": {
+    "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+  },
+  "strict": true,
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": {
+            "$var": "transactionId"
+          }
+        }
+      }
+    },
+    {
+      "resolve": {
+        "path": "createUserId",
+        "as": "clerk",
+        "onMissing": "null",
+        "select": [
+          "address.firstName",
+          "address.lastName",
+          "primaryEmailAddress.email"
+        ]
+      }
+    },
+    {
+      "unwind": {
+        "path": "items",
+        "flatten": "items",
+        "as": "item",
+        "includeIndex": "position"
+      }
+    },
+    {
+      "match": {
+        "item": {
+          "is": "BillingLineTransactionItem"
+        }
+      }
+    },
+    {
+      "resolve": {
+        "path": "item.references.referenceId",
+        "as": "lineShipment",
+        "elements": "first",
+        "target": "transport.shipment",
+        "select": [
+          "shipmentNumber",
+          "referenceNumber",
+          "loadAddress",
+          "deliveryAddress",
+          "effectiveDeliveryEnd",
+          "deliveryNoteNumber",
+          "items.weightNotes.number",
+          "items.weightNotes.quantity"
+        ]
+      }
+    },
+    {
+      "resolve": {
+        "path": "lineShipment.tours.tourId",
+        "as": "deliveringTour",
+        "elements": "first",
+        "select": [
+          "number"
+        ]
+      }
+    },
+    {
+      "resolve": {
+        "path": "deliveringTour.resource.id",
+        "as": "tourVehicle",
+        "target": "fleet.vehicle",
+        "onMissing": "null",
+        "select": [
+          "registrationPlate.registrationIdentifier",
+          "matchCode"
+        ]
+      }
+    },
+    {
+      "resolve": {
+        "path": "deliveringTour.attachedResources.resource.id",
+        "as": "driver",
+        "elements": "first",
+        "target": "staff.employee",
+        "onMissing": "null",
+        "select": [
+          "address.firstName",
+          "address.lastName",
+          "primaryEmailAddress.email"
+        ]
+      }
+    },
+    {
+      "resolve": {
+        "path": "item.references.referenceId",
+        "as": "lineTour",
+        "elements": "first",
+        "target": "transport.tour",
+        "select": [
+          "number",
+          "startDateTime",
+          "endDateTime",
+          "actions"
+        ]
+      }
+    },
+    {
+      "project": {
+        "number": 1,
+        "date": 1,
+        "dueDate": 1,
+        "invoiceRecipient": 1,
+        "termsOfPayment.formattedText": 1,
+        "totalPriceNet": 1,
+        "totalPriceGross": 1,
+        "taxKeyTotalPrices": 1,
+        "clerk": 1,
+        "position": 1,
+        "item.text": 1,
+        "item.quantity": 1,
+        "item.totalPriceNet": 1,
+        "lineShipment": 1,
+        "deliveringTour": 1,
+        "tourVehicle": 1,
+        "driver": 1,
+        "lineTour": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "position": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 5000
+      }
+    }
+  ]
+}

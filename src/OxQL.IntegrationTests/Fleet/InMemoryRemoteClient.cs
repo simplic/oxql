@@ -20,10 +20,11 @@ namespace OxQL.IntegrationTests.Fleet;
 /// with <c>internalCall: true</c>), which alone admits the keyed fetch's <c>keyedBy</c>, under a
 /// request scope of the owner carrying the caller's organisation, user and correlation forwarded
 /// from the scope provider the parent query was scoped with. The batch travels as wire JSON both
-/// ways. A service served by a mounted handler (<see cref="LabFleet.Mount"/>: a fake or misbehaving
-/// owner) is posted to over HTTP as before. The budget cancels the call. Calls stay inside the
-/// host's own fleet; a service the fleet knows but has no server for
-/// (<see cref="LabFleet.Configured"/>) is unreachable.
+/// ways; the owner's internal explain is called the same way (<see cref="ExplainAsync"/>). A
+/// service served by a mounted handler (<see cref="LabFleet.Mount"/>: a fake or misbehaving owner)
+/// is posted to over HTTP as before. The budget cancels the call. Calls stay inside the host's own
+/// fleet; a service the fleet knows but has no server for (<see cref="LabFleet.Configured"/>) is
+/// unreachable.
 /// <para>
 /// What each owner's shallow health said when reachability was last measured is kept
 /// (<see cref="IRemoteOwnerInfo"/>): the keyed fetch splits batches at the owner's cap and refuses
@@ -106,24 +107,72 @@ public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor ht
     }
 
     /// <summary>
-    /// The batch run by the owner's query service through its internal overload, in a request scope
-    /// of the owner host that carries the forwarded identity. It runs on a flow of its own, so the
-    /// owner's request context never replaces the caller's; the budget abandons it as a timed-out
-    /// HTTP call would. A batch the owner refuses whole is the HTTP error its route would answer.
+    /// The owner's internal explain (<c>POST internal/oxql/explain</c>, DESIGN §4.1): the owner's
+    /// query service through its internal overload
+    /// (<see cref="IOxQLQueryService.ExplainAsync(ExplainRequest, bool, CancellationToken)"/> with
+    /// <c>internalCall: true</c>) in a request scope of the owner carrying the forwarded identity, the
+    /// envelope and the answer travelling as wire JSON. An owner served by a mounted handler has no
+    /// internal explain here and answers null, which the origin notes <c>REMOTE_UNCHECKED</c>
+    /// (unsupported). A refusal is the HTTP error the route would answer; the budget cancels the call.
     /// </summary>
-    private async Task<BatchResponse> InternalAsync(LabService service, BatchRequest request, IReadOnlyList<(string Name, string Value)> identity, CancellationToken cancellationToken)
+    public async Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (LabService.All.FirstOrDefault(service => service.Key == serviceKey) is not { } served)
+            return null;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(budget > TimeSpan.Zero ? budget : FallbackBudget);
+
+        var identity = await IdentityAsync(cancellationToken);
+        var sent = JsonSerializer.Deserialize<ExplainRequest>(JsonSerializer.SerializeToUtf8Bytes(request, OxQLJson.Wire), OxQLJson.Wire)!;
+
+        return await OnOwnerAsync(served, identity, timeout.Token, async (services, token) =>
+            await services.GetRequiredService<IOxQLQueryService>().ExplainAsync(sent, internalCall: true, token) switch
+            {
+                ExplainOutcome.Success success => JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire)!.AsObject(),
+                ExplainOutcome.Refused refused => throw new HttpRequestException(
+                    $"The owner of '{serviceKey}' refused the explain: {refused.Refusal.Title}", null, (HttpStatusCode)refused.Refusal.Status),
+                _ => throw new InvalidOperationException("An unknown explain outcome."),
+            });
+    }
+
+    /// <summary>
+    /// The batch run by the owner's query service through its internal overload. A batch the owner
+    /// refuses whole is the HTTP error its route would answer.
+    /// </summary>
+    private Task<BatchResponse> InternalAsync(LabService service, BatchRequest request, IReadOnlyList<(string Name, string Value)> identity, CancellationToken cancellationToken)
+    {
+        var sent = JsonSerializer.Deserialize<BatchRequest>(JsonSerializer.SerializeToUtf8Bytes(request, OxQLJson.Wire), OxQLJson.Wire)!;
+
+        return OnOwnerAsync(service, identity, cancellationToken, async (services, token) =>
+            await services.GetRequiredService<IOxQLQueryService>().BatchAsync(sent, internalCall: true, token) switch
+            {
+                BatchOutcome.Success success => JsonSerializer.Deserialize<BatchResponse>(JsonSerializer.SerializeToUtf8Bytes(success.Response, OxQLJson.Wire), OxQLJson.Wire)!,
+                BatchOutcome.Refused refused => throw new HttpRequestException(
+                    $"The owner of '{service.Key}' refused the batch: {refused.Refusal.Title}", null, (HttpStatusCode)refused.Refusal.Status),
+                _ => throw new InvalidOperationException("An unknown batch outcome."),
+            });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="call"/> in a request scope of the owner host that carries the forwarded
+    /// identity. It runs on a flow of its own, so the owner's request context never replaces the
+    /// caller's; the token abandons it as a timed-out HTTP call would.
+    /// </summary>
+    private async Task<T> OnOwnerAsync<T>(LabService service, IReadOnlyList<(string Name, string Value)> identity, CancellationToken cancellationToken, Func<IServiceProvider, CancellationToken, Task<T>> call)
     {
         var host = await fleet.HostAsync(service);
-        var sent = JsonSerializer.Deserialize<BatchRequest>(JsonSerializer.SerializeToUtf8Bytes(request, OxQLJson.Wire), OxQLJson.Wire)!;
-        Task<BatchResponse> run;
+        Task<T> run;
 
         using (ExecutionContext.SuppressFlow())
-            run = Task.Run(() => RunAsync(host, sent, identity, cancellationToken), CancellationToken.None);
+            run = Task.Run(() => InScopeAsync(host, identity, call, cancellationToken), CancellationToken.None);
 
         return await run.WaitAsync(cancellationToken);
     }
 
-    private static async Task<BatchResponse> RunAsync(FleetHost host, BatchRequest request, IReadOnlyList<(string Name, string Value)> identity, CancellationToken cancellationToken)
+    private static async Task<T> InScopeAsync<T>(FleetHost host, IReadOnlyList<(string Name, string Value)> identity, Func<IServiceProvider, CancellationToken, Task<T>> call, CancellationToken cancellationToken)
     {
         await using var scope = host.Services.CreateAsyncScope();
         var context = new DefaultHttpContext { RequestServices = scope.ServiceProvider };
@@ -136,15 +185,7 @@ public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor ht
 
         try
         {
-            var outcome = await scope.ServiceProvider.GetRequiredService<IOxQLQueryService>().BatchAsync(request, internalCall: true, cancellationToken);
-
-            return outcome switch
-            {
-                BatchOutcome.Success success => JsonSerializer.Deserialize<BatchResponse>(JsonSerializer.SerializeToUtf8Bytes(success.Response, OxQLJson.Wire), OxQLJson.Wire)!,
-                BatchOutcome.Refused refused => throw new HttpRequestException(
-                    $"The owner of '{host.Service.Key}' refused the batch: {refused.Refusal.Title}", null, (HttpStatusCode)refused.Refusal.Status),
-                _ => throw new InvalidOperationException("An unknown batch outcome."),
-            };
+            return await call(scope.ServiceProvider, cancellationToken);
         }
         finally
         {

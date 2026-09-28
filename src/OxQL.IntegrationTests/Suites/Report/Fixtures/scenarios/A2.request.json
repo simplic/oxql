@@ -1,0 +1,42 @@
+{
+  "entityType": "transport.shipment",
+  "variables": {
+    "shipmentId": "5b2a7e10-0c1d-4a5e-8f7b-9a1c2d3e4f50"
+  },
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": {
+            "$var": "shipmentId"
+          }
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "transport.delivery_attempt",
+        "path": "shipmentId",
+        "as": "lastAttempt",
+        "first": true,
+        "sort": [
+          {
+            "dateTime": "desc"
+          }
+        ],
+        "select": [
+          "id",
+          "dateTime",
+          "status",
+          "text"
+        ]
+      }
+    },
+    {
+      "project": {
+        "shipmentNumber": 1,
+        "lastAttempt": 1
+      }
+    }
+  ]
+}

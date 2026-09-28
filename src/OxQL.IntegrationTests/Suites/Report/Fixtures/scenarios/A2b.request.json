@@ -1,0 +1,112 @@
+{
+  "entityType": "ledger.transaction",
+  "variables": {
+    "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+  },
+  "strict": true,
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": {
+            "$var": "transactionId"
+          }
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "items",
+        "flatten": "items",
+        "as": "item",
+        "includeIndex": "position"
+      }
+    },
+    {
+      "match": {
+        "item": {
+          "is": "BillingLineTransactionItem"
+        }
+      }
+    },
+    {
+      "resolve": {
+        "path": "item.billingLineId",
+        "as": "erpLine",
+        "select": [
+          "id",
+          "text",
+          "sourceBillingLineReference.type",
+          "sourceBillingLineReference.id"
+        ]
+      }
+    },
+    {
+      "resolve": {
+        "path": "erpLine.sourceBillingLineReference.id",
+        "as": "sourceLine",
+        "select": [
+          "id",
+          "type",
+          "status",
+          "singlePrice",
+          "totalPrice",
+          "quantity.value",
+          "quantity.quantityUnit"
+        ],
+        "parentAs": "sourceParent",
+        "parentSelect": [
+          "id",
+          "shipmentNumber",
+          "referenceNumber",
+          "number"
+        ]
+      }
+    },
+    {
+      "lookup": {
+        "from": "transport.delivery_attempt",
+        "path": "shipmentId",
+        "on": "sourceParent",
+        "forTarget": "transport.shipment",
+        "as": "lastAttempt",
+        "first": true,
+        "sort": [
+          {
+            "dateTime": "desc"
+          }
+        ],
+        "select": [
+          "dateTime",
+          "status"
+        ]
+      }
+    },
+    {
+      "project": {
+        "number": 1,
+        "date": 1,
+        "position": 1,
+        "item.text": 1,
+        "item.quantity": 1,
+        "item.totalPriceNet": 1,
+        "erpLine": 1,
+        "sourceLine": 1,
+        "sourceParent": 1,
+        "lastAttempt": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "position": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 5000
+      }
+    }
+  ]
+}

@@ -328,11 +328,11 @@ public class ResolveBindTests
     }
 
     [Theory]
-    [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } }, "onMissing": "report" }""", ResolveExecutor.Keyed, ResolveOnMissing.Report)]
+    [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } }, "onMissing": "report" }""", ResolveExecutor.Inline, ResolveOnMissing.Report)]
     [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } }, "onMissing": "null" }""", ResolveExecutor.Inline, ResolveOnMissing.Null)]
     [InlineData("""{ "path": "customerId", "as": "c", "onMissing": "refuse" }""", ResolveExecutor.Inline, ResolveOnMissing.Refuse)]
     [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } } }""", ResolveExecutor.Inline, ResolveOnMissing.Null)]
-    public async Task A_filter_that_must_be_told_apart_from_a_missing_record_takes_the_keyed_fetch(string stage, ResolveExecutor executor, ResolveOnMissing effective)
+    public async Task A_filter_under_any_onMissing_keeps_the_inline_executor(string stage, ResolveExecutor executor, ResolveOnMissing effective)
     {
         var resolve = await ResolveAsync($$"""[{ "resolve": {{stage}} }]""");
 

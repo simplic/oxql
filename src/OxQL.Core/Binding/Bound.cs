@@ -415,6 +415,12 @@ public sealed record BoundPipeline
     /// field or group key folds case. A pipeline that folds nothing runs without one.
     /// </summary>
     public bool Collated { get; init; }
+
+    /// <summary>
+    /// Whether the request is strict (contract 2): what the executor detects to refuse, never what
+    /// binds. It is not part of the canonical form or the fingerprint.
+    /// </summary>
+    public bool Strict { get; init; }
 }
 
 /// <summary>

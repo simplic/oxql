@@ -481,6 +481,25 @@ public sealed class ChaosOwner : HttpMessageHandler
             return Refusal(refused.Code, refused.Message, refused.Path);
         }
 
+        // A grouped query (the internal keyedBy): the rows holding a key, at most perKey per key
+        // by record key, as a 2.1 owner's window leaves them.
+        if (query["keyedBy"] is JsonObject keyedBy)
+        {
+            var path = keyedBy["path"]?.GetValue<string>() ?? "";
+
+            if (!Members.Contains(path))
+                return Refusal("UNKNOWN_PATH", $"'{path}' is not a path of owner.widget.", path);
+
+            var keys = (keyedBy["keys"] as JsonArray ?? []).Select(key => key?.ToString()).ToHashSet(StringComparer.Ordinal);
+            var perKey = keyedBy["perKey"]?.GetValue<int>() ?? 2;
+
+            rows = rows
+                .Where(row => keys.Contains(row.Member(path)?.ToString()))
+                .GroupBy(row => row.Member(path)?.ToString(), StringComparer.Ordinal)
+                .SelectMany(group => group.OrderBy(row => row.Id, StringComparer.Ordinal).Take(perKey))
+                .ToList();
+        }
+
         foreach (var entry in sort.Reverse().OfType<JsonObject>())
         {
             var (path, direction) = entry.Select(pair => (pair.Key, pair.Value?.GetValue<string>())).FirstOrDefault();

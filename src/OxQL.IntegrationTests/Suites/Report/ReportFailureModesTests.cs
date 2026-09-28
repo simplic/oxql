@@ -13,8 +13,9 @@ namespace OxQL.IntegrationTests.Suites.Report;
 /// outside strict and under strict, where the report suites and <c>Suites.Joins</c> do not already
 /// hold them: a key two records hold in one chunk of a grouped owner answer beside keys that resolve
 /// (no false <c>not_found</c>); the clerk two employees share, through the plain owner query of a
-/// remote resolve onto a non-key member (the documented limitation PRE-2: its ambiguity is seen
-/// only when the owner page happens to hold both rows); a target the filter excludes, told apart
+/// 2.0 remote resolve onto a non-key member (its ambiguity is seen only when the owner page happens
+/// to hold both rows) and through the grouped query the same resolve sends once it reads its
+/// outcomes (PRE-2b: the same answer cold and warm); a target the filter excludes, told apart
 /// from a missing one by the existence probe; a flatten cut at its depth outside strict; the key
 /// budget over an in-process chain; the 5 000-row report page and <c>PAGE_INCOMPLETE</c>;
 /// <c>MAX_CONTINUED_STAGES_EXCEEDED</c> under strict. Every case gives its resolve a select of its
@@ -67,11 +68,11 @@ public class ReportFailureModesTests
     }
 
     [Fact]
-    public async Task R02_PRE2_the_clerk_two_employees_share_alone_on_a_page_is_RESOLVE_PARTIAL_with_nothing_unanswered_not_RESOLVE_AMBIGUOUS()
+    public async Task R02_PRE2_the_clerk_two_employees_share_alone_on_a_page_is_RESOLVE_PARTIAL_on_the_plain_query_and_RESOLVE_AMBIGUOUS_under_strict()
     {
-        // Documented limitation (E09/E10a, review item PRE-2): a remote resolve onto a non-key
-        // member of an owner on the plain query asks with a page of one row per key, so the
-        // owner's second employee is a next page, not a second row under the key.
+        // A 2.0 request reads no outcome and keeps the plain owner query, which asks with a page of
+        // one row per key: the owner's second employee is a next page. A strict request reads the
+        // outcomes, so its query onto the non-key userId is grouped per key and sees both (PRE-2b).
         var client = await LedgerClient();
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.AmbiguousClerkTransactionId)}}" } } },
@@ -87,12 +88,12 @@ public class ReportFailureModesTests
 
         var refused = await client.QueryAsync(Request(ReportSeed.Transaction, pipeline.Replace("SELECT", "address.street"), strict: true));
 
-        refused.ShouldRefuse(Codes.ResolvePartial, 422);
-        refused.ErrorCodes.Should().Equal([Codes.ResolvePartial], "strict refuses the cut owner page; it cannot name the ambiguity");
+        refused.ShouldRefuse(Codes.ResolveAmbiguous, 422);
+        refused.ErrorCodes.Should().Equal([Codes.ResolveAmbiguous], "strict names the ambiguity, whatever the owner's page holds");
     }
 
     [Fact]
-    public async Task R03_PRE2_the_shared_clerk_in_one_plain_chunk_with_other_keys_is_ambiguous_only_while_the_owner_page_holds_both_rows_and_a_cached_repeat_takes_the_first()
+    public async Task R03_PRE2b_the_shared_clerk_under_onMissing_is_ambiguous_whatever_the_owner_page_holds_and_the_same_cold_and_warm()
     {
         var client = await LedgerClient();
         var pipeline = $$"""
@@ -102,32 +103,34 @@ public class ReportFailureModesTests
             """;
         string Ids(params Guid[] ids) => string.Join(", ", ids.Select(id => $"\"{Id(id)}\""));
 
-        // Two keys, one of them shared: the page of two rows holds the clerk and one of the two
-        // employees; the cut is RESOLVE_PARTIAL with nothing unanswered, and no key reads not_found.
+        // Two keys, one of them shared: grouped per key, the owner answers both employees under the
+        // shared clerk, so the ambiguity is seen although a plain page of two rows would have cut it.
         var two = await client.QueryAsync(Request(ReportSeed.Transaction,
             pipeline.Replace("IDS", Ids(ReportSeed.TransactionId, ReportSeed.AmbiguousClerkTransactionId)).Replace("SELECT", "address.zipcode")));
 
-        two.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_PARTIAL"], two.ToString());
-        two.Diagnostics[0]["params"]!["unanswered"]!.GetValue<int>().Should().Be(0);
+        two.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_AMBIGUOUS"], two.ToString());
+        RowsOf(two.Diagnostics[0]).Should().Equal((1, Id(ReportSeed.DuplicateUserId), "ambiguous"));
         two.Strings("clerk.address.lastName").Should().Equal("Becker", "Krause");
 
-        // Three keys, one missing: the page of three rows holds both employees, so the ambiguity is
-        // seen, and the missing clerk is not_found.
+        // Three keys, one missing: cold, then warm from the cache, then strict: the same ambiguity.
         var three = Request(ReportSeed.Transaction,
             pipeline.Replace("IDS", Ids(ReportSeed.TransactionId, ReportSeed.AmbiguousClerkTransactionId, ReportSeed.MissingClerkTransactionId)).Replace("SELECT", "address.countryIso"));
         var cold = await client.QueryAsync(three);
-
-        cold.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_AMBIGUOUS", "RESOLVE_MISSING"], cold.ToString());
-        RowsOf(cold.Diagnostics[0]).Should().Equal((1, Id(ReportSeed.DuplicateUserId), "ambiguous"));
-        RowsOf(cold.Diagnostics[1]).Should().Equal((2, Id(ReportSeed.UnknownUserId), "not_found"));
-
-        // The plain query's cache entry keeps the first row of a key: the repeat, strict included,
-        // no longer sees the second employee.
-        three["strict"] = true;
         var warm = await client.QueryAsync(three);
 
-        warm.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_MISSING"], "strict with onMissing report keeps the missing row a diagnostic; the ambiguity is lost to the cache (PRE-2)");
-        warm.Strings("clerk.address.lastName").Should().Equal("Becker", "Krause", null);
+        foreach (var answer in new[] { cold, warm })
+        {
+            answer.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_AMBIGUOUS", "RESOLVE_MISSING"], answer.ToString());
+            RowsOf(answer.Diagnostics[0]).Should().Equal((1, Id(ReportSeed.DuplicateUserId), "ambiguous"));
+            RowsOf(answer.Diagnostics[1]).Should().Equal((2, Id(ReportSeed.UnknownUserId), "not_found"));
+            answer.Strings("clerk.address.lastName").Should().Equal("Becker", "Krause", null);
+        }
+
+        three["strict"] = true;
+        var strict = await client.QueryAsync(three);
+
+        strict.ShouldRefuse(Codes.ResolveAmbiguous, 422);
+        strict.ErrorCodes.Should().Equal([Codes.ResolveAmbiguous], "the cached repeat keeps both employees, so strict still sees the ambiguity; the missing clerk stays a diagnostic under onMissing report");
     }
 
     // ---- excluded, told apart from missing by the probe ---------------------------------------

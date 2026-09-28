@@ -527,6 +527,7 @@ public sealed class Binder
                 HasSemiJoin = hasSemiJoin,
                 KeyedBy = keyedByBound,
                 Collated = collated,
+                Strict = contract2 && request.IsStrict,
             };
         }
 
@@ -1356,12 +1357,12 @@ public sealed class Binder
                 return;
 
             // Step 5: the executor. The in-aggregate $lookup runs one unconditional case on one
-            // local entity, without conversion; a filter it would need to tell apart from a
-            // missing record (onMissing other than null) takes the keyed fetch's probe.
+            // local entity, without conversion. What strict or onMissing asks of it (a filter's
+            // excluded record told from a missing one, a non-key target's second record) the
+            // aggregate detects itself, so neither changes the executor or what binds (DESIGN §3.0).
             var first = cases[0].Targets[0];
             var inline = cases is [{ Declared: { When: null, KeyAs: KeyAs.None }, Targets: [{ IsRemote: false, Declared.Item: null }] }]
-                && elements is null
-                && !(resolve.Filter?.Condition is not null && effectiveOnMissing != ResolveOnMissing.Null);
+                && elements is null;
             var anyRemote = cases.Any(bound => bound.Targets.Any(target => target.IsRemote));
 
             var stage = new BoundStage.Resolve(reference, alias, first.Declared.Entity, first.Declared.Field, anyRemote,

@@ -43,8 +43,13 @@ public static class OwnerQueryBuilder
     /// filtered query did not return tells <c>excluded</c> (the probe finds it) from
     /// <c>not_found</c> (it does not).
     /// </para>
+    /// <para>
+    /// A plain query onto a member that is not the target's key, sent to an owner before 2.1 for a
+    /// request that reads its outcomes, pages <paramref name="plainRowsPerKey"/> rows per key, so a
+    /// second row under a key arrives or the answer has a next page.
+    /// </para>
     /// </summary>
-    public static QueryRequest ByKeys(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<string> keys, int? perKey, bool probe = false)
+    public static QueryRequest ByKeys(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<string> keys, int? perKey, bool probe = false, int plainRowsPerKey = 1)
     {
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(target);
@@ -96,7 +101,7 @@ public static class OwnerQueryBuilder
         }
 
         pipeline.Add(new PipelineStage { Project = new ProjectStage { Fields = projection }, Keys = ["project"] });
-        pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count * (perKey ?? 1) }, Keys = ["page"] });
+        pipeline.Add(new PipelineStage { Page = new PageStage { Limit = keys.Count * (perKey ?? Math.Max(1, plainRowsPerKey)) }, Keys = ["page"] });
 
         return new QueryRequest
         {

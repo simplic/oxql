@@ -27,11 +27,14 @@ public sealed record FlattenProbe(string Field, int Stage, string Path, int Dept
 public sealed record LookupFlag(string Field, int Stage, string Alias, int Limit);
 
 /// <summary>
-/// An inline resolve whose missing references the executor reads off the page rows (DESIGN §3.6):
-/// a row whose reference at <paramref name="ReferenceStorage"/> holds a value and whose alias is
-/// null is <c>not_found</c>. The compiler keeps the reference in storage against projections.
+/// An inline resolve whose outcomes the executor reads off the page rows (DESIGN §3.6): a row whose
+/// reference at <paramref name="ReferenceStorage"/> holds a value and whose alias is null is
+/// <c>not_found</c>, or <c>excluded</c> when <paramref name="ExistsFlag"/> says the unfiltered
+/// target has the record (a filtered resolve); a row whose <paramref name="AmbiguityFlag"/> is set
+/// joined a key two records hold (a target onto a member that is not its key) and is
+/// <c>ambiguous</c>. The compiler keeps the reference and the flags in storage against projections.
 /// </summary>
-public sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage);
+public sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage, string? AmbiguityFlag = null, string? ExistsFlag = null);
 
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
 public sealed record CompiledQuery
@@ -119,6 +122,12 @@ public static class MongoCompiler
 
     /// <summary>The prefix of a lookup's truncation flag; the row keeps it through projections and groups, and the executor removes it.</summary>
     private const string ReservedLookupFlag = Aliases.ReservedPrefix + "oxLk";
+
+    /// <summary>The prefix of an inline resolve's ambiguity flag (a key two records hold); the row keeps it through projections, and the executor removes it.</summary>
+    private const string ReservedAmbiguityFlag = Aliases.ReservedPrefix + "oxAmb";
+
+    /// <summary>The prefix of a filtered inline resolve's existence flag (the unfiltered target has the record); the row keeps it through projections, and the executor removes it.</summary>
+    private const string ReservedExistsFlag = Aliases.ReservedPrefix + "oxHas";
 
     /// <summary>The variable a join on an alias binds the parent's key to, so a parent the row does not hold joins no children.</summary>
     private const string ParentVariable = "oxParent";
@@ -292,14 +301,12 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
-                    lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated));
+                    lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys)));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
-                    Probe(bound, index, resolve, inlineProbes, probeKeys);
                     break;
 
                 case BoundStage.Resolve resolve:
-                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated));
-                    Probe(bound, index, resolve, inlineProbes, probeKeys);
+                    emitted.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys)));
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -335,7 +342,7 @@ public static class MongoCompiler
                     break;
 
                 case BoundStage.Project project:
-                    if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                    if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey, [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes)], sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
                         emitted.Add(projection);
                     break;
 
@@ -439,23 +446,52 @@ public static class MongoCompiler
         };
     }
 
-    /// <summary>Registers an inline resolve's missing-reference probe when its effective <c>onMissing</c> asks for one and the row shows its alias.</summary>
-    private static void Probe(BoundPipeline bound, int index, BoundStage.Resolve resolve, List<InlineProbe> probes, List<string> keys)
+    /// <summary>
+    /// Registers an inline resolve's outcome probe when the row shows its alias and something reads
+    /// the outcomes: an effective <c>onMissing</c> other than <c>null</c> (missing rows, and with a
+    /// filter the existence flag that tells an excluded record from a missing one), or a strict
+    /// request (a non-key target's ambiguity). A target onto a member that is not its key is joined
+    /// with two records, so a key two records hold is <c>ambiguous</c> whatever the page and cache
+    /// hold. Null when there is nothing to probe.
+    /// </summary>
+    private static InlineProbe? Probe(BoundPipeline bound, int index, BoundStage.Resolve resolve, List<InlineProbe> probes, List<string> keys)
     {
-        if (resolve.EffectiveOnMissing == ResolveOnMissing.Null || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
-            return;
+        var reports = resolve.EffectiveOnMissing != ResolveOnMissing.Null;
 
-        probes.Add(new InlineProbe(bound.CallerIndexOf(index) ?? index, resolve, storage));
+        if (!(reports || bound.Strict) || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
+            return null;
+
+        var ambiguity = TargetIsKey(resolve) ? null : ReservedAmbiguityFlag + probes.Count;
+        var exists = reports && resolve.Filter is not null ? ReservedExistsFlag + probes.Count : null;
+
+        if (!reports && ambiguity is null)
+            return null;
+
+        var probe = new InlineProbe(bound.CallerIndexOf(index) ?? index, resolve, storage, ambiguity, exists);
+
+        probes.Add(probe);
 
         if (!keys.Contains(storage, StringComparer.Ordinal))
             keys.Add(storage);
+
+        return probe;
     }
 
+    /// <summary>Whether an inline resolve's target field is its entity's key, which no two records share.</summary>
+    private static bool TargetIsKey(BoundStage.Resolve resolve) =>
+        resolve.Cases is [{ Targets: [var target] }, ..] ? target.Declared.FieldIsKey : resolve.TargetFieldStorage == KeyStorage;
+
+    /// <summary>The flags the inline probes write into the rows.</summary>
+    private static IEnumerable<string> InlineFlags(IEnumerable<InlineProbe> probes) =>
+        probes.SelectMany(probe => new[] { probe.AmbiguityFlag, probe.ExistsFlag }).OfType<string>();
+
     /// <summary>
-    /// The missing references of the page's inline resolves (DESIGN §3.6): per probe, every row
-    /// whose reference holds a value and whose alias is null or absent is <c>not_found</c>, keyed
-    /// by the reference's wire value. A null reference is <c>reference_null</c>, which is not
-    /// reported.
+    /// The outcomes of the page's inline resolves (DESIGN §3.6): per probe, every row whose
+    /// reference holds a value and whose alias is null or absent is <c>not_found</c>, or
+    /// <c>excluded</c> when the unfiltered target has the record; one whose ambiguity flag is set
+    /// is <c>ambiguous</c>; each keyed by the reference's wire value. A null reference is
+    /// <c>reference_null</c>, which is not reported. The flags are removed from the rows, which
+    /// never show them.
     /// </summary>
     public static IReadOnlyList<KeyedRowOutcome> InlineOutcomes(CompiledQuery compiled, IReadOnlyList<BsonDocument> page)
     {
@@ -470,12 +506,16 @@ public static class MongoCompiler
 
             for (var row = 0; row < page.Count; row++)
             {
+                var ambiguous = Take(page[row], probe.AmbiguityFlag);
+                var exists = Take(page[row], probe.ExistsFlag);
                 var value = KeyedFetch.ValueAt(page[row], probe.ReferenceStorage);
 
                 if (value is null || value.IsBsonNull || value.IsBsonUndefined)
                     continue;
 
-                if (KeyedFetch.ValueAt(page[row], probe.Resolve.As) is { IsBsonNull: false, IsBsonUndefined: false })
+                var joined = KeyedFetch.ValueAt(page[row], probe.Resolve.As) is { IsBsonNull: false, IsBsonUndefined: false };
+
+                if (joined && !ambiguous)
                     continue;
 
                 var key = WireEncoder.EncodeScalar(value, reference.LeafKind, reference.Leaf) switch
@@ -485,11 +525,23 @@ public static class MongoCompiler
                     var other => other.ToJsonString(),
                 };
 
-                outcomes.Add(new KeyedRowOutcome(probe.Stage, probe.Resolve.As, row, null, key, KeyedOutcome.NotFound));
+                outcomes.Add(new KeyedRowOutcome(probe.Stage, probe.Resolve.As, row, null, key,
+                    joined ? KeyedOutcome.Ambiguous : exists ? KeyedOutcome.Excluded : KeyedOutcome.NotFound));
             }
         }
 
         return outcomes;
+
+        // Reads a flag off a row and removes it; absent is false.
+        static bool Take(BsonDocument row, string? field)
+        {
+            if (field is null || !row.TryGetValue(field, out var set))
+                return false;
+
+            row.Remove(field);
+
+            return set is BsonBoolean { Value: true };
+        }
     }
 
     /// <summary>
@@ -980,7 +1032,13 @@ public static class MongoCompiler
                 yield return when.Storage;
     }
 
-    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated)
+    /// <summary>
+    /// An inline resolve: the indexed <c>$lookup</c> with the scope inside, the target's filter, one
+    /// record, then a <c>$set</c> that takes it out of the array. With an ambiguity flag the join takes
+    /// two records and the flag says whether there were two; with an existence flag a second join
+    /// without the filter says whether the target has the record at all (DESIGN §3.6).
+    /// </summary>
+    private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated, InlineProbe? probe = null)
     {
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
         var exactKey = collated && IsStringStored(resolve.Reference);
@@ -991,15 +1049,45 @@ public static class MongoCompiler
         if (resolve.Filter is not null)
             pipeline.Add(new BsonDocument("$match", Filter(resolve.Filter, semiJoins, collated)));
 
-        pipeline.Add(new BsonDocument("$limit", 1));
+        // Two records of one key: the first by record key is the one taken, as the keyed fetch takes it.
+        if (probe?.AmbiguityFlag is not null)
+            pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
+
+        pipeline.Add(new BsonDocument("$limit", probe?.AmbiguityFlag is null ? 1 : 2));
         pipeline.Add(new BsonDocument("$project", Select(resolve.Select!)));
 
         // No caller alias ends in the suffix, so the temporary field shadows nothing.
         var temporary = resolve.As + Aliases.ReservedSuffix;
+        var set = new BsonDocument(resolve.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + temporary, 0 }));
 
         yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, pipeline, temporary));
-        yield return new BsonDocument("$set", new BsonDocument(resolve.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + temporary, 0 })));
-        yield return new BsonDocument("$unset", temporary);
+
+        if (probe?.AmbiguityFlag is { } ambiguity)
+            set[ambiguity] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + temporary), 1 });
+
+        if (probe?.ExistsFlag is not { } exists)
+        {
+            yield return new BsonDocument("$set", set);
+            yield return new BsonDocument("$unset", temporary);
+            yield break;
+        }
+
+        // The existence join: the same key match without the filter, one key read.
+        var existing = resolve.As + "Has" + Aliases.ReservedSuffix;
+        var probeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
+
+        if (exactKey)
+            probeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
+
+        probeline.Add(new BsonDocument("$limit", 1));
+        probeline.Add(new BsonDocument("$project", new BsonDocument(KeyStorage, 1)));
+
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, probeline, existing));
+
+        set[exists] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 });
+
+        yield return new BsonDocument("$set", set);
+        yield return new BsonDocument("$unset", new BsonArray { temporary, existing });
     }
 
     /// <summary>

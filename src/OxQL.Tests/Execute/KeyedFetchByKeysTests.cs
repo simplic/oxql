@@ -134,11 +134,11 @@ public class KeyedFetchByKeysTests
     public async Task A_local_keyed_filter_reaches_SelfOwner_with_its_variables_substituted()
     {
         var (engine, runner, _) = Host();
-        runner.Rows[Invoice] = [InvoiceRow(row => row["CustomerId"] = Id(Customer1))];
+        runner.Rows[Invoice] = [InvoiceRow(row => row["CustomerIds"] = new BsonArray { Id(Customer1) })];
         runner.Rows["rc.customer"] = [CustomerRow(Customer1, "Alice")];
 
         var outcome = await engine.ExecuteAsync(
-            BindHost.Request(Invoice, """[{ "resolve": { "path": "customerId", "as": "customer", "filter": { "name": { "eq": { "$var": "who" } } }, "onMissing": "report" } }]""", """{ "who": "Alice" }"""),
+            BindHost.Request(Invoice, """[{ "resolve": { "path": "customerIds", "as": "customer", "elements": "first", "filter": { "name": { "eq": { "$var": "who" } } }, "onMissing": "report" } }]""", """{ "who": "Alice" }"""),
             BindHost.Context());
 
         var result = outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "").Subject.Result;

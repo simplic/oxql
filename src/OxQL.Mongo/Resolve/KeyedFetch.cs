@@ -1128,7 +1128,7 @@ public sealed class KeyedFetch
         private readonly IReadOnlyList<string>? parentProjected;
 
         public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict,
-            bool union = false, IReadOnlyList<string>? projected = null, IReadOnlyList<string>? parentProjected = null)
+            bool union = false, IReadOnlyList<string>? projected = null, IReadOnlyList<string>? parentProjected = null, bool legacyOwner = false)
         {
             Stage = stage;
             Target = target;
@@ -1143,8 +1143,17 @@ public sealed class KeyedFetch
             // An entity keyed by its own key has one row per key, which a plain key match serves;
             // every other target is grouped per key. A plain 2.0 resolve keeps the plain query it
             // always sent (DESIGN §3.5.7, §3.5.8): its owner may still be on 2.0, or reached over
-            // a route that does not take keyedBy.
-            Grouped = stage.NeedsKeyedFetch && (target.Declared.Item is not null || !target.Declared.FieldIsKey);
+            // a route that does not take keyedBy. A request that reads the outcomes (strict, or an
+            // onMissing other than null) is 2.1, and a plain query onto a member that is not the key
+            // sees a second row only when the owner's page happens to hold it, so such a target is
+            // grouped too: its ambiguity then depends neither on the page nor on the cache.
+            // An owner known to run an engine before 2.1 takes no keyedBy; it is asked the plain query
+            // with two rows per key instead, so a second row arrives or the answer has a next page.
+            var nonKey = target.Declared.Item is not null || !target.Declared.FieldIsKey;
+            var readsOutcomes = strict || stage.EffectiveOnMissing != ResolveOnMissing.Null;
+
+            Grouped = nonKey && (stage.NeedsKeyedFetch || (readsOutcomes && !legacyOwner));
+            PlainRowsPerKey = !Grouped && nonKey && readsOutcomes ? PerKey : 1;
             Service = target.IsRemote ? ServiceKeyOf(target.Declared.Entity) : SelfService;
 
             // The probe tells a key the filter left out from a missing one, which only a stage
@@ -1175,6 +1184,9 @@ public sealed class KeyedFetch
         public int ContinuedAt { get; private set; }
 
         public bool Grouped { get; }
+
+        /// <summary>The rows per key a plain query's page holds: two for a non-key target whose outcomes are read at an owner before 2.1, else one.</summary>
+        public int PlainRowsPerKey { get; }
 
         /// <summary>Whether the keys the filtered query does not return are probed without the filter.</summary>
         public bool Probed { get; }
@@ -1219,7 +1231,7 @@ public sealed class KeyedFetch
         /// </summary>
         public QueryRequest Query(IReadOnlyList<string> keys)
         {
-            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? PerKey : null);
+            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? PerKey : null, plainRowsPerKey: PlainRowsPerKey);
 
             if (Continued.IsEmpty)
                 return query;
@@ -1247,7 +1259,7 @@ public sealed class KeyedFetch
             row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
         /// <summary>The existence probe of some keys: the query without the filter, one row per key is enough.</summary>
-        public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true);
+        public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true, plainRowsPerKey: PlainRowsPerKey);
 
         /// <summary>Whether the keyed stage has more than one target entity: a flat select path one of them lacks is dropped for it.</summary>
         public bool Union { get; }
@@ -1382,12 +1394,15 @@ public sealed class KeyedFetch
                 Excluded.Add(key);
         }
 
-        /// <summary>What the cache keeps for a key: its rows (the first for a plain query, up to <see cref="PerKey"/> for a grouped one), or whether it was excluded.</summary>
+        /// <summary>
+        /// What the cache keeps for a key: its rows, up to <see cref="PerKey"/> as they arrived, so a
+        /// repeat answers the ambiguity the first answer saw; or whether it was excluded.
+        /// </summary>
         public OwnerAnswer Cached(string key)
         {
             Hits.TryGetValue(key, out var rows);
 
-            return new OwnerAnswer((rows ?? []).Take(Grouped ? PerKey : 1).ToList(), rows is not { Count: > 0 } && Excluded.Contains(key));
+            return new OwnerAnswer((rows ?? []).Take(PerKey).ToList(), rows is not { Count: > 0 } && Excluded.Contains(key));
         }
 
         public void Hit(string key, JsonObject row)
@@ -1479,7 +1494,7 @@ public sealed class KeyedFetch
     {
         var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
 
-        return target.Grouped ? Math.Max(1, Math.Min(chunk, options.Limits.MaxPageSize / PerKey)) : chunk;
+        return target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, options.Limits.MaxPageSize / PerKey)) : chunk;
     }
 
     /// <summary>
@@ -1503,7 +1518,8 @@ public sealed class KeyedFetch
                 var shared = plan.Targets.FirstOrDefault(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item);
 
                 if (shared is null)
-                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, projected, parentProjected));
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, projected, parentProjected,
+                        legacyOwner: target.IsRemote && IsBefore21(ServiceKeyOf(target.Declared.Entity))));
 
                 plan.ByTarget[target] = shared;
             }
@@ -2069,6 +2085,10 @@ public sealed class KeyedFetch
 
         return null;
     }
+
+    /// <summary>Whether the owner of <paramref name="service"/> is known, by its shallow health, to run an engine before 2.1.</summary>
+    private bool IsBefore21(string service) =>
+        client is IRemoteOwnerInfo owners && owners.OwnerOf(service)?.EngineVersion is { } version && EngineVersionOf(version) is { } parsed && parsed < Owner21;
 
     /// <summary>The engine version remote continuation, typed and item targets and <c>keyedBy</c> need at the owner.</summary>
     private static readonly Version Owner21 = new(2, 1);

@@ -136,7 +136,7 @@ public class StrictRequestBindTests
     [InlineData("""{ "path": "customerId", "as": "c" }""", "\"strict\": false,", ResolveExecutor.Inline, ResolveOnMissing.Null)]
     [InlineData("""{ "path": "customerId", "as": "c", "onMissing": "null" }""", "\"strict\": true,", ResolveExecutor.Inline, ResolveOnMissing.Null)]
     [InlineData("""{ "path": "customerId", "as": "c", "onMissing": "report" }""", "\"strict\": true,", ResolveExecutor.Inline, ResolveOnMissing.Report)]
-    [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } } }""", "\"strict\": true,", ResolveExecutor.Keyed, ResolveOnMissing.Refuse)]
+    [InlineData("""{ "path": "customerId", "as": "c", "filter": { "name": { "eq": "x" } } }""", "\"strict\": true,", ResolveExecutor.Inline, ResolveOnMissing.Refuse)]
     public async Task A_strict_request_refuses_a_missing_reference_unless_the_stage_says_otherwise(string stage, string members, ResolveExecutor executor, ResolveOnMissing effective)
     {
         var request = BindHost.Parse($$"""{ "entityType": "{{ResolveModel.Invoice}}", {{members}} "pipeline": [{ "resolve": {{stage}} }] }""");
@@ -146,7 +146,7 @@ public class StrictRequestBindTests
         var resolve = ((BindOutcome.Bound)outcome).Pipeline.Stages.OfType<BoundStage.Resolve>().Single();
 
         resolve.EffectiveOnMissing.Should().Be(effective);
-        resolve.Executor.Should().Be(executor, "a filter a missing record must be told apart from takes the keyed fetch");
+        resolve.Executor.Should().Be(executor, "strict changes what refuses, never the executor: the aggregate tells an excluded record from a missing one itself");
     }
 
     // ---- the report page ---------------------------------------------------------------------

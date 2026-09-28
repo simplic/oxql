@@ -67,12 +67,16 @@ public class KeyedFetchOwnerTests
         return ((QueryOutcome.Success)outcome).Result;
     }
 
-    /// <summary>The keys a plain owner query matches.</summary>
+    /// <summary>
+    /// The keys an owner query asks for: a plain query's key match, or a grouped one's <c>keyedBy</c>
+    /// (a resolve onto <c>contactNumber</c>, which is not the contact's key, is grouped once it reads
+    /// its outcomes under <c>onMissing</c> or strict).
+    /// </summary>
     private static List<string> KeysOf(QueryRequest query) =>
-        query.Pipeline[0].Match!.Condition!.Value!.Value.EnumerateArray().Select(key => key.GetString()!).ToList();
+        (query.KeyedBy is { } keyedBy ? keyedBy.Keys!.Value : query.Pipeline[0].Match!.Condition!.Value!.Value).EnumerateArray().Select(key => key.GetString()!).ToList();
 
     /// <summary>Whether an owner query carries the target's filter, i.e. is not the probe.</summary>
-    private static bool Filtered(QueryRequest query) => query.Pipeline.Count(stage => stage.Match is not null) > 1;
+    private static bool Filtered(QueryRequest query) => query.Pipeline.Count(stage => stage.Match is not null) > (query.KeyedBy is null ? 1 : 0);
 
     private static JsonObject Diagnostic(QueryResult result, string code) =>
         JsonSerializer.SerializeToNode(result.Diagnostics!.Single(diagnostic => diagnostic.Code == code), OxQLJson.Wire)!.AsObject();

@@ -4,10 +4,11 @@ namespace OxQL.Core.Engine;
 
 /// <summary>
 /// What a host knows of a remote owner from the owner's shallow health
-/// (<c>GET /oxql/health?shallow=true</c>): its engine version and contract, and the largest batch
-/// it takes (<c>limits.maxBatchQueries</c>). Any member is null while unknown.
+/// (<c>GET /oxql/health?shallow=true</c>): its engine version and contract, the largest batch it
+/// takes (<c>limits.maxBatchQueries</c>) and the largest page it answers (<c>limits.maxPageSize</c>).
+/// Any member is null while unknown.
 /// </summary>
-public sealed record RemoteOwnerInfo(string? EngineVersion, int? Contract, int? MaxBatchQueries)
+public sealed record RemoteOwnerInfo(string? EngineVersion, int? Contract, int? MaxBatchQueries, int? MaxPageSize = null)
 {
     /// <summary>The owner's facts read off its shallow-health body; null when the body is not one.</summary>
     public static RemoteOwnerInfo? FromShallowHealth(JsonNode? health)
@@ -18,7 +19,8 @@ public sealed record RemoteOwnerInfo(string? EngineVersion, int? Contract, int? 
         return new RemoteOwnerInfo(
             body["engine"]?["version"] is JsonValue version && version.TryGetValue<string>(out var text) ? text : null,
             body["engine"]?["contract"] is JsonValue contract && contract.TryGetValue<int>(out var number) ? number : null,
-            body["limits"]?["maxBatchQueries"] is JsonValue cap && cap.TryGetValue<int>(out var size) && size > 0 ? size : null);
+            body["limits"]?["maxBatchQueries"] is JsonValue cap && cap.TryGetValue<int>(out var size) && size > 0 ? size : null,
+            body["limits"]?["maxPageSize"] is JsonValue page && page.TryGetValue<int>(out var rows) && rows > 0 ? rows : null);
     }
 }
 

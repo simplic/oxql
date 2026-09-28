@@ -221,6 +221,65 @@ public class OwnerFetchRobustnessTests
         some.TryGetKeys("empty", out _).Should().BeTrue();
     }
 
+    // ---- the owner's page and the key budget (RE-13, RE-14) ---------------------------------------
+
+    private static readonly Guid ContactA = Guid.Parse("c0000000-0000-0000-0000-00000000000a");
+    private static readonly Guid ContactB = Guid.Parse("c0000000-0000-0000-0000-00000000000b");
+    private static readonly Guid ContactC = Guid.Parse("c0000000-0000-0000-0000-00000000000c");
+
+    private static BsonDocument ContactRow(Guid contact) => new()
+    {
+        ["_id"] = Id(Guid.NewGuid()),
+        ["OrganizationId"] = Id(BindHost.Organisation),
+        ["ContactId"] = Id(contact),
+    };
+
+    [Fact]
+    public async Task An_owner_with_a_smaller_page_than_this_host_is_asked_chunks_its_page_holds()
+    {
+        var (engine, runner, client, _) = Host();
+        runner.PageRows = [ContactRow(ContactA), ContactRow(ContactB), ContactRow(ContactC)];
+        client.Owners["crm"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 10, MaxPageSize: 2);
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
+
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context()));
+
+        client.Calls.Single().Request.Queries.Select(query => query.Pipeline.Single(stage => stage.Page is not null).Page!.Limit)
+            .Should().Equal([2, 1], "the owner answers pages of two, so no query asks for more");
+    }
+
+    [Fact]
+    public void The_owners_page_is_read_off_its_shallow_health()
+    {
+        RemoteOwnerInfo.FromShallowHealth(JsonNode.Parse("""{ "limits": { "maxBatchQueries": 5, "maxPageSize": 200 } }"""))!.MaxPageSize.Should().Be(200);
+    }
+
+    private sealed class EntityRunner : IAggregateRunner
+    {
+        public Dictionary<string, List<BsonDocument>> Rows { get; } = new(StringComparer.Ordinal);
+
+        public Task<IReadOnlyList<BsonDocument>> AggregateAsync(OxQL.Model.EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<BsonDocument>>(Rows.TryGetValue(entity.Id, out var rows) ? rows.Select(row => row.DeepClone().AsBsonDocument).ToList() : []);
+    }
+
+    [Fact]
+    public async Task A_key_asked_of_both_targets_of_a_union_counts_once_against_the_budget()
+    {
+        var runner = new EntityRunner();
+        var options = BindHost.Options(configure => configure.Limits.MaxResolveKeys = 1);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, new FakeRemoteClient(), cache: new OwnerFetchCache(options));
+
+        runner.Rows[Invoice] = [new BsonDocument
+        {
+            ["_id"] = Id(Invoice1), ["OrganizationId"] = Id(BindHost.Organisation), ["Number"] = "RE",
+            ["LocalSource"] = new BsonDocument { ["Type"] = "logistics", ["_id"] = Id(Line1) },
+        }];
+
+        var result = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "localSource.id", "as": "line" } }]"""), BindHost.Context()));
+
+        (result.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Codes.ResolvePartial, "one key of one row is one key, whether the shipment or the tour holds it");
+    }
+
     // ---- a local target without this host's engine (RE-21) -----------------------------------------
 
     [Fact]

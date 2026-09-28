@@ -363,8 +363,6 @@ public sealed class KeyedFetch
 
         var organisation = context.Organisation!.Value;
         var cap = options.Limits.MaxSemiJoinIds;
-        var pageSize = Math.Max(1, Math.Min(options.Limits.MaxPageSize, cap));
-        var lastOffset = (cap / pageSize) * pageSize;
         var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
 
         // An answer already in hand costs the owner nothing, and a grid asks the same question
@@ -372,6 +370,11 @@ public sealed class KeyedFetch
         var pending = new List<SemiJoinSlot>();
 
         await ReadOwnersAsync(slots.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))), remaining, cancellationToken).ConfigureAwait(false);
+
+        // One page size for the phase: the smallest page any owner asked answers, so no owner
+        // refuses a page as too large (RE-13).
+        var pageSize = Math.Max(1, Math.Min(slots.Select(slot => PageOf(ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(), cap));
+        var lastOffset = (cap / pageSize) * pageSize;
 
         foreach (var slot in slots)
         {
@@ -1513,7 +1516,8 @@ public sealed class KeyedFetch
 
     /// <summary>
     /// The keys one request may ask owners for (DESIGN §3.5.2 step 2): <c>MaxResolveKeys</c> over
-    /// every keyed stage and target, in stage order; keys the cache answers cost nothing.
+    /// every keyed stage, in stage order, a key counted once per stage however many targets of a
+    /// union it is asked of; keys the cache answers cost nothing.
     /// </summary>
     private sealed class KeyBudget(int max)
     {
@@ -1532,12 +1536,26 @@ public sealed class KeyedFetch
         }
     }
 
-    /// <summary>The keys one owner query of a target carries: the key chunk, and for a grouped query no more than the owner's page holds at <see cref="PerKey"/> rows per key.</summary>
+    /// <summary>
+    /// The keys one owner query of a target carries: the key chunk, and no more than the owner's page
+    /// holds, at <see cref="PerKey"/> rows per key for a grouped query. The page is the smaller of this
+    /// host's <c>MaxPageSize</c> and the owner's own, when its shallow health said it (RE-13): an owner
+    /// configured smaller would refuse the page as too large.
+    /// </summary>
     private int ChunkOf(TargetPlan target)
     {
         var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
+        var page = PageOf(target.Service);
 
-        return target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, options.Limits.MaxPageSize / PerKey)) : chunk;
+        return target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, page / PerKey)) : Math.Min(chunk, page);
+    }
+
+    /// <summary>The largest page an owner answers: this host's <c>MaxPageSize</c>, or the owner's own when it is known and smaller.</summary>
+    private int PageOf(string service)
+    {
+        var page = Math.Max(1, options.Limits.MaxPageSize);
+
+        return service != SelfService && client is IRemoteOwnerInfo known && known.OwnerOf(service)?.MaxPageSize is { } owner and > 0 && owner < page ? owner : page;
     }
 
     /// <summary>
@@ -1595,22 +1613,30 @@ public sealed class KeyedFetch
             }
         }
 
+        // A key counts once per stage, however many targets of a union it is asked of.
+        var granted = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var target in plan.Targets)
         {
             var misses = target.Misses;
-            var granted = budget.Take(misses.Count);
+            var fresh = misses.Where(key => !granted.Contains(key)).ToList();
+            var allowed = budget.Take(fresh.Count);
 
-            if (granted < misses.Count)
+            granted.UnionWith(fresh.Take(allowed));
+
+            if (allowed < fresh.Count)
             {
+                var asked = misses.Where(granted.Contains).ToList();
+
                 diagnostics.Add(new Diagnostic
                 {
                     Code = Codes.ResolvePartial,
-                    Message = $"'{stage.As}' needs {misses.Count} keys of '{target.Entity}'; the request asks owners for at most {budget.Max} keys, so only the first {granted} are resolved on this page.",
+                    Message = $"'{stage.As}' needs {misses.Count} keys of '{target.Entity}'; the request asks owners for at most {budget.Max} keys, so only {asked.Count} are resolved on this page.",
                     Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = budget.Max },
                 });
 
-                target.Unanswered.UnionWith(misses.Skip(granted));
-                misses = misses.Take(granted).ToList();
+                target.Unanswered.UnionWith(misses.Where(key => !granted.Contains(key)));
+                misses = asked;
             }
 
             var chunk = ChunkOf(target);

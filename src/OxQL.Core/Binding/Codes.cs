@@ -141,11 +141,11 @@ public static class Codes
     public const string ResolveTimeout = "RESOLVE_TIMEOUT";
     public const string ResolveUnreachable = "RESOLVE_UNREACHABLE";
     /// <summary>
-    /// Dormant at the shipped defaults rather than dead: one resolve stage cannot need more
-    /// distinct keys than the page has rows, and <c>MaxPageSize</c> (500) and
-    /// <c>MaxReportPageSize</c> (5 000) are below <c>MaxResolveKeys</c> (10 000), so it cannot
-    /// fire until a host raises a page size past the resolve cap. <see cref="Models.LimitOptions.MaxResolveKeys"/> says so where an
-    /// operator will read it.
+    /// Part of a page's references are not resolved: the request's key budget
+    /// (<see cref="Models.LimitOptions.MaxResolveKeys"/>, one budget for every keyed stage of the
+    /// request) ran out, or an owner answered a chunk with a next page. It fires at the shipped
+    /// defaults too: several keyed stages over a 5 000-row report page, or <c>elements: "all"</c>
+    /// with many keys per row, need more than 10 000 keys.
     /// </summary>
     public const string ResolvePartial = "RESOLVE_PARTIAL";
     public const string SortOnAddon = "SORT_ON_ADDON";

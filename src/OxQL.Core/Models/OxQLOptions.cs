@@ -246,12 +246,14 @@ public sealed class LimitOptions
     public int ResolveKeyChunk { get; set; } = 500;
 
     /// <summary>
-    /// The most keys one request resolves remotely; chunks beyond it are not fetched and the
-    /// page carries a <c>RESOLVE_PARTIAL</c> diagnostic.
+    /// The most keys one request asks owners for, over every keyed stage of the request; keys
+    /// beyond it are not fetched, their rows are <c>owner_unanswered</c>, and the page carries a
+    /// <c>RESOLVE_PARTIAL</c> diagnostic. A key counts once per stage, whichever targets of a union it
+    /// is asked of, and a key the cache answers costs nothing.
     /// <para>
-    /// One resolve stage cannot need more distinct keys than the page has rows, so while this
-    /// is at or above <see cref="MaxPageSize"/> and <see cref="MaxReportPageSize"/> the cap —
-    /// and its diagnostic — cannot be reached. Raising either past it is what brings it into play.
+    /// The budget is per request, not per stage: several keyed stages over a report page of
+    /// <see cref="MaxReportPageSize"/> rows, or <c>elements: "all"</c> with several keys per row,
+    /// reach it at the defaults.
     /// </para>
     /// </summary>
     public int MaxResolveKeys { get; set; } = 10_000;

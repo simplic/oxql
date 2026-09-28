@@ -1,3 +1,4 @@
+using MongoDB.Bson.Serialization.Attributes;
 using OxQL.Core.Attributes;
 using OxQL.Model.Attributes;
 
@@ -305,6 +306,10 @@ public class WeightNote
     public string? Number { get; set; }
 
     public double? Weight { get; set; }
+
+    /// <summary>The weighed quantity; left out when null, so the corpus rows are stored as before.</summary>
+    [BsonIgnoreIfNull]
+    public Quantity? Quantity { get; set; }
 }
 
 public class LoadingAidType
@@ -428,11 +433,28 @@ public class ShipmentTag
     public string? HexColor { get; set; }
 }
 
+/// <summary>
+/// A tour the shipment is on, as the shipment snapshots it: the tour's id and number and the
+/// tour's resource. The new members are left out when null, so the corpus rows are stored as before.
+/// </summary>
 public class ShipmentTour
 {
     public Guid Id { get; set; }
 
     public string? Number { get; set; }
+
+    [BsonIgnoreIfNull]
+    [OxQLReference("transport.tour")]
+    public Guid? TourId { get; set; }
+
+    [BsonIgnoreIfNull]
+    public Resource? Resource { get; set; }
+
+    [BsonIgnoreIfNull]
+    public DateTime? StartDateTime { get; set; }
+
+    [BsonIgnoreIfNull]
+    public DateTime? EndDateTime { get; set; }
 }
 
 /// <summary>The dispatching department, embedded as a subset; its id names a department of the fleet service.</summary>
@@ -516,4 +538,273 @@ public class TemplateTime
     public DateTime? AbsoluteTime { get; set; }
 
     public TimeSpan? RelativeTime { get; set; }
+}
+
+/// <summary>
+/// A tour: a resource (the tractor unit, or a carrier) driving stops, the resources attached on
+/// the way (driver, trailer), billing lines of the same item type as the shipment's, and the
+/// stops themselves as interface-typed actions. Not extendable, as in logistics.
+/// </summary>
+[OxQLType("transport.tour", "tour")]
+public class Tour
+{
+    public Guid Id { get; set; }
+
+    public Guid OrganizationId { get; set; }
+
+    public bool IsDeleted { get; set; }
+
+    public string? Number { get; set; }
+
+    public string? Reference { get; set; }
+
+    public Resource? Resource { get; set; }
+
+    public ContactAddress? StartAddress { get; set; }
+
+    public ContactAddress? EndAddress { get; set; }
+
+    public DateTime? StartDateTime { get; set; }
+
+    public DateTime? EndDateTime { get; set; }
+
+    public DateTime? ActualStartDateTime { get; set; }
+
+    public DateTime? ActualEndDateTime { get; set; }
+
+    public List<ITourAction> Actions { get; set; } = [];
+
+    public List<AttachedResource> AttachedResources { get; set; } = [];
+
+    public List<BillingLine> BillingLines { get; set; } = [];
+
+    public string? Notes { get; set; }
+
+    public BillableContact? FinancialPartner { get; set; }
+
+    public DateTime CreateDateTime { get; set; }
+
+    public DateTime UpdateDateTime { get; set; }
+}
+
+/// <summary>A resource attached to a tour between two of its actions.</summary>
+public class AttachedResource
+{
+    public Guid Id { get; set; }
+
+    public Resource? Resource { get; set; }
+
+    public ITourAction? AttachAction { get; set; }
+
+    public ITourAction? DetachAction { get; set; }
+}
+
+/// <summary>A stop of a tour. Interface-typed wherever it is held; stored with its class name as <c>_t</c>.</summary>
+public interface ITourAction
+{
+    Guid Id { get; set; }
+
+    Guid GlobalActionId { get; set; }
+
+    int OrderId { get; set; }
+
+    DateTime? DateTime { get; set; }
+
+    DateTime? ActualDateTime { get; set; }
+
+    DateTime? CalculatedDateTime { get; set; }
+
+    string? Notes { get; set; }
+
+    bool OutOfTour { get; set; }
+}
+
+public abstract class TourActionBase : ITourAction
+{
+    public Guid Id { get; set; }
+
+    public Guid GlobalActionId { get; set; }
+
+    public int OrderId { get; set; }
+
+    public DateTime? DateTime { get; set; }
+
+    public DateTime? ActualDateTime { get; set; }
+
+    public DateTime? CalculatedDateTime { get; set; }
+
+    public string? Notes { get; set; }
+
+    public bool OutOfTour { get; set; }
+}
+
+/// <summary>Loads a shipment.</summary>
+public class AttachShipmentAction : TourActionBase
+{
+    public ContactAddress? Address { get; set; }
+
+    public Guid? ShipmentId { get; set; }
+}
+
+/// <summary>Unloads a shipment.</summary>
+public class DetachShipmentAction : TourActionBase
+{
+    public ContactAddress? Address { get; set; }
+
+    public Guid? ShipmentId { get; set; }
+}
+
+public class AttachResourceAction : TourActionBase
+{
+    public ContactAddress? Address { get; set; }
+
+    public Resource? Resource { get; set; }
+}
+
+public class DetachResourceAction : TourActionBase
+{
+    public ContactAddress? Address { get; set; }
+
+    public Resource? Resource { get; set; }
+}
+
+public class CheckVehicleAction : TourActionBase
+{
+}
+
+public class CleaningAction : TourActionBase
+{
+    public ContactAddress? Address { get; set; }
+}
+
+public class TaskAction : TourActionBase
+{
+    public string? Title { get; set; }
+
+    public string? Description { get; set; }
+
+    public DateTime? StartDateTime { get; set; }
+
+    public DateTime? EndDateTime { get; set; }
+
+    public ContactAddress? Address { get; set; }
+}
+
+/// <summary>The organisation document every logistics entity derives from: the key and the scope are inherited.</summary>
+public abstract class OrganizationDocumentBase
+{
+    public Guid Id { get; set; }
+
+    public Guid OrganizationId { get; set; }
+
+    public bool IsDeleted { get; set; }
+}
+
+/// <summary>
+/// A resource a tour plans with. Abstract and polymorphic; its inherited <c>id</c> is the id of
+/// the thing it stands for, decided by the stored variant: a driver is an employee of the staff
+/// service, the vehicle-like variants are vehicles of the fleet service, a carrier is neither.
+/// Those references are declared host-side (<see cref="FleetReferences"/>), since the member
+/// is inherited.
+/// </summary>
+[OxQLType("transport.resource", "resource", Extendable = true)]
+public abstract class Resource : OrganizationDocumentBase
+{
+    public string? MatchCode { get; set; }
+
+    public string? DisplayName { get; set; }
+
+    public List<Resource>? AttachedResource { get; set; }
+
+    public DateTime CreateDateTime { get; set; }
+
+    public DateTime UpdateDateTime { get; set; }
+
+    public Guid? CreateUserId { get; set; }
+
+    public string? CreateUserName { get; set; }
+
+    public DateTime? UsableUntil { get; set; }
+
+    public string? PlanningOrderKey { get; set; }
+
+    public string? Notes { get; set; }
+}
+
+public abstract class HumanResource : Resource
+{
+}
+
+public class DriverResource : HumanResource
+{
+}
+
+public abstract class VehicleResource : Resource
+{
+}
+
+public class TractorUnitResource : VehicleResource
+{
+}
+
+public class TrailerResource : VehicleResource
+{
+    public List<ResourceLoadingSlot> LoadingSlots { get; set; } = [];
+
+    public bool IsLoadable { get; set; }
+}
+
+public class CarResource : VehicleResource
+{
+}
+
+public class ContainerResource : Resource
+{
+    public List<ResourceLoadingSlot> LoadingSlots { get; set; } = [];
+
+    public bool IsLoadable { get; set; }
+}
+
+public class CarrierResource : Resource
+{
+}
+
+public class EquipmentResource : Resource
+{
+}
+
+public class ResourceLoadingSlot
+{
+    public Guid Id { get; set; }
+
+    public string? Name { get; set; }
+}
+
+/// <summary>An attempt to deliver a shipment; the latest one by <c>dateTime</c> is the proof of delivery.</summary>
+[OxQLType("transport.delivery_attempt", "deliveryAttempt", Extendable = true)]
+public class DeliveryAttempt
+{
+    public Guid Id { get; set; }
+
+    public Guid OrganizationId { get; set; }
+
+    public bool IsDeleted { get; set; }
+
+    public string? Text { get; set; }
+
+    public DeliveryAttemptStatus? Status { get; set; }
+
+    public DateTime? DateTime { get; set; }
+
+    [OxQLReference("transport.shipment")]
+    public Guid? ShipmentId { get; set; }
+}
+
+public class DeliveryAttemptStatus
+{
+    public Guid Id { get; set; }
+
+    public string? DisplayName { get; set; }
+
+    public string? DisplayKey { get; set; }
 }

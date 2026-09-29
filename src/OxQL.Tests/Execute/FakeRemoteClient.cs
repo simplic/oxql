@@ -23,14 +23,20 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
     /// <summary>The services asked for their facts before a batch.</summary>
     public List<string> Probed { get; } = [];
 
-    public ValueTask<RemoteOwnerInfo?> OwnerOfAsync(string serviceKey, CancellationToken cancellationToken)
+    /// <summary>How long reading an owner's facts takes; the caller's token still cuts it.</summary>
+    public TimeSpan ProbeDelay { get; set; }
+
+    public async ValueTask<RemoteOwnerInfo?> OwnerOfAsync(string serviceKey, CancellationToken cancellationToken)
     {
         Probed.Add(serviceKey);
+
+        if (ProbeDelay > TimeSpan.Zero)
+            await Task.Delay(ProbeDelay, cancellationToken);
 
         if (!Owners.ContainsKey(serviceKey) && Probe?.Invoke(serviceKey) is { } learned)
             Owners[serviceKey] = learned;
 
-        return ValueTask.FromResult(OwnerOf(serviceKey));
+        return OwnerOf(serviceKey);
     }
 
     /// <summary>The API version each service is routed to.</summary>

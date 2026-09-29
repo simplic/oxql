@@ -57,6 +57,29 @@ public class OwnerFactsTests
     }
 
     [Fact]
+    public async Task A_slow_owner_health_read_takes_only_a_slice_of_the_phase_and_the_batch_still_goes_out_under_this_hosts_caps()
+    {
+        var runner = new FakeAggregateRunner { PageRows = [ContactRow(Guid.NewGuid(), ContactId)] };
+        var client = new FakeRemoteClient
+        {
+            ProbeDelay = TimeSpan.FromSeconds(5),
+            Probe = _ => new RemoteOwnerInfo("2.0.126.924", 2, null),
+            Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice"))),
+        };
+        var options = BindHost.Options(configure => configure.Execution.MaxTimeMs = 2_000);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""") with { Strict = true }, BindHost.Context());
+
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(1_500), "the facts read is cut at a slice of the 2 s phase, not the owner's health time");
+        outcome.Should().BeOfType<QueryOutcome.Success>("the batch goes out under this host's caps and the owner answers in time")
+            .Which.Result.Items[0]!["r"]!["name"]!.GetValue<string>().Should().Be("Alice");
+        client.Calls.Should().ContainSingle();
+        client.Calls[0].Budget.Should().BeGreaterThan(TimeSpan.FromMilliseconds(1_000), "the owner call keeps nearly all of the phase");
+    }
+
+    [Fact]
     public async Task An_owner_first_known_to_run_2_0_refuses_a_chain_before_any_batch_is_sent()
     {
         var runner = new FakeAggregateRunner { PageRows = [ContactRow(Guid.NewGuid(), ContactId)] };

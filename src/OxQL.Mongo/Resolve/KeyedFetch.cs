@@ -638,13 +638,15 @@ public sealed class KeyedFetch
         var diagnostics = new List<Diagnostic>();
         var budget = new KeyBudget(options.Limits.MaxResolveKeys);
 
+        // The deadline is taken first: reading the owners' facts is part of the phase's time.
+        var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+
         // The owners' facts gate and size what is sent them, so they are read before the plan.
         await ReadOwnersAsync(compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
             .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), remaining, cancellationToken).ConfigureAwait(false);
         var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
         var cacheHits = targets.Sum(target => target.CacheHits);
-        var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
         var calls = 0;
 
         // This host answers its own targets through its engine; a fetch built without one (the
@@ -2230,7 +2232,10 @@ public sealed class KeyedFetch
 
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        bounded.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+        // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
+        // its facts unknown and this host's own caps apply, rather than the probe eating the time
+        // the owner's answer needs (D-ENG-2).
+        bounded.CancelAfter(OwnerFactsSlice(remaining));
 
         try
         {
@@ -2241,6 +2246,10 @@ public sealed class KeyedFetch
             // Facts are an optimisation of what is sent; without them the owner answers or refuses.
         }
     }
+
+    /// <summary>The time the owners' facts may take out of a phase of <paramref name="remaining"/>: a tenth, at most 250 ms, at least a millisecond.</summary>
+    public static TimeSpan OwnerFactsSlice(TimeSpan remaining) =>
+        TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 10, 1, 250));
 
     /// <summary>Whether the owner of <paramref name="service"/> is known, by its shallow health, to run an engine before 2.1.</summary>
     private bool IsBefore21(string service) =>

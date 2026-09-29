@@ -59,6 +59,25 @@ public class JoinsHiddenTruncationTests
     }
 
     [Fact]
+    public async Task H03_a_match_on_the_lookup_alias_unwound_under_another_name_is_checked_too()
+    {
+        var client = await Lab.ClientAsync(LabService.Transport, Org.R);
+        var pipeline = $$"""
+            [ { "match": { "id": { "eq": "{{Id(ReportSeed.ShipmentId)}}" } } },
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 2, "sort": [ { "dateTime": "asc" } ], "select": ["text"] } },
+              { "unwind": { "path": "attempts", "as": "attempt" } },
+              { "match": { "attempt.text": { "eq": "Delivered to gate 3" } } },
+              { "project": { "id": 1 } } ]
+            """;
+
+        (await client.QueryAsync(Request(ReportSeed.Shipment, pipeline, strict: false))).ShouldBeOk().Items.Should().BeEmpty();
+
+        var refused = await client.QueryAsync(Request(ReportSeed.Shipment, pipeline, strict: true));
+
+        refused.ShouldRefuse("LOOKUP_TRUNCATED", 422)["params"]!["filtered"]!.GetValue<bool>().Should().BeTrue();
+    }
+
+    [Fact]
     public async Task H02_a_match_on_an_item_below_the_flatten_depth_filters_every_row_out_and_strict_refuses_UNWIND_DEPTH_TRUNCATED()
     {
         var client = await Lab.ClientAsync(LabService.Ledger, Org.R);

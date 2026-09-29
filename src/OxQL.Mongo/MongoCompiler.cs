@@ -487,8 +487,22 @@ public static class MongoCompiler
     }
 
     /// <summary>Whether a match after the stage at <paramref name="index"/> reads the alias: it may filter out a row the stage truncated.</summary>
-    private static bool FilteredLater(IReadOnlyList<BoundStage> stages, int index, string alias) =>
-        stages.Skip(index + 1).TakeWhile(stage => stage is not BoundStage.Group).Any(stage => stage is BoundStage.Match && Reads(stage, alias));
+    /// <remarks>An unwind of the alias under another name (<c>as</c>) carries the cut rows on under that name too (D-ENG-1).</remarks>
+    private static bool FilteredLater(IReadOnlyList<BoundStage> stages, int index, string alias)
+    {
+        var names = new List<string> { alias };
+
+        foreach (var stage in stages.Skip(index + 1).TakeWhile(stage => stage is not BoundStage.Group))
+        {
+            if (stage is BoundStage.Match && names.Any(name => Reads(stage, name)))
+                return true;
+
+            if (stage is BoundStage.Unwind { As: { } renamed } unwind && names.Any(name => RootIs(unwind.Path, name)) && !names.Contains(renamed, StringComparer.Ordinal))
+                names.Add(renamed);
+        }
+
+        return false;
+    }
 
     /// <summary>The stages so far, the stage's own, then one row carrying the truncation flag.</summary>
     private static List<BsonDocument> Probing(IEnumerable<BsonDocument> before, IEnumerable<BsonDocument> emitted, string flag) =>

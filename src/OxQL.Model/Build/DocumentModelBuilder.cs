@@ -216,7 +216,8 @@ public sealed class DocumentModelBuilder
                 && options.DictionaryRepresentations.TryGetValue(label, out var representation))
                 member.DictionaryRepresentation = representation;
 
-            if (descriptor.TryGetProperty("referenceCases", out var cases) && cases.ValueKind == JsonValueKind.Array)
+            // An empty or unreadable case list declares nothing, and a simple `references` beside it still counts.
+            if (descriptor.TryGetProperty("referenceCases", out var cases) && cases.ValueKind == JsonValueKind.Array && cases.GetArrayLength() > 0)
             {
                 // Format 1.1: the typed, item and converted cases. A member publishes either
                 // these or a simple `references`, never both; the cases win if a document does.

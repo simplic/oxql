@@ -235,6 +235,18 @@ internal static class ModelAssembler
                 field = declared.Field ?? entity.Key?.Wire ?? WireNames.IdWire;
                 fieldIsKey = entity.Key is not null && entity.Key.Wire == field;
                 fieldPath = entity.Path(field);
+
+                // A declared field the local target does not have would join nothing, silently.
+                if (declared.Field is not null && fieldPath is null)
+                {
+                    findings.Add(new BuildFinding(
+                        BuildCodes.ReferenceTargetFieldUnknown,
+                        pending.OwnerLabel,
+                        $"The reference names the field '{declared.Field}' of '{target}', which that entity does not have, so the case is dropped.",
+                        $"{target}#{declared.Field}"));
+
+                    return null;
+                }
             }
             else
             {

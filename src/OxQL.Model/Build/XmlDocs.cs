@@ -32,7 +32,8 @@ public sealed partial class XmlDocs
     private static readonly IReadOnlyDictionary<string, XElement> NoMembers = new Dictionary<string, XElement>(StringComparer.Ordinal);
 
     private readonly Func<Assembly, XDocument?> source;
-    private readonly ConcurrentDictionary<Assembly, IReadOnlyDictionary<string, XElement>> files = new();
+    // Weakly keyed: a collectible assembly the host unloads is not kept alive by its documentation.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Assembly, IReadOnlyDictionary<string, XElement>> files = new();
 
     /// <summary>Reads each assembly's documentation through <paramref name="source"/>, once per assembly; null means the assembly has none.</summary>
     public XmlDocs(Func<Assembly, XDocument?> source)
@@ -98,17 +99,23 @@ public sealed partial class XmlDocs
 
     private static XDocument? LoadBeside(Assembly assembly)
     {
-        if (assembly.IsDynamic || string.IsNullOrEmpty(assembly.Location))
+        if (assembly.IsDynamic)
             return null;
 
-        var path = Path.ChangeExtension(assembly.Location, ".xml");
+        // A single-file host has no assembly location; its documentation files lie beside the app.
+        var path = !string.IsNullOrEmpty(assembly.Location)
+            ? Path.ChangeExtension(assembly.Location, ".xml")
+            : assembly.GetName().Name is { Length: > 0 } name ? Path.Combine(AppContext.BaseDirectory, name + ".xml") : null;
 
-        if (!File.Exists(path))
+        if (path is null || !File.Exists(path))
             return null;
 
         try
         {
-            return XDocument.Load(path, LoadOptions.PreserveWhitespace);
+            // A documentation file is data: no DTD is read, so no entity expands.
+            using var reader = System.Xml.XmlReader.Create(path, new System.Xml.XmlReaderSettings { DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null });
+
+            return XDocument.Load(reader, LoadOptions.PreserveWhitespace);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
@@ -117,7 +124,7 @@ public sealed partial class XmlDocs
     }
 
     private IReadOnlyDictionary<string, XElement> MembersOf(Assembly assembly) =>
-        files.GetOrAdd(assembly, key =>
+        files.GetValue(assembly, key =>
         {
             var document = source(key);
             var members = document?.Root?.Element("members");
@@ -253,6 +260,14 @@ public sealed partial class XmlDocs
 
             case "paramref" or "typeparamref":
                 text.Append(element.Attribute("name")?.Value ?? "");
+                break;
+
+            // A list item's term and its description read as "term: description".
+            case "term":
+                RenderNodes(element, text);
+
+                if (element.ElementsAfterSelf("description").Any())
+                    text.Append(": ");
                 break;
 
             case "br":

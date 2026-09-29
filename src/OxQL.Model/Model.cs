@@ -679,7 +679,11 @@ public static class BuildCodes
     /// <summary>A <c>[ReferenceId]</c> declaration names a type that is not an entity or a property that does not exist.</summary>
     public const string ReferenceDeclarationUnresolved = "reference-declaration-unresolved";
 
-    /// <summary>A reference into another service names no target field, and this host cannot know the target's key; the reference is dropped.</summary>
+    /// <summary>
+    /// A reference into another service names no target field, and this host cannot know the
+    /// target's key; or a reference names a field of a local target the entity does not have. The
+    /// reference (or the case) is dropped.
+    /// </summary>
     public const string ReferenceTargetFieldUnknown = "reference-target-field-unknown";
 
     /// <summary>A schema document's format version is not one this reader understands.</summary>

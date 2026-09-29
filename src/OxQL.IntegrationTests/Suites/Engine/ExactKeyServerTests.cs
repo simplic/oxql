@@ -60,4 +60,22 @@ public class ExactKeyServerTests
         var result = outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? EngineDirect.Describe(refused.Refusal) : "").Subject.Result;
         result.Items.Select(item => item!["code"]!.GetValue<string>()).Should().Equal(["abc"], "the filter folds, the key does not");
     }
+
+    [Fact]
+    public async Task K02_two_keys_differing_only_in_case_are_ranked_apart_under_a_folding_filter()
+    {
+        await using var owned = await OxQL.IntegrationTests.Fleet.MongoFixture.CreateDatabaseAsync("exact_partition");
+        await owned.Database.GetCollection<BsonDocument>("tmp_ek_customers").InsertManyAsync([Row(1, "abc"), Row(2, "abc"), Row(3, "ABC"), Row(4, "ABC")]);
+        var engine = Direct.Engine(await OxQL.IntegrationTests.Fleet.MongoFixture.ClientAsync(), owned.Name);
+
+        var request = EngineDirect.Request(Customer, """[{ "match": { "name": { "eq": "same name" } } }, { "project": { "code": 1 } }]""") with
+        {
+            KeyedBy = new KeyedByMember { Path = "code", Keys = System.Text.Json.JsonSerializer.SerializeToElement(new[] { "abc", "ABC" }), PerKey = 2 },
+        };
+
+        var outcome = await engine.ExecuteAsync(request, Direct.Context() with { Internal = true });
+
+        var result = outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? EngineDirect.Describe(refused.Refusal) : "").Subject.Result;
+        result.Items.Select(item => item!["code"]!.GetValue<string>()).Should().BeEquivalentTo(["abc", "abc", "ABC", "ABC"], "each key keeps its own two rows");
+    }
 }

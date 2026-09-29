@@ -251,7 +251,7 @@ public static class MongoCompiler
         // An internal owner query grouped per key: the keys matched first, where an index serves
         // them, and the window after the caller's leading matches (the resolve's filter), so a
         // key's rows are numbered among those that pass it.
-        var window = bound.KeyedBy is { } keyedBy ? KeyedByWindow(keyedBy) : null;
+        var window = bound.KeyedBy is { } keyedBy ? KeyedByWindow(keyedBy, collated) : null;
 
         if (bound.KeyedBy is { } prologueOf)
         {
@@ -1112,11 +1112,15 @@ public static class MongoCompiler
     /// past <c>perKey</c> dropped, the number removed. A key with two rows is how the caller tells
     /// an ambiguous reference from a resolved one.
     /// </summary>
-    private static List<BsonDocument> KeyedByWindow(BoundKeyedBy keyedBy) =>
+    private static List<BsonDocument> KeyedByWindow(BoundKeyedBy keyedBy, bool collated = false) =>
     [
         new("$setWindowFields", new BsonDocument
         {
-            ["partitionBy"] = "$" + keyedBy.PartitionStorage,
+            // Inside a collated aggregate a partition on a string key folds keys that differ only in
+            // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12).
+            ["partitionBy"] = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString)
+                ? new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage)
+                : "$" + keyedBy.PartitionStorage,
             ["sortBy"] = keyedBy.ItemStorage is null ? new BsonDocument(KeyStorage, 1) : new BsonDocument { [KeyStorage] = 1, [ReservedElementIndex] = 1 },
 
             // $documentNumber takes one sort field; an item's rows are numbered by record key and

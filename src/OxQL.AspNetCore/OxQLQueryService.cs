@@ -180,9 +180,19 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
             // A contract 1 request that does not rewrite is an answer too (DESIGN §4.1): valid false with the errors.
             if (rewrite.Refusal is not null)
-                return rewrite.Refusal.Status == 400
-                    ? new ExplainOutcome.Success(ExplainResult.Invalid(context.Contract, EngineOf(), rewrite.Refusal.Errors ?? []))
-                    : new ExplainOutcome.Refused(rewrite.Refusal);
+            {
+                if (rewrite.Refusal.Status != 400)
+                    return new ExplainOutcome.Refused(rewrite.Refusal);
+
+                // Each describe entry says why nothing is described, rather than no answer at all.
+                var first = rewrite.Refusal.Errors is [var head, ..] ? head : null;
+                var invalid = ExplainResult.Invalid(context.Contract, EngineOf(), rewrite.Refusal.Errors ?? []);
+
+                return new ExplainOutcome.Success(invalid with
+                {
+                    Describe = Describe.Refused(request, first?.Code ?? Codes.LegacyStageUnsupported, first?.Message ?? "The contract 1 request does not rewrite."),
+                });
+            }
 
             request = request with { Query = rewrite.Request! };
         }

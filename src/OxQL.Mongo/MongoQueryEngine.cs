@@ -400,7 +400,22 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             });
         }
 
-        var advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null;
+        IReadOnlyList<JsonNode>? advisory = null;
+
+        // The advisory reads index lists; a list that cannot be read is a note, never a failed explain.
+        try
+        {
+            advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            notes.Add(new Diagnostic
+            {
+                Code = Notes.IndexAdvice,
+                Message = "The index lists could not be read, so no index advice is given.",
+                Params = new Dictionary<string, object?> { ["reason"] = exception.GetType().Name },
+            });
+        }
 
         foreach (var line in advisory ?? [])
             notes.Add(Notes.Index(
@@ -442,6 +457,14 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             switch (bound.Stages[position])
             {
+                // A join nothing reads and the row does not show is not run: it has no executor or phase.
+                case BoundStage.Lookup dropped when !MongoCompiler.JoinRuns(bound, position, dropped.As):
+                    break;
+
+                case BoundStage.Resolve droppedResolve when !MongoCompiler.JoinRuns(bound, position, droppedResolve.As)
+                    && !(droppedResolve.ParentAs is { } droppedParent && MongoCompiler.JoinRuns(bound, position, droppedParent)):
+                    break;
+
                 case BoundStage.Lookup lookup:
                 {
                     var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, lookup.As);

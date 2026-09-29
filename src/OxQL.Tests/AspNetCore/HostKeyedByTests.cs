@@ -65,3 +65,25 @@ public class HostKeyedByTests
         body["errors"]![0]!["message"]!.GetValue<string>().Should().Contain("'strict'");
     }
 }
+
+/// <summary>A contract 1 explain that does not rewrite answers each describe entry with the refusal (RE-25).</summary>
+public class HostContract1ExplainDescribeTests
+{
+    [Fact]
+    public async Task Each_describe_entry_of_a_contract_1_request_that_does_not_rewrite_carries_the_refusal()
+    {
+        using var host = new SampleHost();
+
+        var response = await host.Client(contract: null).PostAsync("/OxQL/explain", SampleHost.Json("""
+            { "query": { "entityType": "probe.customer", "pipeline": [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "first": true } }] },
+              "describe": [{ "id": "d", "at": 0, "prefix": "", "usage": "match" }] }
+            """));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
+        body!["valid"]!.GetValue<bool>().Should().BeFalse();
+        body["describe"]!.AsArray().Should().ContainSingle();
+        body["describe"]![0]!["id"]!.GetValue<string>().Should().Be("d");
+        body["describe"]![0]!["error"]!["code"]!.GetValue<string>().Should().Be(Codes.LegacyStageUnsupported);
+    }
+}

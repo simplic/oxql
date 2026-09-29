@@ -549,4 +549,66 @@ public class ExplainDescribeTests
         ExplainForwardCache.KeyOf(BindHost.Organisation, "hr", request).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request with { Remote = ExplainRequest.RemoteSkip }).Should().NotBe(key);
     }
+
+    // ---- explain quality (RE-25) ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Paths_under_one_remote_alias_go_to_its_owner_in_one_describe_under_an_id_of_its_own()
+    {
+        var client = new FakeRemoteClient { Explains = (_, request) => OwnerDescribe(request, OwnerChild("name", "string"), OwnerChild("title", "string")) };
+
+        var result = await ExplainAsync(Joins, """
+            [{ "id": "p1", "at": 4, "paths": ["ct.name", "ct.title"], "usage": "project" },
+             { "id": "p2", "at": 4, "paths": ["ct.name", "ct.title"], "usage": "project" }]
+            """, client);
+
+        var describes = client.ExplainCalls.Where(call => call.Request.Remote == ExplainRequest.RemoteSkip).ToList();
+
+        describes.Should().ContainSingle("both paths go in one call, and the second entry is the first's forwarded body, answered from the cache");
+        Strings(describes[0].Request.Describe.Single()["paths"]).Should().Equal("name", "title");
+        describes[0].Request.Describe.Single()["id"]!.GetValue<string>().Should().Be("forwarded", "the caller's id would make every entry a cache entry of its own");
+        Children(Answer(result, "p1")).Select(child => child["path"]!.GetValue<string>()).Should().Equal("ct.name", "ct.title");
+        Children(Answer(result, "p2")).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task A_join_the_compiler_leaves_out_is_placed_nowhere()
+    {
+        var result = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "project": { "number": 1 } }]""", "[]");
+
+        var step = result.Steps.Single(each => each.Index == 0);
+        step.Executor.Should().BeNull("nothing reads 'c' and the row does not show it, so it is not joined");
+        step.Phase.Should().BeNull();
+        result.Notes!.Should().NotContain(note => note.Code == Notes.JoinBeforePage || note.Code == Notes.JoinAfterPage);
+    }
+
+    private sealed class FailingIndexes : IIndexSource
+    {
+        public Task<IReadOnlyList<MongoDB.Bson.BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken) =>
+            throw new MongoDB.Driver.MongoException("listIndexes failed");
+    }
+
+    [Fact]
+    public async Task Index_lists_that_cannot_be_read_are_a_note_not_a_failed_explain()
+    {
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), indexes: new FailingIndexes());
+        var request = JsonSerializer.Deserialize<ExplainRequest>($$"""{ "query": { "entityType": "{{Invoice}}", "pipeline": [] }, "include": ["indexes"] }""", OxQLJson.Wire)!;
+
+        var result = (await engine.ExplainAsync(request, BindHost.Context())).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        result.Valid.Should().BeTrue();
+        result.Notes!.Should().Contain(note => note.Code == Notes.IndexAdvice && note.Message.Contains("could not be read"));
+    }
+
+    [Fact]
+    public async Task An_inline_resolve_names_only_the_outcomes_it_can_have()
+    {
+        var result = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c", "onMissing": "report" } }, { "resolve": { "path": "customerCode", "as": "k", "onMissing": "report" } }]""", "[]");
+
+        var policies = result.Notes!.Where(note => note.Code == Notes.MissingPolicy).ToDictionary(note => note.Stage!.Value);
+        ((IEnumerable<string>)policies[0].Params!["dataLoss"]!).Should().Equal("not_found");
+        ((IEnumerable<string>)policies[1].Params!["dataLoss"]!).Should().Equal("ambiguous", "not_found");
+        policies[0].Message.Should().NotContain("owner");
+        policies[1].Message.Should().Contain("RESOLVE_AMBIGUOUS");
+    }
 }

@@ -1584,6 +1584,20 @@ public static class MongoCompiler
         bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, alias))
         || Shown(bound.FinalShape, alias);
 
+    /// <summary>
+    /// Whether the join at <paramref name="position"/> runs: a later stage other than a projection
+    /// reads its alias, or the final row shows it (a keyed resolve runs only for the rows it shows).
+    /// Explain reads it so a join the compiler leaves out is placed nowhere.
+    /// </summary>
+    public static bool JoinRuns(BoundPipeline bound, int position, string alias)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        return bound.Stages[position] is BoundStage.Resolve resolve && IsKeyed(resolve)
+            ? Shown(bound.FinalShape, alias)
+            : JoinUsed(bound, position, alias);
+    }
+
     /// <summary>Whether the final row carries an alias: it is still a root and no projection after it dropped it.</summary>
     private static bool Shown(Shape shape, string alias) => shape.Carries(alias);
 

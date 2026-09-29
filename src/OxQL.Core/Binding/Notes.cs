@@ -324,16 +324,29 @@ public static class Notes
                     new() { ["alias"] = resolve.As, ["limit"] = options.Limits.MaxLookupLimit });
 
             var onMissing = WireName(resolve.EffectiveOnMissing);
+
+            // An inline resolve joins one local entity in the aggregate: no owner, no conversion, so
+            // no owner_unanswered or invalid_key; a second record exists only for a target field that
+            // is not the key, and is seen only when the outcomes are read (RE-25).
+            var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
+            var nonKey = (resolve.Cases ?? []).SelectMany(bound => bound.Targets).Any(target => target.Declared.Item is not null || !target.Declared.FieldIsKey);
+            var readsOutcomes = strict || resolve.EffectiveOnMissing != ResolveOnMissing.Null;
+            var ambiguity = inline ? nonKey && readsOutcomes : true;
+            var dataLoss = inline
+                ? DataLossOutcomes.Where(outcome => outcome == "not_found" || (outcome == "ambiguous" && ambiguity)).ToList()
+                : DataLossOutcomes.ToList();
             var what = resolve.EffectiveOnMissing switch
             {
                 ResolveOnMissing.Refuse => "refuses the request",
                 ResolveOnMissing.Report => "leaves the alias null and is reported (RESOLVE_MISSING)",
+                _ when inline => "leaves the alias null",
                 _ => "leaves the alias null; only an owner that fails is reported",
             };
 
             Add(MissingPolicy, stage, resolve.Reference.Wire,
-                $"A reference of '{resolve.As}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); ambiguous, not_found, invalid_key and owner_unanswered lose data{(strict ? " and refuse under strict" : "")}.",
-                new() { ["alias"] = resolve.As, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = DataLossOutcomes });
+                $"A reference of '{resolve.As}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
+                + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : ""),
+                new() { ["alias"] = resolve.As, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss });
         }
 
         public void Condition(BoundCondition condition, int? stage)

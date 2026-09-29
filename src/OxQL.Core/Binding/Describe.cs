@@ -105,6 +105,17 @@ public sealed class Describe
         return answers;
     }
 
+    /// <summary>
+    /// Each describe entry of a request that was refused before any shape existed (a contract 1
+    /// request that does not rewrite), answered with that refusal as its error, its id echoed.
+    /// </summary>
+    public static IReadOnlyList<JsonNode> Refused(ExplainRequest request, string code, string message)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return [.. request.Describe.Select(entry => (JsonNode)Failed(Entry.Echo(entry), code, message))];
+    }
+
     // ---- one entry ---------------------------------------------------------------------------
 
     /// <summary>A describe entry as read: the members, or the first thing wrong with it.</summary>
@@ -266,15 +277,27 @@ public sealed class Describe
 
         if (entry.Paths is not null)
         {
+            // The paths under one remote or keyed alias go to its targets together: one owner call
+            // per target, not one per path (RE-25).
+            var asked = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var path in entry.Paths)
             {
                 if (collected.Full(maxChildren))
                     break;
 
-                if (UnderAlias(shape, path) is { } alias)
-                    await AliasChildrenAsync(entry, shape, alias.Name, alias.Node, alias.Below, [alias.Below], collected).ConfigureAwait(false);
-                else
+                if (UnderAlias(shape, path) is not { } alias)
+                {
                     collected.Add(Child(shape, path, entry.Usage, name: LastSegment(path)));
+                    continue;
+                }
+
+                if (!asked.Add(alias.Name))
+                    continue;
+
+                var below = entry.Paths.Select(each => UnderAlias(shape, each)).Where(each => each is { } other && other.Name == alias.Name).Select(each => each!.Value.Below).Distinct(StringComparer.Ordinal).ToList();
+
+                await AliasChildrenAsync(entry, shape, alias.Name, alias.Node, alias.Below, below, collected).ConfigureAwait(false);
             }
 
             return Answered(entry, RootOf(shape, ""), collected);
@@ -384,6 +407,8 @@ public sealed class Describe
 
         var forwarded = entry.Head();
 
+        forwarded["id"] = ForwardedId;
+
         if (entry.Depth > 1)
             forwarded["depth"] = entry.Depth;
 
@@ -394,7 +419,7 @@ public sealed class Describe
 
         if (answer is null)
         {
-            notes.Add(Unchecked(null, service, entry.Entity!, reason, entry.Id));
+            AddNote(Unchecked(null, service, entry.Entity!, reason, entry.Id));
             return Failed(entry.Head(), Codes.ResolveUnreachable, $"The owner of '{entityId}' did not answer the describe ({reason ?? "no answer"}).");
         }
 
@@ -620,11 +645,12 @@ public sealed class Describe
 
             if (owners is null || !owners.Knows(service))
             {
-                notes.Add(Unchecked(entry.At, service, item is null ? entityId : entityId + "#" + item, "unconfigured", entry.Id));
+                AddNote(Unchecked(entry.At, service, item is null ? entityId : entityId + "#" + item, "unconfigured", entry.Id));
                 continue;
             }
 
-            var forwarded = new JsonObject { ["id"] = entry.Id, ["entity"] = item is null ? entityId : entityId + "#" + item };
+            // The caller's id stays here: forwarded under one id, the same describe is one cache entry.
+            var forwarded = new JsonObject { ["id"] = ForwardedId, ["entity"] = item is null ? entityId : entityId + "#" + item };
 
             if (paths is not null)
             {
@@ -652,7 +678,7 @@ public sealed class Describe
 
             if (answer is null)
             {
-                notes.Add(Unchecked(entry.At, service, forwarded["entity"]!.GetValue<string>(), reason, entry.Id));
+                AddNote(Unchecked(entry.At, service, forwarded["entity"]!.GetValue<string>(), reason, entry.Id));
                 continue;
             }
 
@@ -1249,6 +1275,19 @@ public sealed class Describe
     }
 
     /// <summary>The <c>REMOTE_UNCHECKED</c> note of a describe no owner answered.</summary>
+    /// <summary>The id a describe entry is forwarded to an owner under, whatever the caller named it.</summary>
+    private const string ForwardedId = "forwarded";
+
+    /// <summary>Adds a note once: the same note for the same describe, stage and target is said once.</summary>
+    private void AddNote(Diagnostic note)
+    {
+        if (notes.Any(other => other.Code == note.Code && other.Stage == note.Stage && other.Message == note.Message
+            && Equals(other.Params?.GetValueOrDefault("describe"), note.Params?.GetValueOrDefault("describe"))))
+            return;
+
+        notes.Add(note);
+    }
+
     private static Diagnostic Unchecked(int? stage, string service, string target, string? reason, string describe) => new()
     {
         Code = Notes.RemoteUnchecked,

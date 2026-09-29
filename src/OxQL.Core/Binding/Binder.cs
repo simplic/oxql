@@ -159,9 +159,11 @@ public sealed class Binder
         /// <summary>
         /// An alias a stage may continue under: the keyed <paramref name="Stage"/> whose owner runs the
         /// continuation, the one target the alias exists on (<c>forTarget</c> of the stage that added
-        /// it), and whether it holds every resolved target of a row (<c>elements: "all"</c>).
+        /// it), whether it holds every resolved target of a row (<c>elements: "all"</c>), and whether a
+        /// continued stage added it (<paramref name="Nested"/>): the owner then binds that stage's own
+        /// join, so its targets are the owner's to know and a <c>forTarget</c> under it is the owner's to check.
         /// </summary>
-        private sealed record ContinuationAnchor(BoundStage.Resolve Stage, string? ForTarget, bool Many);
+        private sealed record ContinuationAnchor(BoundStage.Resolve Stage, string? ForTarget, bool Many, bool Nested = false);
 
         /// <summary>Contract 2, where a string comparison, sort or group key folds case unless it opts out.</summary>
         private readonly bool contract2 = context.Contract != 1;
@@ -1697,9 +1699,10 @@ public sealed class Binder
         /// as a <see cref="ContinuedStage"/> of the keyed stage whose owner query carries it, which
         /// the owner binds with its own model. Checked here: contract 2, the alias still in the row,
         /// not under an <c>elements: "all"</c> alias (the per-element association would be lost),
-        /// <c>forTarget</c> naming a target of the alias (inherited under an alias a
-        /// <c>forTarget</c> stage added), at most <c>MaxContinuedStages</c> per keyed stage, the new
-        /// aliases free at the origin — so no continued alias collides with an origin alias — and every
+        /// <c>forTarget</c> naming a target of the keyed stage's alias (under an alias a continued
+        /// stage added, it names a target of that alias, which only the owner knows: it travels there
+        /// and the owner checks it; the target the stage goes to here is the one the alias inherited),
+        /// at most <c>MaxContinuedStages</c> per keyed stage, the new aliases free at the origin — so no continued alias collides with an origin alias — and every
         /// variable bound, since the owner never receives <c>variables</c> (DESIGN §3.5.5).
         /// </summary>
         private void BindContinued(PipelineStage raw, int index, string root, ContinuationAnchor anchor, string? forTarget, IReadOnlyList<string?> aliases)
@@ -1737,15 +1740,12 @@ public sealed class Binder
             var targets = TargetsOf(anchor.Stage);
             var effective = anchor.ForTarget;
 
-            if (forTarget is not null)
+            // Under an alias a continued stage added, forTarget names a target of that alias, whose join
+            // the owner binds with its own model (DESIGN §3.5.3): the stage carries it to the owner, which
+            // checks it and applies it to its own keyed stage, and an owner's refusal maps back here.
+            // This host sends the stage wherever the alias it continues under goes.
+            if (forTarget is not null && !anchor.Nested)
             {
-                if (anchor.ForTarget is not null && forTarget != anchor.ForTarget)
-                {
-                    errors.Add(Error(Codes.OptionNotApplicable,
-                        $"'forTarget' is '{forTarget}', but '{head}' exists only on rows resolved to '{anchor.ForTarget}'.", index, root));
-                    return;
-                }
-
                 if (!targets.Contains(forTarget, StringComparer.Ordinal))
                 {
                     errors.Add(Error(Codes.OptionNotApplicable,
@@ -1811,7 +1811,7 @@ public sealed class Binder
             foreach (var alias in added)
             {
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(raw.Lookup?.From ?? raw.Resolve?.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false));
-                anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many);
+                anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many, Nested: true);
             }
         }
 

@@ -299,8 +299,11 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
 - `forTarget` names one target of a union alias; the stage goes into that target's owner query only,
   and on rows resolved to another target its alias is `null` (outcome `not_applicable`). Without it
   the stage goes to every target and must bind on each; an owner's refusal comes back as this
-  stage's error (`RESOLVE_REFUSED`, see *Refusal*). A `forTarget` that is not a target of R, or that
-  contradicts the `forTarget` R itself was continued with, is `OPTION_NOT_APPLICABLE`.
+  stage's error (`RESOLVE_REFUSED`, see *Refusal*). `forTarget` names a target of the alias the
+  stage continues from: a `forTarget` that is not a target of R is `OPTION_NOT_APPLICABLE` here.
+  Under an alias another continued stage added (a join the owner binds), it names a target of that
+  alias; it travels to the owner, which applies it to its own join and refuses a target that alias
+  lacks with `OPTION_NOT_APPLICABLE`, mapped back to this stage.
 - Only `resolve` and `lookup` continue. An `unwind` of a path under R, a `group` key under R, and a
   continued stage under an `elements: "all"` alias are `NOT_CONTINUABLE`; a `sort` under R stays
   `RESOLVE_NOT_SORTABLE` and a `match` under R `RESOLVE_NOT_FILTERABLE` (except the semi-join of a

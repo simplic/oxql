@@ -43,6 +43,23 @@ public class ContinuationSplitterTests
     }
 
     [Fact]
+    public async Task A_stage_under_an_alias_a_continued_stage_added_keeps_its_forTarget_for_the_owner_which_continues_it()
+    {
+        var bound = await BoundAsync($$"""
+            [{{Union}},
+             { "resolve": { "path": "owner.customerId", "as": "c", "forTarget": "rc.shipment" } },
+             { "resolve": { "path": "c.addressId", "as": "a", "forTarget": "crm.address" } },
+             { "lookup": { "from": "crm.note", "path": "customerId", "on": "c", "forTarget": "crm.customer", "as": "notes" } }]
+            """);
+        var anchor = Anchor(bound, "line");
+        var owner = Continuation.For(anchor, "rc.shipment", itemTarget: true, Continuation.Of(bound, anchor));
+
+        owner.Stages.Select(stage => stage.Resolve?.ForTarget ?? stage.Lookup?.ForTarget).Should().Equal(null, "crm.address", "crm.customer");
+        owner.Stages.Select(stage => stage.Resolve?.Path ?? stage.Lookup!.On).Should().Equal("customerId", "c.addressId", "c");
+        Continuation.For(anchor, "rc.tour", itemTarget: true, Continuation.Of(bound, anchor)).IsEmpty.Should().BeTrue("every stage inherits the shipment target");
+    }
+
+    [Fact]
     public async Task ForTarget_keeps_a_stage_out_of_every_other_targets_owner_query()
     {
         var bound = await BoundAsync($$"""

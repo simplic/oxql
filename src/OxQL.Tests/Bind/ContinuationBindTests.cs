@@ -184,16 +184,42 @@ public class ContinuationBindTests
     }
 
     [Fact]
-    public async Task ForTarget_naming_no_target_of_the_alias_or_contradicting_the_inherited_one_is_not_applicable()
+    public async Task ForTarget_naming_no_target_of_the_alias_is_not_applicable()
     {
         (await ErrorAsync($$"""[{{Union}}, { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "forTarget": "rc.customer", "as": "l" } }]""", Codes.OptionNotApplicable))
             .Message.Should().Contain("'rc.shipment', 'rc.tour', 'transport.shipment'");
+    }
 
-        (await ErrorAsync($$"""
+    [Fact]
+    public async Task ForTarget_under_an_alias_a_continued_stage_added_names_a_target_of_that_alias_and_travels_to_the_owner()
+    {
+        // 'c' is the owner's own join, its targets the owner's to know: forTarget there is not checked
+        // against the keyed stage's targets (crm.contact), and the root-level target is the inherited one.
+        var bound = await BoundAsync($$"""
+            [{{Contact}},
+             { "resolve": { "path": "r.customerId", "as": "c" } },
+             { "resolve": { "path": "c.addressId", "as": "a", "forTarget": "crm.address" } },
+             { "lookup": { "from": "crm.note", "path": "customerId", "on": "c", "forTarget": "crm.customer", "as": "notes" } }]
+            """);
+
+        var continued = bound.Stages.OfType<ContinuedStage>().ToList();
+        continued.Select(stage => stage.Anchor).Should().Equal("r", "r", "r");
+        continued.Select(stage => stage.ForTarget).Should().Equal([null, null, null], "no stage narrows the keyed stage's own targets");
+        continued[1].Stage.Resolve!.ForTarget.Should().Be("crm.address", "the stage keeps it for the owner, which checks and applies it");
+        continued[2].Stage.Lookup!.ForTarget.Should().Be("crm.customer");
+    }
+
+    [Fact]
+    public async Task ForTarget_under_a_nested_alias_of_a_forTarget_stage_keeps_the_inherited_target_at_the_origin()
+    {
+        var bound = await BoundAsync($$"""
             [{{Union}},
-             { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "forTarget": "rc.shipment", "as": "invoices" } },
-             { "resolve": { "path": "invoices.customerId", "as": "c", "forTarget": "rc.tour" } }]
-            """, Codes.OptionNotApplicable)).Message.Should().Contain("exists only on rows resolved to 'rc.shipment'");
+             { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "forTarget": "rc.shipment", "first": true, "as": "invoice" } },
+             { "resolve": { "path": "invoice.customerId", "as": "c", "forTarget": "rc.customer" } }]
+            """);
+
+        bound.Stages.OfType<ContinuedStage>().Select(stage => stage.ForTarget).Should().Equal("rc.shipment", "rc.shipment");
+        bound.Stages.OfType<ContinuedStage>().Last().Stage.Resolve!.ForTarget.Should().Be("rc.customer");
     }
 
     [Fact]

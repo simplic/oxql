@@ -82,24 +82,47 @@ public static class Continuation
         return stages.Count == 0 ? OwnerContinuation.None : new OwnerContinuation(stages, origins, aliases);
     }
 
-    /// <summary>One stage with its root on the owner's row and without <c>forTarget</c>, which the owner does not continue.</summary>
+    /// <summary>
+    /// One stage with its root on the owner's row. A stage directly under the anchor's alias or its
+    /// owning row loses <c>forTarget</c>, which picked this target here and names nothing the owner
+    /// continues; a stage under an alias another continued stage added keeps it, since it names a
+    /// target of that alias, whose join the owner binds and continues itself.
+    /// </summary>
     public static PipelineStage Rewrite(PipelineStage stage, BoundStage.Resolve anchor, bool itemTarget)
     {
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(anchor);
 
         if (stage.Resolve is { } resolve)
-            return stage with { Resolve = resolve with { Path = ToOwner(resolve.Path, anchor, itemTarget), ForTarget = null } };
+            return stage with
+            {
+                Resolve = resolve with
+                {
+                    Path = ToOwner(resolve.Path, anchor, itemTarget),
+                    ForTarget = UnderAnchor(resolve.Path, anchor) ? null : resolve.ForTarget,
+                },
+            };
 
         if (stage.Lookup is { } lookup)
         {
             var on = ToOwner(lookup.On, anchor, itemTarget);
 
-            return stage with { Lookup = lookup with { On = string.IsNullOrEmpty(on) ? null : on, ForTarget = null } };
+            return stage with
+            {
+                Lookup = lookup with
+                {
+                    On = string.IsNullOrEmpty(on) ? null : on,
+                    ForTarget = UnderAnchor(lookup.On, anchor) ? null : lookup.ForTarget,
+                },
+            };
         }
 
         return stage;
     }
+
+    /// <summary>Whether a stage's root lies directly under the anchor's alias or its owning row, not under an alias a continued stage added.</summary>
+    private static bool UnderAnchor(string? root, BoundStage.Resolve anchor) =>
+        root is not null && (Strip(root, anchor.As) is not null || (anchor.ParentAs is { } parentAs && Strip(root, parentAs) is not null));
 
     /// <summary>
     /// A path of the origin row as the owner's row holds it: under the anchor's alias onto the

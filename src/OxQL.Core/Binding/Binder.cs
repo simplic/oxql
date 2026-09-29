@@ -1943,6 +1943,24 @@ public sealed class Binder
                     var siblingWire = holder.Length == 0 ? equals.Path : holder + "." + equals.Path;
                     var sibling = shape.Resolve(siblingWire, PathUsage.Project);
 
+                    // The member is declared but the join above it did not fetch it: the fix is the
+                    // join's select, as for any other path under the alias, not the declaration.
+                    if (!sibling.Succeeded && shape.NotSelected(siblingWire) is { } join)
+                    {
+                        var relative = siblingWire[(join.Alias.Length + 1)..];
+
+                        errors.Add(Error(Codes.UnknownPath,
+                            $"The reference on '{reference.Wire}' picks its target by '{siblingWire}', which is not in the select of '{join.Alias}', which fetched {string.Join(", ", join.Select.Select(path => $"'{path}'"))}; add '{relative}' to that select.",
+                            index, siblingWire));
+                        return null;
+                    }
+
+                    if (!sibling.Succeeded && !shape.IsVisible(siblingWire))
+                    {
+                        errors.Add(Error(Codes.UnknownPath, $"The reference on '{reference.Wire}' picks its target by '{siblingWire}': {sibling.Message}", index, siblingWire));
+                        return null;
+                    }
+
                     if (!sibling.Succeeded || sibling.Path!.Storage is null)
                     {
                         errors.Add(Error(Codes.ResolveNotDeclared, $"The reference on '{reference.Wire}' tests '{siblingWire}', which is not stored here.", index, reference.Wire));
@@ -2197,10 +2215,12 @@ public sealed class Binder
 
         private void BindUnwind(UnwindStage unwind, int index)
         {
-            // flatten is a contract 2 member; under contract 1 it is one the stage does not have.
-            IReadOnlyList<string> unknown = !contract2 && unwind.Flatten is not null ? [.. unwind.Unknown, "flatten"] : unwind.Unknown;
+            // flatten and keepPath are contract 2 members; under contract 1 they are ones the stage does not have.
+            IReadOnlyList<string> unknown = contract2
+                ? unwind.Unknown
+                : [.. unwind.Unknown, .. unwind.Flatten is not null ? ["flatten"] : Array.Empty<string>(), .. unwind.KeepPathWritten ? ["keepPath"] : Array.Empty<string>()];
 
-            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten" : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null)))
+            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten, keepPath" : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null || unwind.KeepPathWritten)))
                 return;
 
             if (unwind.Path is null)
@@ -2264,13 +2284,25 @@ public sealed class Binder
                 ? firstSegment
                 : Shape.ImplicitRoot;
 
+            if (!unwind.KeepPath && alias is null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' false takes '{unwind.Path}' out of the row once its element is under 'as'; without 'as' the element replaces '{unwind.Path}' in place, so there is nothing to drop.", index, unwind.Path));
+                return;
+            }
+
+            if (!unwind.KeepPath && path.Path is null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' applies to a collection member; '{unwind.Path}' is a join alias, which an unwind without 'as' already replaces by its element.", index, unwind.Path));
+                return;
+            }
+
             BoundFlatten? flatten = null;
 
             if (unwind.Flatten is not null && (flatten = BindFlatten(unwind, path, index)) is null)
                 return;
 
-            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten));
-            shape = shape.WithUnwound(path, rootName, alias, indexAlias);
+            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten, unwind.KeepPath));
+            shape = shape.WithUnwound(path, rootName, alias, indexAlias, unwind.KeepPath);
         }
 
         /// <summary>

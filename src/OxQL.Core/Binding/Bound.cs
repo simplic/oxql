@@ -347,7 +347,7 @@ public abstract record BoundStage
     }
 
     /// <summary>An unwind; <paramref name="Flatten"/> when it also descends a nested collection of the same items.</summary>
-    public sealed record Unwind(ResolvedPath Path, string? As, bool PreserveNull, string? IncludeIndex, BoundFlatten? Flatten = null) : BoundStage;
+    public sealed record Unwind(ResolvedPath Path, string? As, bool PreserveNull, string? IncludeIndex, BoundFlatten? Flatten = null, bool KeepPath = true) : BoundStage;
 
     public sealed record Group(IReadOnlyList<GroupKey> Keys, IReadOnlyList<Aggregate> Fields) : BoundStage;
 

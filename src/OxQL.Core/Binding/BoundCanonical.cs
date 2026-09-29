@@ -307,6 +307,10 @@ public static class BoundCanonical
             node["flattenDepth"] = flatten.Depth;
         }
 
+        // Written only when the collection leaves the row, so every other unwind renders as before.
+        if (!unwind.KeepPath)
+            node["keepPath"] = false;
+
         return node;
     }
 

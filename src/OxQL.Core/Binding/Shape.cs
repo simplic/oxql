@@ -57,6 +57,8 @@ public sealed class Shape
 
     private static readonly IReadOnlySet<string> NoRoots = new HashSet<string>(StringComparer.Ordinal);
 
+    private static readonly IReadOnlyDictionary<string, string> NoUnset = new Dictionary<string, string>(StringComparer.Ordinal);
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> NoAddons =
         new Dictionary<string, IReadOnlyList<AddonDefinition>>(StringComparer.Ordinal);
 
@@ -68,7 +70,8 @@ public sealed class Shape
         IReadOnlySet<string>? included,
         IReadOnlySet<string>? excluded,
         IReadOnlyDictionary<string, IReadOnlyList<AddonDefinition>> addons,
-        IReadOnlySet<string>? dropped = null)
+        IReadOnlySet<string>? dropped = null,
+        IReadOnlyDictionary<string, string>? unset = null)
     {
         Entity = entity;
         Roots = roots;
@@ -78,6 +81,7 @@ public sealed class Shape
         Excluded = excluded;
         Addons = addons;
         Dropped = dropped ?? NoRoots;
+        Unset = unset ?? NoUnset;
     }
 
     /// <summary>The entity the pipeline entered.</summary>
@@ -108,6 +112,12 @@ public sealed class Shape
     /// projection could not name it, and the row carries it.
     /// </summary>
     public IReadOnlySet<string> Dropped { get; }
+
+    /// <summary>
+    /// The collections an unwind with <c>keepPath: false</c> took out of the row, by wire path, each
+    /// with the alias its element went to. A path at or under one is not in the row any more.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Unset { get; }
 
     /// <summary>Whether the row carries a named root: it is a root and no projection after it dropped it.</summary>
     public bool Carries(string name) => Roots.ContainsKey(name) && !Dropped.Contains(name);
@@ -163,11 +173,15 @@ public sealed class Shape
     {
         var roots = new Dictionary<string, ShapeNode>(Roots, StringComparer.Ordinal) { [alias] = node };
 
-        return new Shape(Entity, roots, Unwound, Grouped, Included, Excluded, Addons, Dropped);
+        return new Shape(Entity, roots, Unwound, Grouped, Included, Excluded, Addons, Dropped, Unset);
     }
 
-    /// <summary>The shape after unwinding <paramref name="path"/>, optionally under an alias and with an index root.</summary>
-    public Shape WithUnwound(ResolvedPath path, string rootName, string? alias, string? indexAlias)
+    /// <summary>
+    /// The shape after unwinding <paramref name="path"/>, optionally under an alias and with an index
+    /// root. With <paramref name="keepPath"/> false (only with an alias, on a member collection) the
+    /// collection leaves the row: its element is under the alias only.
+    /// </summary>
+    public Shape WithUnwound(ResolvedPath path, string rootName, string? alias, string? indexAlias, bool keepPath = true)
     {
         var roots = new Dictionary<string, ShapeNode>(Roots, StringComparer.Ordinal);
         var unwound = new HashSet<string>(Unwound, StringComparer.Ordinal);
@@ -192,7 +206,12 @@ public sealed class Shape
         if (indexAlias is not null)
             roots[indexAlias] = new ShapeNode.Scalar(Kind.Int, indexAlias);
 
-        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons, Dropped);
+        var unset = Unset;
+
+        if (!keepPath && alias is not null && path.Path is not null)
+            unset = new Dictionary<string, string>(Unset, StringComparer.Ordinal) { [path.Wire] = alias };
+
+        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons, Dropped, unset);
     }
 
     /// <summary>The shape after a group: only the outputs, each rooted at its alias.</summary>
@@ -214,8 +233,8 @@ public sealed class Shape
             set.Add(Model.Build.WireNames.IdWire);
 
         var projected = inclusion
-            ? new Shape(Entity, Roots, Unwound, Grouped, set, null, Addons)
-            : new Shape(Entity, Roots, Unwound, Grouped, null, set, Addons);
+            ? new Shape(Entity, Roots, Unwound, Grouped, set, null, Addons, unset: Unset)
+            : new Shape(Entity, Roots, Unwound, Grouped, null, set, Addons, unset: Unset);
 
         // A named root the projection does not keep leaves the row, as a member does.
         var dropped = new HashSet<string>(Dropped, StringComparer.Ordinal);
@@ -224,7 +243,7 @@ public sealed class Shape
             if (name != ImplicitRoot && !projected.IsVisible(name))
                 dropped.Add(name);
 
-        return new Shape(Entity, Roots, Unwound, Grouped, projected.Included, projected.Excluded, Addons, dropped);
+        return new Shape(Entity, Roots, Unwound, Grouped, projected.Included, projected.Excluded, Addons, dropped, Unset);
     }
 
     public static string UnwoundKey(string root, string wire) => root + "|" + wire;
@@ -279,6 +298,10 @@ public sealed class Shape
                 ? $"'{wire}' is not an output of the group stage."
                 : $"'{wire}' is not a path of {Entity.Id}.");
         }
+
+        if (UnsetBy(wire) is { } unwound)
+            return PathResolution.Fail(Codes.UnknownPath,
+                $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}', or set 'keepPath' to true on that unwind to keep '{unwound.Collection}'.");
 
         if (!IsVisible(wire))
             return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.");
@@ -659,9 +682,22 @@ public sealed class Shape
             : (wire[..dot], select);
     }
 
-    /// <summary>Whether a wire path survives the projection at this shape.</summary>
+    /// <summary>The unwound collection (and its alias) that took a wire path out of the row, or null.</summary>
+    public (string Collection, string Alias)? UnsetBy(string wire)
+    {
+        foreach (var (collection, alias) in Unset)
+            if (wire == collection || wire.StartsWith(collection + ".", StringComparison.Ordinal))
+                return (collection, alias);
+
+        return null;
+    }
+
+    /// <summary>Whether a wire path survives the projection (and every unwind that dropped its collection) at this shape.</summary>
     public bool IsVisible(string wire)
     {
+        if (UnsetBy(wire) is not null)
+            return false;
+
         if (Included is not null)
         {
             foreach (var kept in Included)

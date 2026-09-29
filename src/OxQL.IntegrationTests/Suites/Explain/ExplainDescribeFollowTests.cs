@@ -63,4 +63,48 @@ public class ExplainDescribeFollowTests
         child["reference"]!["followable"]!["elements"]!.AsArray().Select(node => node!.GetValue<string>()).Should().Equal("first", "all");
         child["reference"]!["followable"]!["one"]!.GetValue<bool>().Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData("""["id", "sourceBillingLineReference.id"]""", false)]
+    [InlineData("""["id", "sourceBillingLineReference.id", "sourceBillingLineReference.type"]""", true)]
+    [InlineData("""["id", "sourceBillingLineReference"]""", true)]
+    public async Task D03_a_reference_with_cases_under_a_join_needs_its_case_member_in_the_select_and_says_so(string select, bool valid)
+    {
+        var request = JsonSerializer.Deserialize<ExplainRequest>($$"""
+            { "query": { "entityType": "ledger.transaction", "pipeline": [
+                { "unwind": { "path": "items", "as": "item" } },
+                { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": {{select}} } },
+                { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "shipment", "target": "transport.shipment" } } ] } }
+            """, OxQLJson.Wire)!;
+
+        var answer = await new ExplainDescribePlanTests.InProcessFleet().ExplainAsync(request);
+        var what = string.Join("; ", answer.Errors.Select(error => $"{error.Code}@{error.Stage} {error.Path}: {error.Message}"));
+
+        answer.Valid.Should().Be(valid, what);
+
+        if (valid)
+            return;
+
+        var error = answer.Errors.Should().ContainSingle().Subject;
+        error.Code.Should().Be("UNKNOWN_PATH", "the reference is declared; the join did not fetch the member its case tests");
+        error.Stage.Should().Be(2);
+        error.Path.Should().Be("erpLine.sourceBillingLineReference.type");
+        error.Message.Should().Contain("not in the select of 'erpLine'").And.Contain("add 'sourceBillingLineReference.type' to that select");
+    }
+
+    [Fact]
+    public async Task D04_after_an_unwind_with_keep_path_false_describe_lists_the_alias_and_not_the_collection()
+    {
+        var request = JsonSerializer.Deserialize<ExplainRequest>("""
+            { "query": { "entityType": "ledger.transaction", "pipeline": [ { "unwind": { "path": "items", "as": "item", "keepPath": false } } ] },
+              "describe": [{ "id": "after", "at": 1, "prefix": "", "usage": "project" }, { "id": "kept", "at": 0, "prefix": "", "usage": "project" }] }
+            """, OxQLJson.Wire)!;
+
+        var answer = await new ExplainDescribePlanTests.InProcessFleet().ExplainAsync(request);
+        answer.Valid.Should().BeTrue(string.Join("; ", answer.Errors.Select(error => error.Message)));
+
+        var after = Answer(answer, "after")["children"]!.AsArray().Select(node => node!["path"]!.GetValue<string>()).ToList();
+        after.Should().Contain("item").And.NotContain("items");
+        Answer(answer, "kept")["children"]!.AsArray().Select(node => node!["path"]!.GetValue<string>()).Should().Contain("items");
+    }
 }

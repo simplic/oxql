@@ -370,6 +370,10 @@ public static class MongoCompiler
                     if (unwind.As is not null)
                         emitted.Add(new BsonDocument("$set", new BsonDocument(unwind.As, "$" + unwind.Path.Storage)));
 
+                    // keepPath: false — the element lives on under the alias only.
+                    if (unwind is { KeepPath: false, As: not null })
+                        emitted.Add(new BsonDocument("$unset", unwind.Path.Storage));
+
                     if (unwind.Flatten is { } cut && bound.Strict && FilteredLater(bound.Stages, index, unwind.As ?? unwind.Path.Wire))
                         truncationProbes.Add(new TruncationProbe(Codes.UnwindDepthTruncated, cut.Stage, unwind.Path.Wire, cut.Depth, Probing(stages, emitted, probes[^1].Field)));
                     break;

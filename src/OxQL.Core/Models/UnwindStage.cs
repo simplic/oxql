@@ -42,6 +42,18 @@ public sealed record UnwindStage
     public string? Flatten { get; init; }
 
     /// <summary>
+    /// Whether the row keeps the unwound collection beside the alias (the default, as in 2.0).
+    /// <c>false</c> takes it out of the row, so the element is only under <c>as</c>; it needs
+    /// <c>as</c> and a member collection. Contract 2 only.
+    /// </summary>
+    [JsonPropertyName("keepPath")]
+    public bool KeepPath { get; init; } = true;
+
+    /// <summary>Whether the caller wrote <c>keepPath</c> (contract 1 does not have it).</summary>
+    [JsonIgnore]
+    public bool KeepPathWritten { get; init; }
+
+    /// <summary>
     /// Member names the caller wrote that the stage does not have. System.Text.Json skips an
     /// unmapped member by default, so they are recorded here and the binder refuses them:
     /// <c>preserveNulls</c> for <c>preserveNull</c> is an error, not the default applied.
@@ -71,6 +83,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
                 case "includeIndex": stage = stage with { IncludeIndex = property.Value.GetString() }; break;
                 // "flatten": null is the member left out, not a member named "null".
                 case "flatten": stage = stage with { Flatten = property.Value.ValueKind switch { JsonValueKind.String => property.Value.GetString(), JsonValueKind.Null => null, _ => property.Value.GetRawText() } }; break;
+                case "keepPath": stage = stage with { KeepPath = property.Value.ValueKind != JsonValueKind.False, KeepPathWritten = true }; break;
                 default: unknown.Add(property.Name); break;
             }
         }
@@ -86,6 +99,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
         if (value.PreserveNull) writer.WriteBoolean("preserveNull", true);
         if (value.IncludeIndex is not null) writer.WriteString("includeIndex", value.IncludeIndex);
         if (value.Flatten is not null) writer.WriteString("flatten", value.Flatten);
+        if (!value.KeepPath) writer.WriteBoolean("keepPath", false);
         writer.WriteEndObject();
     }
 }

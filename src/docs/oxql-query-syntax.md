@@ -226,7 +226,9 @@ it names, one object under the alias, `null` when the target does not exist or f
 ```
 
 `path` must carry a declared reference (`RESOLVE_NOT_DECLARED`, whose message names the path's
-kind). A join compares its id exactly, whatever the id's kind: a string id never folds. At most
+kind). Under a join alias, a reference whose cases test a sibling (`type`) needs that sibling in the
+join's `select` as well: without it the error is the join's `UNKNOWN_PATH` "not in the select of",
+naming the member to add. A join compares its id exactly, whatever the id's kind: a string id never folds. At most
 `MaxResolveStages` (8) resolve stages run on this host; stages continued at an owner count there.
 
 2.1 adds six members for references that are typed, point at items, convert their key or sit in a
@@ -327,6 +329,16 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
 `path` must be a collection at the current shape (`NOT_A_COLLECTION`). Afterwards `path`
 means the element, `as` is a copy of it and `includeIndex` an `int`. `preserveNull` keeps
 documents whose collection is empty or absent.
+
+```jsonc
+{ "unwind": { "path": "items", "as": "item", "keepPath": false } }
+```
+
+`keepPath` (2.1, default `true`) set to `false` takes the unwound collection out of the row once
+its element is under `as`: the row carries `item` and no `items`, and a later path under `items` is
+`UNKNOWN_PATH` naming the alias to read instead. It needs `as` and a member collection (a join alias
+unwound without `as` is already replaced by its element); otherwise `OPTION_NOT_APPLICABLE`. Refused
+under contract 1 (`LEGACY_STAGE_UNSUPPORTED`). Leaving it out keeps the 2.0 rows.
 
 ```jsonc
 { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }

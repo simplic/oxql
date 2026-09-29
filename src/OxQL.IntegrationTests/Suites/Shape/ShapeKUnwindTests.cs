@@ -105,6 +105,36 @@ public class ShapeKUnwindTests
     }
 
     [Fact]
+    public async Task K25_keep_path_false_takes_the_collection_out_of_the_row_and_keeps_the_element_under_the_alias()
+    {
+        var stored = Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32).ToList();
+
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "keepPath": false } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 50, "includeTotalCount": true } } ]""");
+
+        answer.ShouldHaveTotal(3);
+        answer.Items.Should().OnlyContain(row => !row!.AsObject().ContainsKey("items"), "the unwound collection left the row");
+        answer.Values("item.orderNumber").Select(value => value!.GetValue<int>()).Should().Equal(stored);
+    }
+
+    [Fact]
+    public async Task K26_after_keep_path_false_a_path_under_the_collection_is_refused_with_where_the_element_went()
+    {
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "as": "item", "keepPath": false } }, { "match": { "items.orderNumber": { "eq": 1 } } }, {{FullPage}} ]"""),
+            "UNKNOWN_PATH", "items.orderNumber", 1);
+    }
+
+    [Fact]
+    public async Task K27_keep_path_false_without_as_is_not_applicable_and_keep_path_true_is_the_default()
+    {
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "keepPath": false } }, {{FullPage}} ]"""), "OPTION_NOT_APPLICABLE", "items", 0);
+
+        var kept = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "keepPath": true } }, { "project": { "id": 1, "items.orderNumber": 1, "item.orderNumber": 1 } }, {{FullPage}} ]""");
+
+        kept.ShouldHaveIds(Enumerable.Repeat(Id("items-three"), 3));
+        kept.Items.Should().OnlyContain(row => row!["items"] is JsonObject);
+    }
+
+    [Fact]
     public async Task K04_include_index_writes_the_zero_based_position_as_an_int_in_stored_order()
     {
         var stored = Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32).ToList();

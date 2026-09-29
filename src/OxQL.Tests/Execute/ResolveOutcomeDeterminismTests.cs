@@ -255,6 +255,22 @@ public class ResolveOutcomeDeterminismTests
     }
 
     [Fact]
+    public async Task Explain_shows_the_plain_query_a_run_sends_an_owner_before_2_1()
+    {
+        var client = new FakeRemoteClient();
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
+
+        client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
+
+        var explained = await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]"""), BindHost.Context());
+
+        var owner = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result.Steps.Single(step => step.Index == 0).Owner!;
+        owner["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeFalse("the run asks a 2.0 owner the plain query, and explain shows what the run sends");
+        owner["query"]!.AsObject().ContainsKey("keyedBy").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task A_plain_2_0_resolve_onto_a_non_key_member_keeps_the_plain_query()
     {
         var runner = new FakeAggregateRunner { PageRows = [OrderRow(Order1, "c1")] };

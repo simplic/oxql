@@ -143,7 +143,7 @@ public sealed class RemoteExplain : IDescribeOwners
 
         foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote))
         {
-            var checks = KeyedFetch.Checks(bound, resolve, strict);
+            var checks = KeyedFetch.Checks(bound, resolve, strict, client);
             var misses = new List<Miss>();
             var answered = new HashSet<OwnerCheck>(ReferenceEqualityComparer.Instance);
 

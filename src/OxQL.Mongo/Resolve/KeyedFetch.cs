@@ -1047,14 +1047,17 @@ public sealed class KeyedFetch
     /// <see cref="ElidedKey"/>, with the continued stages that target's owner runs and those it does
     /// not (<c>not_applicable</c> for its rows). Nothing is sent and nothing is cached.
     /// </summary>
-    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict)
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Explain(bound, stage, strict, null);
+
+    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by (a known pre-2.1 owner is asked the plain query).</summary>
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
 
         var continued = Continuation.Of(bound, stage);
 
-        return PlansOf(bound, stage, strict, continued).Select(plan => new ExplainedOwnerQuery(
+        return PlansOf(bound, stage, strict, continued, client).Select(plan => new ExplainedOwnerQuery(
             plan.TargetName,
             plan.Target.IsRemote,
             plan.Target.Declared.Entity.Split('.')[0],
@@ -1075,7 +1078,10 @@ public sealed class KeyedFetch
     /// refusal; one at the owner query's own stages to null, since those are this host's making.
     /// Nothing is sent here.
     /// </summary>
-    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict)
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Checks(bound, stage, strict, null);
+
+    /// <summary><see cref="Checks(BoundPipeline, BoundStage.Resolve, bool)"/>, planned by the remote client's owner facts as a run plans.</summary>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
@@ -1087,7 +1093,7 @@ public sealed class KeyedFetch
         var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
         var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
 
-        return PlansOf(bound, stage, strict, Continuation.Of(bound, stage))
+        return PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client)
             .Where(plan => plan.Target.IsRemote && (!plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0))
             .Select(plan =>
             {
@@ -1129,7 +1135,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
-    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued)
+    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued, IRemoteQueryClient? client = null)
     {
         var position = PositionOf(bound, stage);
         var cases = CasesOf(stage);
@@ -1140,7 +1146,8 @@ public sealed class KeyedFetch
 
         foreach (var target in cases.SelectMany(selected => selected.Targets))
             if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
-                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, projected, parentProjected));
+                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, projected, parentProjected,
+                    legacyOwner: target.IsRemote && IsBefore21(client, ServiceKeyOf(target.Declared.Entity))));
 
         return plans;
     }
@@ -2252,7 +2259,9 @@ public sealed class KeyedFetch
         TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 10, 1, 250));
 
     /// <summary>Whether the owner of <paramref name="service"/> is known, by its shallow health, to run an engine before 2.1.</summary>
-    private bool IsBefore21(string service) =>
+    private bool IsBefore21(string service) => IsBefore21(client, service);
+
+    private static bool IsBefore21(IRemoteQueryClient? client, string service) =>
         client is IRemoteOwnerInfo owners && owners.OwnerOf(service)?.EngineVersion is { } version && EngineVersionOf(version) is { } parsed && parsed < Owner21;
 
     /// <summary>The engine version remote continuation, typed and item targets and <c>keyedBy</c> need at the owner.</summary>

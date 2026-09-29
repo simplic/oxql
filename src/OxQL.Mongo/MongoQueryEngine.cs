@@ -476,7 +476,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
                 case BoundStage.Resolve resolve when resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed:
                 {
-                    var explained = KeyedFetch.Explain(bound, resolve, strict);
+                    var explained = KeyedFetch.Explain(bound, resolve, strict, remote);
                     var continued = Continuation.Of(bound, resolve);
 
                     owners[resolve.As] = explained;

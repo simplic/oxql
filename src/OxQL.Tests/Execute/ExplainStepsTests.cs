@@ -246,6 +246,35 @@ public class ExplainStepsTests
     }
 
     [Fact]
+    public async Task The_stages_continued_under_a_local_keyed_alias_are_checked_at_this_host_as_its_SelfOwner_binds_them()
+    {
+        // The billing line is keyed at this host; a resolve under its owning row runs at this host's
+        // own SelfOwner, which binds it with the shipment's model: 'number' is no reference there.
+        var refused = await ExplainAsync("""
+            [{ "resolve": { "path": "billingLineId", "as": "r", "parentAs": "s" } },
+             { "resolve": { "path": "s.number", "as": "n" } }]
+            """);
+
+        refused.Valid.Should().BeFalse();
+        var error = refused.Errors.Should().ContainSingle().Subject;
+        error.Code.Should().Be(Codes.ResolveNotDeclared);
+        error.Stage.Should().Be(1, "the owner's error maps back to the caller's stage");
+        error.Path.Should().Be("s.number");
+        ((IReadOnlyDictionary<string, object?>)error.Params!["owner"]!)["service"].Should().BeNull("this host is the owner");
+        refused.Steps[1].Status.Should().Be("error");
+
+        var client = new FakeRemoteClient();
+        var valid = await ExplainAsync("""
+            [{ "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice" } }]
+            """, client: client);
+
+        valid.Valid.Should().BeTrue(string.Join("; ", valid.Errors.Select(each => each.Message)));
+        valid.Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked, "this host always answers its own check");
+        client.ExplainCalls.Should().BeEmpty("nothing is forwarded for a local owner");
+    }
+
+    [Fact]
     public async Task A_written_path_whose_owner_does_not_answer_is_noted_unchecked()
     {
         var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""");

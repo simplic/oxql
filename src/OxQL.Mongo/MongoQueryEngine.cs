@@ -362,7 +362,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         // Describe answers from the shapes of the part that binds, valid or not (DESIGN §4.2, §4.5);
         // the owners' answers and the remote check share one budget (DESIGN §4.3).
-        var owners = new RemoteExplain(remote, explainCache, context, request);
+        var owners = new RemoteExplain(remote, explainCache, context, request, (owned, token) => ExplainOwnedAsync(owned, context, token));
         var describeNotes = new List<Diagnostic>();
         var describe = await Describe.AnswerAsync(request, binding.Trace, models.Model, context, owners, describeNotes, cancellationToken).ConfigureAwait(false);
 
@@ -443,6 +443,19 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
             Advisory = advisory,
         });
+    }
+
+    /// <summary>
+    /// An owner query of a local keyed stage explained at this host, under the context its SelfOwner
+    /// runs one with (internal, so it may carry <c>keyedBy</c>, and contract 2): the answer in the
+    /// internal explain route's wire form, or null when explain refuses it outright. The owner query
+    /// carries strictly fewer join stages than the query it came from, so this ends by construction.
+    /// </summary>
+    private async Task<JsonObject?> ExplainOwnedAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken)
+    {
+        var outcome = await ExplainAsync(request, context with { Internal = true, Contract = 2 }, cancellationToken).ConfigureAwait(false);
+
+        return outcome is ExplainOutcome.Success success ? JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire) as JsonObject : null;
     }
 
     /// <summary>The notes in stage order, request-wide ones (no stage) last; within a stage as they were found.</summary>

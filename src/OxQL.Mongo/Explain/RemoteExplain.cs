@@ -74,6 +74,7 @@ public sealed class ExplainForwardCache : IDisposable
 public sealed class RemoteExplain : IDescribeOwners
 {
     private readonly IRemoteQueryClient? client;
+    private readonly Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self;
     private readonly ExplainForwardCache cache;
     private readonly RequestContext context;
     private readonly bool skip;
@@ -82,8 +83,20 @@ public sealed class RemoteExplain : IDescribeOwners
 
     /// <summary>The calls of one explain of <paramref name="request"/> under <paramref name="context"/>.</summary>
     public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request)
+        : this(client, cache, context, request, null)
+    {
+    }
+
+    /// <summary>
+    /// The calls of one explain of <paramref name="request"/> under <paramref name="context"/>;
+    /// <paramref name="self"/> explains an owner query at this host itself, as its SelfOwner runs
+    /// one: the check of the stages continued under a local keyed stage (null: they are noted unchecked).
+    /// </summary>
+    public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request,
+        Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self)
     {
         this.client = client;
+        this.self = self;
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         skip = request?.Remote == ExplainRequest.RemoteSkip;
@@ -141,7 +154,10 @@ public sealed class RemoteExplain : IDescribeOwners
         var errors = new List<QueryValidationError>();
         var notes = new List<Diagnostic>();
 
-        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote))
+        // A local keyed stage is checked too when stages continue under it: a run sends them to this
+        // host's own SelfOwner, which binds them with its model and sends what continues further
+        // (a union's every target, a third service) to those owners, whose refusals come back here.
+        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote || Continuation.Of(bound, stage).Count > 0))
         {
             var checks = KeyedFetch.Checks(bound, resolve, strict, client);
             var misses = new List<Miss>();
@@ -149,14 +165,19 @@ public sealed class RemoteExplain : IDescribeOwners
 
             foreach (var check in checks)
             {
-                if (skip)
+                var local = check.Bound is { IsRemote: false };
+
+                // "skip" asks no owner; this host's own check asks none either, since it passes "skip" on.
+                if (skip && !local)
                 {
                     notes.Add(Unchecked(check, Skipped));
                     continue;
                 }
 
-                var request = new ExplainRequest { Query = check.Query, Remote = ExplainRequest.RemoteCheck, IsEnvelope = true };
-                var (answer, reason) = await CallAsync(check.Service, request, cancellationToken).ConfigureAwait(false);
+                var request = new ExplainRequest { Query = check.Query, Remote = skip ? ExplainRequest.RemoteSkip : ExplainRequest.RemoteCheck, IsEnvelope = true };
+                var (answer, reason) = local
+                    ? await SelfAsync(request, cancellationToken).ConfigureAwait(false)
+                    : await CallAsync(check.Service, request, cancellationToken).ConfigureAwait(false);
 
                 if (answer is null)
                 {
@@ -174,7 +195,7 @@ public sealed class RemoteExplain : IDescribeOwners
                             if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && other.Path == mapped.Path))
                                 errors.Add(mapped);
                         }
-                        else if (MissOf(check, error) is { } miss)
+                        else if (!local && MissOf(check, error) is { } miss)
                         {
                             misses.Add(miss);
                         }
@@ -294,6 +315,21 @@ public sealed class RemoteExplain : IDescribeOwners
         }
     }
 
+    /// <summary>
+    /// An owner query explained at this host itself, as its SelfOwner would run it: nothing is
+    /// forwarded or cached, and what the explain asks further owners shares nothing with this budget
+    /// but the time. Without a way to explain here, the part is noted unchecked.
+    /// </summary>
+    private async Task<(JsonObject? Answer, string? Reason)> SelfAsync(ExplainRequest request, CancellationToken cancellationToken)
+    {
+        if (self is null)
+            return (null, Unsupported);
+
+        var answer = await self(request, cancellationToken).ConfigureAwait(false);
+
+        return answer is null ? (null, Unsupported) : (answer, null);
+    }
+
     /// <summary>One forwarded body: from the cache, else from the owner within what is left of the budget.</summary>
     private async Task<(JsonObject? Answer, string? Reason)> CallAsync(string service, ExplainRequest request, CancellationToken cancellationToken)
     {
@@ -343,10 +379,12 @@ public sealed class RemoteExplain : IDescribeOwners
     private static Diagnostic Unchecked(OwnerCheck check, string reason) => new()
     {
         Code = Notes.RemoteUnchecked,
-        Message = reason == Skipped
+        Message = check.Service.Length == 0
+            ? $"The stages continued under '{check.Target}' at this host were not checked ({reason}); this host binds them when the query runs."
+            : reason == Skipped
             ? $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) was not checked: the request asked for remote \"skip\"."
             : $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
         Stage = check.FirstContinued,
-        Params = new Dictionary<string, object?> { ["service"] = check.Service, ["target"] = check.Target, ["reason"] = reason },
+        Params = new Dictionary<string, object?> { ["service"] = check.Service.Length == 0 ? null : check.Service, ["target"] = check.Target, ["reason"] = reason },
     };
 }

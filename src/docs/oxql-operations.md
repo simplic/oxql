@@ -394,7 +394,10 @@ configuration secret appears. Explain has no rate limit; it costs one bind and o
 A host that serves continued stages for other services also answers the internal twin, `POST
 internal/oxql/explain` in the Simplic base package: the same body and answer, admitted by the
 internal key under the forwarded identity. An origin calls it for the remote check and remote
-describes through `IRemoteQueryClient.ExplainAsync`.
+describes through `IRemoteQueryClient.ExplainAsync`. The stages continued under a keyed stage of
+the host itself are checked the same way in process, as its own owner binds them when the query
+runs; what continues from there to another service (every target of a union without `forTarget`)
+is that owner's remote check, so explain refuses what the run would refuse.
 
 ## Keyed fetch and remote continuation
 

@@ -1089,7 +1089,8 @@ public sealed class KeyedFetch
 
     /// <summary>
     /// The owner queries of a keyed stage that a remote owner continues (DESIGN §4.3 remote check):
-    /// per remote target with continued stages, its service, the query a run sends with one
+    /// per remote target with continued stages (and per local target with continued stages, service
+    /// empty: this host checks them in process), its service, the query a run sends with one
     /// <see cref="CheckKey"/> in place of the page's keys, and how an owner error maps back — one at
     /// a continued stage to the caller's stage and path with <c>params.owner</c>, as a run maps a
     /// refusal; one at the owner query's own stages to null, since those are this host's making.
@@ -1110,8 +1111,13 @@ public sealed class KeyedFetch
         var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
         var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
 
+        // A local target is checked only for the stages continued under it: this host binds its select
+        // and paths itself, but the continued stages are bound by its own SelfOwner when the query runs,
+        // with its own model and, for a join there that reaches another service, that owner's.
         return PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client)
-            .Where(plan => plan.Target.IsRemote && (!plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null))
+            .Where(plan => plan.Target.IsRemote
+                ? !plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null
+                : !plan.Continued.IsEmpty)
             .Select(plan =>
             {
                 var query = plan.Query([CheckKey]);

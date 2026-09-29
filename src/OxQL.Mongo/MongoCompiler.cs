@@ -1563,9 +1563,19 @@ public static class MongoCompiler
         }
 
         if (project.Inclusion)
+        {
             foreach (var storage in kept)
                 if (!project.Paths.Any(path => path.Storage is not null && Covers(path.Storage, storage)))
                     projection[storage] = 1;
+
+            // A kept member may hold paths the caller projected inside it — a keyed resolve over a
+            // collection keeps the whole collection, and the caller asked for one member of its
+            // elements (tours.tourId beside a resolve of it). Mongo refuses a projection naming a path
+            // and one inside it ("path collision"), so the narrower path merges into the one holding
+            // it; the wire row still follows the shape and shows only what was asked for.
+            foreach (var inner in projection.Names.Where(name => projection.Names.Any(outer => name != outer && Covers(outer, name))).ToList())
+                projection.Remove(inner);
+        }
 
         // Excluding the key leaves the sort and the cursor reading a member that is not there,
         // which pages an order Mongo never produced; keep it and record that the caller did not

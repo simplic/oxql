@@ -606,8 +606,9 @@ POST /oxql/batch
 ```
 
 Always HTTP 200 with `{ "results": [ … ] }` in order; each entry is a full success body or a
-refusal envelope. `maxTimeMs` caps every query's aggregate under the host's ceiling. More than
-`MaxBatchQueries` is a 400 `BATCH_TOO_LARGE` refusal of the whole batch.
+refusal envelope. `maxTimeMs` bounds the whole batch: the queries run one after another, each
+under what is left, never above the host's ceiling. More than `MaxBatchQueries` is a 400
+`BATCH_TOO_LARGE` refusal of the whole batch.
 
 ## Contract 1 (compatibility mode)
 

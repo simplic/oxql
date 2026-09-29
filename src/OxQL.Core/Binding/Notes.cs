@@ -232,7 +232,11 @@ public static class Notes
         Params = new Dictionary<string, object?> { ["alias"] = alias, ["kind"] = kind },
     };
 
-    /// <summary>A flat select path one target of a union lacks, dropped for that target: at binding for a local target, at run time for a remote one.</summary>
+    /// <summary>
+    /// A flat select path one target of a union lacks, dropped for that target: at binding for a local
+    /// target; for a remote one by its owner's internal explain (the remote check), and by a run,
+    /// which keeps what it learned in the cache and reports it from there too.
+    /// </summary>
     public static Diagnostic SelectPathDropped(int? stage, string alias, string target, string path, bool parent) => new()
     {
         Code = SelectPathNotOnTarget,

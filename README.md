@@ -356,6 +356,26 @@ operator notice:
   `PAGE_INCOMPLETE`) and five diagnostics (`RESOLVE_MISSING`, `RESOLVE_AMBIGUOUS`,
   `RESOLVE_TRUNCATED`, `LOOKUP_TRUNCATED`, `UNWIND_DEPTH_TRUNCATED`); `RESOLVE_UNAVAILABLE` stays.
 - **The console** is served at `RoutePath` under the path base (see *Studio console*).
+- **Resolve outcomes do not depend on the page, the cache or the executor.** Under `strict` or an
+  `onMissing` other than `null` a remote resolve onto a non-key field is grouped per key (2.0
+  owners: the plain match with two rows per key); an inline resolve onto a non-key field is flagged
+  `ambiguous` in the aggregate; an inline resolve with a `filter` stays inline under `strict` (it was
+  keyed, which changed what bound). A strict request refuses a lookup or `flatten` cut that a later
+  match hides. A path under a join alias beyond its `select` is `UNKNOWN_PATH`. The stage index in
+  every diagnostic is the caller's, also after a stage that binds to nothing (an empty `match`).
+- **Batches.** A batch's `maxTimeMs` bounds the whole batch, not each query; the keyed fetch sends
+  it a tenth (at most 250 ms) below its own wait. A batch member other than `queries` and
+  `maxTimeMs` is `UNKNOWN_REQUEST_MEMBER` under contract 2.
+- **Public API.** `IOxQLQueryService` gained `BatchAsync(batch, internalCall, …)` and
+  `ExplainAsync(request, internalCall, …)`, and `IQueryEngine.ExplainAsync` takes an
+  `ExplainRequest`: an implementation of either interface outside this package must add them.
+  `IRemoteOwnerInfo` gained default members `OwnerOfAsync` (read an owner's facts before its first
+  batch) and `ApiVersionOf` (explain's `route.apiVersion`), `RemoteOwnerInfo` a `MaxPageSize`, and
+  `IEntityModelProvider` a default `SchemaRevision` (explain's `schemaRevision`); a host fills them
+  to have them used.
+- **Request depth.** Hosts read request bodies to `OxQLJson.MaxDepth` (256), the depth explain's
+  answers need; every host of a fleet runs the same limit, so a body one host accepts its owners
+  read too.
 
 ## Upgrading from 1.x
 

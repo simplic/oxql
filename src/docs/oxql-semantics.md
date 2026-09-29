@@ -227,7 +227,17 @@ with no index but `_id`. What changes with the collation is which indexes the se
 - A `lookup` returns at most `limit` children per parent (default and maximum
   `Limits:MaxLookupLimit`, 100) in the order of its `sort`, then the child's key (without `sort`,
   ascending by the child's key). Children beyond the limit are not returned, and the page carries
-  `LOOKUP_TRUNCATED` naming the alias and how many rows were cut; under `strict` it refuses.
+  `LOOKUP_TRUNCATED` naming the alias and how many rows were cut; under `strict` it refuses. A
+  strict request also refuses a cut that a later match hides by filtering the cut parent out (a
+  second read of the rows up to the lookup, `params.filtered: true`); the same holds for a
+  `flatten` cut at its depth.
+- A join fetches only its `select` (the key always): a path under its alias beyond the select is
+  `UNKNOWN_PATH` wherever it is read, and a `lookup` `on` an alias that did not fetch the member it
+  joins on is refused the same way.
+- `strict` and `onMissing` change what is refused, never what binds: an inline resolve with a
+  `filter` stays inline, and the aggregate tells a record the filter excluded from a missing one. An
+  inline resolve onto a target field that is not the key joins two records when its outcomes are
+  read, so a key two records hold is `ambiguous` (the first by record key is taken).
 
 **Cursors.** A cursor is signed with a key derived from `Cursor:SigningKey` and bound to a
 fingerprint of the bound pipeline: the entity, the organisation, every stage with its storage
@@ -485,11 +495,14 @@ Nothing else changes compared with a plain remote resolve:
   forwarded query therefore has strictly fewer join stages than the one that produced it, and a
   chain ends after at most as many levels as the original request has join stages. No hop counter is
   needed.
-- **Time.** The batch carries `maxTimeMs`, which the owner applies as its request ceiling and budgets
+- **Time.** The batch carries `maxTimeMs`, which the owner applies to the whole batch and budgets
   its own owner calls from. A call carrying continued stages, or a typed, item, converted or
   element-wise resolve, gets the origin's remaining time less 50 ms, at most `Execution:ChainTimeoutMs` (6 000); a plain remote
-  resolve keeps `min(remaining, ResolveTimeoutMs)`. An owner that runs out answers nothing for its
-  keys: `RESOLVE_TIMEOUT`, rows `owner_unanswered`.
+  resolve keeps `min(remaining, ResolveTimeoutMs)`; the batch's `maxTimeMs` is that less a tenth (at
+  most 250 ms), and split batches of one owner share one deadline. An owner that runs out answers
+  nothing for its keys: `RESOLVE_TIMEOUT`, rows `owner_unanswered`. An owner checking its own
+  continued stages at explain starts a fresh `Explain:RemoteTimeoutMs` budget while the origin waits
+  only for what is left of its own, so a slow second owner comes back `REMOTE_UNCHECKED`.
 - **Cost.** Owner queries per level are bounded by stages × key chunks, and keys per level by the
   rows the previous level returned; the remaining limits are `MaxResolveKeys` (per request),
   `MaxContinuedStages`, the owner's `MaxBatchQueries` and the time ceiling.

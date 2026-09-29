@@ -139,9 +139,10 @@ stage's effective `onMissing`:
 the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a framework
 response (a body without a `queries` array is a 400 ProblemDetails). An entry is either a success body (it has `items`)
 or a refusal envelope (it has `type`); an entry carries no status of its own, so a caller derives
-it from `type` with the table above. Queries run one after another on the host; a batch of
-`n` queries may take up to `n` times the time ceiling, and `maxTimeMs` lowers the ceiling of
-every query in it, never raises it.
+it from `type` with the table above. Queries run one after another on the host; `maxTimeMs` bounds
+the whole batch: each query runs under what is left of it (never above the host's own ceiling), so
+the batch ends within it. A member the batch does not have (a batch-level `strict`, say) is a 400
+`UNKNOWN_REQUEST_MEMBER` under contract 2.
 
 ## Limits
 
@@ -319,7 +320,8 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   reads an alias an earlier stage failed to create); for a join `executor` (`inline`,
   `keyed-local`, `keyed-remote`, `continued`) and `phase` (`beforePage`, `afterPage`, `owner`); for a
   keyed or continued stage `owner` with every owner query as it is forwarded, keys and the page limit
-  elided as `"…"` (`route.apiVersion` is left `null` for the caller to fill); `reference` for a
+  elided as `"…"` (`route.apiVersion` is the version the remote client routes the service to,
+  `IRemoteOwnerInfo.ApiVersionOf`, or `null` when it does not say); `reference` for a
   resolve, as bound; `creates`, the aliases added (`node` `entity`, `element`, `array`, `remote`,
   `keyed`, `scalar`, `group`); `continued` on a keyed stage; `shapeAfter` (`paging` is `cursor`
   while every row is one entity row, `offset` after an unwind or group).
@@ -332,9 +334,12 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   `ONLY_FOR_VARIANTS`, `SNAPSHOT_COPY`, `JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
   `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP`, `LOOKUP_LIMIT`, `OFFSET_PAGING`,
   `MISSING_POLICY` (the effective `onMissing`, `strict`, and which outcomes lose data),
-  `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`). Codes are stable; messages may
-  change. A remote union target's `SELECT_PATH_NOT_ON_TARGET` is known only when the query runs and
-  comes with the run's diagnostics instead.
+  `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`; an index list that cannot be read
+  is an `INDEX_ADVICE` note saying so). Codes are stable; messages may change. A remote union
+  target's `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check);
+  a run reports the paths an owner dropped as diagnostics, from the cache as well.
+  `MISSING_POLICY` names only the outcomes the stage can have: an inline resolve has no
+  `owner_unanswered` or `invalid_key`, and `ambiguous` only onto a target field that is not the key.
 - **`describe`**: one answer per describe entry, in order, echoing `id`, `at` or `entity`, `prefix`
   or `paths` and `usage`, with the `root` it was taken under, whether an owner answered it
   (`forwarded`), `truncated`, and the `children`. A child carries its `name`, `path`, `displayName`
@@ -342,7 +347,8 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   `collection`, `underCollection`, the flags `filterable sortable projectable unwindable groupable`
   (the binder's own answer for that usage at that point of the pipeline), `operators` (those the
   binder admits there, plus `is` and `any` where they apply), `caseFolding` (`folds` or `none`),
-  `enum` (values with descriptions), `variants`, `flatten`, `onlyFor`, `snapshotOf`, `reference`
+  `enum` (values with descriptions), `variants`, `flatten` (the collection's own recursion first,
+  and `flattenMembers` listing every candidate when there are several), `onlyFor`, `snapshotOf`, `reference`
   (`simple`, `keyAs`, `cases`, `followable`), `referencedBy` (with `referencing: true`), `addon`,
   `deprecated` (`since`, `replacedBy`, `note`), `constraints`, `hasChildren`, `notes`, and an `error`
   when the entry could not be answered.
@@ -413,7 +419,7 @@ owning service, owners in parallel:
 | target | owner query |
 |---|---|
 | an entity by its own key | `match <field> in [keys]`, the filter, the continued stages, the projection, a page of the chunk's size |
-| an item, or a non-key field | the internal member `keyedBy: { path, keys, perKey: 2 }`: the owner matches the keys (for an item, unwinds the item collection as `oxEl` and matches the element), ranks the records per key, keeps two, then the filter, the continued stages and the projection; a second record means `ambiguous`. At most `MaxPageSize / 2` keys per query |
+| an item, or a non-key field | the internal member `keyedBy: { path, keys, perKey: 2 }`: the owner matches the keys (for an item, unwinds only the elements holding a key as `oxEl`, keeping their position), ranks the records per key by record key (and position), keeps two, then the filter, the continued stages and the projection; a second record means `ambiguous`. String keys compare exactly even inside a collated aggregate. At most `MaxPageSize / 2` keys per query, and no more than the owner's own page holds. A plain 2.0 resolve onto a non-key field keeps the plain key match while nothing reads its outcomes; under `strict` or an `onMissing` other than `null` it is grouped, or, at an owner known to run 2.0, asked the plain match with two rows per key |
 | the existence probe | the same without the filter and projecting only the key, for keys the filtered answer lacked, when the stage has a `filter` and an `onMissing` other than `null` |
 
 - `keyedBy` is accepted only on the internal route and in process (`IOxQLQueryService.BatchAsync(batch,
@@ -421,16 +427,24 @@ owning service, owners in parallel:
   `UNKNOWN_REQUEST_MEMBER`. It is the only new wire vocabulary; no header is added. A plain remote
   resolve onto an entity's key sends the plain key match, so an owner still on 2.0 keeps answering
   it.
-- **Owner facts.** The keyed fetch splits each owner's batch at the owner's `maxBatchQueries` and
-  refuses 2.1 vocabulary (continued stages, `keyedBy`) to an owner whose engine is older
-  (`OWNER_NOT_CAPABLE`), both read from the owner's shallow health by a remote client that
-  implements `IRemoteOwnerInfo` (the base package's reads it where it measures reachability). Until
-  an owner has been measured the host uses its own cap and sends the query; an old owner then
-  refuses the unknown members inside `RESOLVE_REFUSED`.
+- **Owner facts.** The keyed fetch splits each owner's batch at the owner's `maxBatchQueries`, sizes
+  its key chunks by the owner's `maxPageSize`, and refuses 2.1 vocabulary (continued stages,
+  `keyedBy`) to an owner whose engine is older (`OWNER_NOT_CAPABLE`), all read from the owner's
+  shallow health by a remote client that implements `IRemoteOwnerInfo`. Before the first batch of a
+  request the fetch asks the client for each owner's facts (`OwnerOfAsync`), which may read the
+  owner's shallow health right then; a client that does not know them yet leaves the host's own cap,
+  and an old owner then refuses the unknown members inside `RESOLVE_REFUSED`.
+- **Union select paths.** A select path an owner says one target of a union lacks is dropped for
+  that target and the query asked again, for every chunk that carried it; what was learned is kept
+  in the cache per organisation, service and plan, so later requests do not send it and still
+  report it.
 - **An owner answer with `hasNextPage`** means the owner cut rows: the chunk's open keys are
   `owner_unanswered` (`RESOLVE_PARTIAL`), never `not_found`, and are not cached.
-- **Time.** See `Execution:ResolveTimeoutMs` and `ChainTimeoutMs` under *Limits*; the batch's
-  `maxTimeMs` carries the budget, and the owner applies it as its ceiling.
+- **Time.** See `Execution:ResolveTimeoutMs` and `ChainTimeoutMs` under *Limits*. Split batches of
+  one owner share the request's deadline, each under what is left. The batch's `maxTimeMs` is the
+  call's budget less a tenth (at most 250 ms), so the owner stops and answers before the caller
+  stops waiting; the owner applies it to the whole batch. A `RESOLVE_TIMEOUT` names the time the
+  failing call had.
 - **Strictness** travels in the query body: an owner query carrying continued stages carries
   `strict: true` when the origin is strict. Variables are substituted at the origin.
 - **Security** is that of a remote resolve: the internal route is admitted by the internal key and

@@ -64,16 +64,47 @@ public class ContinuationBindTests
     }
 
     [Theory]
-    [InlineData(Contact)]
-    [InlineData(Line)]
-    public async Task A_lookup_on_a_keyed_or_remote_alias_binds_as_a_stage_continued_at_its_owner(string first)
+    [InlineData(Contact, "r")]
+    [InlineData("""{ "resolve": { "path": "billingLineId", "as": "e", "parentAs": "r" } }""", "r")]
+    public async Task A_lookup_on_a_keyed_or_remote_alias_binds_as_a_stage_continued_at_its_owner(string first, string on)
     {
-        var bound = await BoundAsync($$"""[{{first}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "as": "l", "first": true } }]""");
+        var bound = await BoundAsync($$"""[{{first}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "{{on}}", "as": "l", "first": true } }]""");
 
         var continued = bound.Stages.OfType<ContinuedStage>().Should().ContainSingle().Subject;
         continued.Kind.Should().Be("lookup");
-        continued.Root.Should().Be("r");
+        continued.Root.Should().Be(on);
         continued.Aliases.Should().Equal("l");
+    }
+
+    [Theory]
+    [InlineData("""{ "group": { "by": [{ "dateTrunc": { "path": "r.createDateTime", "unit": "day" }, "as": "day" }], "fields": { "n": { "count": true } } } }""")]
+    [InlineData("""{ "group": { "by": [{ "path": "number", "as": "number" }], "fields": { "top": { "max": "r.name" } } } }""")]
+    public async Task A_group_aggregate_or_date_over_a_keyed_or_remote_alias_is_NOT_CONTINUABLE(string group)
+    {
+        var error = await BindHost.ErrorAsync(ResolveModel.Model, ResolveModel.Invoice, $$"""[{{Contact}}, {{group}}]""", Codes.NotContinuable);
+
+        error.Stage.Should().Be(1);
+        error.Message.Should().Contain("Aggregate chain data in the report");
+    }
+
+    [Fact]
+    public async Task A_group_after_a_continued_stage_leaves_no_alias_to_continue_under_or_to_blame_a_projection_for()
+    {
+        await BindHost.BoundAsync(ResolveModel.Model, ResolveModel.Invoice, $$"""
+            [{{Contact}},
+             { "resolve": { "path": "r.companyId", "as": "co" } },
+             { "group": { "by": [{ "path": "number", "as": "number" }], "fields": { "n": { "count": true } } } }]
+            """);
+    }
+
+    [Fact]
+    public async Task A_lookup_on_an_item_targets_alias_is_refused_at_the_origin_since_it_holds_an_element()
+    {
+        var error = await BindHost.ErrorAsync(ResolveModel.Model, ResolveModel.Invoice,
+            $$"""[{{Line}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "as": "l", "first": true } }]""", Codes.LookupOnNotEntity);
+
+        error.Stage.Should().Be(1);
+        error.Message.Should().Contain("parentAs");
     }
 
     [Fact]

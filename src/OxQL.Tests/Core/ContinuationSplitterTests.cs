@@ -28,18 +28,18 @@ public class ContinuationSplitterTests
             [{{Union}},
              { "resolve": { "path": "line.code", "as": "a" } },
              { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "as": "b" } },
-             { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "line", "as": "c" } },
              { "resolve": { "path": "owner.number", "as": "d", "forTarget": "rc.shipment" } }]
             """);
         var anchor = Anchor(bound, "line");
 
+        // A lookup on 'line' itself, the element, is refused at the origin (RE-20); the owning row is the entity row.
         var owner = Continuation.For(anchor, "rc.shipment", itemTarget: true, Continuation.Of(bound, anchor));
 
-        owner.Stages.Select(stage => stage.Resolve?.Path ?? $"on:{stage.Lookup!.On ?? "(root)"}").Should().Equal("oxEl.code", "on:(root)", "on:oxEl", "number");
+        owner.Stages.Select(stage => stage.Resolve?.Path ?? $"on:{stage.Lookup!.On ?? "(root)"}").Should().Equal("oxEl.code", "on:(root)", "number");
         owner.Stages.Should().OnlyContain(stage => (stage.Resolve == null || stage.Resolve.ForTarget == null) && (stage.Lookup == null || stage.Lookup.ForTarget == null),
             "the owner does not continue the stage further, so it is not sent forTarget");
-        owner.Origins.Select(stage => stage.OriginIndex).Should().Equal(1, 2, 3, 4);
-        owner.Aliases.Should().Equal("a", "b", "c", "d");
+        owner.Origins.Select(stage => stage.OriginIndex).Should().Equal(1, 2, 3);
+        owner.Aliases.Should().Equal("a", "b", "d");
     }
 
     [Fact]

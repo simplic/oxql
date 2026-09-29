@@ -940,6 +940,15 @@ public sealed class Binder
             // it is not a lookup of this host and does not count towards its limit.
             if (lookup.On is { } continuedOn && anchors.TryGetValue(continuedOn, out var anchor))
             {
+                // An item target's alias holds an element, not an entity row: every owner would refuse
+                // the lookup, so it is refused here (its owning row, parentAs, is the entity row).
+                if (continuedOn == anchor.Stage.As && ItemTargetsOnly(anchor, lookup.ForTarget))
+                {
+                    errors.Add(Error(Codes.LookupOnNotEntity,
+                        $"'{continuedOn}' is an element of an item collection; a lookup's parent is one entity row. Join on the owning row ('parentAs') instead.", index, continuedOn));
+                    return;
+                }
+
                 BindContinued(new PipelineStage { Lookup = lookup, Keys = ["lookup"] }, index, continuedOn, anchor, lookup.ForTarget, [lookup.As]);
                 return;
             }
@@ -1565,6 +1574,15 @@ public sealed class Binder
             return refused;
         }
 
+        /// <summary>Whether every target a stage continued under the anchor reaches (after <c>forTarget</c>) is an item target.</summary>
+        private static bool ItemTargetsOnly(ContinuationAnchor anchor, string? forTarget)
+        {
+            var effective = forTarget ?? anchor.ForTarget;
+            var targets = (anchor.Stage.Cases ?? []).SelectMany(bound => bound.Targets).Where(target => effective is null || target.Declared.Entity == effective).ToList();
+
+            return targets.Count > 0 && targets.All(target => target.Declared.Item is not null);
+        }
+
         /// <summary>The target entities of a keyed stage's selected cases, in declaration order.</summary>
         private static List<string> TargetsOf(BoundStage.Resolve stage) =>
             (stage.Cases ?? []).SelectMany(bound => bound.Targets).Select(target => target.Declared.Entity).DefaultIfEmpty(stage.TargetEntity).Distinct(StringComparer.Ordinal).ToList();
@@ -1596,7 +1614,11 @@ public sealed class Binder
         {
             foreach (var continued in stages.OfType<ContinuedStage>())
             {
-                var anchor = anchors[continued.Anchor].Stage;
+                // A group after it replaced the row, and the continued alias with it.
+                if (!anchors.TryGetValue(continued.Anchor, out var anchored))
+                    continue;
+
+                var anchor = anchored.Stage;
 
                 if (shape.Carries(anchor.As) || (anchor.ParentAs is { } parentAs && shape.Carries(parentAs)))
                     continue;
@@ -2161,6 +2183,10 @@ public sealed class Binder
             }
 
             stages.Add(new BoundStage.Group(keys, fields));
+
+            // A group replaces the row: no alias a later stage could continue under survives it.
+            anchors.Clear();
+
             shape = shape.WithGroup(keys.Select(key => new ShapeNode.GroupOutput(key.OutputKind, key.OutputShape, key.As))
                 .Concat(fields.Select(field => field.Function == "push"
                     ? new ShapeNode.GroupOutput(field.OutputKind, null, field.As, field.ArgumentKind, field.OutputShape)
@@ -2170,6 +2196,9 @@ public sealed class Binder
 
         private DateTrunc? BindDateTrunc(DateTruncExpression trunc, int index)
         {
+            if (RefusedUnderAnchor(trunc.Path, "group", index))
+                return null;
+
             var resolution = shape.Resolve(trunc.Path, PathUsage.GroupKey);
 
             if (!resolution.Succeeded)
@@ -2263,6 +2292,10 @@ public sealed class Binder
 
             if (expression.IsPath)
             {
+                // A group over a keyed or remote alias's data is the chain's, which only a report aggregates (DESIGN §3.5.3).
+                if (RefusedUnderAnchor(expression.Path, "group", index))
+                    return null;
+
                 var resolution = shape.Resolve(expression.Path!, PathUsage.Aggregate);
 
                 if (!resolution.Succeeded)

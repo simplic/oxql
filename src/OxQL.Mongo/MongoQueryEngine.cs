@@ -88,9 +88,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
         if (compiled.SemiJoins.Count > 0)
         {
-            var refused = await fetch.ByConditionAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
+            var (refused, semiJoinCalls) = await fetch.ByConditionCountedAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
-            resolveCalls += compiled.SemiJoins.Select(slot => KeyedFetch.ServiceKeyOf(((ShapeNode.Remote)slot.Leaf.Path.Root).TargetEntity)).Distinct().Count();
+            resolveCalls += semiJoinCalls;
 
             if (refused is not null)
             {

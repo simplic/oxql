@@ -280,6 +280,36 @@ public class OwnerFetchRobustnessTests
         (result.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Codes.ResolvePartial, "one key of one row is one key, whether the shipment or the tour holds it");
     }
 
+    // ---- the log line's counters (RE-19) -----------------------------------------------------------
+
+    [Fact]
+    public async Task A_split_batch_counts_each_part_and_a_semi_join_the_cache_answers_counts_none()
+    {
+        var options = BindHost.Options(configure => configure.Limits.ResolveKeyChunk = 1);
+        var cache = new OwnerFetchCache(options);
+        var client = new FakeRemoteClient();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client, cache: cache);
+        var fetch = new KeyedFetch(client, engine, cache, options);
+
+        client.Owners["crm"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 1);
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Counted(0, false, false);
+
+        var keyed = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), new CompileOptions(5_000, null, 10_000));
+        var resolved = await fetch.ByKeysAsync(keyed, [ContactRow(ContactA), ContactRow(ContactB), ContactRow(ContactC)], BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
+
+        resolved.Calls.Should().Be(3, "three parts of one owner's batch are three calls");
+
+        var filtered = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
+            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
+
+        (await fetch.ByConditionCountedAsync(filtered, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None)).Calls.Should().Be(1);
+
+        var again = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
+            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
+
+        (await fetch.ByConditionCountedAsync(again, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None)).Calls.Should().Be(0, "the cache answered");
+    }
+
     // ---- a local target without this host's engine (RE-21) -----------------------------------------
 
     [Fact]

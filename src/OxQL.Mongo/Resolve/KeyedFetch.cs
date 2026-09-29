@@ -354,7 +354,28 @@ public sealed class KeyedFetch
     /// executes something else instead.
     /// </para>
     /// </summary>
-    public async Task<Refusal?> ByConditionAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    public async Task<Refusal?> ByConditionAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken) =>
+        (await ByConditionCountedAsync(compiled, context, remaining, cancellationToken).ConfigureAwait(false)).Refusal;
+
+    /// <summary>
+    /// <see cref="ByConditionAsync"/>, with how many batches went to owners for it (none for slots
+    /// the cache answers, a split batch counted per part), for the log line.
+    /// </summary>
+    public async Task<(Refusal? Refusal, int Calls)> ByConditionCountedAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        var calls = new StrongBox(0);
+        var refusal = await ByConditionCoreAsync(compiled, context, remaining, calls, cancellationToken).ConfigureAwait(false);
+
+        return (refusal, calls.Value);
+    }
+
+    /// <summary>A counter the semi-join's calls add to.</summary>
+    private sealed class StrongBox(int value)
+    {
+        public int Value = value;
+    }
+
+    private async Task<Refusal?> ByConditionCoreAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, StrongBox calls, CancellationToken cancellationToken)
     {
         var slots = compiled.SemiJoins;
 
@@ -403,6 +424,8 @@ public sealed class KeyedFetch
 
         foreach (var (service, members, outcome) in firsts.Select(task => task.Result))
         {
+            calls.Value += outcome.Calls;
+
             if (outcome.Failure is not null)
                 return Unanswered(service, outcome);
 
@@ -460,7 +483,7 @@ public sealed class KeyedFetch
                         break;
                 }
 
-            var calls = wave.GroupBy(entry => plans[entry.Slot].Service, StringComparer.Ordinal).Select(async group =>
+            var waves = wave.GroupBy(entry => plans[entry.Slot].Service, StringComparer.Ordinal).Select(async group =>
             {
                 var entries = group.ToList();
                 var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
@@ -468,10 +491,12 @@ public sealed class KeyedFetch
                 return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, cancellationToken).ConfigureAwait(false));
             }).ToList();
 
-            await Task.WhenAll(calls).ConfigureAwait(false);
+            await Task.WhenAll(waves).ConfigureAwait(false);
 
-            foreach (var call in calls.Select(task => task.Result))
+            foreach (var call in waves.Select(task => task.Result))
             {
+                calls.Value += call.Outcome.Calls;
+
                 if (call.Outcome.Failure is not null)
                     return Unanswered(call.Service, call.Outcome);
 
@@ -648,7 +673,7 @@ public sealed class KeyedFetch
 
             foreach (var call in round)
             {
-                calls += call.Service == SelfService ? 0 : 1;
+                calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
 
                 if (Failed(call, diagnostics))
                     continue;
@@ -706,7 +731,7 @@ public sealed class KeyedFetch
 
         foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline, cancellationToken).ConfigureAwait(false))
         {
-            calls += call.Service == SelfService ? 0 : 1;
+            calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
 
             if (Failed(call, diagnostics))
                 continue;
@@ -1788,10 +1813,14 @@ public sealed class KeyedFetch
                     if (slots[element].Outcome != KeyedOutcome.Resolved)
                         outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, element, slots[element].Key, slots[element].Outcome));
 
+                // An absent or empty collection has no element to name: the row itself is reference_null.
+                if (slots.Count == 0)
+                    outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, null, null, KeyedOutcome.ReferenceNull));
+
                 continue;
             }
 
-            var (chosen, at) = stage.Elements == ResolveElements.First ? First(slots) : (slots.FirstOrDefault() ?? Unresolved.Null, 0);
+            var (chosen, at) = stage.Elements == ResolveElements.First ? First(slots) : (slots.FirstOrDefault() ?? Unresolved.Null, (int?)0);
 
             values[stage.As] = chosen.Hit is { } hit ? hit.Target.AliasOf(hit.Row) : null;
 
@@ -1877,7 +1906,7 @@ public sealed class KeyedFetch
     /// row folds to <c>owner_unanswered</c>, <c>not_found</c> or <c>invalid_key</c> when any slot had
     /// it, then <c>excluded</c>, then <c>reference_null</c>.
     /// </summary>
-    private static (Unresolved Slot, int Index) First(IReadOnlyList<Unresolved> slots)
+    private static (Unresolved Slot, int? Index) First(IReadOnlyList<Unresolved> slots)
     {
         for (var index = 0; index < slots.Count; index++)
             if (slots[index].Hit is not null)
@@ -1888,7 +1917,9 @@ public sealed class KeyedFetch
                 if (slots[index].Outcome == outcome)
                     return (slots[index], index);
 
-        return (Unresolved.Null, 0);
+        // No element at all (an absent or empty collection), or none but null ones: the first null
+        // one when there is one, else no element to name.
+        return slots.Count == 0 ? (Unresolved.Null, null) : (Unresolved.Null, 0);
     }
 
     // ---- values ---------------------------------------------------------------------------
@@ -1944,6 +1975,9 @@ public sealed class KeyedFetch
     private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null)
     {
         public TimeSpan Budget { get; init; }
+
+        /// <summary>How many batches went out for it, a split batch counted per part.</summary>
+        public int Calls { get; init; } = 1;
     }
 
     /// <summary>
@@ -1985,21 +2019,24 @@ public sealed class KeyedFetch
     {
         var size = BatchCapOf(owner, service);
         var results = new List<JsonNode?>(queries.Count);
+        var calls = 0;
 
         for (var start = 0; start < queries.Count; start += size)
         {
+            calls++;
+
             var left = deadline - DateTime.UtcNow;
             var budget = chain ? ChainBudget(left) : Budget(left);
             var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
             var outcome = await CallAsync(owner, service, request, budget, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
-                return outcome with { Budget = budget };
+                return outcome with { Budget = budget, Calls = calls };
 
             results.AddRange(outcome.Results);
         }
 
-        return new CallOutcome(results, null);
+        return new CallOutcome(results, null) { Calls = calls };
     }
 
     /// <summary>

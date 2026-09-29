@@ -251,7 +251,7 @@ public static class MongoCompiler
         // An internal owner query grouped per key: the keys matched first, where an index serves
         // them, and the window after the caller's leading matches (the resolve's filter), so a
         // key's rows are numbered among those that pass it.
-        var window = bound.KeyedBy is { } keyedBy ? KeyedByWindow(keyedBy, collated) : null;
+        var window = bound.KeyedBy is { } keyedBy ? KeyedByWindow(keyedBy, collated, WindowSort(bound)) : null;
 
         if (bound.KeyedBy is { } prologueOf)
         {
@@ -1058,6 +1058,41 @@ public static class MongoCompiler
 
         yield return new BsonDocument("$match", new BsonDocument(keyedBy.Path.Storage!, new BsonDocument("$in", keys)));
 
+        // Whole rows (a remote lookup of an entity, DESIGN §3.4.4): each row carries the key it
+        // answers for. A path through a collection may hold several of the keys, one per element, so
+        // the row is answered once per distinct key it holds.
+        if (keyedBy.KeyAlias is { } keyAlias)
+        {
+            if (keyedBy.ItemStorage is null)
+            {
+                yield return new BsonDocument("$set", new BsonDocument(keyAlias, "$" + keyedBy.Path.Storage));
+            }
+            else
+            {
+                yield return new BsonDocument("$set", new BsonDocument(keyAlias, new BsonDocument("$filter", new BsonDocument
+                {
+                    ["input"] = new BsonDocument("$setUnion", new BsonArray
+                    {
+                        new BsonDocument("$map", new BsonDocument
+                        {
+                            ["input"] = new BsonDocument("$ifNull", new BsonArray { "$" + keyedBy.ItemStorage, new BsonArray() }),
+                            ["as"] = ElementVariable,
+                            ["in"] = "$$" + ElementVariable + "." + keyedBy.ElementFieldStorage,
+                        }),
+                    }),
+                    ["as"] = ElementVariable,
+                    ["cond"] = new BsonDocument("$in", new BsonArray { "$$" + ElementVariable, new BsonDocument("$literal", keys) }),
+                })));
+                yield return new BsonDocument("$unwind", "$" + keyAlias);
+                yield return new BsonDocument("$match", new BsonDocument(keyAlias, new BsonDocument("$in", keys)));
+            }
+
+            if (exact)
+                yield return ExactKeysMatch(keyAlias, keys);
+
+            yield break;
+        }
+
         if (keyedBy.ItemStorage is null)
         {
             if (exact)
@@ -1112,26 +1147,63 @@ public static class MongoCompiler
     /// past <c>perKey</c> dropped, the number removed. A key with two rows is how the caller tells
     /// an ambiguous reference from a resolved one.
     /// </summary>
-    private static List<BsonDocument> KeyedByWindow(BoundKeyedBy keyedBy, bool collated = false) =>
-    [
-        new("$setWindowFields", new BsonDocument
-        {
-            // Inside a collated aggregate a partition on a string key folds keys that differ only in
-            // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12).
-            ["partitionBy"] = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString)
-                ? new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage)
-                : "$" + keyedBy.PartitionStorage,
-            ["sortBy"] = keyedBy.ItemStorage is null ? new BsonDocument(KeyStorage, 1) : new BsonDocument { [KeyStorage] = 1, [ReservedElementIndex] = 1 },
+    private static List<BsonDocument> KeyedByWindow(BoundKeyedBy keyedBy, bool collated = false, IReadOnlyList<BoundSortField>? sort = null)
+    {
+        // An element's rows carry their position, which orders two elements of one row.
+        var element = keyedBy.ItemStorage is not null && keyedBy.KeyAlias is null;
 
-            // $documentNumber takes one sort field; an item's rows are numbered by record key and
-            // position, which a running count over the ordered partition does.
-            ["output"] = new BsonDocument(ReservedRank, keyedBy.ItemStorage is null
-                ? new BsonDocument("$documentNumber", new BsonDocument())
-                : new BsonDocument { ["$sum"] = 1, ["window"] = new BsonDocument("documents", new BsonArray { "unbounded", "current" }) }),
-        }),
-        new("$match", new BsonDocument(ReservedRank, new BsonDocument("$lte", keyedBy.PerKey))),
-        new("$unset", keyedBy.ItemStorage is null ? ReservedRank : new BsonArray { ReservedRank, ReservedElementIndex }),
-    ];
+        // The rows of a key in the query's own order when it sorts right after its leading matches
+        // (a remote lookup's sort, DESIGN §3.4.4), completed by the record key; by record key otherwise.
+        var sortBy = new BsonDocument();
+
+        foreach (var field in sort ?? [])
+            sortBy[field.Path.Storage!] = field.Ascending ? 1 : -1;
+
+        if (!sortBy.Contains(KeyStorage))
+            sortBy[KeyStorage] = 1;
+
+        if (element)
+            sortBy[ReservedElementIndex] = 1;
+
+        return
+        [
+            new("$setWindowFields", new BsonDocument
+            {
+                // Inside a collated aggregate a partition on a string key folds keys that differ only in
+                // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12).
+                ["partitionBy"] = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString)
+                    ? new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage)
+                    : "$" + keyedBy.PartitionStorage,
+                ["sortBy"] = sortBy,
+
+                // $documentNumber takes one sort field; rows ordered by several are numbered by a
+                // running count over the ordered partition.
+                ["output"] = new BsonDocument(ReservedRank, sortBy.ElementCount == 1
+                    ? new BsonDocument("$documentNumber", new BsonDocument())
+                    : new BsonDocument { ["$sum"] = 1, ["window"] = new BsonDocument("documents", new BsonArray { "unbounded", "current" }) }),
+            }),
+            new("$match", new BsonDocument(ReservedRank, new BsonDocument("$lte", keyedBy.PerKey))),
+            new("$unset", element ? new BsonArray { ReservedRank, ReservedElementIndex } : ReservedRank),
+        ];
+    }
+
+    /// <summary>
+    /// The order a <c>keyedBy</c> window ranks each key's rows in: the query's sort when it is the
+    /// first stage after the leading matches (where the window runs), so the rows it keeps per key are
+    /// the first in that order; null otherwise, and the rows are ranked by record key as before.
+    /// </summary>
+    private static IReadOnlyList<BoundSortField>? WindowSort(BoundPipeline bound)
+    {
+        foreach (var stage in bound.Stages)
+        {
+            if (stage is BoundStage.Match)
+                continue;
+
+            return stage is BoundStage.Sort sort && ReferenceEquals(sort, bound.Sort) ? sort.Fields : null;
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// What a keyed resolve reads off the page rows, which a projection before the page keeps in

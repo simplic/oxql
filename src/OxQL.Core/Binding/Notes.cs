@@ -69,12 +69,19 @@ public static class Notes
     /// <summary>One line of the opt-in index advisory (params <c>field</c>, <c>used</c>, <c>index</c>).</summary>
     public const string IndexAdvice = "INDEX_ADVICE";
 
+    /// <summary>
+    /// A lookup of another service's entity runs at its owner after the page, grouped per key and
+    /// ranked there, within bounds the owner enforces (DESIGN §3.4.4; params <c>alias</c>,
+    /// <c>service</c>, <c>entity</c>, <c>perKey</c>, <c>keysPerQuery</c>, <c>sorted</c>).
+    /// </summary>
+    public const string RemoteLookup = "REMOTE_LOOKUP";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
-        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice,
+        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -155,6 +162,18 @@ public static class Notes
                             new() { ["alias"] = lookup.As, ["limit"] = lookup.Limit });
                     break;
 
+                // A lookup of another service's entity: its owner binds the child's members, and the
+                // limit, the placement and the owner's bounds are what the caller should know.
+                case BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve:
+                    collector.Add(OwnerBinds, stage, resolve.As,
+                        $"'{resolve.As}' comes from another service; its owner binds the path, the select, the filter, the sort and every path under the alias.",
+                        new() { ["alias"] = resolve.As, ["services"] = new List<string> { remoteLookup.Service }, ["forTarget"] = null });
+
+                    if (!remoteLookup.First)
+                        collector.Add(LookupLimit, stage, null, $"'{resolve.As}' holds at most {remoteLookup.Limit} children per row; a row with more keeps the first {remoteLookup.Limit} and is reported (LOOKUP_TRUNCATED).",
+                            new() { ["alias"] = resolve.As, ["limit"] = remoteLookup.Limit });
+                    break;
+
                 case BoundStage.Resolve resolve:
                     collector.Resolve(resolve, stage, strict);
                     break;
@@ -230,6 +249,33 @@ public static class Notes
         Stage = stage,
         Path = alias,
         Params = new Dictionary<string, object?> { ["alias"] = alias, ["kind"] = kind },
+    };
+
+    /// <summary>
+    /// How a lookup of another service's entity runs (DESIGN §3.4.4): one owner query per
+    /// <paramref name="keysPerQuery"/> parent keys of the page, at most <c>perKey</c> rows per key,
+    /// ranked at the owner by the lookup's sort and the child key over every child of those keys that
+    /// passes the filter. No index serves that per-key ranking, so what bounds it is said: the keys per
+    /// query, the rows per key, the owner's page, its time ceiling and its sort memory
+    /// (<c>QUERY_TOO_EXPENSIVE</c>), each enforced by the owner itself.
+    /// </summary>
+    public static Diagnostic RemoteLookupBounds(int? stage, string alias, BoundRemoteLookup lookup, int keysPerQuery) => new()
+    {
+        Code = RemoteLookup,
+        Message = $"'{alias}' is looked up at '{lookup.Service}' after the page is taken: one owner query per {keysPerQuery} keys, at most {lookup.PerKey} "
+            + $"{(lookup.PerKey == 1 ? "row" : "rows")} per key, ranked there by {(lookup.Sort.Count > 0 ? "the lookup's sort, then the child key" : "the child key")} over every child of those keys"
+            + $"{(lookup.Filter is null ? "" : " that passes the filter")}. No index serves that ranking; the owner bounds it by its page, its time ceiling and its sort memory (QUERY_TOO_EXPENSIVE), and refuses what exceeds its own limits.",
+        Stage = stage,
+        Path = alias,
+        Params = new Dictionary<string, object?>
+        {
+            ["alias"] = alias,
+            ["service"] = lookup.Service,
+            ["entity"] = lookup.From,
+            ["perKey"] = lookup.PerKey,
+            ["keysPerQuery"] = keysPerQuery,
+            ["sorted"] = lookup.Sort.Count > 0,
+        },
     };
 
     /// <summary>

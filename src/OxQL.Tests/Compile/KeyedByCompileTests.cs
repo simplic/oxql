@@ -103,7 +103,7 @@ public class KeyedByCompileTests
     [Theory]
     [InlineData("""{ "path": "billingLines", "keys": ["x"] }""", Codes.InvalidPath)]
     [InlineData("""{ "path": "number", "keys": [] }""", Codes.InvalidOperand)]
-    [InlineData("""{ "path": "number", "keys": ["a"], "perKey": 0 }""", Codes.InvalidOperand)]
+    [InlineData("""{ "path": "number", "keys": ["a"], "perKey": 0 }""", Codes.LookupLimitExceeded)]
     [InlineData("""{ "path": "nope", "keys": ["a"] }""", Codes.UnknownPath)]
     public async Task A_keyedBy_that_does_not_name_a_stored_member_and_its_keys_is_refused(string keyedBy, string code)
     {

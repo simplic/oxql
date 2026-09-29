@@ -374,7 +374,7 @@ public sealed class Describe
                 if (!collected.Full(maxChildren))
                     collected.Add(Child(shape, path, entry.Usage, LastSegment(path), referencedBy));
 
-            return Answered(entry, root, collected);
+            return Referencing(entry, Answered(entry, root, collected));
         }
 
         if (entry.Prefix!.Length > 0 && shape.Resolve(entry.Prefix, PathUsage.Project) is { Succeeded: false } failed)
@@ -382,7 +382,20 @@ public sealed class Describe
 
         await LocalChildrenAsync(shape, entry.Prefix, entry.Usage, entry.Depth, collected, origin: null, referencedBy).ConfigureAwait(false);
 
-        return Answered(entry, root, collected);
+        return Referencing(entry, Answered(entry, root, collected));
+    }
+
+    /// <summary>
+    /// An entity describe with <c>referencing</c> also says whether this host looks up another
+    /// service's entities (DESIGN §3.4.4, <c>remoteLookup</c>): the entities of other services that
+    /// reference this one — which only their schemas list — can then be joined from here with a lookup.
+    /// </summary>
+    private JsonObject Referencing(Entry entry, JsonObject answer)
+    {
+        if (entry.Referencing)
+            answer["remoteLookup"] = context.Contract == 2 && context.RemoteService is not null;
+
+        return answer;
     }
 
     /// <summary>The entry shape of an entity, with its organisation's addon definitions when it is extendable.</summary>
@@ -714,8 +727,17 @@ public sealed class Describe
         {
             var stage = query.Pipeline[index];
 
-            if (stage.Lookup is { } lookup && lookup.As == alias && lookup.From is { } from)
-                return [(from.Trim().ToLowerInvariant(), null)];
+            // A lookup's child, or of an item child ('entity#item') the element, and its owning row under parentAs.
+            if (stage.Lookup is { } lookup && (lookup.As == alias || lookup.ParentAs == alias) && lookup.From is { } from)
+            {
+                var child = from.Trim().ToLowerInvariant();
+                var hash = child.IndexOf('#', StringComparison.Ordinal);
+
+                if (hash < 0)
+                    return [(child, null)];
+
+                return lookup.As == alias ? [(child[..hash], from.Trim()[(hash + 1)..])] : [(child[..hash], null)];
+            }
 
             if (stage.Resolve is not { } resolve || (resolve.As != alias && resolve.ParentAs != alias) || resolve.Path is null)
                 continue;
@@ -1176,8 +1198,17 @@ public sealed class Describe
                         if (!found.TryGetValue(at, out var list))
                             found[at] = list = [];
 
+                        // A local lookup joins along a simple reference to the entity itself; a typed,
+                        // item or converted one is followed by a resolve from the referencing side only.
                         if (!list.Any(entry => entry["entity"]!.GetValue<string>() == id && entry["path"]!.GetValue<string>() == path.Wire))
-                            list.Add(new JsonObject { ["entity"] = id, ["path"] = path.Wire });
+                            list.Add(new JsonObject
+                            {
+                                ["entity"] = id,
+                                ["path"] = path.Wire,
+                                ["service"] = id.Split('.')[0],
+                                ["remote"] = false,
+                                ["lookup"] = item is null && path.Member.Reference is { } simple && simple.TargetEntity == entity && target.Item is null,
+                            });
                     }
             }
 

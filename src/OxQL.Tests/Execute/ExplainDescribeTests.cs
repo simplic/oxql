@@ -218,7 +218,7 @@ public class ExplainDescribeTests
         var referenced = Answer(result, "referenced");
         ChildAt(referenced, "id")["referencedBy"]!.AsArray().Select(entry => entry!["path"]!.GetValue<string>())
             .Should().Contain(["customerId", "customerIds", "lines.customerId", "localSource.id", "slot.holderId"]);
-        ChildAt(referenced, "code")["referencedBy"]!.ToJsonString().Should().Be("""[{"entity":"rc.invoice","path":"customerCode"}]""");
+        ChildAt(referenced, "code")["referencedBy"]!.ToJsonString().Should().Be("""[{"entity":"rc.invoice","path":"customerCode","service":"rc","remote":false,"lookup":true}]""");
         ChildAt(Answer(result, "plain"), "id")["referencedBy"].Should().BeNull("only referencing: true asks for them");
     }
 

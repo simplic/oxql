@@ -371,6 +371,8 @@ public class BillingLine
 
     public Dictionary<string, object>? Addon { get; set; }
 
+    /// <summary>The invoice the line was billed on: a reference into the ledger, followed from there by a remote lookup (DESIGN §3.4.4).</summary>
+    [OxQLReference("ledger.transaction", "id")]
     public Guid? AssignedTransactionId { get; set; }
 }
 

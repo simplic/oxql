@@ -40,6 +40,14 @@ public static class BoundCanonical
                 ["perKey"] = keyedBy.PerKey,
             };
 
+        // What a remote lookup adds to its owner query is written only when it is there, so a
+        // resolve's owner query renders as before.
+        if (keyedBy?.References is { } references)
+            node["keyedBy"]!["references"] = references;
+
+        if (keyedBy?.KeyAlias is not null)
+            node["keyedBy"]!["rows"] = "entity";
+
         if (page is not null)
             node["page"] = new JsonObject
             {
@@ -64,6 +72,7 @@ public static class BoundCanonical
     {
         BoundStage.Match match => new JsonObject { ["match"] = RenderCondition(match.Condition) },
         BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
+        BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve => new JsonObject { ["lookup"] = RenderRemoteLookup(resolve, remoteLookup) },
         BoundStage.Resolve resolve => new JsonObject { ["resolve"] = RenderResolve(resolve) },
         BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind) },
         BoundStage.Group group => new JsonObject
@@ -165,6 +174,44 @@ public static class BoundCanonical
 
         if (lookup.On is not null)
             node["on"] = lookup.On;
+
+        return node;
+    }
+
+    /// <summary>
+    /// A lookup of another service's entity (DESIGN §3.4.4): the child as written, the parent key's
+    /// storage it joins on, and the members the owner binds — path, select, filter (every variable
+    /// substituted), sort, owning-row select — as written, since the owner binds them and this host
+    /// has no storage form of them. No 2.0 request had one, so nothing earlier renders differently.
+    /// </summary>
+    private static JsonObject RenderRemoteLookup(BoundStage.Resolve resolve, BoundRemoteLookup lookup)
+    {
+        var node = new JsonObject
+        {
+            ["from"] = lookup.From,
+            ["localField"] = resolve.Reference.Storage,
+            ["path"] = lookup.Path,
+            ["as"] = resolve.As,
+            ["remote"] = true,
+            ["select"] = lookup.Select is null ? null : new JsonArray(lookup.Select.Select(path => (JsonNode)path).ToArray()),
+            ["filter"] = lookup.Filter is { } raw ? JsonNode.Parse(raw.GetRawText()) : null,
+            ["limit"] = lookup.Limit,
+        };
+
+        if (lookup.Sort.Count > 0)
+            node["sort"] = JsonSerializer.SerializeToNode(lookup.Sort, Models.OxQLJson.Wire);
+
+        if (lookup.First)
+            node["first"] = true;
+
+        if (lookup.On is not null)
+            node["on"] = lookup.On;
+
+        if (resolve.ParentAs is not null)
+        {
+            node["parentAs"] = resolve.ParentAs;
+            node["parentSelect"] = lookup.ParentSelect is null ? null : new JsonArray(lookup.ParentSelect.Select(path => (JsonNode)path).ToArray());
+        }
 
         return node;
     }

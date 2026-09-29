@@ -227,7 +227,24 @@ public static class OutcomePolicy
                     refusing.Add(diagnostic);
             }
 
-            if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } truncated)
+            // A remote lookup over its limit is the lookup's truncation, as a local lookup reports it.
+            if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } cut && stage?.RemoteLookup is { } lookup)
+            {
+                var diagnostic = new Diagnostic
+                {
+                    Code = Codes.LookupTruncated,
+                    Message = $"'{key.Alias}' holds the first {lookup.Limit} children of a parent that has more ({cut.Count} {(cut.Count == 1 ? "row" : "rows")} of this page affected).",
+                    Stage = key.Stage,
+                    Path = key.Alias,
+                    Params = new Dictionary<string, object?> { ["alias"] = key.Alias, ["limit"] = lookup.Limit, ["rows"] = cut.Count },
+                };
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+            else if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } truncated)
             {
                 var limit = options.Limits.MaxLookupLimit;
                 var diagnostic = new Diagnostic
@@ -394,7 +411,7 @@ public sealed class KeyedFetch
 
         // One page size for the phase: the smallest page any owner asked answers, so no owner
         // refuses a page as too large (RE-13).
-        var pageSize = Math.Max(1, Math.Min(slots.Select(slot => PageOf(ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(), cap));
+        var pageSize = Math.Max(1, Math.Min(slots.Select(slot => PageOf(options, client, ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(), cap));
         var lastOffset = (cap / pageSize) * pageSize;
 
         foreach (var slot in slots)
@@ -1094,7 +1111,7 @@ public sealed class KeyedFetch
         var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
 
         return PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client)
-            .Where(plan => plan.Target.IsRemote && (!plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0))
+            .Where(plan => plan.Target.IsRemote && (!plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null))
             .Select(plan =>
             {
                 var query = plan.Query([CheckKey]);
@@ -1264,7 +1281,14 @@ public sealed class KeyedFetch
         public string TargetName => Target.Declared.Item is { } item ? $"{Entity}#{item}" : Entity;
 
         /// <summary>The member of an answer row the rows are keyed by, as the owner writes it.</summary>
-        public string KeyWire => Target.Declared.Item is null ? Target.Declared.Field : BoundKeyedBy.Element + "." + Target.Declared.Field;
+        public string KeyWire => Stage.RemoteLookup is { Rows: true } ? BoundKeyedBy.Key
+            : Target.Declared.Item is null ? Target.Declared.Field : BoundKeyedBy.Element + "." + Target.Declared.Field;
+
+        /// <summary>
+        /// The rows a grouped owner query answers per key: <see cref="PerKey"/> for a resolve, which tells one
+        /// record from several; a remote lookup's own (one under <c>first</c>, else one more than its limit).
+        /// </summary>
+        public int RowsPerKey => Stage.RemoteLookup?.PerKey ?? PerKey;
 
         /// <summary>Whether the keys are guids, compared in their normalised form.</summary>
         public bool GuidKeys { get; set; }
@@ -1295,7 +1319,7 @@ public sealed class KeyedFetch
         /// </summary>
         public QueryRequest Query(IReadOnlyList<string> keys)
         {
-            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? PerKey : null, plainRowsPerKey: PlainRowsPerKey);
+            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? RowsPerKey : null, plainRowsPerKey: PlainRowsPerKey);
 
             if (Continued.IsEmpty)
                 return query;
@@ -1482,7 +1506,7 @@ public sealed class KeyedFetch
         {
             Hits.TryGetValue(key, out var rows);
 
-            return new OwnerAnswer((rows ?? []).Take(PerKey).ToList(), rows is not { Count: > 0 } && Excluded.Contains(key));
+            return new OwnerAnswer((rows ?? []).Take(RowsPerKey).ToList(), rows is not { Count: > 0 } && Excluded.Contains(key));
         }
 
         public void Hit(string key, JsonObject row)
@@ -1490,7 +1514,7 @@ public sealed class KeyedFetch
             if (!Hits.TryGetValue(key, out var rows))
                 Hits[key] = rows = [];
 
-            if (rows.Count < PerKey)
+            if (rows.Count < RowsPerKey)
                 rows.Add(row);
         }
 
@@ -1523,13 +1547,16 @@ public sealed class KeyedFetch
             if (Target.Declared.Item is not null)
                 return row[BoundKeyedBy.Element]?.DeepClone();
 
-            if (lifted.Count == 0)
+            var keyed = Stage.RemoteLookup is { Rows: true };
+
+            if (lifted.Count == 0 && !keyed)
                 return row.DeepClone();
 
             var alias = new JsonObject();
 
+            // A whole row answered per key carries that key for this host alone.
             foreach (var (name, value) in row)
-                if (!lifted.Contains(name))
+                if (!lifted.Contains(name) && !(keyed && name == BoundKeyedBy.Key))
                     alias[name] = value?.DeepClone();
 
             return alias;
@@ -1576,16 +1603,26 @@ public sealed class KeyedFetch
     /// host's <c>MaxPageSize</c> and the owner's own, when its shallow health said it (RE-13): an owner
     /// configured smaller would refuse the page as too large.
     /// </summary>
-    private int ChunkOf(TargetPlan target)
-    {
-        var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
-        var page = PageOf(target.Service);
+    private int ChunkOf(TargetPlan target) =>
+        KeysPerQuery(options, client, target.Service, target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(target.RowsPerKey, target.PlainRowsPerKey) : 1);
 
-        return target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, page / PerKey)) : Math.Min(chunk, page);
+    /// <summary>
+    /// The keys one owner query of <paramref name="service"/> carries at <paramref name="rowsPerKey"/> rows per
+    /// key: the key chunk, and no more than the owner's page holds (<see cref="ChunkOf"/>); what explain
+    /// names in a remote lookup's <c>REMOTE_LOOKUP</c> note.
+    /// </summary>
+    public static int KeysPerQuery(OxQLOptions options, IRemoteQueryClient? client, string service, int rowsPerKey)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
+        var page = PageOf(options, client, service);
+
+        return rowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, page / rowsPerKey)) : Math.Min(chunk, page);
     }
 
     /// <summary>The largest page an owner answers: this host's <c>MaxPageSize</c>, or the owner's own when it is known and smaller.</summary>
-    private int PageOf(string service)
+    private static int PageOf(OxQLOptions options, IRemoteQueryClient? client, string service)
     {
         var page = Math.Max(1, options.Limits.MaxPageSize);
 
@@ -1797,6 +1834,12 @@ public sealed class KeyedFetch
     {
         var stage = plan.Stage;
 
+        if (stage.RemoteLookup is { } lookup)
+        {
+            AssignLookup(plan, lookup, perRow, truncations, liftedRows);
+            return;
+        }
+
         for (var rowIndex = 0; rowIndex < plan.Rows.Count; rowIndex++)
         {
             var slots = plan.Rows[rowIndex].Select(slot => Answer(plan, slot)).ToList();
@@ -1840,6 +1883,64 @@ public sealed class KeyedFetch
                 outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, stage.Elements is null ? null : at, chosen.Key, chosen.Outcome));
 
             Lift(plan, chosen, rowIndex, values, outcomes, liftedRows);
+        }
+    }
+
+    /// <summary>
+    /// Assigns a remote lookup's answers to the rows (DESIGN §3.4.4): per row the children its key
+    /// has at the owner, in the owner's order (the lookup's sort, then the child key). Under
+    /// <c>first</c> the alias is the first child or null; otherwise the array of the first
+    /// <c>limit</c> children, and a key that brought one more is a truncated parent
+    /// (<c>LOOKUP_TRUNCATED</c>). An element child's owning rows go under <c>parentAs</c>, one per child
+    /// in the same order. A row whose key the owner did not answer holds null, not an empty array:
+    /// the owner's failure (<c>RESOLVE_TIMEOUT</c>, <c>RESOLVE_UNREACHABLE</c>, <c>RESOLVE_PARTIAL</c>)
+    /// is already reported and refuses under <c>strict</c>. Children found or not, a lookup has no
+    /// missing reference: no outcome is recorded.
+    /// </summary>
+    private static void AssignLookup(StagePlan plan, BoundRemoteLookup lookup, List<Dictionary<string, JsonNode?>> perRow, List<KeyedTruncation> truncations, Dictionary<JsonObject, List<int>> liftedRows)
+    {
+        var stage = plan.Stage;
+        var target = plan.Targets[0];
+
+        for (var rowIndex = 0; rowIndex < plan.Rows.Count; rowIndex++)
+        {
+            var values = perRow[rowIndex];
+            var key = plan.Rows[rowIndex].FirstOrDefault()?.Key;
+            var answered = key is not null && !target.Unanswered.Contains(key);
+            var children = key is not null && target.Hits.TryGetValue(key, out var rows) ? rows : [];
+
+            if (lookup.First)
+            {
+                var child = answered && children.Count > 0 ? children[0] : null;
+
+                values[stage.As] = child is null ? null : target.AliasOf(child);
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = child is null ? null : target.ParentOf(child);
+
+                Lift(plan, child is null ? Unresolved.Null : new Unresolved(key, KeyedOutcome.Resolved, (target, child)), rowIndex, values, [], liftedRows);
+                continue;
+            }
+
+            if (!answered && key is not null)
+            {
+                values[stage.As] = null;
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = null;
+
+                continue;
+            }
+
+            if (children.Count > lookup.Limit)
+                truncations.Add(new KeyedTruncation(plan.Index, stage.As, rowIndex, children.Count));
+
+            var kept = children.Take(lookup.Limit).ToList();
+
+            values[stage.As] = new JsonArray(kept.Select(child => target.AliasOf(child)).ToArray());
+
+            if (stage.ParentAs is not null)
+                values[stage.ParentAs] = new JsonArray(kept.Select(child => (JsonNode?)target.ParentOf(child)).ToArray());
         }
     }
 
@@ -2125,7 +2226,7 @@ public sealed class KeyedFetch
         var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
 
         if (target.OriginOf(ownerStage) is not { } origin)
-            return null;
+            return target.Stage.RemoteLookup is { } lookup ? MapLookupBack(error, mapped, target, lookup, service, ownerStage) : null;
 
         var parameters = error["params"] is JsonObject written
             ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
@@ -2146,6 +2247,41 @@ public sealed class KeyedFetch
             Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null),
             Params = parameters,
         };
+    }
+
+    /// <summary>
+    /// An owner error at a remote lookup's own owner query (DESIGN §3.4.4): its key match, filter, sort,
+    /// projection or <c>keyedBy</c>, all written by the caller in the lookup — the path, the filter, the
+    /// sort, the select, the owning-row select, the limit against the owner's own cap — so the error is
+    /// the lookup's, at its stage, with the path as the caller wrote it (relative to the child) and
+    /// <c>params.owner</c> saying where the owner saw it.
+    /// </summary>
+    private static QueryValidationError MapLookupBack(JsonObject error, QueryValidationError mapped, TargetPlan target, BoundRemoteLookup lookup, string service, int? ownerStage)
+    {
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.TargetName,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        var element = BoundKeyedBy.Element + ".";
+        var keyedPath = lookup.Item is null ? lookup.Path : lookup.Item + "." + lookup.Path;
+        var path = mapped.Path switch
+        {
+            null => null,
+            var owned when owned == keyedPath || owned == BoundKeyedBy.Key => lookup.Path,
+            var owned when lookup.Item is not null && owned.StartsWith(element, StringComparison.Ordinal) => owned[element.Length..],
+            var owned => owned,
+        };
+
+        return mapped with { Stage = target.Stage.Stage < 0 ? null : target.Stage.Stage, Path = path, Params = parameters };
     }
 
     /// <summary>

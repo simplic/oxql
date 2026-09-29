@@ -22,6 +22,9 @@ public static class EngineCapabilities
     /// <summary>Chains across services by remote continuation (DESIGN §3.5.3); only with a remote query client.</summary>
     public const string ResolveChain = "resolve.chain";
 
+    /// <summary>A <c>lookup</c> whose <c>from</c> is another service's entity (DESIGN §3.4.4); only with a remote query client.</summary>
+    public const string LookupRemote = "lookup.remote";
+
     /// <summary><c>POST /oxql/explain</c> answers.</summary>
     public const string Explain = "explain";
 
@@ -38,6 +41,7 @@ public static class EngineCapabilities
             capabilities.Add("resolve.remote");
             capabilities.Add("semiJoin");
             capabilities.Add(ResolveChain);
+            capabilities.Add(LookupRemote);
         }
 
         if (explain)

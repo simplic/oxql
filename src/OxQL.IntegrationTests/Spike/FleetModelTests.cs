@@ -67,6 +67,11 @@ public class FleetModelTests
                 "ledger.billing_line#financialPartner.address.id -> directory.contact",
                 .. logistics.Select(target => $"ledger.billing_line#references.referenceId -> {target}"),
                 .. logistics.Select(target => $"ledger.billing_line#sourceBillingLineReference.id -> {target}"),
+
+                // The references a remote lookup follows from the other side (DESIGN §3.4.4): a billing
+                // line wherever transport holds one names its invoice, and an equipment its shipment.
+                .. new[] { "transport.shipment", "transport.shipment_template", "transport.tour" }.Select(entity => $"{entity}#billingLines.assignedTransactionId -> ledger.transaction"),
+                "fleet.equipment#assignedShipmentId -> transport.shipment",
             ];
 
         LabService.All

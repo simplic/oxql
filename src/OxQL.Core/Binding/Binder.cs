@@ -334,6 +334,25 @@ public sealed class Binder
                 return;
             }
 
+            // The roots the prologue adds, poisoned until it binds: a keyedBy that fails is one error,
+            // not one more per path of the projection under them (DESIGN §3.8).
+            foreach (var root in new[] { BoundKeyedBy.Element, BoundKeyedBy.Key })
+                if (!shape.IsTaken(root))
+                    shape = shape.WithRoot(root, new ShapeNode.Poisoned(root));
+
+            if (keyedBy.Unknown is { Count: > 0 } unknownMembers)
+            {
+                errors.Add(Error(Codes.UnknownRequestMember,
+                    $"'{string.Join(", ", unknownMembers.Keys.Select(name => "keyedBy." + name))}' is not a member of keyedBy; it carries path, keys, perKey, references and rows.", null, null));
+                return;
+            }
+
+            if (keyedBy.Rows is not (null or "entity"))
+            {
+                errors.Add(Error(Codes.InvalidOperand, "'keyedBy.rows' is \"entity\" when given.", null, keyedBy.Path));
+                return;
+            }
+
             var wire = keyedBy.Path ?? "";
             var resolution = shape.Resolve(wire, PathUsage.Match);
 
@@ -370,9 +389,22 @@ public sealed class Binder
 
             var perKey = keyedBy.PerKey ?? 2;
 
-            if (perKey < 1 || perKey > options.Limits.MaxLookupLimit)
+            // The owner's own cap on rows per key, whatever the caller's is: a remote lookup asks one
+            // row more than its limit to tell a truncated parent, so the cap is this host's lookup
+            // limit plus that one (DESIGN §3.4.4).
+            if (perKey < 1 || perKey > options.Limits.MaxLookupLimit + 1)
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'keyedBy.perKey' is between 1 and {options.Limits.MaxLookupLimit}.", null, keyedBy.Path));
+                errors.Add(Error(Codes.LookupLimitExceeded,
+                    $"'keyedBy.perKey' is {perKey}; this host answers between 1 and {options.Limits.MaxLookupLimit + 1} rows per key (a lookup's limit of at most {options.Limits.MaxLookupLimit}, plus one).", null, keyedBy.Path));
+                return;
+            }
+
+            // A remote lookup's path must declare a reference to the asking host's entity, as a local
+            // lookup's must; the keys are that entity's keys.
+            if (keyedBy.References is { } referenced
+                && !(path.Path?.References ?? []).Any(declared => declared.Targets.Any(target => target.Entity == referenced && target.Item is null && target.Field == WireNames.IdWire)))
+            {
+                errors.Add(Error(Codes.LookupNotDeclared, $"'{entity.Id}#{wire}' does not declare a reference to '{referenced}'.", null, keyedBy.Path));
                 return;
             }
 
@@ -386,17 +418,34 @@ public sealed class Binder
                 return;
             }
 
-            string? itemStorage = null, element = null, elementField = null;
+            string? itemStorage = null, element = null, elementField = null, keyAlias = null;
 
             if (crossed is [var collection])
             {
                 itemStorage = collection.Storage!;
-                element = BoundKeyedBy.Element;
                 elementField = path.Storage[(itemStorage.Length + 1)..];
-                shape = shape.WithRoot(element, new ShapeNode.Element(entity, collection.Path!, element));
+
+                if (keyedBy.Rows is null)
+                {
+                    element = BoundKeyedBy.Element;
+                    shape = shape.WithRoot(element, new ShapeNode.Element(entity, collection.Path!, element));
+                }
+                else
+                {
+                    // Each whole row carries the key it answers for, which the caller keys it by.
+                    keyAlias = BoundKeyedBy.Key;
+                    shape = shape.WithRoot(keyAlias, new ShapeNode.Scalar(path.LeafKind, keyAlias));
+                }
+            }
+            else if (keyedBy.Rows is not null)
+            {
+                // A path on the row itself holds one key per row: the row carries it all the same, so
+                // the caller reads every whole-row answer the one way.
+                keyAlias = BoundKeyedBy.Key;
+                shape = shape.WithRoot(keyAlias, new ShapeNode.Scalar(path.LeafKind, keyAlias));
             }
 
-            keyedByBound = new BoundKeyedBy(path, ValuesOf(operand), perKey, itemStorage, element, elementField);
+            keyedByBound = new BoundKeyedBy(path, ValuesOf(operand), perKey, itemStorage, element, elementField, keyAlias, keyedBy.References);
         }
 
         private BoundKeyedBy? keyedByBound;
@@ -409,7 +458,7 @@ public sealed class Binder
         {
             IEnumerable<string?> aliases = stage.Kind switch
             {
-                "lookup" => [stage.Lookup!.As],
+                "lookup" => [stage.Lookup!.As, stage.Lookup.ParentAs],
                 "resolve" => [stage.Resolve!.As, stage.Resolve.ParentAs],
                 "unwind" => [stage.Unwind!.As, stage.Unwind.IncludeIndex],
                 _ => [],
@@ -922,6 +971,7 @@ public sealed class Binder
             var contract2Members = new (string Name, bool Written)[]
             {
                 ("sort", lookup.Sort is not null), ("first", lookup.First is not null), ("on", lookup.On is not null), ("forTarget", lookup.ForTarget is not null),
+                ("parentAs", lookup.ParentAs is not null), ("parentSelect", lookup.ParentSelect is not null),
             };
             IReadOnlyList<string> unknown = contract2
                 ? lookup.Unknown
@@ -930,7 +980,7 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget" : "from, path, as, select, filter, limit")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget, parentAs, parentSelect" : "from, path, as, select, filter, limit")}."
                     + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
                 return;
             }
@@ -942,6 +992,7 @@ public sealed class Binder
                     {
                         "first" => "A lookup's 'first' is true or false.",
                         "sort" => "A lookup's 'sort' is an array of sort entries: [{\"path\": \"asc\"}, …].",
+                        "parentSelect" => "A lookup's 'parentSelect' is an array of paths.",
                         _ => $"A lookup's '{name}' is a string.",
                     }, index, null));
                 return;
@@ -960,7 +1011,7 @@ public sealed class Binder
                     return;
                 }
 
-                BindContinued(new PipelineStage { Lookup = lookup, Keys = ["lookup"] }, index, continuedOn, anchor, lookup.ForTarget, [lookup.As]);
+                BindContinued(new PipelineStage { Lookup = lookup, Keys = ["lookup"] }, index, continuedOn, anchor, lookup.ForTarget, [lookup.As, lookup.ParentAs]);
                 return;
             }
 
@@ -995,7 +1046,30 @@ public sealed class Binder
 
             if (string.IsNullOrWhiteSpace(lookup.From) || !binder.model.TryResolve(lookup.From, out var child, out var retired))
             {
-                errors.Add(Error(Codes.UnknownEntity, $"'{lookup.From}' is not an entity of this host.", index, null));
+                // Another service's entity: the lookup runs at its owner through the keyed fetch
+                // (DESIGN §3.4.4), when this host can reach that owner.
+                if (RemoteOwnerOf(lookup.From) is { } service)
+                {
+                    BindRemoteLookup(lookup, index, parent, service);
+                    return;
+                }
+
+                var from = lookup.From?.Trim() ?? "";
+                var owner = from.Split('.')[0];
+
+                errors.Add(Error(Codes.UnknownEntity, from.Contains('#', StringComparison.Ordinal) && IsOwnNamespace(owner)
+                    ? $"'{from}' names an item collection of this host; a lookup of this host joins whole entities: look up '{from.Split('#')[0]}' and unwind the collection."
+                    : contract2 && !IsOwnNamespace(owner) && owner.Length > 0 && from.Contains('.', StringComparison.Ordinal)
+                        ? $"'{from}' is not an entity of this host, and this host knows no owner for '{owner}'."
+                        : $"'{lookup.From}' is not an entity of this host.", index, null));
+                return;
+            }
+
+            // The owning row of an element: only a lookup of another service's item collection has one.
+            if (lookup.ParentAs is not null || lookup.ParentSelect is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable,
+                    $"'{(lookup.ParentAs is not null ? "parentAs" : "parentSelect")}' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null));
                 return;
             }
 
@@ -1141,6 +1215,188 @@ public sealed class Binder
                     errors.Add(Error(Codes.LookupOnNotEntity,
                         $"'{on}' is {what}; a lookup's parent is one entity row: the entity itself, a resolved alias or an unwound lookup alias.", index, on));
                     return false;
+            }
+        }
+
+        // ---- remote lookup (DESIGN §3.4.4) ------------------------------------------------------
+
+        /// <summary>
+        /// The service that owns <paramref name="from"/> when a lookup of it is a remote lookup: a
+        /// contract 2 request, an id <c>service.entity</c> or <c>service.entity#item</c> whose namespace
+        /// is not one of this host's, and an owner this host can reach (<see cref="RequestContext.RemoteService"/>).
+        /// Null otherwise, and the lookup is refused as naming no entity.
+        /// </summary>
+        private string? RemoteOwnerOf(string? from)
+        {
+            if (!contract2 || context.RemoteService is not { } reachable || string.IsNullOrWhiteSpace(from))
+                return null;
+
+            var entity = from.Trim().Split('#')[0];
+            var service = entity.Split('.')[0];
+
+            if (service.Length == 0 || !entity.Contains('.', StringComparison.Ordinal) || IsOwnNamespace(service))
+                return null;
+
+            return reachable(service) ? service : null;
+        }
+
+        /// <summary>Whether <paramref name="service"/> is the namespace of an entity of this host.</summary>
+        private bool IsOwnNamespace(string service) =>
+            binder.model.Entities.Keys.Any(id => id.StartsWith(service + ".", StringComparison.Ordinal));
+
+        /// <summary>
+        /// A lookup whose <c>from</c> is another service's entity (DESIGN §3.4.4). It runs as the keyed
+        /// fetch runs a remote resolve, and is bound as one: the key of every page row is the parent's
+        /// key, the target member is the child's <c>path</c>, and the owner answers grouped per key
+        /// (<c>keyedBy</c>, at most one row more than the limit per key, ranked by the lookup's
+        /// <c>sort</c>). What lies on the child — its path, select, filter, sort, owning-row select — is
+        /// bound by the owner, as under a remote resolve's alias; the owner also checks that the path
+        /// declares a reference to the parent entity (<c>keyedBy.references</c>). Checked here: the
+        /// alias, <c>parentAs</c> only for an item child, the parent's key visible in the row, the
+        /// limit under this host's cap, the filter's options and variables. Its alias is a remote
+        /// alias, never filtered or sorted here; with <c>first</c> a later resolve or lookup under it
+        /// continues at the same owner.
+        /// </summary>
+        private void BindRemoteLookup(LookupStage lookup, int index, EntityDef parent, string service)
+        {
+            var from = lookup.From!.Trim();
+            var hash = from.IndexOf('#', StringComparison.Ordinal);
+            var entityId = hash < 0 ? from : from[..hash];
+            var item = hash < 0 ? null : from[(hash + 1)..];
+
+            if (item is not null && (item.Length == 0 || item.Split('.').Any(segment => segment.Length == 0)))
+            {
+                errors.Add(Error(Codes.UnknownEntity, $"'{from}' names no item collection; an item child is written 'service.entity#collection'.", index, null));
+                return;
+            }
+
+            if (!CheckAlias(lookup.As, index, out var alias))
+                return;
+
+            string? parentAs = null;
+
+            if (lookup.ParentAs is not null)
+            {
+                if (item is null)
+                {
+                    errors.Add(Error(Codes.OptionNotApplicable,
+                        $"'parentAs' names the row that owns an element; '{from}' is an entity, which is its own row. Look up '{entityId}#<collection>' to join elements.", index, null));
+                    return;
+                }
+
+                if (!CheckAlias(lookup.ParentAs, index, out var checkedParent))
+                    return;
+
+                if (checkedParent == alias)
+                {
+                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent));
+                    return;
+                }
+
+                parentAs = checkedParent;
+            }
+            else if (lookup.ParentSelect is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, "'parentSelect' applies with 'parentAs', which names the owning row it selects from.", index, null));
+                return;
+            }
+
+            var childPath = lookup.Path?.Trim() ?? "";
+
+            if (childPath.Length == 0 || childPath.Split('.').Any(segment => segment.Length == 0))
+            {
+                errors.Add(Error(Codes.InvalidPath, $"'{lookup.Path}' is not a path; a lookup names the child's member that references '{parent.Id}'.", index, lookup.Path));
+                return;
+            }
+
+            // The keys are the parent's keys: the owner's reference names the parent entity, whose
+            // key it holds (a remote reference targets the key, DESIGN §3.3.2).
+            if (parent.Key is not { Stored: true } key)
+            {
+                errors.Add(Error(Codes.LookupNotDeclared, $"'{parent.Id}' has no stored key; a lookup from another service joins on it.", index, lookup.Path));
+                return;
+            }
+
+            var keyWire = lookup.On is null ? key.Wire : lookup.On + "." + key.Wire;
+
+            if (lookup.On is not null && !shape.IsVisible(keyWire))
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{keyWire}' was removed by the projection; the lookup joins on it.", index, lookup.On));
+                return;
+            }
+
+            if (lookup.On is not null && shape.NotSelected(keyWire) is not null)
+            {
+                errors.Add(Error(Codes.UnknownPath,
+                    $"'{keyWire}' is not in the select of '{lookup.On}'; the lookup joins on it, so add '{key.Wire}' to that select.", index, lookup.On));
+                return;
+            }
+
+            if (shape.Resolve(keyWire, PathUsage.Match) is not { Succeeded: true, Path: { Storage: not null } parentKey })
+            {
+                errors.Add(Error(Codes.UnknownPath, $"'{keyWire}' is not in the row here; the lookup joins on it.", index, lookup.On));
+                return;
+            }
+
+            var first = lookup.First is true;
+            int limit;
+
+            if (first)
+            {
+                if (lookup.Limit is not null)
+                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
+
+                limit = 1;
+            }
+            else
+            {
+                limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
+
+                if (limit < 1 || limit > options.Limits.MaxLookupLimit)
+                    errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
+            }
+
+            foreach (var entry in lookup.Sort ?? [])
+                if (string.IsNullOrWhiteSpace(entry.Path))
+                    errors.Add(Error(Codes.InvalidPath, "A sort entry of a lookup names a path of the child.", index, null));
+
+            // What the wire form cannot carry to the owner is refused here, not dropped on the way;
+            // every variable is bound here, since the owner never receives them (DESIGN §3.5.5).
+            if (RefuseUnknownOptions(lookup.Filter?.Condition, index))
+                return;
+
+            var substitution = new List<QueryValidationError>();
+            var filter = lookup.RawFilter is { } rawFilter ? coercer.SubstituteVariables(rawFilter, index, lookup.Path, substitution) : (JsonElement?)null;
+
+            errors.AddRange(substitution);
+
+            if (++lookups > options.Limits.MaxLookupStages)
+                errors.Add(Error(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null));
+
+            if (errors.Count > 0 && errors.Any(error => error.Stage == index))
+                return;
+
+            var spec = new BoundRemoteLookup(from, entityId, item, childPath, parent.Id, lookup.On, lookup.Sort ?? [], first, limit, Rows: item is null,
+                lookup.Select, lookup.ParentSelect, filter);
+            var declared = new ReferenceTarget(entityId, childPath, item, IsRemote: true, FieldIsKey: false);
+            var target = new BoundResolveTarget(declared, null, null, null, null, lookup.Select, null, filter, null, null, lookup.ParentSelect, []);
+            var reference = new ReferenceDef { Targets = [declared], DeclaredBy = ReferenceSource.Declaration };
+            var stage = new BoundStage.Resolve(parentKey, alias, entityId, childPath, IsRemote: true,
+                null, null, null, null, null, lookup.Select, filter,
+                ResolveExecutor.Keyed, [new BoundResolveCase(reference, null, [target])], null, null, null, parentAs, null, ResolveOnMissing.Null, index, spec);
+
+            stages.Add(stage);
+
+            // The alias holds the owner's rows: a remote alias, projected, never filtered or sorted
+            // here. Under 'first' it is one row, and a resolve or lookup under it continues at the
+            // owner; an array of children is not continued (its per-child association would be lost).
+            shape = shape.WithRoot(alias, new ShapeNode.Remote(entityId, parentKey, alias, SemiJoinable: false));
+            anchors[alias] = new ContinuationAnchor(stage, null, Many: !first);
+
+            if (parentAs is not null)
+            {
+                shape = shape.WithRoot(parentAs, new ShapeNode.Remote(entityId, parentKey, parentAs, SemiJoinable: false));
+                anchors[parentAs] = new ContinuationAnchor(stage, null, Many: !first);
             }
         }
 
@@ -1461,6 +1717,13 @@ public sealed class Binder
             if (!shape.IsVisible(root))
             {
                 errors.Add(Error(Codes.UnknownPath, $"'{root}' was removed by the projection.", index, root));
+                return;
+            }
+
+            if (anchor.Many && anchor.Stage.RemoteLookup is not null)
+            {
+                errors.Add(Error(Codes.NotContinuable,
+                    $"'{kind}' cannot run on '{head}', which holds every child the lookup found for a row; a continued stage would lose which child it belongs to. Look up with 'first' to continue from one child.", index, root));
                 return;
             }
 

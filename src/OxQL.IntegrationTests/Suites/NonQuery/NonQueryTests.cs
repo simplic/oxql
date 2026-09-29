@@ -104,7 +104,7 @@ public class NonQueryTests
     [Fact]
     public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_five_plus_exactly_the_features_a_host_has_switched_on()
     {
-        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "explain", "compat.v1"]).ToList();
+        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"]).ToList();
 
         foreach (var service in LabService.All)
             Strings((await (await Lab.ClientAsync(service)).HealthAsync()).Body!["capabilities"]).Should().Equal(expectedFleet, service.Key);
@@ -116,14 +116,14 @@ public class NonQueryTests
         using (var client = explainOff.Server.CreateClient())
         {
             var body = JsonNode.Parse(await client.GetStringAsync("OxQL/health"))!;
-            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "compat.v1"]));
+            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "compat.v1"]));
         }
 
         // Y6: compat.v1 is published exactly when the compat binder is on.
         var noCompat = shared.Variant(LabService.Staff, "b5-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
-        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "explain"]));
+        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain"]));
 
-        // Y4: resolve.remote, semiJoin and resolve.chain need a remote query client.
+        // Y4: resolve.remote, semiJoin, resolve.chain and lookup.remote need a remote query client.
         await using var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport));
         var bareHealth = await bare.GetAsync("OxQL/health");
         Strings(bareHealth.Body!["capabilities"]).Should().Equal(Universal.Concat(["explain", "compat.v1"]));
@@ -184,7 +184,7 @@ public class NonQueryTests
             health.Body!["status"]!.GetValue<string>().Should().Be("healthy", "every reference reachable");
         }
 
-        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet", "staff"]);
+        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet", "ledger", "staff"]);
         RemoteServicesOf(LabService.Ledger).Should().Equal(["directory", "staff", "transport"]);
         RemoteServicesOf(LabService.Conformance).Should().Equal(["owner", "staff"]);
         RemoteServicesOf(LabService.Staff).Should().BeEmpty();

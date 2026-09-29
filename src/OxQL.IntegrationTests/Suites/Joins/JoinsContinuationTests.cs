@@ -184,7 +184,9 @@ public class JoinsContinuationTests
             """);
 
         refused.ShouldRefuse("RESOLVE_REFUSED", 422)["stage"]!.GetValue<int>().Should().Be(1, "the continued lookup the owner refused");
-        refused.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "UNKNOWN_ENTITY");
+        // The directory looks up the ledger's billing lines remotely (DESIGN §3.4.4), and the ledger refuses:
+        // a billing line references a transaction, not a contact. Each owner's refusal maps back.
+        refused.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "RESOLVE_REFUSED", "LOOKUP_NOT_DECLARED");
 
         var mapped = refused.Errors[1];
         mapped["stage"]!.GetValue<int>().Should().Be(1);

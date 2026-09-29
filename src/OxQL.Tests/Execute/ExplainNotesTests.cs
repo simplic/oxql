@@ -41,7 +41,7 @@ public class ExplainNotesTests
         Notes.All.Should().Equal(
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
-            "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE");
+            "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP");
         Notes.All.Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue");
     }

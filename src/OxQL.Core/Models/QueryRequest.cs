@@ -80,6 +80,28 @@ public sealed record KeyedByMember
     [JsonPropertyName("perKey")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PerKey { get; init; }
+
+    /// <summary>
+    /// The entity of the asking host whose key the keys are: <see cref="Path"/> must declare a
+    /// reference to it, as a local lookup's path must (<c>LOOKUP_NOT_DECLARED</c>). Sent by a remote
+    /// lookup (DESIGN §3.4.4); a resolve's owner query carries none.
+    /// </summary>
+    [JsonPropertyName("references")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? References { get; init; }
+
+    /// <summary>
+    /// <c>"entity"</c>: a path through one collection answers whole rows, one per key a row holds in
+    /// some element, the key under <c>oxKey</c>, instead of one row per matching element under
+    /// <c>oxEl</c> (the default). Sent by a remote lookup whose child is the entity itself.
+    /// </summary>
+    [JsonPropertyName("rows")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Rows { get; init; }
+
+    /// <summary>Members of <c>keyedBy</c> this engine does not know; refused, so a newer caller's member is never silently dropped.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Unknown { get; init; }
 }
 
 /// <summary>

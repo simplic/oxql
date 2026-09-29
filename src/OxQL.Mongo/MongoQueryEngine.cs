@@ -69,6 +69,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
+        context = Reaching(context);
         var binding = await new Binder(models.Model, cursors).BindAsync(request, context, cancellationToken);
 
         if (binding is BindOutcome.Failed failed)
@@ -334,6 +335,13 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private static void Observe(Task? abandoned) =>
         abandoned?.ContinueWith(static task => _ = task.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
+    /// <summary>
+    /// The context with the owners this host can reach (<see cref="RequestContext.RemoteService"/>), which a
+    /// lookup of another service's entity binds by (DESIGN §3.4.4); a host without a remote client reaches none.
+    /// </summary>
+    private RequestContext Reaching(RequestContext context) =>
+        remote is null || context.RemoteService is not null ? context : context with { RemoteService = remote.IsConfigured };
+
     /// <summary>What is left of the request's time budget for the owners.</summary>
     private static TimeSpan Remaining(CompiledQuery compiled, Stopwatch timer) =>
         TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
@@ -342,6 +350,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     public async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        context = Reaching(context);
 
         var binding = await new Binder(models.Model, cursors).BindAsync(request.Query, context, explain: true, cancellationToken);
         var steps = Steps(binding.Trace);
@@ -486,10 +495,14 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                         Phase = "afterPage",
                         Creates = Created(step.Creates, resolve),
                         Owner = OwnerOf(explained),
-                        Reference = ReferenceOf(resolve),
+                        // A lookup follows no reference of this host: the owner checks its path.
+                        Reference = resolve.RemoteLookup is null ? ReferenceOf(resolve) : null,
                         Continued = continued.Count == 0 ? null : continued.Select(stage => (JsonNode)new JsonObject { ["index"] = stage.OriginIndex, ["forTarget"] = stage.ForTarget }).ToList(),
                     };
-                    notes.Add(Notes.Join(index, resolve.As, "resolve", afterPage: true));
+                    notes.Add(Notes.Join(index, resolve.As, resolve.Kind, afterPage: true));
+
+                    if (resolve.RemoteLookup is { } lookup)
+                        notes.Add(Notes.RemoteLookupBounds(index, resolve.As, lookup, KeyedFetch.KeysPerQuery(options, remote, lookup.Service, lookup.PerKey)));
                     break;
                 }
 
@@ -673,6 +686,11 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                     break;
 
                 case ShapeNode.Keyed { Many: true }:
+                    columns.Add(Column(name, Kind.Array, nullable: true, stage, name));
+                    break;
+
+                // The children of a remote lookup, or their owning rows, as an array per row (DESIGN §3.4.4).
+                case ShapeNode.Remote when bound.Stages.OfType<BoundStage.Resolve>().Any(resolve => resolve.RemoteLookup is { First: false } && (resolve.As == name || resolve.ParentAs == name)):
                     columns.Add(Column(name, Kind.Array, nullable: true, stage, name));
                     break;
 

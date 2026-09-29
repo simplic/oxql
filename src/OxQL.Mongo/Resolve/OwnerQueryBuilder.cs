@@ -87,6 +87,22 @@ public static class OwnerQueryBuilder
             pipeline.Add(new PipelineStage { Match = element.Length == 0 ? match : match with { Condition = Rebased(match.Condition, element) }, Keys = ["match"] });
         }
 
+        // A remote lookup's order (DESIGN §3.4.4): right after the key match and the filter, where the
+        // owner's keyedBy window ranks each key's rows by it, so the rows it keeps per key are the first
+        // in that order. Without a sort the children come by key, as a local lookup's do. A probe
+        // never carries it.
+        var lookup = stage.RemoteLookup;
+
+        // An element child without a sort is ranked by record key and position by the window itself.
+        if (lookup is not null && !probe && (lookup.Sort.Count > 0 || item is null))
+            pipeline.Add(new PipelineStage
+            {
+                Sort = lookup.Sort.Count > 0
+                    ? lookup.Sort.Select(field => field with { Path = element + field.Path }).ToList()
+                    : [new SortField { Path = "id", Direction = "asc" }],
+                Keys = ["sort"],
+            });
+
         // With a select it is the caller's (a local target's as bound, the paths it has); without
         // one the reserved $default key, which the owner expands to its own entity's key and
         // display members — the pair the local half of this stage keeps — or, for an item, the
@@ -101,8 +117,15 @@ public static class OwnerQueryBuilder
                 projection[element + path] = 1;
         else if (!probe && item is null)
             projection["$default"] = 1;
+        else if (!probe && lookup is not null)
+            projection[BoundKeyedBy.Element] = 1;   // a looked-up element without a select is the whole element
 
-        projection[element + field] = 1;
+        // A whole row answered per key carries the key under its own member (DESIGN §3.4.4); every
+        // other answer row carries it at the matched member.
+        if (lookup is { Rows: true })
+            projection[BoundKeyedBy.Key] = 1;
+        else if (!projection.ContainsKey(BoundKeyedBy.Element))
+            projection[element + field] = 1;
 
         if (!probe && item is not null && stage.ParentAs is not null)
         {
@@ -121,7 +144,14 @@ public static class OwnerQueryBuilder
             EntityType = target.Declared.Entity,
             Pipeline = pipeline,
             KeyedBy = perKey is { } rows
-                ? new KeyedByMember { Path = item is null ? field : item + "." + field, Keys = JsonSerializer.SerializeToElement(keys), PerKey = rows }
+                ? new KeyedByMember
+                {
+                    Path = item is null ? field : item + "." + field,
+                    Keys = JsonSerializer.SerializeToElement(keys),
+                    PerKey = rows,
+                    References = lookup?.Parent,
+                    Rows = lookup is { Rows: true } ? "entity" : null,
+                }
                 : null,
         };
     }

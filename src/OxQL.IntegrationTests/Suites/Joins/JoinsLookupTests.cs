@@ -322,11 +322,11 @@ public class JoinsLookupTests
     [InlineData("L16", Corpus.Vehicle, """[ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "matchCode" } }, { "page": { "limit": 1 } } ]""", "ALIAS_COLLISION")]
     [InlineData("L18", Corpus.Vehicle, """[ { "group": { "by": [ { "path": "matchCode", "as": "mc" } ], "fields": { "n": { "count": true } } } }, { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_PATH")]
     [InlineData("L20", Corpus.Vehicle, """[ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "nope": 1 } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_STAGE_MEMBER")]
-    [InlineData("L25", Corpus.Vehicle, """[ { "lookup": { "from": "transport.shipment_template", "path": "createUserId", "as": "templates" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_ENTITY")]
+    [InlineData("L25", Corpus.Vehicle, """[ { "lookup": { "from": "billing.run", "path": "vehicleId", "as": "runs" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_ENTITY")]
     public async Task L03_L04_L06_L07_L16_L18_L20_L25_the_engine_refuses_the_lookup_shapes_it_cannot_serve(string caseId, string entity, string pipeline, string code)
     {
-        // L7: `equipment` is the collection's name, never an entity id. L25: the child lives on
-        // another service; there is no remote backward lookup, so the host does not know it.
+        // L7: `equipment` is the collection's name, never an entity id. L25: the child lives on a
+        // service this host knows no owner for (another service's entity is a remote lookup, L26).
         var answer = await (await FleetClient()).SendAsync(entity, pipeline);
 
         answer.ShouldRefuse(code, 400, caseId);
@@ -334,6 +334,20 @@ public class JoinsLookupTests
 
         if (caseId == "L18")
             answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("no key to join on");
+    }
+
+    [Fact]
+    public async Task L26_a_lookup_of_another_services_entity_runs_at_its_owner_along_the_reference_the_owner_declares()
+    {
+        // DESIGN §3.4.4: a template's createUserId names a fleet vehicle, so transport answers the
+        // templates of each vehicle grouped per key; it was UNKNOWN_ENTITY before the remote lookup.
+        var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, """
+            [ { "lookup": { "from": "transport.shipment_template", "path": "createUserId", "as": "templates", "limit": 2 } }, { "page": { "limit": 1 } } ]
+            """);
+
+        answer.ShouldBeOk();
+        answer.Items[0]!["templates"]!.AsArray().Should().HaveCount(2, "the vehicle names four templates; the limit keeps two");
+        answer.DiagnosticCodes.Should().Contain("LOOKUP_TRUNCATED");
     }
 
     [Fact]

@@ -34,4 +34,14 @@ public sealed record RequestContext
     /// header carries it.
     /// </summary>
     public bool Internal { get; init; }
+
+    /// <summary>
+    /// Whether this host can send a query to the owner of a service namespace (an
+    /// <c>InternalHosts</c> entry, <see cref="Engine.IRemoteQueryClient.IsConfigured"/>); null when it
+    /// has no remote query client. The engine sets it before binding: a <c>lookup</c> whose
+    /// <c>from</c> is another service's entity binds as a remote lookup only when its owner is one
+    /// (DESIGN §3.4.4), since, unlike a resolve's, its target is written by the caller and declared nowhere
+    /// on this host.
+    /// </summary>
+    public Func<string, bool>? RemoteService { get; init; }
 }

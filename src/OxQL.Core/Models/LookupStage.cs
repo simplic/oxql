@@ -42,6 +42,20 @@ public sealed record LookupStage
     /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
     public string? ForTarget { get; init; }
 
+    /// <summary>
+    /// The alias each child's owning row is placed under, when <see cref="From"/> names an item
+    /// collection of another service's entity (<c>entity#item</c>): the child is the element and its
+    /// owning row travels here, as it does for a resolve's item target. Contract 2.
+    /// </summary>
+    public string? ParentAs { get; init; }
+
+    /// <summary>Wire paths of the owning row to keep under <see cref="ParentAs"/>; its key and display members by default. Contract 2.</summary>
+    public IReadOnlyList<string>? ParentSelect { get; init; }
+
+    /// <summary>The raw filter, for a remote owner that binds it itself.</summary>
+    [JsonIgnore]
+    public JsonElement? RawFilter { get; init; }
+
     /// <summary>Members the caller wrote with a value of the wrong JSON kind, such as a <c>first</c> that is not a boolean.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Malformed { get; init; } = [];
@@ -119,7 +133,13 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                 case "path": stage = stage with { Path = property.Value.GetString() }; break;
                 case "as": stage = stage with { As = property.Value.GetString() }; break;
                 case "select": stage = stage with { Select = StageJson.ReadStrings(property.Value) }; break;
-                case "filter": stage = stage with { Filter = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options) }; break;
+                case "filter":
+                    stage = stage with
+                    {
+                        Filter = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options),
+                        RawFilter = property.Value.Clone(),
+                    };
+                    break;
                 case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
                 case "sort":
                     if (property.Value.ValueKind == JsonValueKind.Array)
@@ -145,6 +165,18 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                     else
                         malformed.Add(property.Name);
                     break;
+                case "parentAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ParentAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "parentSelect":
+                    if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Array)
+                        stage = stage with { ParentSelect = StageJson.ReadStrings(property.Value) };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
@@ -165,6 +197,8 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         if (value.First is not null) writer.WriteBoolean("first", value.First.Value);
         if (value.On is not null) writer.WriteString("on", value.On);
         if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
+        if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
+        if (value.ParentSelect is not null) { writer.WritePropertyName("parentSelect"); JsonSerializer.Serialize(writer, value.ParentSelect, options); }
         writer.WriteEndObject();
     }
 }

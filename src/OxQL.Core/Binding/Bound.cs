@@ -195,6 +195,43 @@ public sealed record BoundResolveTarget(
     public bool IsRemote => Declared.IsRemote;
 }
 
+/// <summary>
+/// What makes a keyed stage a remote lookup (DESIGN §3.4.4): a <c>lookup</c> whose <c>from</c> is
+/// another service's entity, run by the keyed fetch like a remote resolve whose key is the parent
+/// row's key and whose target member is the child's <see cref="Path"/>. The owner groups its rows per
+/// key (<c>keyedBy</c>), at most <see cref="PerKey"/> per key, ranked by <see cref="Sort"/> and the
+/// child key. <see cref="From"/> is the child entity as written, <see cref="Entity"/> without its
+/// item; <see cref="Item"/> the item collection of an <c>entity#item</c> child, whose element is the
+/// child and whose owning row goes under the stage's <c>ParentAs</c>. <see cref="Rows"/> is set on an
+/// entity child whose <see cref="Path"/> crosses one of its collections: a row holding a key in some
+/// element counts once for it. <see cref="Parent"/> is this host's entity whose key the keys are,
+/// <see cref="On"/> the alias of the parent row (null for the implicit root). <see cref="Sort"/> is the
+/// order as written, bound by the owner; <see cref="Limit"/> the bound limit (1 under
+/// <see cref="First"/>). <see cref="Filter"/> is the filter as the owner is sent it, every variable
+/// substituted.
+/// </summary>
+public sealed record BoundRemoteLookup(
+    string From,
+    string Entity,
+    string? Item,
+    string Path,
+    string Parent,
+    string? On,
+    IReadOnlyList<Models.SortField> Sort,
+    bool First,
+    int Limit,
+    bool Rows,
+    IReadOnlyList<string>? Select,
+    IReadOnlyList<string>? ParentSelect,
+    JsonElement? Filter)
+{
+    /// <summary>The service that owns the child.</summary>
+    public string Service => Entity.Split('.')[0];
+
+    /// <summary>The rows the owner answers per key: one under <c>first</c>, else one more than the limit, which tells a truncated parent.</summary>
+    public int PerKey => First ? 1 : Limit + 1;
+}
+
 /// <summary>A coerced operand: one value, a set, alternatives to match tolerantly, null, or a raw operand for a remote owner.</summary>
 public abstract record BoundOperand
 {
@@ -290,13 +327,17 @@ public abstract record BoundStage
         string? ParentAs = null,
         ResolveOnMissing? OnMissing = null,
         ResolveOnMissing EffectiveOnMissing = ResolveOnMissing.Null,
-        int Stage = -1) : BoundStage
+        int Stage = -1,
+        BoundRemoteLookup? RemoteLookup = null) : BoundStage
     {
         /// <summary>
         /// The 2.0 form: one simple case, no <c>elements</c>, no narrowing, no owning row. Such a
-        /// resolve renders as 2.0 did.
+        /// resolve renders as 2.0 did. A remote lookup is never one.
         /// </summary>
-        public bool IsPlain => Cases is null or [{ Declared.IsSimple: true }] && Elements is null && NarrowedTo is null && ParentAs is null;
+        public bool IsPlain => RemoteLookup is null && (Cases is null or [{ Declared.IsSimple: true }]) && Elements is null && NarrowedTo is null && ParentAs is null;
+
+        /// <summary>The caller's kind of the stage: <c>lookup</c> for a remote lookup, <c>resolve</c> otherwise.</summary>
+        public string Kind => RemoteLookup is null ? "resolve" : "lookup";
 
         /// <summary>
         /// Whether the resolve needs the keyed fetch of OxQL 2.1 (DESIGN §3.5): a keyed resolve other
@@ -437,14 +478,27 @@ public sealed record BoundPipeline
 /// <paramref name="PerKey"/> rows per key. For an item target <paramref name="ItemStorage"/> is the
 /// item collection, each row carries the matched element under <paramref name="ElementAlias"/>,
 /// and <paramref name="ElementFieldStorage"/> is the member on that element.
+/// <para>
+/// With <paramref name="KeyAlias"/> (<c>rows: "entity"</c>) a path through the item collection answers
+/// whole rows instead: one per key some element of the row holds, that key under
+/// <see cref="Key"/>. <paramref name="References"/> is the entity of the asking host the path must
+/// declare a reference to (a remote lookup's parent); null for a resolve's owner query.
+/// </para>
 /// </summary>
-public sealed record BoundKeyedBy(ResolvedPath Path, IReadOnlyList<BsonValue> Keys, int PerKey, string? ItemStorage, string? ElementAlias, string? ElementFieldStorage)
+public sealed record BoundKeyedBy(ResolvedPath Path, IReadOnlyList<BsonValue> Keys, int PerKey, string? ItemStorage, string? ElementAlias, string? ElementFieldStorage,
+    string? KeyAlias = null, string? References = null)
 {
     /// <summary>The alias an item target's element travels under in the owner's rows.</summary>
     public const string Element = "oxEl";
 
-    /// <summary>The storage every row's key lies at after the prologue: the element's member for an item, the entity's otherwise.</summary>
-    public string PartitionStorage => ItemStorage is null ? Path.Storage! : ElementAlias + "." + ElementFieldStorage;
+    /// <summary>The member a whole row answered per key (<c>rows: "entity"</c>) carries that key under.</summary>
+    public const string Key = "oxKey";
+
+    /// <summary>
+    /// The storage every row's key lies at after the prologue: the key alias of a whole-row answer, the
+    /// element's member for an item, the entity's otherwise.
+    /// </summary>
+    public string PartitionStorage => KeyAlias ?? (ItemStorage is null ? Path.Storage! : ElementAlias + "." + ElementFieldStorage);
 }
 
 /// <summary>

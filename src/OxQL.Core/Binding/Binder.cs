@@ -1296,7 +1296,7 @@ public sealed class Binder
                 if (elements is null)
                 {
                     errors.Add(Error(Codes.ResolveOnCollection,
-                        $"'{resolve.Path}' lies under the collection '{crossed[0].Wire}', which is not unwound here; unwind it first, or set 'elements' to 'first' or 'all'.", index, resolve.Path));
+                        $"'{resolve.Path}' lies under the collection '{crossed[0].Wire}', which is not unwound here; unwind it first, or set 'elements' to 'first' or 'all'." + Hint(true), index, resolve.Path));
                     return;
                 }
 
@@ -1880,9 +1880,12 @@ public sealed class Binder
             diagnostics.RemoveRange(diagnosticsBefore, diagnostics.Count - diagnosticsBefore);
             exactTexts.RemoveRange(exactBefore, exactTexts.Count - exactBefore);
 
-            // The same mistake on another target of the union is the one already reported.
+            // The same mistake on another target of the union is the one already reported; a
+            // different one is this target's own and stays.
             if (errors.Count > errorsBefore && reportedFilterError)
-                errors.RemoveRange(errorsBefore, errors.Count - errorsBefore);
+                for (var position = errors.Count - 1; position >= errorsBefore; position--)
+                    if (errors.Take(errorsBefore).Any(reported => reported.Code == errors[position].Code && reported.Path == errors[position].Path))
+                        errors.RemoveAt(position);
 
             reportedFilterError |= errors.Count > errorsBefore;
 

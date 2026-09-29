@@ -69,7 +69,8 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
                 case "as": stage = stage with { As = property.Value.GetString() }; break;
                 case "preserveNull": stage = stage with { PreserveNull = property.Value.ValueKind == JsonValueKind.True }; break;
                 case "includeIndex": stage = stage with { IncludeIndex = property.Value.GetString() }; break;
-                case "flatten": stage = stage with { Flatten = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : property.Value.GetRawText() }; break;
+                // "flatten": null is the member left out, not a member named "null".
+                case "flatten": stage = stage with { Flatten = property.Value.ValueKind switch { JsonValueKind.String => property.Value.GetString(), JsonValueKind.Null => null, _ => property.Value.GetRawText() } }; break;
                 default: unknown.Add(property.Name); break;
             }
         }

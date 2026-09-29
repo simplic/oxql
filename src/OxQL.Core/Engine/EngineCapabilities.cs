@@ -25,6 +25,9 @@ public static class EngineCapabilities
     /// <summary>A <c>lookup</c> whose <c>from</c> is another service's entity (DESIGN §3.4.4); only with a remote query client.</summary>
     public const string LookupRemote = "lookup.remote";
 
+    /// <summary><c>unwind.keepPath</c>: an unwind can take its collection out of the row (<c>keepPath: false</c>).</summary>
+    public const string UnwindKeepPath = "unwind.keepPath";
+
     /// <summary><c>POST /oxql/explain</c> answers.</summary>
     public const string Explain = "explain";
 
@@ -34,7 +37,7 @@ public static class EngineCapabilities
     /// <summary>The capabilities of a host with the given features and options.</summary>
     public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain)
     {
-        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any", Oxql21 };
+        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any", Oxql21, UnwindKeepPath };
 
         if (remoteResolve)
         {

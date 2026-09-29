@@ -25,7 +25,7 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "oxql.2.1"];
+    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath"];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
 
@@ -102,7 +102,7 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_five_plus_exactly_the_features_a_host_has_switched_on()
+    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_six_plus_exactly_the_features_a_host_has_switched_on()
     {
         var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"]).ToList();
 

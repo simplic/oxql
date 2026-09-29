@@ -198,7 +198,7 @@ public class HostTests
 
         var capabilities = body["capabilities"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
-        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "oxql.2.1", "explain", "compat.v1"], "explain is on by default and 2.1 is announced");
+        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath", "explain", "compat.v1"], "explain is on by default and 2.1 is announced");
 
         var limits = body["limits"]!.AsObject();
 

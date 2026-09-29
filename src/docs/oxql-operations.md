@@ -219,7 +219,7 @@ Anonymous, always 200, and never waits for another service:
   "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
-  "capabilities": ["batch", "group.page", "page.offset", "any", "oxql.2.1",
+  "capabilities": ["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath",
                    "resolve.remote", "semiJoin", "resolve.chain", "explain", "compat.v1"],
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
@@ -238,7 +238,9 @@ Anonymous, always 200, and never waits for another service:
 - `engine.version` is the version of the `OxQL.Core` assembly the host runs, which is the package
   version. Another host reads it from this
   endpoint to decide whether it may send 2.1 vocabulary (see *Keyed fetch and remote continuation*).
-- `capabilities`: `batch`, `group.page`, `page.offset`, `any` and `oxql.2.1` always;
+- `capabilities`: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1` and `unwind.keepPath` always
+  (`unwind.keepPath`: an unwind may take its collection out of the row; a caller gates on it before
+  sending `keepPath`, which an engine without it refuses as an unknown member);
   `resolve.remote`, `semiJoin` and `resolve.chain` when the host installed a remote query client;
   `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`. `oxql.2.1`
   covers every language feature of 2.1 and the explain answer described below; a caller gates on it

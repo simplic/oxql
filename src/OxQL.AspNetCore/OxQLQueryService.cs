@@ -116,6 +116,15 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The batch is empty; a batch carries a queries array.",
             }]));
 
+        // A member the batch does not have is refused rather than dropped: a batch-level strict
+        // would otherwise run every query without it. Contract 1 ignores it, as it always has.
+        if (batch.Unknown is { Count: > 0 } unknown && ContractOf(httpContextAccessor?.HttpContext) != 1)
+            return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownRequestMember,
+                Message = $"'{string.Join(", ", unknown.Keys)}' is not a member of a batch; a batch carries queries and maxTimeMs, and each query its own strict.",
+            }]));
+
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)
             return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
             {

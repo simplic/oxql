@@ -310,7 +310,7 @@ public sealed class Binder
 
             if (request.Unknown is { Count: > 0 } unknown)
                 errors.Add(Error(Codes.UnknownRequestMember,
-                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {RequestMembers}.", null, null));
+                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", null, null));
         }
 
         /// <summary>
@@ -325,10 +325,12 @@ public sealed class Binder
             if (request.KeyedBy is not { } keyedBy)
                 return;
 
+            // Only an internal call of contract 2 carries it; the contract 1 hint would suggest the
+            // header is what is missing, which it is not.
             if (!context.Internal || !contract2)
             {
                 errors.Add(Error(Codes.UnknownRequestMember,
-                    $"'keyedBy' is not a member of a request; a request carries {RequestMembers}." + Hint(!contract2), null, null));
+                    $"'keyedBy' is not a member of a request; a request carries {RequestMembers}.", null, null));
                 return;
             }
 
@@ -354,6 +356,15 @@ public sealed class Binder
             if (keyedBy.Keys is not { ValueKind: JsonValueKind.Array } keys || keys.GetArrayLength() == 0)
             {
                 errors.Add(Error(Codes.InvalidOperand, "'keyedBy.keys' is a non-empty array of keys.", null, keyedBy.Path));
+                return;
+            }
+
+            // Every key answers at least one row, so no more keys than the largest page holds.
+            var maxKeys = Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize);
+
+            if (keys.GetArrayLength() > maxKeys)
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'keyedBy.keys' holds {keys.GetArrayLength()} keys; one query takes at most {maxKeys}.", null, keyedBy.Path));
                 return;
             }
 

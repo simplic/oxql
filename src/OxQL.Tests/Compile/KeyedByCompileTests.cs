@@ -91,6 +91,15 @@ public class KeyedByCompileTests
         bound.KeyedBy!.PerKey.Should().Be(2, "two rows tell one from several");
     }
 
+    [Fact]
+    public async Task More_keys_than_the_largest_page_holds_are_refused()
+    {
+        var keys = string.Join(", ", Enumerable.Range(0, 5_001).Select(n => $"\"k{n}\""));
+        var outcome = await BindHost.BindAsync(ResolveModel.Model, Request("rc.customer", $$"""{ "path": "code", "keys": [{{keys}}] }""", "[]"), Internal());
+
+        outcome.Should().BeOfType<BindOutcome.Failed>().Which.Refusal.Errors!.Single().Code.Should().Be(Codes.InvalidOperand);
+    }
+
     [Theory]
     [InlineData("""{ "path": "billingLines", "keys": ["x"] }""", Codes.InvalidPath)]
     [InlineData("""{ "path": "number", "keys": [] }""", Codes.InvalidOperand)]

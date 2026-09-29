@@ -307,7 +307,9 @@ public sealed class RemoteExplain : IDescribeOwners
 
         var remaining = budget - clock.Elapsed;
 
-        if (remaining <= TimeSpan.Zero)
+        // A call cut by the budget spent it, whatever the clock reads a moment later (the timer may
+        // fire a hair before the elapsed time reaches the budget).
+        if (spent || remaining <= TimeSpan.Zero)
             return (null, Timeout);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -326,6 +328,7 @@ public sealed class RemoteExplain : IDescribeOwners
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            spent = true;
             return (null, Timeout);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -333,6 +336,9 @@ public sealed class RemoteExplain : IDescribeOwners
             return (null, Unreachable);
         }
     }
+
+    /// <summary>Whether a call already ran out of the shared budget.</summary>
+    private bool spent;
 
     private static Diagnostic Unchecked(OwnerCheck check, string reason) => new()
     {

@@ -100,8 +100,8 @@ public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Serv
 /// aliases: its <c>select</c>, its <c>parentSelect</c>, and every path the last projection after the
 /// stage names under them, which the check query projects at <see cref="ProjectAt"/> so the
 /// owner says which it lacks. <see cref="Stage"/> is the resolve's caller index,
-/// <see cref="ProjectStage"/> that projection's; <see cref="Select"/> and
-/// <see cref="ParentSelect"/> are what the caller wrote.
+/// <see cref="ProjectStage"/> that projection's; <c>select</c> and
+/// <c>parentSelect</c> are what the caller wrote.
 /// </para>
 /// </summary>
 public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)

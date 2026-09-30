@@ -118,7 +118,13 @@ public class ExplainDescribeTests
             var group = shape.Resolve(path, PathUsage.GroupKey);
             var expectedError = usage == "lookupOn" ? Codes.LookupOnNotEntity : shape.Resolve(path, asked).Code;
 
-            child["filterable"]!.GetValue<bool>().Should().Be(match.Path?.Filterable == true, path);
+            var operators = child["operators"]!.AsArray().Select(op => op!.GetValue<string>()).ToList();
+
+            child["filterable"]!.GetValue<bool>().Should().Be(operators.Count > 0, $"{path}: filterable and operators have one source");
+            (operators.Count > 0).Should().Be(match.Succeeded && (match.Path!.Filterable || operators.All(op => op is "exists" or "is" or "any")), path);
+
+            if (match.Path?.Filterable == true)
+                operators.Should().Contain("exists", $"{path} compares values");
             child["sortable"]!.GetValue<bool>().Should().Be(sort.Path?.Sortable == true, path);
             child["projectable"]!.GetValue<bool>().Should().Be(shape.Resolve(path, PathUsage.Project).Succeeded, path);
             child["unwindable"]!.GetValue<bool>().Should().Be(unwind.Path is { Kind: Kind.Array, CollectionAncestors: 0, Storage: not null }, path);
@@ -173,6 +179,7 @@ public class ExplainDescribeTests
 
         var slot = ChildAt(answer, "slot");
         Strings(slot["operators"]).Should().Equal("exists", "is");
+        slot["filterable"]!.GetValue<bool>().Should().BeTrue("a member whose operators list 'is' is filterable: one source for both (UX-S)");
         Strings(slot["variants"]).Should().Equal("RcSlot", "RcDriverSlot", "RcVehicleSlot");
         slot["hasChildren"]!.GetValue<bool>().Should().BeTrue();
 

@@ -817,7 +817,13 @@ public sealed class Describe
         child["path"] = path;
 
         var match = origin.Resolve(path, PathUsage.Match);
-        var filterable = match is { Succeeded: true, Path.Filterable: true };
+
+        // The operators the origin admits under the alias (a semi-join compares values, never `is` or
+        // `any`), and the flag from them: one source for both (UX-S).
+        var operators = match is { Succeeded: true, Path.Filterable: true } && child["operators"] is JsonArray written
+            ? new JsonArray(written.Where(op => op?.GetValue<string>() is not ("any" or "is")).Select(op => op!.DeepClone()).ToArray())
+            : new JsonArray();
+        var filterable = operators.Count > 0;
 
         child["filterable"] = filterable;
         child["sortable"] = origin.Resolve(path, PathUsage.Sort) is { Succeeded: true, Path.Sortable: true };
@@ -825,11 +831,7 @@ public sealed class Describe
         child["unwindable"] = false;
         child["groupable"] = false;
         child["underCollection"] = ownUnder;
-
-        if (!filterable)
-            child["operators"] = new JsonArray();
-        else if (child["operators"] is JsonArray operators)
-            child["operators"] = new JsonArray(operators.Where(op => op?.GetValue<string>() is not ("any" or "is")).Select(op => op!.DeepClone()).ToArray());
+        child["operators"] = operators;
 
         if (!filterable)
             child["caseFolding"] = NoFolding;
@@ -867,8 +869,12 @@ public sealed class Describe
         var kind = facts?.Kind ?? Kind.Unknown;
         var leafKind = facts?.Shape?.LeafKind ?? kind;
         var matched = match.Path;
-        var filterable = matched is { Filterable: true };
-        var folds = filterable && !matched!.IsRemote && OperandCoercer.FoldsByDefault("eq", matched);
+        // One source for both (UX-S): a member is filterable exactly when a condition on it admits an
+        // operator, as the binder admits them; `is` on a variant holder and `exists` on a stored member
+        // make a member filterable that compares no value.
+        var operators = Operators(match);
+        var filterable = operators.Count > 0;
+        var folds = matched is { Filterable: true } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched);
         var variantHolder = facts is null ? null : OperandCoercer.VariantHolder(facts);
         var node = facts?.Root;
         var isRootAlias = facts is not null && facts.Path is null && path.IndexOf('.', StringComparison.Ordinal) < 0 && shape.Roots.ContainsKey(path);
@@ -907,7 +913,7 @@ public sealed class Describe
             ["projectable"] = project.Succeeded,
             ["unwindable"] = Unwindable(unwind),
             ["groupable"] = group is { Succeeded: true, Path: { CollectionAncestors: 0 } key } && key.Kind != Kind.Array && Kinds.IsScalar(key.Kind),
-            ["operators"] = new JsonArray(Operators(match).Select(op => (JsonNode)op).ToArray()),
+            ["operators"] = new JsonArray(operators.Select(op => (JsonNode)op).ToArray()),
             ["caseFolding"] = folds ? Folds : NoFolding,
             ["enum"] = enumValues,
             ["variants"] = variantHolder is { Variants.Count: > 0 } ? new JsonArray(VariantNames(variantHolder).Select(variant => (JsonNode)variant).ToArray()) : null,
@@ -990,7 +996,8 @@ public sealed class Describe
     /// <summary>The operators a condition on the path admits, as the binder admits them (DESIGN §4.5): the operator table's, <c>is</c> on a variant holder, <c>any</c> on a collection of objects.</summary>
     private static IReadOnlyList<string> Operators(PathResolution match)
     {
-        if (match.Path is not { } path)
+        // A path the binder refuses in a condition admits no operator at all.
+        if (!match.Succeeded || match.Path is not { } path)
             return [];
 
         var admitted = new HashSet<string>(StringComparer.Ordinal);

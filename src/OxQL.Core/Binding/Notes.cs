@@ -401,7 +401,8 @@ public static class Notes
                 _ => strict ? ResolveOnMissing.Refuse : ResolveOnMissing.Null,
             };
 
-            Policy(resolve.As, path, stage, effective, strict, inline: false, nonKey: true);
+            // The binder checked the alias before it continued the stage.
+            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true);
         }
 
         private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey)

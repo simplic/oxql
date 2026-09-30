@@ -91,17 +91,28 @@ public sealed class RemoteExplain : IDescribeOwners
     /// The calls of one explain of <paramref name="request"/> under <paramref name="context"/>;
     /// <paramref name="self"/> explains an owner query at this host itself, as its SelfOwner runs
     /// one: the check of the stages continued under a local keyed stage (null: they are noted unchecked).
+    /// <paramref name="budget"/> is the time the owners may take together, <c>Explain.RemoteTimeoutMs</c>
+    /// when null; an explain nested in another passes what is left of the outer one (<see cref="Remaining"/>).
     /// </summary>
     public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request,
-        Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self)
+        Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self, TimeSpan? budget = null)
     {
         this.client = client;
         this.self = self;
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         skip = request?.Remote == ExplainRequest.RemoteSkip;
-        budget = TimeSpan.FromMilliseconds(Math.Max(1, context.Options.Explain.RemoteTimeoutMs));
+        this.budget = budget is { } given
+            ? TimeSpan.FromMilliseconds(Math.Max(1, given.TotalMilliseconds))
+            : TimeSpan.FromMilliseconds(Math.Max(1, context.Options.Explain.RemoteTimeoutMs));
     }
+
+    /// <summary>
+    /// What is left of the owners' budget: an explain this one runs at this host (the check of a local
+    /// keyed stage's continued stages) gets it for its own owners, so they cannot stretch the explain
+    /// past its budget, while this host's own binding is still checked (RL-8).
+    /// </summary>
+    public TimeSpan Remaining => spent ? TimeSpan.Zero : budget - clock.Elapsed is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     /// <summary>The <c>reason</c> of a part no owner was asked for because the request said <c>remote: "skip"</c>.</summary>
     public const string Skipped = "skipped";

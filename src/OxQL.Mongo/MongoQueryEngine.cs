@@ -347,7 +347,11 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         TimeSpan.FromMilliseconds(compiled.MaxTimeMs) - timer.Elapsed;
 
     /// <inheritdoc/>
-    public async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default)
+    public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default) =>
+        ExplainAsync(request, context, null, cancellationToken);
+
+    /// <summary>The explain of <paramref name="request"/>, its owners within <paramref name="remoteBudget"/> (<c>Explain.RemoteTimeoutMs</c> when null).</summary>
+    private async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, TimeSpan? remoteBudget, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         context = Reaching(context);
@@ -362,7 +366,8 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         // Describe answers from the shapes of the part that binds, valid or not (DESIGN §4.2, §4.5);
         // the owners' answers and the remote check share one budget (DESIGN §4.3).
-        var owners = new RemoteExplain(remote, explainCache, context, request, (owned, token) => ExplainOwnedAsync(owned, context, token));
+        RemoteExplain? owners = null;
+        owners = new RemoteExplain(remote, explainCache, context, request, (owned, token) => ExplainOwnedAsync(owned, context, owners!.Remaining, token), remoteBudget);
         var describeNotes = new List<Diagnostic>();
         var describe = await Describe.AnswerAsync(request, binding.Trace, models.Model, context, owners, describeNotes, cancellationToken).ConfigureAwait(false);
 
@@ -380,7 +385,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
         // as a run does, within the explain budget (RL-3).
-        await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, TimeSpan.FromMilliseconds(Math.Max(1, options.Explain.RemoteTimeoutMs)), cancellationToken).ConfigureAwait(false);
+        await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, remoteBudget ?? TimeSpan.FromMilliseconds(Math.Max(1, options.Explain.RemoteTimeoutMs)), cancellationToken).ConfigureAwait(false);
         var indexes = Notes.CallerIndexes(bound, request.Query);
         var notes = Notes.Of(bound, request.Query, indexes, strict, context.Contract, options);
 
@@ -461,9 +466,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// internal explain route's wire form, or null when explain refuses it outright. The owner query
     /// carries strictly fewer join stages than the query it came from, so this ends by construction.
     /// </summary>
-    private async Task<JsonObject?> ExplainOwnedAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken)
+    private async Task<JsonObject?> ExplainOwnedAsync(ExplainRequest request, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
-        var outcome = await ExplainAsync(request, context with { Internal = true, Contract = 2 }, cancellationToken).ConfigureAwait(false);
+        var outcome = await ExplainAsync(request, context with { Internal = true, Contract = 2 }, remaining, cancellationToken).ConfigureAwait(false);
 
         return outcome is ExplainOutcome.Success success ? JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire) as JsonObject : null;
     }

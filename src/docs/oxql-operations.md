@@ -341,8 +341,9 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   `MISSING_POLICY` (the effective `onMissing`, `strict`, and which outcomes lose data),
   `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`; an index list that cannot be read
   is an `INDEX_ADVICE` note saying so). Codes are stable; messages may change. A remote union
-  target's `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check);
-  a run reports the paths an owner dropped as diagnostics, from the cache as well.
+  target's `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check),
+  which then checks that target again without the paths it lacks, as a run asks again, so the
+  stages continued at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics, from the cache as well.
   `MISSING_POLICY` names only the outcomes the stage can have: an inline resolve has no
   `owner_unanswered` or `invalid_key`, and `ambiguous` only onto a target field that is not the key.
 - **`describe`**: one answer per describe entry, in order, echoing `id`, `at` or `entity`, `prefix`

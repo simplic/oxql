@@ -126,6 +126,14 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
 
     /// <summary>The continued stage an owner's stage index of the check query names; null for a stage of the query itself.</summary>
     public Func<int?, ContinuedStage?> OriginOf { get; init; } = _ => null;
+
+    /// <summary>
+    /// The check query asked again after an owner's answer to the query it was sent, as a run asks a
+    /// remote union target again (DESIGN §3.4.1 flat select): when the answer refuses only paths the
+    /// target lacks at the projection, the query without them, which binds its continued stages as
+    /// the run's does; null when a run would not ask again.
+    /// </summary>
+    public Func<JsonObject, QueryRequest, QueryRequest?> Again { get; init; } = (_, _) => null;
 }
 
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
@@ -895,7 +903,7 @@ public sealed class KeyedFetch
     private const string SelfService = "";
 
     /// <summary>How many times a union target's query is asked again without select paths its owner lacks.</summary>
-    private const int MaxDropRounds = 2;
+    internal const int MaxDropRounds = 2;
 
     /// <summary>A diagnostic an owner reported with its answer for a target that carried continued stages, and the answer's rows.</summary>
     private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, JsonArray Items);
@@ -1123,26 +1131,10 @@ public sealed class KeyedFetch
                 : !plan.Continued.IsEmpty)
             .Select(plan =>
             {
-                var query = plan.Query([CheckKey]);
                 var item = plan.Target.Declared.Item is not null;
+                var lacking = new HashSet<string>(StringComparer.Ordinal);
+                var query = CheckQuery(plan, item, lacking);
                 var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
-
-                // The paths the projection names under the aliases are asked too, so the owner says
-                // which of them this target lacks; a run sends only those under the select.
-                if (projectAt >= 0)
-                {
-                    var fields = new Dictionary<string, int>(query.Pipeline[projectAt].Project!.Fields, StringComparer.Ordinal);
-
-                    foreach (var path in projected)
-                        fields.TryAdd(item ? BoundKeyedBy.Element + "." + path : path, 1);
-
-                    foreach (var path in item ? parentProjected : [])
-                        fields.TryAdd(path, 1);
-
-                    var pipeline = query.Pipeline.ToList();
-                    pipeline[projectAt] = pipeline[projectAt] with { Project = pipeline[projectAt].Project! with { Fields = fields } };
-                    query = query with { Pipeline = pipeline };
-                }
 
                 return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.IsEmpty ? index ?? 0 : plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service))
                 {
@@ -1153,9 +1145,45 @@ public sealed class KeyedFetch
                     ProjectAt = projectAt,
                     Item = item,
                     OriginOf = plan.OriginOf,
+                    // What a run does with the refusal (DropUnknown) is done to the check: the paths the
+                    // target lacks leave the select, and the projected ones the check asks beside it.
+                    Again = (answer, sent) =>
+                    {
+                        if (!plan.DropUnknown(answer, sent, lacking))
+                            return null;
+
+                        return CheckQuery(plan, item, lacking);
+                    },
                 };
             })
             .ToList();
+
+        // The query a run sends with the check key, and the paths the projection names under the
+        // aliases asked too, so the owner says which of them this target lacks (a run sends only those
+        // under the select); none the owner already said the target lacks.
+        QueryRequest CheckQuery(TargetPlan plan, bool item, HashSet<string> lacking)
+        {
+            var query = plan.Query([CheckKey]);
+            var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
+
+            if (projectAt < 0)
+                return query;
+
+            var fields = new Dictionary<string, int>(query.Pipeline[projectAt].Project!.Fields, StringComparer.Ordinal);
+
+            foreach (var field in projected.Select(path => item ? BoundKeyedBy.Element + "." + path : path))
+                if (!lacking.Contains(field))
+                    fields.TryAdd(field, 1);
+
+            foreach (var path in item ? parentProjected : [])
+                if (!lacking.Contains(path))
+                    fields.TryAdd(path, 1);
+
+            var pipeline = query.Pipeline.ToList();
+            pipeline[projectAt] = pipeline[projectAt] with { Project = pipeline[projectAt].Project! with { Fields = fields } };
+
+            return query with { Pipeline = pipeline };
+        }
 
         static bool Writes(BoundResolveTarget target) =>
             target.RemoteSelect is { Count: > 0 } || target.RemoteParentSelect is { Count: > 0 };
@@ -1422,7 +1450,15 @@ public sealed class KeyedFetch
         /// query asked again does not: newly learned, or learned from another chunk of the same round
         /// that was sent before the drop (RE-5).
         /// </summary>
-        public bool DropUnknown(JsonNode? result, QueryRequest sent)
+        public bool DropUnknown(JsonNode? result, QueryRequest sent) => DropUnknown(result, sent, null);
+
+        /// <summary>
+        /// <see cref="DropUnknown(JsonNode?, QueryRequest)"/> for a check query, which projects paths
+        /// beside the select (<paramref name="asked"/> is not null): a refused path the check asked
+        /// beside the select is dropped as well, and every refused projection field lands in
+        /// <paramref name="asked"/> so the check does not ask it again.
+        /// </summary>
+        public bool DropUnknown(JsonNode? result, QueryRequest sent, ISet<string>? asked)
         {
             if (!Target.IsRemote || !Union || result?["errors"] is not JsonArray { Count: > 0 } errors)
                 return false;
@@ -1455,15 +1491,16 @@ public sealed class KeyedFetch
             var sentSelect = Narrow(Target.RemoteSelect, projected) ?? [];
             var sentParent = Narrow(Target.RemoteParentSelect, parentProjected) ?? [];
 
-            if (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal)))
+            if (asked is null && (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal))))
                 return false;
 
             // The query asked again leaves every refused path out, so asking again cannot loop.
             if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
                 return false;
 
-            DroppedSelect.UnionWith(select);
-            DroppedParent.UnionWith(parent);
+            DroppedSelect.UnionWith(select.Where(path => sentSelect.Contains(path, StringComparer.Ordinal)));
+            DroppedParent.UnionWith(parent.Where(path => sentParent.Contains(path, StringComparer.Ordinal)));
+            asked?.UnionWith(select.Select(path => Target.Declared.Item is null ? path : element + path).Concat(parent));
 
             return true;
         }

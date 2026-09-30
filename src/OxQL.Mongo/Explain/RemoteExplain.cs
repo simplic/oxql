@@ -211,6 +211,29 @@ public sealed class RemoteExplain : IDescribeOwners
                 answered.Add(check);
 
                 OwnerFaults.Scrubbed(answer);
+
+                // A remote union target whose owner refused only paths the target lacks is asked again
+                // without them, as a run asks it (DESIGN §3.4.1 flat select): the owner then binds the
+                // stages continued at it, and checks theirs, exactly as the run's query has them bound.
+                // What it lacked stays a miss; an answer that does not come leaves the first.
+                var sent = check.Query;
+
+                for (var round = 0; !local && round < KeyedFetch.MaxDropRounds && check.Again(answer, sent) is { } again; round++)
+                {
+                    var (asked, _) = await CallAsync(check.Service, request with { Query = again }, cancellationToken).ConfigureAwait(false);
+
+                    if (asked is null)
+                        break;
+
+                    foreach (var error in answer["errors"]!.AsArray().OfType<JsonObject>())
+                        if (MissOf(check, error) is { } miss)
+                            misses.Add(miss);
+
+                    OwnerFaults.Scrubbed(asked);
+                    answer = asked;
+                    sent = again;
+                }
+
                 Remember(check, answer);
 
                 if (answer["errors"] is JsonArray owned)

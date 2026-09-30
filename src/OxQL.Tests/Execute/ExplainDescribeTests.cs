@@ -676,15 +676,49 @@ public class ExplainDescribeTests
         return outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
     }
 
-    [Fact]
-    public async Task An_owner_check_that_does_not_bind_at_the_origins_projection_still_creates_the_target_of_a_continued_resolve()
+    /// <summary>
+    /// The owner of the union's remote target (transport) as a real one answers the check: a projection
+    /// naming a path the shipment lacks (<c>name</c>) does not bind, so nothing is checked past it and its
+    /// continued alias reaches nothing; without it the continued resolve binds and reaches the carrier.
+    /// </summary>
+    private static FakeRemoteClient TransportOwnerLacking(string lacking) => new()
     {
-        var explain = await ExplainInternalAsync(DriverUnderProbe, internalCall: true);
+        Explains = (_, request) =>
+        {
+            var pipeline = request.Query.Pipeline.ToList();
+            var projectAt = pipeline.FindLastIndex(stage => stage.Project is not null);
+            var continuedAt = pipeline.FindIndex(stage => stage.Resolve?.As == "c");
+            var binds = !pipeline[projectAt].Project!.Fields.ContainsKey(lacking);
 
-        explain.Valid.Should().BeFalse();
-        explain.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Stage == 2);
-        explain.Steps[1].Creates.Single().Entities.Should().Equal(["crm.contact"],
-            "the joins before the probe bind, and this host checks them as a valid check query, so the origin hears what its alias continued under a continued alias reaches");
+            return new JsonObject
+            {
+                ["valid"] = binds,
+                ["errors"] = binds ? new JsonArray() : new JsonArray(new JsonObject { ["code"] = Codes.UnknownPath, ["message"] = $"'{lacking}' is not a path.", ["stage"] = projectAt, ["path"] = lacking }),
+                ["notes"] = new JsonArray(),
+                ["steps"] = new JsonArray(new JsonObject
+                {
+                    ["index"] = continuedAt,
+                    ["creates"] = new JsonArray(new JsonObject { ["alias"] = "c", ["node"] = "remote", ["entities"] = binds ? new JsonArray("transport.carrier") : new JsonArray() }),
+                }),
+            };
+        },
+    };
+
+    [Fact]
+    public async Task An_owner_check_refused_at_a_path_its_union_target_lacks_is_asked_again_without_it_as_the_run_is_and_creates_its_continued_target()
+    {
+        var client = TransportOwnerLacking("name");
+        var explain = await ExplainAsync("""
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } },
+             { "resolve": { "path": "owner.carrierId", "as": "c", "forTarget": "transport.shipment" } }]
+            """, "[]", client);
+
+        explain.Valid.Should().BeTrue(string.Join("; ", explain.Errors.Select(error => error.Message)));
+        explain.Steps[1].Creates.Single().Entities.Should().Equal(["transport.carrier"], "the check asked again binds the continued resolve at its owner, as the run's query asked again does");
+        explain.Notes!.Should().Contain(note => note.Code == Notes.SelectPathNotOnTarget && note.Path == "name", "what the target lacks is still said");
+
+        client.ExplainCalls.Should().HaveCount(2);
+        client.ExplainCalls[1].Request.Query.Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys.Should().NotContain("name").And.Contain("number");
     }
 
     [Fact]

@@ -1,0 +1,340 @@
+{
+  "request": {
+    "entityType": "transport.shipment",
+    "variables": {
+      "shipmentId": "5b2a7e10-0c1d-4a5e-8f7b-9a1c2d3e4f50"
+    },
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "shipmentId"
+            }
+          }
+        }
+      },
+      {
+        "lookup": {
+          "from": "transport.delivery_attempt",
+          "path": "shipmentId",
+          "as": "lastAttempt",
+          "first": true,
+          "sort": [
+            {
+              "dateTime": "desc"
+            }
+          ],
+          "select": [
+            "id",
+            "dateTime",
+            "status",
+            "text"
+          ]
+        }
+      },
+      {
+        "project": {
+          "shipmentNumber": 1,
+          "lastAttempt": 1
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "contract": 2,
+    "engine": {
+      "capabilities": [
+        "batch",
+        "group.page",
+        "page.offset",
+        "any",
+        "oxql.2.1",
+        "unwind.keepPath",
+        "resolve.remote",
+        "semiJoin",
+        "resolve.chain",
+        "lookup.remote",
+        "explain",
+        "compat.v1"
+      ]
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {
+        "code": "JOIN_AFTER_PAGE",
+        "message": "'lastAttempt' is joined after the page is taken, for the page's rows only.",
+        "stage": 1,
+        "path": "lastAttempt",
+        "params": {
+          "alias": "lastAttempt",
+          "kind": "lookup"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 1,
+        "kind": "lookup",
+        "status": "ok",
+        "executor": "inline",
+        "phase": "afterPage",
+        "owner": null,
+        "creates": [
+          {
+            "alias": "lastAttempt",
+            "node": "entity",
+            "entity": "transport.delivery_attempt"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 2,
+        "kind": "project",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": [
+            "id",
+            "lastAttempt",
+            "shipmentNumber"
+          ]
+        }
+      }
+    ],
+    "result": {
+      "paging": "cursor",
+      "columns": [
+        {
+          "path": "id",
+          "kind": "guid",
+          "nullable": false,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "shipmentNumber",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "lastAttempt.id",
+          "kind": "guid",
+          "nullable": true,
+          "stage": 1,
+          "root": "lastAttempt"
+        },
+        {
+          "path": "lastAttempt.dateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "stage": 1,
+          "root": "lastAttempt"
+        },
+        {
+          "path": "lastAttempt.status",
+          "kind": "object",
+          "nullable": true,
+          "stage": 1,
+          "root": "lastAttempt"
+        },
+        {
+          "path": "lastAttempt.text",
+          "kind": "string",
+          "nullable": true,
+          "stage": 1,
+          "root": "lastAttempt"
+        }
+      ]
+    },
+    "describe": [],
+    "bound": {
+      "entity": "transport.shipment",
+      "scope": {
+        "path": "OrganizationId",
+        "organisation": "77777777-7777-7777-7777-777777777777"
+      },
+      "stages": [
+        {
+          "match": {
+            "path": "_id",
+            "op": "eq",
+            "operand": {
+              "$binary": {
+                "base64": "Wyp+EAwdSl6Pe5ocLT5PUA==",
+                "subType": "04"
+              }
+            },
+            "caseSensitive": true,
+            "semiJoin": false,
+            "addonDecimal": false
+          }
+        },
+        {
+          "lookup": {
+            "from": "transport.delivery_attempt",
+            "localField": "_id",
+            "foreignField": "ShipmentId",
+            "as": "lastAttempt",
+            "select": [
+              "_id",
+              "DateTime",
+              "Status",
+              "Text"
+            ],
+            "filter": null,
+            "limit": 1,
+            "sort": [
+              {
+                "path": "DateTime",
+                "direction": "desc",
+                "caseSensitive": true
+              }
+            ],
+            "first": true
+          }
+        },
+        {
+          "project": {
+            "mode": "include",
+            "paths": [
+              "ShipmentNumber",
+              "lastAttempt"
+            ],
+            "id": true
+          }
+        },
+        {
+          "page": {
+            "limit": 100,
+            "offset": 0,
+            "includeTotalCount": false
+          }
+        }
+      ],
+      "paging": "keyset",
+      "page": {
+        "limit": 100,
+        "offset": 0,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    },
+    "stages": [
+      {
+        "$match": {
+          "OrganizationId": {
+            "$binary": {
+              "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$match": {
+          "_id": {
+            "$binary": {
+              "base64": "Wyp+EAwdSl6Pe5ocLT5PUA==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$project": {
+          "ShipmentNumber": 1,
+          "lastAttempt": 1,
+          "_id": 1
+        }
+      },
+      {
+        "$sort": {
+          "_id": 1
+        }
+      },
+      {
+        "$limit": 101
+      },
+      {
+        "$lookup": {
+          "from": "deliveryAttempt",
+          "localField": "_id",
+          "foreignField": "ShipmentId",
+          "pipeline": [
+            {
+              "$match": {
+                "OrganizationId": {
+                  "$binary": {
+                    "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
+                    "subType": "04"
+                  }
+                }
+              }
+            },
+            {
+              "$sort": {
+                "DateTime": -1,
+                "_id": 1
+              }
+            },
+            {
+              "$limit": 1
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "DateTime": 1,
+                "Status": 1,
+                "Text": 1
+              }
+            }
+          ],
+          "as": "lastAttempt"
+        }
+      },
+      {
+        "$set": {
+          "lastAttempt": {
+            "$arrayElemAt": [
+              "$lastAttempt",
+              0
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

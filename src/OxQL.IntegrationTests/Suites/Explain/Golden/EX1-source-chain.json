@@ -1,0 +1,2269 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "unwind": {
+          "path": "items",
+          "flatten": "items",
+          "as": "item",
+          "includeIndex": "position"
+        }
+      },
+      {
+        "match": {
+          "item": {
+            "is": "BillingLineTransactionItem"
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "item.billingLineId",
+          "as": "erpLine",
+          "onMissing": "report",
+          "select": [
+            "id",
+            "text",
+            "sourceBillingLineReference.type",
+            "sourceBillingLineReference.id"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "as": "sourceLine",
+          "onMissing": "report",
+          "select": [
+            "id",
+            "totalPrice"
+          ],
+          "parentAs": "sourceParent",
+          "parentSelect": [
+            "id",
+            "shipmentNumber",
+            "number"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "sourceParent.tours.tourId",
+          "as": "deliveringTour",
+          "forTarget": "transport.shipment",
+          "elements": "first",
+          "select": [
+            "id",
+            "number",
+            "resource.id"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "deliveringTour.resource.id",
+          "as": "shipmentVehicle",
+          "target": "fleet.vehicle",
+          "onMissing": "report",
+          "select": [
+            "matchCode",
+            "registrationPlate.registrationIdentifier"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "sourceParent.resource.id",
+          "as": "tourVehicle",
+          "forTarget": "transport.tour",
+          "target": "fleet.vehicle",
+          "onMissing": "report",
+          "select": [
+            "matchCode",
+            "registrationPlate.registrationIdentifier"
+          ]
+        }
+      },
+      {
+        "lookup": {
+          "from": "transport.delivery_attempt",
+          "path": "shipmentId",
+          "on": "sourceParent",
+          "forTarget": "transport.shipment",
+          "as": "lastAttempt",
+          "first": true,
+          "sort": [
+            {
+              "dateTime": "desc"
+            }
+          ],
+          "select": [
+            "dateTime",
+            "status"
+          ]
+        }
+      },
+      {
+        "project": {
+          "position": 1,
+          "item.text": 1,
+          "erpLine": 1,
+          "sourceLine": 1,
+          "sourceParent": 1,
+          "deliveringTour": 1,
+          "shipmentVehicle": 1,
+          "tourVehicle": 1,
+          "lastAttempt": 1
+        }
+      },
+      {
+        "sort": [
+          {
+            "position": "asc"
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "contract": 2,
+    "engine": {
+      "capabilities": [
+        "batch",
+        "group.page",
+        "page.offset",
+        "any",
+        "oxql.2.1",
+        "unwind.keepPath",
+        "resolve.remote",
+        "semiJoin",
+        "resolve.chain",
+        "lookup.remote",
+        "explain",
+        "compat.v1"
+      ]
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {
+        "code": "OFFSET_PAGING",
+        "message": "After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.",
+        "stage": 1,
+        "params": {
+          "maxOffset": 5000
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'erpLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); not_found lose data.",
+        "stage": 3,
+        "path": "item.billingLineId",
+        "params": {
+          "alias": "erpLine",
+          "onMissing": "report",
+          "strict": false,
+          "dataLoss": [
+            "not_found"
+          ]
+        }
+      },
+      {
+        "code": "JOIN_BEFORE_PAGE",
+        "message": "'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.",
+        "stage": 3,
+        "path": "erpLine",
+        "params": {
+          "alias": "erpLine",
+          "kind": "resolve"
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.",
+        "stage": 4,
+        "path": "erpLine.sourceBillingLineReference.id",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": null
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'sourceLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 4,
+        "path": "erpLine.sourceBillingLineReference.id",
+        "params": {
+          "alias": "sourceLine",
+          "onMissing": "report",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "JOIN_AFTER_PAGE",
+        "message": "'sourceLine' is joined after the page is taken, for the page's rows only.",
+        "stage": 4,
+        "path": "sourceLine",
+        "params": {
+          "alias": "sourceLine",
+          "kind": "resolve"
+        }
+      },
+      {
+        "code": "SELECT_PATH_NOT_ON_TARGET",
+        "message": "'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.",
+        "stage": 4,
+        "path": "number",
+        "params": {
+          "alias": "sourceLine",
+          "target": "transport.shipment#billingLines",
+          "parent": true
+        }
+      },
+      {
+        "code": "SELECT_PATH_NOT_ON_TARGET",
+        "message": "'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.",
+        "stage": 4,
+        "path": "shipmentNumber",
+        "params": {
+          "alias": "sourceLine",
+          "target": "transport.tour#billingLines",
+          "parent": true
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.",
+        "stage": 5,
+        "path": "sourceParent.tours.tourId",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": "transport.shipment"
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 5,
+        "path": "sourceParent.tours.tourId",
+        "params": {
+          "alias": "deliveringTour",
+          "onMissing": "null",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.",
+        "stage": 6,
+        "path": "deliveringTour.resource.id",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": "transport.shipment"
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'shipmentVehicle' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 6,
+        "path": "deliveringTour.resource.id",
+        "params": {
+          "alias": "shipmentVehicle",
+          "onMissing": "report",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.tour' only.",
+        "stage": 7,
+        "path": "sourceParent.resource.id",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": "transport.tour"
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'tourVehicle' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 7,
+        "path": "sourceParent.resource.id",
+        "params": {
+          "alias": "tourVehicle",
+          "onMissing": "report",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "This lookup continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.",
+        "stage": 8,
+        "path": "sourceParent",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": "transport.shipment"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 1,
+        "kind": "unwind",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [
+          {
+            "alias": "item",
+            "node": "element",
+            "entity": "ledger.transaction",
+            "source": "items"
+          },
+          {
+            "alias": "position",
+            "node": "scalar",
+            "kind": "int"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 2,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 3,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "inline",
+        "phase": "beforePage",
+        "owner": null,
+        "reference": {
+          "cases": [
+            {
+              "when": null,
+              "keyAs": null,
+              "targets": [
+                {
+                  "entity": "ledger.billing_line",
+                  "item": null,
+                  "field": "id",
+                  "remote": false
+                }
+              ]
+            }
+          ],
+          "keyAs": null,
+          "elements": null
+        },
+        "creates": [
+          {
+            "alias": "erpLine",
+            "node": "entity",
+            "entity": "ledger.billing_line"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 4,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "keyed-remote",
+        "phase": "afterPage",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number",
+                    "resource.id"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "resolve": {
+                  "path": "deliveringTour.resource.id",
+                  "as": "shipmentVehicle",
+                  "select": [
+                    "matchCode",
+                    "registrationPlate.registrationIdentifier"
+                  ],
+                  "target": "fleet.vehicle",
+                  "onMissing": "report"
+                }
+              },
+              {
+                "lookup": {
+                  "from": "transport.delivery_attempt",
+                  "path": "shipmentId",
+                  "as": "lastAttempt",
+                  "select": [
+                    "dateTime",
+                    "status"
+                  ],
+                  "sort": [
+                    {
+                      "dateTime": "desc"
+                    }
+                  ],
+                  "first": true
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "oxEl.totalPrice": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1,
+                  "shipmentVehicle": 1,
+                  "lastAttempt": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number",
+                        "resource.id"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "resolve": {
+                      "path": "deliveringTour.resource.id",
+                      "as": "shipmentVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "lookup": {
+                      "from": "transport.delivery_attempt",
+                      "path": "shipmentId",
+                      "as": "lastAttempt",
+                      "select": [
+                        "dateTime",
+                        "status"
+                      ],
+                      "sort": [
+                        {
+                          "dateTime": "desc"
+                        }
+                      ],
+                      "first": true
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1,
+                      "shipmentVehicle": 1,
+                      "lastAttempt": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5,
+                6,
+                8
+              ],
+              "notApplicable": [
+                7
+              ]
+            },
+            {
+              "target": "transport.tour#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.tour",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "resource.id",
+                      "as": "tourVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "tourVehicle": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                7
+              ],
+              "notApplicable": [
+                5,
+                6,
+                8
+              ]
+            }
+          ]
+        },
+        "reference": {
+          "cases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": [
+                  "logistics"
+                ]
+              },
+              "keyAs": null,
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ],
+          "keyAs": null,
+          "elements": null
+        },
+        "creates": [
+          {
+            "alias": "sourceLine",
+            "node": "remote",
+            "entities": [
+              "transport.shipment#billingLines",
+              "transport.tour#billingLines"
+            ]
+          },
+          {
+            "alias": "sourceParent",
+            "node": "remote",
+            "entities": [
+              "transport.shipment",
+              "transport.tour"
+            ]
+          }
+        ],
+        "continued": [
+          {
+            "index": 5,
+            "forTarget": "transport.shipment"
+          },
+          {
+            "index": 6,
+            "forTarget": "transport.shipment"
+          },
+          {
+            "index": 7,
+            "forTarget": "transport.tour"
+          },
+          {
+            "index": 8,
+            "forTarget": "transport.shipment"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 5,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "continued",
+        "phase": "owner",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number",
+                    "resource.id"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "resolve": {
+                  "path": "deliveringTour.resource.id",
+                  "as": "shipmentVehicle",
+                  "select": [
+                    "matchCode",
+                    "registrationPlate.registrationIdentifier"
+                  ],
+                  "target": "fleet.vehicle",
+                  "onMissing": "report"
+                }
+              },
+              {
+                "lookup": {
+                  "from": "transport.delivery_attempt",
+                  "path": "shipmentId",
+                  "as": "lastAttempt",
+                  "select": [
+                    "dateTime",
+                    "status"
+                  ],
+                  "sort": [
+                    {
+                      "dateTime": "desc"
+                    }
+                  ],
+                  "first": true
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "oxEl.totalPrice": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1,
+                  "shipmentVehicle": 1,
+                  "lastAttempt": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number",
+                        "resource.id"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "resolve": {
+                      "path": "deliveringTour.resource.id",
+                      "as": "shipmentVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "lookup": {
+                      "from": "transport.delivery_attempt",
+                      "path": "shipmentId",
+                      "as": "lastAttempt",
+                      "select": [
+                        "dateTime",
+                        "status"
+                      ],
+                      "sort": [
+                        {
+                          "dateTime": "desc"
+                        }
+                      ],
+                      "first": true
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1,
+                      "shipmentVehicle": 1,
+                      "lastAttempt": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5,
+                6,
+                8
+              ],
+              "notApplicable": [
+                7
+              ]
+            }
+          ]
+        },
+        "creates": [
+          {
+            "alias": "deliveringTour",
+            "node": "remote",
+            "entities": [
+              "transport.tour"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 6,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "continued",
+        "phase": "owner",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number",
+                    "resource.id"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "resolve": {
+                  "path": "deliveringTour.resource.id",
+                  "as": "shipmentVehicle",
+                  "select": [
+                    "matchCode",
+                    "registrationPlate.registrationIdentifier"
+                  ],
+                  "target": "fleet.vehicle",
+                  "onMissing": "report"
+                }
+              },
+              {
+                "lookup": {
+                  "from": "transport.delivery_attempt",
+                  "path": "shipmentId",
+                  "as": "lastAttempt",
+                  "select": [
+                    "dateTime",
+                    "status"
+                  ],
+                  "sort": [
+                    {
+                      "dateTime": "desc"
+                    }
+                  ],
+                  "first": true
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "oxEl.totalPrice": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1,
+                  "shipmentVehicle": 1,
+                  "lastAttempt": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number",
+                        "resource.id"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "resolve": {
+                      "path": "deliveringTour.resource.id",
+                      "as": "shipmentVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "lookup": {
+                      "from": "transport.delivery_attempt",
+                      "path": "shipmentId",
+                      "as": "lastAttempt",
+                      "select": [
+                        "dateTime",
+                        "status"
+                      ],
+                      "sort": [
+                        {
+                          "dateTime": "desc"
+                        }
+                      ],
+                      "first": true
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1,
+                      "shipmentVehicle": 1,
+                      "lastAttempt": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5,
+                6,
+                8
+              ],
+              "notApplicable": [
+                7
+              ]
+            }
+          ]
+        },
+        "creates": [
+          {
+            "alias": "shipmentVehicle",
+            "node": "remote",
+            "entities": [
+              "fleet.vehicle"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 7,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "continued",
+        "phase": "owner",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.tour",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "resource.id",
+                  "as": "tourVehicle",
+                  "select": [
+                    "matchCode",
+                    "registrationPlate.registrationIdentifier"
+                  ],
+                  "target": "fleet.vehicle",
+                  "onMissing": "report"
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "oxEl.totalPrice": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "tourVehicle": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.tour#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.tour",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "resource.id",
+                      "as": "tourVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "tourVehicle": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                7
+              ],
+              "notApplicable": [
+                5,
+                6,
+                8
+              ]
+            }
+          ]
+        },
+        "creates": [
+          {
+            "alias": "tourVehicle",
+            "node": "remote",
+            "entities": [
+              "fleet.vehicle"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 8,
+        "kind": "lookup",
+        "status": "ok",
+        "executor": "continued",
+        "phase": "owner",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number",
+                    "resource.id"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "resolve": {
+                  "path": "deliveringTour.resource.id",
+                  "as": "shipmentVehicle",
+                  "select": [
+                    "matchCode",
+                    "registrationPlate.registrationIdentifier"
+                  ],
+                  "target": "fleet.vehicle",
+                  "onMissing": "report"
+                }
+              },
+              {
+                "lookup": {
+                  "from": "transport.delivery_attempt",
+                  "path": "shipmentId",
+                  "as": "lastAttempt",
+                  "select": [
+                    "dateTime",
+                    "status"
+                  ],
+                  "sort": [
+                    {
+                      "dateTime": "desc"
+                    }
+                  ],
+                  "first": true
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "oxEl.totalPrice": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1,
+                  "shipmentVehicle": 1,
+                  "lastAttempt": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number",
+                        "resource.id"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "resolve": {
+                      "path": "deliveringTour.resource.id",
+                      "as": "shipmentVehicle",
+                      "select": [
+                        "matchCode",
+                        "registrationPlate.registrationIdentifier"
+                      ],
+                      "target": "fleet.vehicle",
+                      "onMissing": "report"
+                    }
+                  },
+                  {
+                    "lookup": {
+                      "from": "transport.delivery_attempt",
+                      "path": "shipmentId",
+                      "as": "lastAttempt",
+                      "select": [
+                        "dateTime",
+                        "status"
+                      ],
+                      "sort": [
+                        {
+                          "dateTime": "desc"
+                        }
+                      ],
+                      "first": true
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "oxEl.totalPrice": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1,
+                      "shipmentVehicle": 1,
+                      "lastAttempt": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5,
+                6,
+                8
+              ],
+              "notApplicable": [
+                7
+              ]
+            }
+          ]
+        },
+        "creates": [
+          {
+            "alias": "lastAttempt",
+            "node": "remote",
+            "entities": [
+              "transport.delivery_attempt"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 9,
+        "kind": "project",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": [
+            "deliveringTour",
+            "erpLine",
+            "id",
+            "item.text",
+            "lastAttempt",
+            "position",
+            "shipmentVehicle",
+            "sourceLine",
+            "sourceParent",
+            "tourVehicle"
+          ]
+        }
+      },
+      {
+        "index": 10,
+        "kind": "sort",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": [
+            "deliveringTour",
+            "erpLine",
+            "id",
+            "item.text",
+            "lastAttempt",
+            "position",
+            "shipmentVehicle",
+            "sourceLine",
+            "sourceParent",
+            "tourVehicle"
+          ]
+        }
+      }
+    ],
+    "result": {
+      "paging": "offset",
+      "columns": [
+        {
+          "path": "id",
+          "kind": "guid",
+          "nullable": false,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "item.text",
+          "kind": "string",
+          "nullable": true,
+          "stage": 1,
+          "root": "item"
+        },
+        {
+          "path": "position",
+          "kind": "int",
+          "nullable": false,
+          "stage": 1,
+          "root": ""
+        },
+        {
+          "path": "erpLine.id",
+          "kind": "guid",
+          "nullable": true,
+          "stage": 3,
+          "root": "erpLine"
+        },
+        {
+          "path": "erpLine.text",
+          "kind": "string",
+          "nullable": true,
+          "stage": 3,
+          "root": "erpLine"
+        },
+        {
+          "path": "erpLine.sourceBillingLineReference.type",
+          "kind": "string",
+          "nullable": true,
+          "stage": 3,
+          "root": "erpLine"
+        },
+        {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "kind": "guid",
+          "nullable": true,
+          "stage": 3,
+          "root": "erpLine"
+        },
+        {
+          "path": "sourceLine.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceLine"
+        },
+        {
+          "path": "sourceLine.totalPrice",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceLine"
+        },
+        {
+          "path": "sourceParent.entity",
+          "kind": "string",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.shipmentNumber",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.number",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "deliveringTour.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 5,
+          "root": "deliveringTour"
+        },
+        {
+          "path": "deliveringTour.number",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 5,
+          "root": "deliveringTour"
+        },
+        {
+          "path": "deliveringTour.resource.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 5,
+          "root": "deliveringTour"
+        },
+        {
+          "path": "shipmentVehicle.matchCode",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 6,
+          "root": "shipmentVehicle"
+        },
+        {
+          "path": "shipmentVehicle.registrationPlate.registrationIdentifier",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 6,
+          "root": "shipmentVehicle"
+        },
+        {
+          "path": "tourVehicle.matchCode",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 7,
+          "root": "tourVehicle"
+        },
+        {
+          "path": "tourVehicle.registrationPlate.registrationIdentifier",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 7,
+          "root": "tourVehicle"
+        },
+        {
+          "path": "lastAttempt",
+          "kind": "object",
+          "nullable": true,
+          "stage": 8,
+          "root": "lastAttempt"
+        }
+      ]
+    },
+    "describe": [],
+    "bound": {
+      "entity": "ledger.transaction",
+      "scope": {
+        "path": "OrganizationId",
+        "organisation": "77777777-7777-7777-7777-777777777777"
+      },
+      "stages": [
+        {
+          "match": {
+            "path": "_id",
+            "op": "eq",
+            "operand": {
+              "$binary": {
+                "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
+                "subType": "04"
+              }
+            },
+            "caseSensitive": true,
+            "semiJoin": false,
+            "addonDecimal": false
+          }
+        },
+        {
+          "unwind": {
+            "path": "Items",
+            "as": "item",
+            "preserveNull": false,
+            "includeIndex": "position",
+            "flatten": "Items",
+            "flattenDepth": 5
+          }
+        },
+        {
+          "match": {
+            "path": "item",
+            "op": "is",
+            "element": "_t",
+            "operand": {
+              "set": [
+                "BillingLineTransactionItem"
+              ]
+            }
+          }
+        },
+        {
+          "resolve": {
+            "path": "item.BillingLineId",
+            "as": "erpLine",
+            "target": "ledger.billing_line",
+            "targetField": "id",
+            "remote": false,
+            "select": [
+              "_id",
+              "Text",
+              "SourceBillingLineReference.Type",
+              "SourceBillingLineReference._id"
+            ],
+            "filter": null
+          }
+        },
+        {
+          "resolve": {
+            "path": "erpLine.SourceBillingLineReference._id",
+            "as": "sourceLine",
+            "target": "transport.shipment",
+            "targetField": "id",
+            "remote": true,
+            "select": [
+              "id",
+              "totalPrice"
+            ],
+            "filter": null,
+            "parentAs": "sourceParent",
+            "cases": [
+              {
+                "when": {
+                  "path": "erpLine.SourceBillingLineReference.Type",
+                  "variant": false,
+                  "values": [
+                    "logistics"
+                  ]
+                },
+                "keyAs": null,
+                "targets": [
+                  {
+                    "entity": "transport.shipment",
+                    "item": "billingLines",
+                    "field": "id",
+                    "remote": true,
+                    "select": [
+                      "id",
+                      "totalPrice"
+                    ],
+                    "filter": null,
+                    "parentSelect": [
+                      "id",
+                      "shipmentNumber",
+                      "number"
+                    ]
+                  },
+                  {
+                    "entity": "transport.tour",
+                    "item": "billingLines",
+                    "field": "id",
+                    "remote": true,
+                    "select": [
+                      "id",
+                      "totalPrice"
+                    ],
+                    "filter": null,
+                    "parentSelect": [
+                      "id",
+                      "shipmentNumber",
+                      "number"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "continued": {
+            "anchor": "sourceLine",
+            "kind": "resolve",
+            "forTarget": "transport.shipment",
+            "aliases": [
+              "deliveringTour"
+            ],
+            "stage": {
+              "resolve": {
+                "path": "sourceParent.tours.tourId",
+                "as": "deliveringTour",
+                "select": [
+                  "id",
+                  "number",
+                  "resource.id"
+                ],
+                "elements": "first",
+                "forTarget": "transport.shipment"
+              }
+            }
+          }
+        },
+        {
+          "continued": {
+            "anchor": "sourceLine",
+            "kind": "resolve",
+            "forTarget": "transport.shipment",
+            "aliases": [
+              "shipmentVehicle"
+            ],
+            "stage": {
+              "resolve": {
+                "path": "deliveringTour.resource.id",
+                "as": "shipmentVehicle",
+                "select": [
+                  "matchCode",
+                  "registrationPlate.registrationIdentifier"
+                ],
+                "target": "fleet.vehicle",
+                "onMissing": "report"
+              }
+            }
+          }
+        },
+        {
+          "continued": {
+            "anchor": "sourceLine",
+            "kind": "resolve",
+            "forTarget": "transport.tour",
+            "aliases": [
+              "tourVehicle"
+            ],
+            "stage": {
+              "resolve": {
+                "path": "sourceParent.resource.id",
+                "as": "tourVehicle",
+                "select": [
+                  "matchCode",
+                  "registrationPlate.registrationIdentifier"
+                ],
+                "target": "fleet.vehicle",
+                "onMissing": "report",
+                "forTarget": "transport.tour"
+              }
+            }
+          }
+        },
+        {
+          "continued": {
+            "anchor": "sourceLine",
+            "kind": "lookup",
+            "forTarget": "transport.shipment",
+            "aliases": [
+              "lastAttempt"
+            ],
+            "stage": {
+              "lookup": {
+                "from": "transport.delivery_attempt",
+                "path": "shipmentId",
+                "as": "lastAttempt",
+                "select": [
+                  "dateTime",
+                  "status"
+                ],
+                "sort": [
+                  {
+                    "dateTime": "desc"
+                  }
+                ],
+                "first": true,
+                "on": "sourceParent",
+                "forTarget": "transport.shipment"
+              }
+            }
+          }
+        },
+        {
+          "project": {
+            "mode": "include",
+            "paths": [
+              "position",
+              "item.Text",
+              "erpLine",
+              "sourceLine",
+              "sourceParent",
+              "deliveringTour",
+              "shipmentVehicle",
+              "tourVehicle",
+              "lastAttempt"
+            ],
+            "id": true
+          }
+        },
+        {
+          "sort": [
+            {
+              "path": "position",
+              "direction": "asc",
+              "caseSensitive": true
+            }
+          ]
+        },
+        {
+          "page": {
+            "limit": 100,
+            "offset": 0,
+            "includeTotalCount": false
+          }
+        }
+      ],
+      "paging": "offset",
+      "page": {
+        "limit": 100,
+        "offset": 0,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    },
+    "stages": [
+      {
+        "$match": {
+          "OrganizationId": {
+            "$binary": {
+              "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$match": {
+          "_id": {
+            "$binary": {
+              "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$set": {
+          "Items": {
+            "$reduce": {
+              "input": {
+                "$cond": [
+                  {
+                    "$isArray": "$Items"
+                  },
+                  "$Items",
+                  []
+                ]
+              },
+              "initialValue": [],
+              "in": {
+                "$let": {
+                  "vars": {
+                    "l1": "$$this"
+                  },
+                  "in": {
+                    "$concatArrays": [
+                      "$$value",
+                      [
+                        {
+                          "$unsetField": {
+                            "field": {
+                              "$literal": "Items"
+                            },
+                            "input": "$$l1"
+                          }
+                        }
+                      ],
+                      {
+                        "$reduce": {
+                          "input": {
+                            "$cond": [
+                              {
+                                "$isArray": "$$l1.Items"
+                              },
+                              "$$l1.Items",
+                              []
+                            ]
+                          },
+                          "initialValue": [],
+                          "in": {
+                            "$let": {
+                              "vars": {
+                                "l2": "$$this"
+                              },
+                              "in": {
+                                "$concatArrays": [
+                                  "$$value",
+                                  [
+                                    {
+                                      "$unsetField": {
+                                        "field": {
+                                          "$literal": "Items"
+                                        },
+                                        "input": "$$l2"
+                                      }
+                                    }
+                                  ],
+                                  {
+                                    "$reduce": {
+                                      "input": {
+                                        "$cond": [
+                                          {
+                                            "$isArray": "$$l2.Items"
+                                          },
+                                          "$$l2.Items",
+                                          []
+                                        ]
+                                      },
+                                      "initialValue": [],
+                                      "in": {
+                                        "$let": {
+                                          "vars": {
+                                            "l3": "$$this"
+                                          },
+                                          "in": {
+                                            "$concatArrays": [
+                                              "$$value",
+                                              [
+                                                {
+                                                  "$unsetField": {
+                                                    "field": {
+                                                      "$literal": "Items"
+                                                    },
+                                                    "input": "$$l3"
+                                                  }
+                                                }
+                                              ],
+                                              {
+                                                "$reduce": {
+                                                  "input": {
+                                                    "$cond": [
+                                                      {
+                                                        "$isArray": "$$l3.Items"
+                                                      },
+                                                      "$$l3.Items",
+                                                      []
+                                                    ]
+                                                  },
+                                                  "initialValue": [],
+                                                  "in": {
+                                                    "$let": {
+                                                      "vars": {
+                                                        "l4": "$$this"
+                                                      },
+                                                      "in": {
+                                                        "$concatArrays": [
+                                                          "$$value",
+                                                          [
+                                                            {
+                                                              "$unsetField": {
+                                                                "field": {
+                                                                  "$literal": "Items"
+                                                                },
+                                                                "input": "$$l4"
+                                                              }
+                                                            }
+                                                          ],
+                                                          {
+                                                            "$reduce": {
+                                                              "input": {
+                                                                "$cond": [
+                                                                  {
+                                                                    "$isArray": "$$l4.Items"
+                                                                  },
+                                                                  "$$l4.Items",
+                                                                  []
+                                                                ]
+                                                              },
+                                                              "initialValue": [],
+                                                              "in": {
+                                                                "$let": {
+                                                                  "vars": {
+                                                                    "l5": "$$this"
+                                                                  },
+                                                                  "in": {
+                                                                    "$concatArrays": [
+                                                                      "$$value",
+                                                                      [
+                                                                        "$$l5"
+                                                                      ]
+                                                                    ]
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        ]
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "$set": {
+          "__oxFlat0": {
+            "$anyElementTrue": [
+              {
+                "$map": {
+                  "input": "$Items",
+                  "as": "item",
+                  "in": {
+                    "$gt": [
+                      {
+                        "$size": {
+                          "$cond": [
+                            {
+                              "$isArray": "$$item.Items"
+                            },
+                            "$$item.Items",
+                            []
+                          ]
+                        }
+                      },
+                      0
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "Items": {
+            "$map": {
+              "input": "$Items",
+              "as": "item",
+              "in": {
+                "$unsetField": {
+                  "field": {
+                    "$literal": "Items"
+                  },
+                  "input": "$$item"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "$unwind": {
+          "path": "$Items",
+          "preserveNullAndEmptyArrays": false,
+          "includeArrayIndex": "position"
+        }
+      },
+      {
+        "$set": {
+          "item": "$Items"
+        }
+      },
+      {
+        "$match": {
+          "item._t": {
+            "$in": [
+              "BillingLineTransactionItem"
+            ]
+          }
+        }
+      },
+      {
+        "$lookup": {
+          "from": "billing_line",
+          "localField": "item.BillingLineId",
+          "foreignField": "_id",
+          "pipeline": [
+            {
+              "$match": {
+                "OrganizationId": {
+                  "$binary": {
+                    "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
+                    "subType": "04"
+                  }
+                }
+              }
+            },
+            {
+              "$limit": 1
+            },
+            {
+              "$project": {
+                "_id": 1,
+                "Text": 1,
+                "SourceBillingLineReference.Type": 1,
+                "SourceBillingLineReference._id": 1
+              }
+            }
+          ],
+          "as": "erpLine__arr"
+        }
+      },
+      {
+        "$set": {
+          "erpLine": {
+            "$arrayElemAt": [
+              "$erpLine__arr",
+              0
+            ]
+          }
+        }
+      },
+      {
+        "$unset": "erpLine__arr"
+      },
+      {
+        "$project": {
+          "position": 1,
+          "item.Text": 1,
+          "erpLine": 1,
+          "item.BillingLineId": 1,
+          "__oxFlat0": 1,
+          "item._t": 1
+        }
+      },
+      {
+        "$sort": {
+          "position": 1,
+          "_id": 1
+        }
+      },
+      {
+        "$limit": 101
+      }
+    ]
+  }
+}

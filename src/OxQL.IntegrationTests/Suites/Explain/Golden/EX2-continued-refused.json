@@ -1,0 +1,828 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "unwind": {
+          "path": "items",
+          "flatten": "items",
+          "as": "item",
+          "includeIndex": "position"
+        }
+      },
+      {
+        "match": {
+          "item": {
+            "is": "BillingLineTransactionItem"
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "item.billingLineId",
+          "as": "erpLine",
+          "select": [
+            "id",
+            "sourceBillingLineReference.type",
+            "sourceBillingLineReference.id"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "as": "sourceLine",
+          "parentAs": "sourceParent",
+          "select": [
+            "id"
+          ],
+          "parentSelect": [
+            "id",
+            "shipmentNumber",
+            "number"
+          ]
+        }
+      },
+      {
+        "resolve": {
+          "path": "sourceParent.tours.tourId",
+          "as": "deliveringTour",
+          "elements": "first",
+          "select": [
+            "id",
+            "number"
+          ]
+        }
+      },
+      {
+        "project": {
+          "position": 1,
+          "sourceLine": 1,
+          "sourceParent": 1,
+          "deliveringTour": 1
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": false,
+    "contract": 2,
+    "engine": {
+      "capabilities": [
+        "batch",
+        "group.page",
+        "page.offset",
+        "any",
+        "oxql.2.1",
+        "unwind.keepPath",
+        "resolve.remote",
+        "semiJoin",
+        "resolve.chain",
+        "lookup.remote",
+        "explain",
+        "compat.v1"
+      ]
+    },
+    "errors": [
+      {
+        "code": "UNKNOWN_PATH",
+        "message": "'tours.tourId' is not a path of transport.tour.",
+        "stage": 5,
+        "path": "sourceParent.tours.tourId",
+        "params": {
+          "owner": {
+            "service": "transport",
+            "entity": "transport.tour",
+            "target": "transport.tour#billingLines",
+            "stage": 0,
+            "path": "tours.tourId"
+          }
+        }
+      }
+    ],
+    "diagnostics": [],
+    "notes": [
+      {
+        "code": "OFFSET_PAGING",
+        "message": "After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.",
+        "stage": 1,
+        "params": {
+          "maxOffset": 5000
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data.",
+        "stage": 3,
+        "path": "item.billingLineId",
+        "params": {
+          "alias": "erpLine",
+          "onMissing": "null",
+          "strict": false,
+          "dataLoss": [
+            "not_found"
+          ]
+        }
+      },
+      {
+        "code": "JOIN_BEFORE_PAGE",
+        "message": "'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.",
+        "stage": 3,
+        "path": "erpLine",
+        "params": {
+          "alias": "erpLine",
+          "kind": "resolve"
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.",
+        "stage": 4,
+        "path": "erpLine.sourceBillingLineReference.id",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": null
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 4,
+        "path": "erpLine.sourceBillingLineReference.id",
+        "params": {
+          "alias": "sourceLine",
+          "onMissing": "null",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "JOIN_AFTER_PAGE",
+        "message": "'sourceLine' is joined after the page is taken, for the page's rows only.",
+        "stage": 4,
+        "path": "sourceLine",
+        "params": {
+          "alias": "sourceLine",
+          "kind": "resolve"
+        }
+      },
+      {
+        "code": "SELECT_PATH_NOT_ON_TARGET",
+        "message": "'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.",
+        "stage": 4,
+        "path": "number",
+        "params": {
+          "alias": "sourceLine",
+          "target": "transport.shipment#billingLines",
+          "parent": true
+        }
+      },
+      {
+        "code": "SELECT_PATH_NOT_ON_TARGET",
+        "message": "'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.",
+        "stage": 4,
+        "path": "shipmentNumber",
+        "params": {
+          "alias": "sourceLine",
+          "target": "transport.tour#billingLines",
+          "parent": true
+        }
+      },
+      {
+        "code": "OWNER_BINDS",
+        "message": "This resolve continues under 'sourceLine' at its owner, which binds and runs it.",
+        "stage": 5,
+        "path": "sourceParent.tours.tourId",
+        "params": {
+          "alias": "sourceLine",
+          "services": [
+            "transport"
+          ],
+          "forTarget": null
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 5,
+        "path": "sourceParent.tours.tourId",
+        "params": {
+          "alias": "deliveringTour",
+          "onMissing": "null",
+          "strict": false,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 1,
+        "kind": "unwind",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [
+          {
+            "alias": "item",
+            "node": "element",
+            "entity": "ledger.transaction",
+            "source": "items"
+          },
+          {
+            "alias": "position",
+            "node": "scalar",
+            "kind": "int"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 2,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 3,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "inline",
+        "phase": "beforePage",
+        "owner": null,
+        "reference": {
+          "cases": [
+            {
+              "when": null,
+              "keyAs": null,
+              "targets": [
+                {
+                  "entity": "ledger.billing_line",
+                  "item": null,
+                  "field": "id",
+                  "remote": false
+                }
+              ]
+            }
+          ],
+          "keyAs": null,
+          "elements": null
+        },
+        "creates": [
+          {
+            "alias": "erpLine",
+            "node": "entity",
+            "entity": "ledger.billing_line"
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 4,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "keyed-remote",
+        "phase": "afterPage",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5
+              ],
+              "notApplicable": []
+            },
+            {
+              "target": "transport.tour#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.tour",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5
+              ],
+              "notApplicable": []
+            }
+          ]
+        },
+        "reference": {
+          "cases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": [
+                  "logistics"
+                ]
+              },
+              "keyAs": null,
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ],
+          "keyAs": null,
+          "elements": null
+        },
+        "creates": [
+          {
+            "alias": "sourceLine",
+            "node": "remote",
+            "entities": [
+              "transport.shipment#billingLines",
+              "transport.tour#billingLines"
+            ]
+          },
+          {
+            "alias": "sourceParent",
+            "node": "remote",
+            "entities": [
+              "transport.shipment",
+              "transport.tour"
+            ]
+          }
+        ],
+        "continued": [
+          {
+            "index": 5,
+            "forTarget": null
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 5,
+        "kind": "resolve",
+        "status": "error",
+        "executor": "continued",
+        "phase": "owner",
+        "owner": {
+          "service": "transport",
+          "route": {
+            "apiName": "transport-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "transport.shipment",
+            "pipeline": [
+              {
+                "resolve": {
+                  "path": "tours.tourId",
+                  "as": "deliveringTour",
+                  "select": [
+                    "id",
+                    "number"
+                  ],
+                  "elements": "first"
+                }
+              },
+              {
+                "project": {
+                  "oxEl.id": 1,
+                  "id": 1,
+                  "shipmentNumber": 1,
+                  "number": 1,
+                  "deliveringTour": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ],
+            "keyedBy": {
+              "path": "billingLines.id",
+              "keys": [
+                "…"
+              ],
+              "perKey": 2
+            }
+          },
+          "targets": [
+            {
+              "target": "transport.shipment#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.shipment",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5
+              ],
+              "notApplicable": []
+            },
+            {
+              "target": "transport.tour#billingLines",
+              "service": "transport",
+              "remote": true,
+              "grouped": true,
+              "route": {
+                "apiName": "transport-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "transport.tour",
+                "pipeline": [
+                  {
+                    "resolve": {
+                      "path": "tours.tourId",
+                      "as": "deliveringTour",
+                      "select": [
+                        "id",
+                        "number"
+                      ],
+                      "elements": "first"
+                    }
+                  },
+                  {
+                    "project": {
+                      "oxEl.id": 1,
+                      "id": 1,
+                      "shipmentNumber": 1,
+                      "number": 1,
+                      "deliveringTour": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ],
+                "keyedBy": {
+                  "path": "billingLines.id",
+                  "keys": [
+                    "…"
+                  ],
+                  "perKey": 2
+                }
+              },
+              "continued": [
+                5
+              ],
+              "notApplicable": []
+            }
+          ]
+        },
+        "creates": [
+          {
+            "alias": "deliveringTour",
+            "node": "remote",
+            "entities": [
+              "transport.tour"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": null
+        }
+      },
+      {
+        "index": 6,
+        "kind": "project",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": [
+            "items"
+          ],
+          "projection": [
+            "deliveringTour",
+            "id",
+            "position",
+            "sourceLine",
+            "sourceParent"
+          ]
+        }
+      }
+    ],
+    "result": {
+      "paging": "offset",
+      "columns": [
+        {
+          "path": "id",
+          "kind": "guid",
+          "nullable": false,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "position",
+          "kind": "int",
+          "nullable": false,
+          "stage": 1,
+          "root": ""
+        },
+        {
+          "path": "sourceLine.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceLine"
+        },
+        {
+          "path": "sourceParent.entity",
+          "kind": "string",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.shipmentNumber",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "sourceParent.number",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 4,
+          "root": "sourceParent"
+        },
+        {
+          "path": "deliveringTour.id",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 5,
+          "root": "deliveringTour"
+        },
+        {
+          "path": "deliveringTour.number",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 5,
+          "root": "deliveringTour"
+        }
+      ]
+    },
+    "describe": []
+  }
+}

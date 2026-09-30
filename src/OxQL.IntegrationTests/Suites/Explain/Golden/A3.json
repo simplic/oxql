@@ -1,0 +1,460 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "strict": true,
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "invoiceRecipient.address.id",
+          "as": "recipientContact",
+          "select": [
+            "primaryEmailAddress.email",
+            "primaryPhoneNumber.number",
+            "address.companyName"
+          ]
+        }
+      },
+      {
+        "project": {
+          "number": 1,
+          "invoiceRecipient": 1,
+          "recipientContact": 1
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "contract": 2,
+    "engine": {
+      "capabilities": [
+        "batch",
+        "group.page",
+        "page.offset",
+        "any",
+        "oxql.2.1",
+        "unwind.keepPath",
+        "resolve.remote",
+        "semiJoin",
+        "resolve.chain",
+        "lookup.remote",
+        "explain",
+        "compat.v1"
+      ]
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {
+        "code": "OWNER_BINDS",
+        "message": "'recipientContact' comes from another service; its owner binds the select, the filter and every path under the alias.",
+        "stage": 1,
+        "path": "invoiceRecipient.address.id",
+        "params": {
+          "alias": "recipientContact",
+          "services": [
+            "directory"
+          ],
+          "forTarget": null
+        }
+      },
+      {
+        "code": "MISSING_POLICY",
+        "message": "A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
+        "stage": 1,
+        "path": "invoiceRecipient.address.id",
+        "params": {
+          "alias": "recipientContact",
+          "onMissing": "refuse",
+          "strict": true,
+          "dataLoss": [
+            "ambiguous",
+            "not_found",
+            "invalid_key",
+            "owner_unanswered"
+          ]
+        }
+      },
+      {
+        "code": "JOIN_AFTER_PAGE",
+        "message": "'recipientContact' is joined after the page is taken, for the page's rows only.",
+        "stage": 1,
+        "path": "recipientContact",
+        "params": {
+          "alias": "recipientContact",
+          "kind": "resolve"
+        }
+      },
+      {
+        "code": "REPORT_PAGE",
+        "message": "A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.",
+        "params": {
+          "limit": 100,
+          "max": 5000
+        }
+      }
+    ],
+    "steps": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 1,
+        "kind": "resolve",
+        "status": "ok",
+        "executor": "keyed-remote",
+        "phase": "afterPage",
+        "owner": {
+          "service": "directory",
+          "route": {
+            "apiName": "directory-api",
+            "apiVersion": null
+          },
+          "query": {
+            "entityType": "directory.contact",
+            "pipeline": [
+              {
+                "match": {
+                  "id": {
+                    "in": [
+                      "…"
+                    ]
+                  }
+                }
+              },
+              {
+                "project": {
+                  "primaryEmailAddress.email": 1,
+                  "primaryPhoneNumber.number": 1,
+                  "address.companyName": 1,
+                  "id": 1
+                }
+              },
+              {
+                "page": {
+                  "limit": "…"
+                }
+              }
+            ]
+          },
+          "targets": [
+            {
+              "target": "directory.contact",
+              "service": "directory",
+              "remote": true,
+              "grouped": false,
+              "route": {
+                "apiName": "directory-api",
+                "apiVersion": null
+              },
+              "query": {
+                "entityType": "directory.contact",
+                "pipeline": [
+                  {
+                    "match": {
+                      "id": {
+                        "in": [
+                          "…"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "project": {
+                      "primaryEmailAddress.email": 1,
+                      "primaryPhoneNumber.number": 1,
+                      "address.companyName": 1,
+                      "id": 1
+                    }
+                  },
+                  {
+                    "page": {
+                      "limit": "…"
+                    }
+                  }
+                ]
+              },
+              "continued": [],
+              "notApplicable": []
+            }
+          ]
+        },
+        "reference": {
+          "cases": [
+            {
+              "when": null,
+              "keyAs": null,
+              "targets": [
+                {
+                  "entity": "directory.contact",
+                  "item": null,
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ],
+          "keyAs": null,
+          "elements": null
+        },
+        "creates": [
+          {
+            "alias": "recipientContact",
+            "node": "remote",
+            "entities": [
+              "directory.contact"
+            ]
+          }
+        ],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null
+        }
+      },
+      {
+        "index": 2,
+        "kind": "project",
+        "status": "ok",
+        "executor": null,
+        "phase": null,
+        "owner": null,
+        "creates": [],
+        "shapeAfter": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": [
+            "id",
+            "invoiceRecipient",
+            "number",
+            "recipientContact"
+          ]
+        }
+      }
+    ],
+    "result": {
+      "paging": "cursor",
+      "columns": [
+        {
+          "path": "id",
+          "kind": "guid",
+          "nullable": false,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "number",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": ""
+        },
+        {
+          "path": "invoiceRecipient.id",
+          "kind": "guid",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.accountNumber",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.companyName",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.firstName",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.lastName",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.taxGroupId",
+          "kind": "guid",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.vatId",
+          "kind": "string",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "invoiceRecipient.address",
+          "kind": "object",
+          "nullable": true,
+          "stage": null,
+          "root": "invoiceRecipient"
+        },
+        {
+          "path": "recipientContact.primaryEmailAddress.email",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 1,
+          "root": "recipientContact"
+        },
+        {
+          "path": "recipientContact.primaryPhoneNumber.number",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 1,
+          "root": "recipientContact"
+        },
+        {
+          "path": "recipientContact.address.companyName",
+          "kind": "unknown",
+          "nullable": true,
+          "stage": 1,
+          "root": "recipientContact"
+        }
+      ]
+    },
+    "describe": [],
+    "bound": {
+      "entity": "ledger.transaction",
+      "scope": {
+        "path": "OrganizationId",
+        "organisation": "77777777-7777-7777-7777-777777777777"
+      },
+      "stages": [
+        {
+          "match": {
+            "path": "_id",
+            "op": "eq",
+            "operand": {
+              "$binary": {
+                "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
+                "subType": "04"
+              }
+            },
+            "caseSensitive": true,
+            "semiJoin": false,
+            "addonDecimal": false
+          }
+        },
+        {
+          "resolve": {
+            "path": "InvoiceRecipient.Address._id",
+            "as": "recipientContact",
+            "target": "directory.contact",
+            "targetField": "id",
+            "remote": true,
+            "select": [
+              "primaryEmailAddress.email",
+              "primaryPhoneNumber.number",
+              "address.companyName"
+            ],
+            "filter": null
+          }
+        },
+        {
+          "project": {
+            "mode": "include",
+            "paths": [
+              "Number",
+              "InvoiceRecipient",
+              "recipientContact"
+            ],
+            "id": true
+          }
+        },
+        {
+          "page": {
+            "limit": 100,
+            "offset": 0,
+            "includeTotalCount": false
+          }
+        }
+      ],
+      "paging": "keyset",
+      "page": {
+        "limit": 100,
+        "offset": 0,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    },
+    "stages": [
+      {
+        "$match": {
+          "OrganizationId": {
+            "$binary": {
+              "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$match": {
+          "_id": {
+            "$binary": {
+              "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
+              "subType": "04"
+            }
+          }
+        }
+      },
+      {
+        "$project": {
+          "Number": 1,
+          "InvoiceRecipient": 1
+        }
+      },
+      {
+        "$sort": {
+          "_id": 1
+        }
+      },
+      {
+        "$limit": 101
+      }
+    ]
+  }
+}

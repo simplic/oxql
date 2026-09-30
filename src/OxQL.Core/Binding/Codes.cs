@@ -112,6 +112,9 @@ public static class Codes
     public const string BatchTooLarge = "BATCH_TOO_LARGE";
     public const string RequestTooLarge = "REQUEST_TOO_LARGE";
 
+    /// <summary>An explain body past one of the explain bounds (stages, catalog entries, shape depth) or naming an include or remote value the engine does not know; refused before anything is bound (400).</summary>
+    public const string ExplainLimit = "EXPLAIN_LIMIT";
+
     // cursor
     public const string CursorInvalid = "CURSOR_INVALID";
 

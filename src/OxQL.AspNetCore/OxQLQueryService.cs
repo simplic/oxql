@@ -172,6 +172,10 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
+        // An explain past its bounds costs its parse and nothing else: no scope, model, binder or owner.
+        if (ExplainLimits.Check(request, options.Explain) is { } limited)
+            return new ExplainOutcome.Refused(limited);
+
         var context = await ContextAsync(null, internalCall, cancellationToken);
 
         if (context.Contract == 1)

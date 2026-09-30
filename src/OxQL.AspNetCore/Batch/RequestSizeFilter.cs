@@ -10,7 +10,17 @@ using OxQL.Core.Models;
 namespace OxQL.AspNetCore.Batch;
 
 /// <summary>
-/// Caps the request body at <c>Limits:MaxRequestBytes</c> before the model binder reads it. A
+/// Marks an action whose body is an explain request: <see cref="RequestSizeFilter"/> caps it at
+/// <c>Explain:MaxRequestBytes</c> as well, so an oversized explain is refused before it is read.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class ExplainBodyAttribute : Attribute
+{
+}
+
+/// <summary>
+/// Caps the request body at <c>Limits:MaxRequestBytes</c> (and an explain body at
+/// <c>Explain:MaxRequestBytes</c>, see <see cref="ExplainBodyAttribute"/>) before the model binder reads it. A
 /// body whose length is declared and too large is answered with the 413 refusal envelope
 /// (<c>REQUEST_TOO_LARGE</c>). An undeclared length (a chunked body) is capped in one of two
 /// ways: when a middleware ahead of MVC has buffered the body, the stream is seekable and its
@@ -27,7 +37,10 @@ public sealed class RequestSizeFilter(OxQLOptions options, ILogger<RequestSizeFi
     /// <inheritdoc/>
     public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
     {
-        var max = options.Limits.MaxRequestBytes;
+        // An explain route takes the tighter of the two caps (Explain:MaxRequestBytes).
+        var max = context.ActionDescriptor.EndpointMetadata.OfType<ExplainBodyAttribute>().Any()
+            ? Math.Min(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes)
+            : options.Limits.MaxRequestBytes;
         var request = context.HttpContext.Request;
 
         // A buffered body has been read already, so the server's cap can no longer be set; the

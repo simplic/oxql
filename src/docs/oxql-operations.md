@@ -101,6 +101,7 @@ the listed status.
 | `MAX_OFFSET_EXCEEDED` | 400 | `offset` above `MaxOffset` |
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
+| `EXPLAIN_LIMIT` | 400 | an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound |
 | `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
@@ -193,6 +194,8 @@ a caller checks a request against before sending it are also published in the sc
 | `Explain:Enabled` | `true` (was `false`) | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
 | `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (remote check and remote describes) | note `REMOTE_UNCHECKED` | no | — |
 | `Explain:MaxDescribeChildren` / `MaxDescribeRequests` | 500 / 10 | children per describe answer (then `truncated`) / describe entries per explain (then an error) | `REQUEST_TOO_LARGE` per entry | no | — |
+| `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
+| `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too; `catalog` and `shape` are only bounded so far |
 
 Fixed bounds, not configurable:
 
@@ -229,7 +232,8 @@ Anonymous, always 200, and never waits for another service:
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
     "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10,
-    "explainRemoteTimeoutMs": 1500, "maxDescribeChildren": 500, "maxDescribeRequests": 10
+    "explainRemoteTimeoutMs": 1500, "maxDescribeChildren": 500, "maxDescribeRequests": 10,
+    "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3
   },
   "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
 }

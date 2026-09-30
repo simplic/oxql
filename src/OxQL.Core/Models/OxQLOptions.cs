@@ -101,6 +101,10 @@ public sealed class OxQLOptions
         Explain.RemoteTimeoutMs = AtLeast(1, Explain.RemoteTimeoutMs, nameof(ExplainOptions.RemoteTimeoutMs), adjustments, "Explain");
         Explain.MaxDescribeChildren = AtLeast(1, Explain.MaxDescribeChildren, nameof(ExplainOptions.MaxDescribeChildren), adjustments, "Explain");
         Explain.MaxDescribeRequests = AtLeast(1, Explain.MaxDescribeRequests, nameof(ExplainOptions.MaxDescribeRequests), adjustments, "Explain");
+        Explain.MaxRequestBytes = AtLeast(1, Explain.MaxRequestBytes, nameof(ExplainOptions.MaxRequestBytes), adjustments, "Explain");
+        Explain.MaxStages = AtLeast(1, Explain.MaxStages, nameof(ExplainOptions.MaxStages), adjustments, "Explain");
+        Explain.MaxCatalogEntries = AtLeast(0, Explain.MaxCatalogEntries, nameof(ExplainOptions.MaxCatalogEntries), adjustments, "Explain");
+        Explain.MaxShapeDepth = AtLeast(1, Explain.MaxShapeDepth, nameof(ExplainOptions.MaxShapeDepth), adjustments, "Explain");
 
         if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
         {
@@ -190,6 +194,22 @@ public sealed class ExplainOptions
 
     /// <summary>The most describe requests one explain answers; the ones past it are answered with an error (DESIGN §4.2).</summary>
     public int MaxDescribeRequests { get; set; } = 10;
+
+    /// <summary>
+    /// The largest explain body, in bytes; a larger one is 413 <c>REQUEST_TOO_LARGE</c> before it is
+    /// read (<c>Limits:MaxRequestBytes</c> still applies when it is lower). Explain is rare and cheap
+    /// to refuse, so its bounds are tight: none of them is a way to load a service.
+    /// </summary>
+    public int MaxRequestBytes { get; set; } = 65_536;
+
+    /// <summary>The most pipeline stages an explained query may carry; more is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxStages { get; set; } = 30;
+
+    /// <summary>The most <c>catalog</c> entries one explain may ask for; more is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxCatalogEntries { get; set; } = 10;
+
+    /// <summary>The deepest <c>shape.depth</c> an explain may ask for; deeper is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxShapeDepth { get; set; } = 3;
 }
 
 /// <summary>Every cap a request is checked against. All are published on <c>/oxql/health</c>; the schema publishes the ones a caller can act on in advance.</summary>

@@ -45,6 +45,7 @@ public class RefusalsCatalogueTests
         ["SEMI_JOIN_TOO_LARGE"] = nameof(V56_a_semi_join_selecting_more_owner_rows_than_the_cap_is_refused_and_one_under_it_is_answered),
         ["QUERY_TOO_EXPENSIVE"] = nameof(V57_a_push_that_builds_a_value_above_the_document_limit_is_refused_as_too_expensive),
         ["INTERNAL_ERROR"] = nameof(V58_an_exception_escaping_a_seam_is_a_coded_500_that_names_the_correlation_id),
+        ["EXPLAIN_LIMIT"] = nameof(V61_an_explain_past_its_bounds_is_refused_EXPLAIN_LIMIT_and_one_within_them_answers),
         ["RESOLVE_NOT_FILTERABLE"] = nameof(RefusalsServerTests.V35_a_condition_on_the_remote_alias_itself_is_refused_with_RESOLVE_NOT_FILTERABLE_before_the_owner_is_called),
         ["UNKNOWN_VARIANT"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
         ["FLATTEN_NOT_RECURSIVE"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
@@ -95,9 +96,9 @@ public class RefusalsCatalogueTests
         // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
         // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
         // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
-        // MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE.
-        catalogue.Should().HaveCount(84);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(71);
+        // MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE, then EXPLAIN_LIMIT.
+        catalogue.Should().HaveCount(85);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(72);
         catalogue.Count(DiagnosticCodes.Contains).Should().Be(13);
     }
 
@@ -301,6 +302,23 @@ public class RefusalsCatalogueTests
             answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("b5-correlation", "the message points at the log line");
             answer.Text.Should().NotContain("down").And.NotContain("did not answer", "the fault's own text stays in the log");
         }
+    }
+
+    [Fact]
+    public async Task V61_an_explain_past_its_bounds_is_refused_EXPLAIN_LIMIT_and_one_within_them_answers()
+    {
+        var staff = await Lab.ClientAsync(LabService.Staff);
+        var query = $$"""{ "entityType": "{{Corpus.Employee}}", "pipeline": [{ "page": { "limit": 1 } }] }""";
+
+        var unknown = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "include": ["executionStats"] }""");
+        unknown.ShouldRefuse("EXPLAIN_LIMIT", 400);
+        unknown.ErrorCodes.Should().Equal(["EXPLAIN_LIMIT"]);
+
+        var deep = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "shape": { "depth": 4 } }""");
+        deep.ShouldRefuse("EXPLAIN_LIMIT", 400)["params"]!["max"]!.GetValue<int>().Should().Be(3);
+
+        var within = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "shape": { "depth": 3 } }""");
+        within.Body!["valid"]!.GetValue<bool>().Should().BeTrue(within.Text);
     }
 
     /// <summary>An entity with no organisation member, and one that joins it both ways.</summary>

@@ -354,6 +354,11 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, TimeSpan? remoteBudget, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // An explain past its bounds is refused before the model is read (ExplainLimits).
+        if (ExplainLimits.Check(request, context.Options.Explain) is { } limited)
+            return new ExplainOutcome.Refused(limited);
+
         context = Reaching(context);
 
         var binding = await new Binder(models.Model, cursors).BindAsync(request.Query, context, explain: true, cancellationToken);

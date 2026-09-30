@@ -238,6 +238,30 @@ public sealed record ExplainRequest
     /// <summary>The opt-in extra reads; only <see cref="IncludeIndexes"/> exists.</summary>
     public IReadOnlyList<string> Include { get; init; } = [];
 
+    /// <summary>The <c>include</c> values the engine knows.</summary>
+    public static readonly IReadOnlyList<string> KnownIncludes = [IncludeIndexes];
+
+    /// <summary>The <c>remote</c> values the engine knows.</summary>
+    public static readonly IReadOnlyList<string> KnownRemotes = [RemoteCheck, RemoteSkip];
+
+    /// <summary>
+    /// The <c>catalog</c> entries as the caller wrote them. Only bounded today
+    /// (<c>Explain.MaxCatalogEntries</c>); the explain answer does not read them yet.
+    /// </summary>
+    public IReadOnlyList<JsonObject> Catalog { get; init; } = [];
+
+    /// <summary>
+    /// The <c>shape.depth</c> the caller asked for, or null. Only bounded today
+    /// (<c>Explain.MaxShapeDepth</c>); the explain answer does not read it yet.
+    /// </summary>
+    public int? ShapeDepth { get; init; }
+
+    /// <summary>
+    /// The <c>include</c> and <c>remote</c> values the engine does not know, in the order written;
+    /// such a request is refused with <c>EXPLAIN_LIMIT</c> before anything is bound (<see cref="ExplainLimits"/>).
+    /// </summary>
+    public IReadOnlyList<ExplainUnknownValue> UnknownValues { get; init; } = [];
+
     /// <summary>Whether the body was the envelope rather than a plain query.</summary>
     public bool IsEnvelope { get; init; }
 
@@ -250,13 +274,14 @@ public sealed record ExplainRequest
 
 /// <summary>
 /// Reads the explain body. A malformed body (neither a query nor the envelope, an unknown envelope
-/// member, an <c>include</c> or <c>remote</c> value the engine does not know) is a
-/// <see cref="JsonException"/>, which the host answers 400 like any malformed body. Written back,
-/// a request is its envelope form.
+/// member, a member of the wrong kind) is a <see cref="JsonException"/>, which the host answers 400
+/// like any malformed body. An <c>include</c> or <c>remote</c> value the engine does not know is
+/// kept in <see cref="ExplainRequest.UnknownValues"/> and refused as <c>EXPLAIN_LIMIT</c>
+/// (<see cref="ExplainLimits"/>). Written back, a request is its envelope form.
 /// </summary>
 public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
 {
-    private static readonly string[] EnvelopeMembers = ["query", "describe", "remote", "include"];
+    private static readonly string[] EnvelopeMembers = ["query", "describe", "remote", "include", "catalog", "shape"];
 
     /// <inheritdoc/>
     public override ExplainRequest Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -272,17 +297,22 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
 
         foreach (var member in body.EnumerateObject())
             if (!EnvelopeMembers.Contains(member.Name, StringComparer.Ordinal))
-                throw new JsonException($"'{member.Name}' is not a member of an explain envelope; it carries query, describe, remote and include.");
+                throw new JsonException($"'{member.Name}' is not a member of an explain envelope; it carries query, describe, remote, include, catalog and shape.");
 
         if (!body.TryGetProperty("query", out var query) || query.ValueKind != JsonValueKind.Object)
             throw new JsonException("An explain envelope carries the query under 'query'.");
 
+        var unknown = new List<ExplainUnknownValue>();
+
         return new ExplainRequest
         {
             Query = QueryOf(query, options),
-            Describe = DescribeOf(body),
-            Remote = RemoteOf(body),
-            Include = IncludeOf(body),
+            Describe = ObjectsOf(body, "describe", "describe requests"),
+            Remote = RemoteOf(body, unknown),
+            Include = IncludeOf(body, unknown),
+            Catalog = ObjectsOf(body, "catalog", "catalog entries"),
+            ShapeDepth = ShapeDepthOf(body),
+            UnknownValues = unknown,
             IsEnvelope = true,
         };
     }
@@ -308,46 +338,65 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
             JsonSerializer.Serialize(writer, value.Include, options);
         }
 
+        if (value.Catalog.Count > 0)
+        {
+            writer.WritePropertyName("catalog");
+            JsonSerializer.Serialize(writer, value.Catalog, options);
+        }
+
+        if (value.ShapeDepth is { } depth)
+        {
+            writer.WriteStartObject("shape");
+            writer.WriteNumber("depth", depth);
+            writer.WriteEndObject();
+        }
+
         writer.WriteEndObject();
     }
 
     private static QueryRequest QueryOf(JsonElement element, JsonSerializerOptions options) =>
         element.Deserialize<QueryRequest>(options) ?? throw new JsonException("The explained query is null.");
 
-    private static List<JsonObject> DescribeOf(JsonElement body)
+    private static List<JsonObject> ObjectsOf(JsonElement body, string name, string what)
     {
-        var describe = new List<JsonObject>();
+        var objects = new List<JsonObject>();
 
-        if (!body.TryGetProperty("describe", out var requests) || requests.ValueKind == JsonValueKind.Null)
-            return describe;
+        if (!body.TryGetProperty(name, out var entries) || entries.ValueKind == JsonValueKind.Null)
+            return objects;
 
-        if (requests.ValueKind != JsonValueKind.Array)
-            throw new JsonException("'describe' is an array of describe requests.");
+        if (entries.ValueKind != JsonValueKind.Array)
+            throw new JsonException($"'{name}' is an array of {what}.");
 
-        foreach (var entry in requests.EnumerateArray())
+        foreach (var entry in entries.EnumerateArray())
         {
             if (entry.ValueKind != JsonValueKind.Object)
-                throw new JsonException("A describe request is an object.");
+                throw new JsonException($"An entry of '{name}' is an object.");
 
-            describe.Add(JsonNode.Parse(entry.GetRawText())!.AsObject());
+            objects.Add(JsonNode.Parse(entry.GetRawText())!.AsObject());
         }
 
-        return describe;
+        return objects;
     }
 
-    private static string RemoteOf(JsonElement body)
+    private static string RemoteOf(JsonElement body, List<ExplainUnknownValue> unknown)
     {
         if (!body.TryGetProperty("remote", out var remote) || remote.ValueKind == JsonValueKind.Null)
             return ExplainRequest.RemoteCheck;
 
-        var value = remote.ValueKind == JsonValueKind.String ? remote.GetString() : null;
+        if (remote.ValueKind != JsonValueKind.String)
+            throw new JsonException("'remote' is a string.");
 
-        return value is ExplainRequest.RemoteCheck or ExplainRequest.RemoteSkip
-            ? value
-            : throw new JsonException("'remote' is \"check\" or \"skip\".");
+        var value = remote.GetString()!;
+
+        if (ExplainRequest.KnownRemotes.Contains(value, StringComparer.Ordinal))
+            return value;
+
+        unknown.Add(new ExplainUnknownValue("remote", value));
+
+        return ExplainRequest.RemoteCheck;
     }
 
-    private static List<string> IncludeOf(JsonElement body)
+    private static List<string> IncludeOf(JsonElement body, List<ExplainUnknownValue> unknown)
     {
         var include = new List<string>();
 
@@ -355,18 +404,46 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
             return include;
 
         if (entries.ValueKind != JsonValueKind.Array)
-            throw new JsonException("'include' is an array; it may name \"indexes\".");
+            throw new JsonException("'include' is an array of strings.");
 
         foreach (var entry in entries.EnumerateArray())
         {
-            if (entry.ValueKind != JsonValueKind.String || entry.GetString() != ExplainRequest.IncludeIndexes)
-                throw new JsonException("'include' may name \"indexes\" only.");
+            if (entry.ValueKind != JsonValueKind.String)
+                throw new JsonException("An entry of 'include' is a string.");
 
-            if (!include.Contains(ExplainRequest.IncludeIndexes))
-                include.Add(ExplainRequest.IncludeIndexes);
+            var value = entry.GetString()!;
+
+            if (!ExplainRequest.KnownIncludes.Contains(value, StringComparer.Ordinal))
+                unknown.Add(new ExplainUnknownValue("include", value));
+            else if (!include.Contains(value, StringComparer.Ordinal))
+                include.Add(value);
         }
 
         return include;
+    }
+
+    private static int? ShapeDepthOf(JsonElement body)
+    {
+        if (!body.TryGetProperty("shape", out var shape) || shape.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (shape.ValueKind != JsonValueKind.Object)
+            throw new JsonException("'shape' is an object { depth }.");
+
+        int? depth = null;
+
+        foreach (var member in shape.EnumerateObject())
+        {
+            if (member.Name != "depth")
+                throw new JsonException($"'{member.Name}' is not a member of 'shape'; it carries depth.");
+
+            if (member.Value.ValueKind != JsonValueKind.Number || !member.Value.TryGetInt32(out var value) || value < 0)
+                throw new JsonException("'shape.depth' is a whole number of at least 0.");
+
+            depth = value;
+        }
+
+        return depth;
     }
 }
 

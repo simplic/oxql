@@ -147,6 +147,10 @@ public class OxQLController : ControllerBase
             explainRemoteTimeoutMs = options.Explain.RemoteTimeoutMs,
             maxDescribeChildren = options.Explain.MaxDescribeChildren,
             maxDescribeRequests = options.Explain.MaxDescribeRequests,
+            explainMaxRequestBytes = Math.Min(limits.MaxRequestBytes, options.Explain.MaxRequestBytes),
+            explainMaxStages = options.Explain.MaxStages,
+            explainMaxCatalogEntries = options.Explain.MaxCatalogEntries,
+            explainMaxShapeDepth = options.Explain.MaxShapeDepth,
         };
     }
 
@@ -168,9 +172,11 @@ public class OxQLController : ControllerBase
     /// with <c>valid: false</c> and every error; the bound form and the emitted stages come with a
     /// valid one. Explain never executes the query; the index advisory reads only the index lists,
     /// and only with <c>include: ["indexes"]</c>. On by default; 404 while <c>Explain:Enabled</c>
-    /// is off. A malformed body is 400, no organisation 403, a body over the limit 413.
+    /// is off. A malformed body is 400, no organisation 403, a body over <c>Explain:MaxRequestBytes</c>
+    /// 413, and a body past the other explain bounds 400 <c>EXPLAIN_LIMIT</c>, both before anything is bound.
     /// </summary>
     [HttpPost("explain")]
+    [ExplainBody]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]

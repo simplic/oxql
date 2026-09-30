@@ -23,7 +23,7 @@ namespace OxQL.IntegrationTests.Suites.Paging;
 [Trait("Category", "Integration")]
 public class PagingLimitsTests
 {
-    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; twenty-eight names since 2.1 (the three explain limits last).</summary>
+    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; thirty-two names (the explain limits last).</summary>
     private static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>
     {
         ["maxPageSize"] = 500,
@@ -54,6 +54,10 @@ public class PagingLimitsTests
         ["explainRemoteTimeoutMs"] = 1_500,
         ["maxDescribeChildren"] = 500,
         ["maxDescribeRequests"] = 10,
+        ["explainMaxRequestBytes"] = 65_536,
+        ["explainMaxStages"] = 30,
+        ["explainMaxCatalogEntries"] = 10,
+        ["explainMaxShapeDepth"] = 3,
     };
 
     private static int Limit(string name) => Defaults[name];
@@ -76,7 +80,7 @@ public class PagingLimitsTests
     // ── U25 — where the numbers come from ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task U25_every_host_publishes_all_twenty_eight_limits_on_health_at_their_defaults()
+    public async Task U25_every_host_publishes_all_thirty_two_limits_on_health_at_their_defaults()
     {
         // The legacy half that compared them with the generated TypeScript modules is the client's.
         foreach (var service in LabService.All)

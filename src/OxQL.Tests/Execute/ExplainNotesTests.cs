@@ -118,6 +118,40 @@ public class ExplainNotesTests
         owners[1].Params!["alias"].Should().Be("r");
     }
 
+    [Theory]
+    [InlineData(null, false, "null")]
+    [InlineData(null, true, "refuse")]
+    [InlineData("report", false, "report")]
+    [InlineData("null", true, "null")]
+    public async Task A_continued_resolve_says_its_missing_policy_as_its_owner_binds_it(string? onMissing, bool strict, string effective)
+    {
+        var notes = await NotesAsync($$"""
+            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+             { "resolve": { "path": "r.companyId", "as": "co"{{(onMissing is null ? "" : $", \"onMissing\": \"{onMissing}\"")}} } }]
+            """, strict: strict);
+
+        var policies = notes.Where(note => note.Code == Notes.MissingPolicy).ToDictionary(note => note.Stage!.Value);
+        policies.Keys.Should().Equal([0, 1], "the continued stage says its policy as the origin's resolve does");
+
+        var continued = policies[1];
+        continued.Path.Should().Be("r.companyId");
+        continued.Params!["alias"].Should().Be("co");
+        continued.Params["onMissing"].Should().Be(effective);
+        continued.Params["strict"].Should().Be(strict);
+        continued.Params["dataLoss"].Should().BeEquivalentTo(Notes.DataLossOutcomes, "the owner binds it; every outcome is possible");
+    }
+
+    [Fact]
+    public async Task A_continued_lookup_says_no_missing_policy()
+    {
+        var notes = await NotesAsync("""
+            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+             { "lookup": { "from": "crm.note", "path": "contactId", "on": "r", "as": "notes" } }]
+            """);
+
+        notes.Where(note => note.Code == Notes.MissingPolicy).Select(note => note.Stage).Should().Equal(0);
+    }
+
     [Fact]
     public async Task A_flat_select_path_a_local_target_lacks_is_said_per_target()
     {

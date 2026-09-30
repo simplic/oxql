@@ -182,6 +182,10 @@ public static class Notes
                     collector.Add(OwnerBinds, stage, continued.Root,
                         $"This {continued.Kind} continues under '{continued.Anchor}' at its owner, which binds and runs it{(continued.ForTarget is { } only ? $" for rows resolved to '{only}' only" : "")}.",
                         new() { ["alias"] = continued.Anchor, ["services"] = collector.ServicesOf(continued.Anchor), ["forTarget"] = continued.ForTarget });
+
+                    // A continued resolve loses data at its owner as any resolve does (R3 F8).
+                    if (continued.Stage.Resolve is { } written)
+                        collector.Continued(written, continued.Root, stage, strict);
                     break;
 
                 case BoundStage.Unwind unwind:
@@ -373,19 +377,42 @@ public static class Notes
                 Add(LookupLimit, stage, resolve.Reference.Wire, $"'{resolve.As}' collects at most {options.Limits.MaxLookupLimit} targets per row; a row with more keeps the first and is reported (RESOLVE_TRUNCATED).",
                     new() { ["alias"] = resolve.As, ["limit"] = options.Limits.MaxLookupLimit });
 
-            var onMissing = WireName(resolve.EffectiveOnMissing);
-
             // An inline resolve joins one local entity in the aggregate: no owner, no conversion, so
             // no owner_unanswered or invalid_key; a second record exists only for a target field that
             // is not the key, and is seen only when the outcomes are read (RE-25).
             var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
             var nonKey = (resolve.Cases ?? []).SelectMany(bound => bound.Targets).Any(target => target.Declared.Item is not null || !target.Declared.FieldIsKey);
-            var readsOutcomes = strict || resolve.EffectiveOnMissing != ResolveOnMissing.Null;
+
+            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey);
+        }
+
+        /// <summary>
+        /// The missing policy of a resolve continued at an owner: its <c>onMissing</c> as written,
+        /// else the default the owner binds it with (refuse under strict, which the owner query
+        /// carries; else null). The owner binds and runs it, so every data-loss outcome is possible.
+        /// </summary>
+        public void Continued(ResolveStage resolve, string path, int? stage, bool strict)
+        {
+            var effective = resolve.OnMissing switch
+            {
+                "report" => ResolveOnMissing.Report,
+                "refuse" => ResolveOnMissing.Refuse,
+                "null" => ResolveOnMissing.Null,
+                _ => strict ? ResolveOnMissing.Refuse : ResolveOnMissing.Null,
+            };
+
+            Policy(resolve.As, path, stage, effective, strict, inline: false, nonKey: true);
+        }
+
+        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey)
+        {
+            var onMissing = WireName(effective);
+            var readsOutcomes = strict || effective != ResolveOnMissing.Null;
             var ambiguity = inline ? nonKey && readsOutcomes : true;
             var dataLoss = inline
                 ? DataLossOutcomes.Where(outcome => outcome == "not_found" || (outcome == "ambiguous" && ambiguity)).ToList()
                 : DataLossOutcomes.ToList();
-            var what = resolve.EffectiveOnMissing switch
+            var what = effective switch
             {
                 ResolveOnMissing.Refuse => "refuses the request",
                 ResolveOnMissing.Report => "leaves the alias null and is reported (RESOLVE_MISSING)",
@@ -393,10 +420,10 @@ public static class Notes
                 _ => "leaves the alias null; only an owner that fails is reported",
             };
 
-            Add(MissingPolicy, stage, resolve.Reference.Wire,
-                $"A reference of '{resolve.As}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
+            Add(MissingPolicy, stage, path,
+                $"A reference of '{alias}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
                 + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : ""),
-                new() { ["alias"] = resolve.As, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss });
+                new() { ["alias"] = alias, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss });
         }
 
         public void Condition(BoundCondition condition, int? stage)

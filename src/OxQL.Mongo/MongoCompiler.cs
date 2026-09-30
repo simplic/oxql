@@ -1174,9 +1174,10 @@ public static class MongoCompiler
             new("$setWindowFields", new BsonDocument
             {
                 // Inside a collated aggregate a partition on a string key folds keys that differ only in
-                // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12).
+                // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12),
+                // and the key beside the hash keeps two keys apart whose hashes collide.
                 ["partitionBy"] = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString)
-                    ? new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage)
+                    ? new BsonDocument { ["h"] = new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage), ["k"] = "$" + keyedBy.PartitionStorage }
                     : "$" + keyedBy.PartitionStorage,
                 ["sortBy"] = sortBy,
 

@@ -65,7 +65,8 @@ public class KeyedByCompileTests
 
         stages[1]["$match"]["Code"]["$in"].AsBsonArray.Select(key => key.AsString).Should().Equal("A", "B");
         stages[2]["$match"].AsBsonDocument.Names.Should().Equal("$expr");
-        stages[4]["$setWindowFields"]["partitionBy"]["$toHashedIndexKey"].AsString.Should().Be("$Code", "under the collation each key is partitioned by its bytes");
+        stages[4]["$setWindowFields"]["partitionBy"]["h"]["$toHashedIndexKey"].AsString.Should().Be("$Code", "under the collation each key is partitioned by its bytes");
+        stages[4]["$setWindowFields"]["partitionBy"]["k"].AsString.Should().Be("$Code", "and by the key itself, so two keys whose hashes collide stay apart");
         stages[4]["$setWindowFields"]["sortBy"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("_id", 1), "the first row of a key is the one with the lowest record key");
         stages[5]["$match"]["__oxRank"]["$lte"].AsInt32.Should().Be(2);
         JsonNode.Parse(bound.Canonical)!["keyedBy"]!["path"]!.GetValue<string>().Should().Be("Code");

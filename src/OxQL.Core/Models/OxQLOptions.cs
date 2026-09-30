@@ -270,8 +270,12 @@ public sealed class LimitOptions
     /// <summary>The most rows one lookup returns per parent.</summary>
     public int MaxLookupLimit { get; set; } = 100;
 
-    /// <summary>The ceiling <see cref="MaxFlattenDepth"/> is clamped to.</summary>
-    public const int MaxFlattenDepthCeiling = 16;
+    /// <summary>
+    /// The ceiling <see cref="MaxFlattenDepth"/> is clamped to. Every level nests the flattening
+    /// expression deeper; at 16 the pipeline no longer serializes (the driver stops at 100 levels),
+    /// so the ceiling keeps a margin below the 15 that still does.
+    /// </summary>
+    public const int MaxFlattenDepthCeiling = 12;
 
     /// <summary>
     /// How many levels an <c>unwind</c> with <c>flatten</c> descends: the collection itself is

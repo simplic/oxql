@@ -150,7 +150,7 @@ Every limit is bound from the host's `OxQL` section and brought into range when 
 registered: a value below 1 is raised to 1 (`MaxOffset` and `Cache:NegativeResolveTtlSeconds` to 0;
 a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChunk` are clamped to
 `MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
-`MaxFlattenDepth` to 16, and each adjustment is logged as a warning when the engine is built. All
+`MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
 twenty-three `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
 `chainTimeoutMs`, `negativeResolveTtlSeconds` and the three explain bounds (28 entries). The fifteen
 a caller checks a request against before sending it are also published in the schema document's
@@ -178,7 +178,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxBatchQueries` | 10 | query service | `BATCH_TOO_LARGE` | yes | The keyed fetch splits an owner's batch at the owner's `maxBatchQueries` as its shallow health last reported it, and at this host's own value until that is known (before the first health measurement, or with a remote client that does not report owners). An owner configured lower that has not been measured refuses the whole batch with HTTP 400: resolved aliases are `null` with `RESOLVE_UNREACHABLE`, a semi-join is 422 `RESOLVE_UNAVAILABLE`. Keep the value equal across services |
 | `Limits:RegexMaxLength` | 200 | binder | `REGEX_TOO_LONG` | yes | a `regex` under a remote alias is checked by the owner |
 | `Limits:MaxLookupLimit` | 100 | binder: the largest lookup `limit` and the default when none is given; the most targets an `elements: "all"` alias holds | `LOOKUP_LIMIT_EXCEEDED`; diagnostics `LOOKUP_TRUNCATED`, `RESOLVE_TRUNCATED` | yes | — |
-| `Limits:MaxFlattenDepth` | 5, clamped to 1–16 | compiler: the levels an `unwind` with `flatten` descends | diagnostic `UNWIND_DEPTH_TRUNCATED` | yes | — |
+| `Limits:MaxFlattenDepth` | 5, clamped to 1–12 | compiler: the levels an `unwind` with `flatten` descends | diagnostic `UNWIND_DEPTH_TRUNCATED` | yes | — |
 | `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without `cursor` or `offset` (at least `MaxPageSize`) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate; a batch's `maxTimeMs` only lowers it | 504 `QUERY_TIMEOUT` | no | the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |

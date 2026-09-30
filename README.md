@@ -167,7 +167,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Limits:MaxPipelineStages` | 20 | caller stages; the engine's scope stage does not count |
 | `Limits:MaxLookupStages` / `MaxUnwindStages` / `MaxResolveStages` | 5 / 5 / 8 | resolve stages bound on this host (2 before 2.1); continued stages count at their owner |
 | `Limits:MaxContinuedStages` | 8 | stages continued under one keyed or remote alias; clamped to `MaxPipelineStages` |
-| `Limits:MaxFlattenDepth` | 5 | levels an `unwind` with `flatten` descends; clamped to 1–16 |
+| `Limits:MaxFlattenDepth` | 5 | levels an `unwind` with `flatten` descends; clamped to 1–12 |
 | `Limits:MaxReportPageSize` / `MaxReportedRows` | 5 000 / 50 | the page of a `strict` request without cursor or offset / rows one outcome diagnostic lists |
 | `Limits:MaxGroupFields` / `MaxProjectionFields` | 20 / 500 | |
 | `Limits:MaxConditions` / `MaxVariables` | 200 / 64 | leaf conditions, lookup and resolve filters included |

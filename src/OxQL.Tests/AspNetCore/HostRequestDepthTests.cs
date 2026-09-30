@@ -1,5 +1,6 @@
 using System.Net;
 using FluentAssertions;
+using OxQL.Core.Binding;
 using OxQL.Core.Models;
 using Xunit;
 
@@ -29,7 +30,7 @@ public class HostRequestDepthTests
     {
         using var host = new SampleHost();
 
-        var response = await host.Client().PostAsync("/OxQL/query", SampleHost.Json(Nested(40)));
+        var response = await host.Client().PostAsync("/OxQL/query", SampleHost.Json(Nested(Binder.MaxConditionDepth - 1)));
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
     }
@@ -42,5 +43,17 @@ public class HostRequestDepthTests
         var response = await host.Client().PostAsync("/OxQL/query", SampleHost.Json(Nested(OxQLJson.MaxDepth)));
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_condition_nested_past_the_binders_depth_is_a_400_with_the_conditions_code()
+    {
+        using var host = new SampleHost();
+
+        var response = await host.Client().PostAsync("/OxQL/query", SampleHost.Json(Nested(Binder.MaxConditionDepth)));
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        body.Should().Contain(Codes.MaxConditionsExceeded);
     }
 }

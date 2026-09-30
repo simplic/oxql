@@ -120,6 +120,25 @@ public class OwnerFetchCacheTests
         OwnerFetchCache.KeyOf(organisation, query with { EntityType = "crm.contact" }).Should().NotBe(OwnerFetchCache.KeyOf(organisation, query));
     }
 
+    [Fact]
+    public void Learned_union_drops_never_compete_with_the_answers_for_the_size_budget()
+    {
+        var options = BindHost.Options();
+        options.Cache.OwnerFetchCacheMaxEntries = 1;
+
+        using var cache = new OwnerFetchCache(options);
+        var drops = OwnerFetchCache.DropsKeyOf(BindHost.Organisation, "logistics", "plan");
+        var row = OwnerFetchCache.KeyOf("logistics.tour", null, "id", BindHost.Organisation, "k1", "plan");
+
+        cache.SetDrops(drops, ["number"], []);
+        cache.Set(row, new OwnerAnswer([new System.Text.Json.Nodes.JsonObject { ["id"] = "k1" }]));
+
+        cache.TryGet(row, strict: false, out var answer).Should().BeTrue("the drops take nothing from the answers' budget");
+        answer!.Rows.Should().ContainSingle();
+        cache.TryGetDrops(drops, out var select, out _).Should().BeTrue();
+        select.Should().Equal("number");
+    }
+
     private sealed class BinaryReference
     {
         public Guid Id { get; set; }

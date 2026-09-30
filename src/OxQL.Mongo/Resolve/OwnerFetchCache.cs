@@ -54,8 +54,9 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 /// of the resolves beside it. An empty by-condition answer lives as long as a negative by-keys one.
 /// </para>
 /// <para>
-/// Beside the answers, the select paths an owner said one target of a union lacks are kept per
-/// organisation, service and plan (<see cref="DropsKeyOf"/>), so a later request drops them before
+/// Beside the answers, in a store of their own that the answers' budget never evicts, the select
+/// paths an owner said one target of a union lacks are kept per organisation, service and plan
+/// (<see cref="DropsKeyOf"/>), so a later request drops them before
 /// it asks and reports them from the cache too: the answer does not depend on what is cached.
 /// </para>
 /// <para>
@@ -69,6 +70,7 @@ public sealed class OwnerFetchCache : IDisposable
 {
     private readonly MemoryCache rows;
     private readonly MemoryCache keys;
+    private readonly MemoryCache drops;
     private readonly TimeSpan ttl;
     private readonly TimeSpan negativeTtl;
     private readonly TimeProvider time;
@@ -82,6 +84,7 @@ public sealed class OwnerFetchCache : IDisposable
 
         rows = new MemoryCache(new MemoryCacheOptions { SizeLimit = limit });
         keys = new MemoryCache(new MemoryCacheOptions { SizeLimit = limit });
+        drops = new MemoryCache(new MemoryCacheOptions { SizeLimit = limit });
         ttl = TimeSpan.FromSeconds(Math.Max(1, options.Cache.ResolveTtlSeconds));
         negativeTtl = TimeSpan.FromSeconds(Math.Max(0, options.Cache.NegativeResolveTtlSeconds));
         this.time = time ?? TimeProvider.System;
@@ -185,7 +188,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// <summary>The select paths (<c>Select</c>) and owning-row paths (<c>Parent</c>) an owner said the target lacks, or false.</summary>
     public bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
     {
-        if (rows.TryGetValue(key, out Drops? cached) && cached is not null && time.GetUtcNow() < cached.Expires)
+        if (drops.TryGetValue(key, out Drops? cached) && cached is not null && time.GetUtcNow() < cached.Expires)
         {
             select = cached.Select;
             parent = cached.Parent;
@@ -197,18 +200,23 @@ public sealed class OwnerFetchCache : IDisposable
         return false;
     }
 
-    /// <summary>Keeps the paths an owner said the target lacks for the TTL.</summary>
+    /// <summary>
+    /// Keeps the paths an owner said the target lacks for the TTL, in a store of their own: the
+    /// answers' size budget must never evict them while rows cached under the same plan live on,
+    /// or a page served from the cache would lose its <c>SELECT_PATH_NOT_ON_TARGET</c> note.
+    /// </summary>
     public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent) =>
-        rows.Set(key, new Drops([.. select], [.. parent], time.GetUtcNow() + ttl), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
+        drops.Set(key, new Drops([.. select], [.. parent], time.GetUtcNow() + ttl), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
 
     /// <summary>How many entries the cache holds, both modes together.</summary>
-    public int Count => rows.Count + keys.Count;
+    public int Count => rows.Count + keys.Count + drops.Count;
 
     /// <inheritdoc/>
     public void Dispose()
     {
         rows.Dispose();
         keys.Dispose();
+        drops.Dispose();
     }
 
     private static OwnerAnswer Clone(OwnerAnswer answer) =>

@@ -17,6 +17,15 @@ namespace OxQL.Core.Binding;
 /// </summary>
 public sealed class Binder
 {
+    /// <summary>
+    /// The deepest nesting of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> a condition may have
+    /// (<c>MAX_CONDITIONS_EXCEEDED</c> beyond it). Every level is one or two more nested documents in
+    /// the compiled pipeline, whose serializer stops at 100; the bound keeps a margin for the stages
+    /// a filter is nested in (a lookup or resolve sub-pipeline). No request the 2.0 host read
+    /// (JSON depth 32) nests deeper.
+    /// </summary>
+    public const int MaxConditionDepth = 32;
+
     private static readonly IReadOnlySet<string> Units = new HashSet<string>(StringComparer.Ordinal) { "year", "quarter", "month", "week", "day", "hour", "minute", "second" };
     private static readonly IReadOnlySet<string> WeekDays = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
     private static readonly IReadOnlySet<string> Aggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg", "min", "max", "first", "last", "push", "count", "countDistinct" };
@@ -136,7 +145,8 @@ public sealed class Binder
         private BoundStage.Sort? sort;
         private BoundStage.Page? page;
         private int pageIndex = -1;
-        private int lookups, unwinds, resolves, conditions;
+        private int lookups, unwinds, resolves, conditions, conditionDepth;
+        private bool conditionDepthReported;
         private bool hasSemiJoin;
 
         /// <summary>The shape the pipeline entered with, and each caller stage's kind and shapes around it (DESIGN §4.6).</summary>
@@ -614,7 +624,35 @@ public sealed class Binder
                 stages.Add(new BoundStage.Match(bound));
         }
 
+        /// <summary>
+        /// Binds one condition, refusing a tree nested deeper than <see cref="MaxConditionDepth"/>
+        /// levels of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> once per request: the
+        /// compiled filter would pass the driver's nesting limit and fail as a fault.
+        /// </summary>
         private BoundCondition? BindCondition(FilterCondition condition, Shape at, int index)
+        {
+            if (conditionDepth >= MaxConditionDepth)
+            {
+                if (!conditionDepthReported)
+                    errors.Add(Error(Codes.MaxConditionsExceeded, $"A condition nests more than {MaxConditionDepth} levels of and, or, not and any; flatten the groups.", index, null));
+
+                conditionDepthReported = true;
+                return null;
+            }
+
+            conditionDepth++;
+
+            try
+            {
+                return BindConditionAt(condition, at, index);
+            }
+            finally
+            {
+                conditionDepth--;
+            }
+        }
+
+        private BoundCondition? BindConditionAt(FilterCondition condition, Shape at, int index)
         {
             if (condition.And is not null)
                 return BindGroup(condition.And, at, index, "and", list => new BoundCondition.And(list));

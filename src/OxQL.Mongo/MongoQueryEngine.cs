@@ -1015,7 +1015,9 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             case MongoCommandException command when command.Code == 50:
                 return Refusal.Timeout("The query exceeded its time budget.");
 
-            case MongoCommandException command when command.Code is 292 or 16819 or 16820 or 16945:
+            // 5414201: a keyed window ($setWindowFields) over its memory limit, which a remote
+            // lookup ranking many children per key without an index can reach.
+            case MongoCommandException command when command.Code is 292 or 16819 or 16820 or 16945 or 5414201:
                 return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match.");
 
             // An accumulator over its memory cap, which spilling to disk does not lift, and a
@@ -1027,6 +1029,11 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             // with PCRE2; a construct only the first accepts is rejected here.
             case MongoCommandException command when IsPatternRejection(command):
                 return Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]);
+
+            // The binder bounds how deep a condition nests; a pipeline the driver still cannot
+            // serialize this deep is the query's cost, not a fault of the host.
+            case BsonSerializationException:
+                return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query nests deeper than the database accepts; flatten its conditions or joins.");
 
             default:
                 logger.LogError(exception, "OxQL engine fault");

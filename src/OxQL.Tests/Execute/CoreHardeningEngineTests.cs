@@ -43,6 +43,25 @@ public class CoreHardeningEngineTests
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
     }
 
+    [Fact]
+    public async Task A_window_over_its_memory_limit_is_too_expensive_not_a_fault()
+    {
+        var refusal = await Refused(new FakeAggregateRunner { Fail = CommandFailure(5414201, "Exceeded memory limit in DocumentSourceSetWindowFields") }, "[]");
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
+    }
+
+    [Fact]
+    public async Task A_pipeline_the_driver_cannot_serialize_is_too_expensive_not_a_fault()
+    {
+        var refusal = await Refused(new FakeAggregateRunner { Fail = new BsonSerializationException("Maximum serialization depth exceeded (does the object being serialized have a circular reference?).") }, "[]");
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
+        refusal.Errors![0].Message.Should().NotContain("circular");
+    }
+
     [Theory]
     [InlineData(51091, "Regular expression is invalid: lookbehind assertion is not fixed length")]
     [InlineData(2, "Regular expression is too long")]

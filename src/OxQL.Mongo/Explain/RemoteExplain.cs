@@ -187,6 +187,8 @@ public sealed class RemoteExplain : IDescribeOwners
 
                 answered.Add(check);
 
+                OwnerFaults.Scrubbed(answer);
+
                 if (answer["errors"] is JsonArray owned)
                     foreach (var error in owned.OfType<JsonObject>())
                     {

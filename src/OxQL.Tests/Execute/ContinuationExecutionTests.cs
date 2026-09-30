@@ -240,6 +240,20 @@ public class ContinuationExecutionTests
         refusal.Errors[1].Params.Should().BeNull();
     }
 
+    [Fact]
+    public async Task An_owners_fault_reaches_the_caller_without_the_owners_detail()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.InternalError, "Command aggregate failed: secret-host:27017 unreachable");
+
+        var refusal = RefusedWith(await RunAsync(engine, ContactChain));
+
+        refusal.Errors![1].Code.Should().Be(Codes.InternalError);
+        refusal.Errors[1].Message.Should().Be("The owner failed while answering; the detail is in the owner's log.");
+        refusal.Errors.Select(error => error.Message).Should().NotContain(message => message.Contains("secret-host"));
+    }
+
     [Theory]
     [InlineData("2.0.126.924", true)]
     [InlineData("2.0.3-beta", true)]

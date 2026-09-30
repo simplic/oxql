@@ -2297,6 +2297,8 @@ public sealed class KeyedFetch
     /// </summary>
     private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null)
     {
+        result = OwnerFaults.Scrubbed(result);
+
         var inner = new List<QueryValidationError>();
         int? mappedStage = null;
 

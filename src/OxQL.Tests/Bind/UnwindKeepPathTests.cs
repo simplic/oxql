@@ -5,6 +5,7 @@ using OxQL.Core.Binding;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Mongo;
+using OxQL.Tests.Bind.Fixtures.Resolve;
 using OxQL.Tests.Model.Fixtures.Variants;
 using Xunit;
 
@@ -131,5 +132,35 @@ public class UnwindKeepPathTests
 
         bound.FinalShape.IsVisible("nodes").Should().BeFalse();
         bound.FinalShape.IsVisible("node").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("\"false\"")]
+    [InlineData("0")]
+    [InlineData("null")]
+    public async Task KeepPath_other_than_true_or_false_is_refused(string value)
+    {
+        var error = await Error($$"""[ { "unwind": { "path": "nodes", "as": "node", "keepPath": {{value}} } } ]""", Codes.InvalidOperand);
+
+        error.Message.Should().Be("'keepPath' is true or false.");
+    }
+
+    [Fact]
+    public async Task KeepPath_false_is_refused_on_a_collection_an_earlier_join_reads_its_keys_from()
+    {
+        var error = await BindHost.ErrorAsync(ResolveModel.Model, ResolveModel.Invoice,
+            """[{ "resolve": { "path": "lines.customerId", "as": "c", "elements": "first" } }, { "unwind": { "path": "lines", "as": "line", "keepPath": false } }]""", Codes.OptionNotApplicable);
+
+        error.Message.Should().Contain("the join 'c' of an earlier stage reads its keys from it");
+        error.Stage.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task KeepPath_false_binds_when_the_earlier_join_reads_outside_the_collection()
+    {
+        var bound = await BindHost.BoundAsync(ResolveModel.Model, ResolveModel.Invoice,
+            """[{ "resolve": { "path": "customerId", "as": "c" } }, { "unwind": { "path": "lines", "as": "line", "keepPath": false } }]""");
+
+        bound.Stages.OfType<BoundStage.Unwind>().Single().KeepPath.Should().BeFalse();
     }
 }

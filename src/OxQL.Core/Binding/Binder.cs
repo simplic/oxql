@@ -2229,6 +2229,12 @@ public sealed class Binder
                 return;
             }
 
+            if (unwind.KeepPathInvalid)
+            {
+                errors.Add(Error(Codes.InvalidOperand, "'keepPath' is true or false.", index, unwind.Path));
+                return;
+            }
+
             if (++unwinds > options.Limits.MaxUnwindStages)
                 errors.Add(Error(Codes.MaxUnwindStagesExceeded, $"The pipeline has more than {options.Limits.MaxUnwindStages} unwind stages.", index, null));
 
@@ -2296,6 +2302,15 @@ public sealed class Binder
                 return;
             }
 
+            // A join bound earlier may read its keys off the page rows after the page is taken
+            // (a keyed resolve, a join after the page); the collection keepPath false removes
+            // before the page would take those keys with it and null every such alias.
+            if (!unwind.KeepPath && JoinReadingUnder(path.Storage) is { } reader)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' false would take '{unwind.Path}' out of the row, but the join '{reader}' of an earlier stage reads its keys from it; keep the collection (keepPath true), or join after the unwind through '{alias}'.", index, unwind.Path));
+                return;
+            }
+
             BoundFlatten? flatten = null;
 
             if (unwind.Flatten is not null && (flatten = BindFlatten(unwind, path, index)) is null)
@@ -2303,6 +2318,27 @@ public sealed class Binder
 
             stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten, unwind.KeepPath));
             shape = shape.WithUnwound(path, rootName, alias, indexAlias, unwind.KeepPath);
+        }
+
+        /// <summary>The alias of an earlier resolve or lookup whose reference or parent key lies in or under <paramref name="storage"/>, or null.</summary>
+        private string? JoinReadingUnder(string storage)
+        {
+            static bool Under(string? read, string storage) =>
+                read is not null && (read == storage || read.StartsWith(storage + ".", StringComparison.Ordinal));
+
+            foreach (var stage in stages)
+            {
+                switch (stage)
+                {
+                    case BoundStage.Resolve resolve when Under(resolve.Reference.Storage, storage) || Under(resolve.CollectionStorage, storage):
+                        return resolve.As;
+
+                    case BoundStage.Lookup lookup when Under(lookup.ParentKeyStorage, storage):
+                        return lookup.As;
+                }
+            }
+
+            return null;
         }
 
         /// <summary>

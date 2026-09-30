@@ -722,7 +722,7 @@ public sealed class KeyedFetch
                             continue;
                         }
 
-                        return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex), Calls = calls, CacheHits = cacheHits };
+                        return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, query), Calls = calls, CacheHits = cacheHits };
                     }
 
                     var items = result["items"]!.AsArray();
@@ -1505,6 +1505,25 @@ public sealed class KeyedFetch
             return true;
         }
 
+        /// <summary>
+        /// Whether one owner error is a path this remote union target lacks at the projection of the
+        /// query <paramref name="sent"/>: what <see cref="DropUnknown(JsonNode?, QueryRequest)"/> drops for the target.
+        /// </summary>
+        public bool Droppable(JsonObject error, QueryRequest sent)
+        {
+            ArgumentNullException.ThrowIfNull(error);
+            ArgumentNullException.ThrowIfNull(sent);
+
+            if (!Target.IsRemote || !Union || error["code"]?.ToString() != Codes.UnknownPath
+                || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage)
+                || error["path"]?.ToString() is not { Length: > 0 } path)
+                return false;
+
+            var projectAt = sent.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
+
+            return projectAt >= 0 && stage == projectAt && sent.Pipeline[projectAt].Project!.Fields.ContainsKey(path);
+        }
+
         /// <summary>The cache key of the paths an owner said this target lacks, per organisation, service and plan.</summary>
         public string DropsKey => OwnerFetchCache.DropsKeyOf(organisation, Service, planHash);
 
@@ -2255,9 +2274,25 @@ public sealed class KeyedFetch
     /// where the owner saw it (<c>service</c>, <c>entity</c>, <c>target</c>, <c>stage</c>, <c>path</c>),
     /// and the head points at the first such stage. An owner that continued further maps its own
     /// owner's errors the same way first, so the mapping composes along the chain.
+    /// <para>
+    /// A remote union target's owner refuses the paths the target lacks at the projection beside the
+    /// refusal that counts. A run drops those for the target and asks again (<c>DropUnknown</c>), so
+    /// they are no error of this request: given the query <paramref name="sent"/>, the refusal
+    /// carries only the other errors (R3 F2).
+    /// </para>
     /// </summary>
-    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage) =>
-        Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service));
+    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage, QueryRequest? sent = null)
+    {
+        if (sent is not null && result?["errors"] is JsonArray errors && errors.OfType<JsonObject>().Any(error => !target.Droppable(error, sent)))
+        {
+            var kept = (JsonObject)result.DeepClone();
+
+            kept["errors"] = new JsonArray(errors.OfType<JsonObject>().Where(error => !target.Droppable(error, sent)).Select(error => (JsonNode)error.DeepClone()).ToArray());
+            result = kept;
+        }
+
+        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service));
+    }
 
     /// <summary>An owner error at one of <paramref name="target"/>'s continued stages as the caller's; null for one at the owner query's own stages.</summary>
     private static QueryValidationError? MapBack(JsonObject error, TargetPlan target, string service) =>

@@ -3044,6 +3044,25 @@ public sealed class Binder
                     ? $"The page limit {limit} exceeds the report page maximum of {maximum}."
                     : $"The page limit {limit} exceeds the maximum of {maximum}." + ReportPageNote(), index, null));
 
+            // A report page multiplies what its lookups fetch: each brings up to its limit of
+            // child rows for every row of the page. Beyond the ordinary page the joined rows are
+            // held to what an ordinary page can reach at most, so the larger page never carries
+            // more than the 2.0 host could.
+            if (report && limit > options.Limits.MaxPageSize && limit <= maximum)
+            {
+                var perRow = stages.Sum(bound => bound switch
+                {
+                    BoundStage.Lookup lookup => lookup.First ? 1 : lookup.Limit,
+                    BoundStage.Resolve { RemoteLookup: { } remote } => remote.First ? 1 : remote.Limit,
+                    _ => 0,
+                });
+                var joined = (long)limit * perRow;
+                var budget = (long)options.Limits.MaxPageSize * options.Limits.MaxLookupLimit * options.Limits.MaxLookupStages;
+
+                if (joined > budget)
+                    errors.Add(Error(Codes.PageSizeExceeded, $"The report page of {limit} rows with lookups of up to {perRow} child rows per row could join {joined} rows; the limit is {budget}. Lower the page limit or the lookups' limits.", index, null));
+            }
+
             var offset = stage.Offset ?? 0;
 
             if (offset < 0)

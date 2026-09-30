@@ -206,6 +206,34 @@ public class StrictRequestBindTests
         errors.Should().ContainSingle().Which.Message.Should().Be("The page limit 501 exceeds the maximum of 500.", "no larger page exists to point at");
     }
 
+    [Theory]
+    [InlineData(5_000, 50, true)]
+    [InlineData(5_000, 51, false)]
+    [InlineData(500, 100, true)]
+    public async Task A_report_page_joins_no_more_rows_than_an_ordinary_page_can(int limit, int lookupLimit, bool binds)
+    {
+        var pipeline = $$"""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": {{lookupLimit}} } }, { "page": { "limit": {{limit}} } }]""";
+        if (binds)
+        {
+            (await BindAsync(""" "strict": true, """, pipeline, entity: Customer)).Should().BeOfType<BindOutcome.Bound>();
+            return;
+        }
+
+        var errors = await ErrorsAsync(""" "strict": true, """, pipeline, entity: Customer);
+
+        var error = errors.Should().ContainSingle().Which;
+        error.Code.Should().Be(Codes.PageSizeExceeded);
+        error.Message.Should().Be($"The report page of {limit} rows with lookups of up to {lookupLimit} child rows per row could join {limit * lookupLimit} rows; the limit is 250000. Lower the page limit or the lookups' limits.");
+    }
+
+    [Fact]
+    public async Task A_report_page_counts_a_first_lookup_as_one_row()
+    {
+        var pipeline = """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true, "sort": [{ "number": "desc" }] } }, { "page": { "limit": 5000 } }]""";
+
+        (await BindAsync(""" "strict": true, """, pipeline, entity: Customer)).Should().BeOfType<BindOutcome.Bound>();
+    }
+
     // ---- the contract 1 hint -----------------------------------------------------------------
 
     public static TheoryData<string, string, string, string> Contract2Constructs => new()

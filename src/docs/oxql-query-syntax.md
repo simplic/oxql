@@ -81,7 +81,8 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 
 - Every property that is not `and`, `or`, `not` is a condition on that path; every operator key
   inside the operand object is a condition; several paths and several operators are `and`.
-- `and` / `or` take arrays of condition objects, `not` one condition object; they nest freely.
+- `and` / `or` take arrays of condition objects, `not` one condition object; they nest up to 32
+  levels deep, `any` included (`MAX_CONDITIONS_EXCEEDED` beyond).
   An empty group is `EMPTY_LOGICAL_GROUP`.
 - `any` evaluates the nested condition against one element of a collection of objects, inner
   paths relative to the element (compiled to `$elemMatch`). It is refused on a collection already
@@ -337,8 +338,11 @@ documents whose collection is empty or absent.
 `keepPath` (2.1, default `true`) set to `false` takes the unwound collection out of the row once
 its element is under `as`: the row carries `item` and no `items`, and a later path under `items` is
 `UNKNOWN_PATH` naming the alias to read instead. It needs `as` and a member collection (a join alias
-unwound without `as` is already replaced by its element); otherwise `OPTION_NOT_APPLICABLE`. Refused
-under contract 1 (`LEGACY_STAGE_UNSUPPORTED`). Leaving it out keeps the 2.0 rows.
+unwound without `as` is already replaced by its element); otherwise `OPTION_NOT_APPLICABLE`. It is
+also `OPTION_NOT_APPLICABLE` when a join of an earlier stage reads its keys from the collection (a
+resolve through `items.*`): join after the unwind through the alias instead. A value other than
+`true` or `false` is `INVALID_OPERAND`. Refused under contract 1 (`LEGACY_STAGE_UNSUPPORTED`).
+Leaving it out keeps the 2.0 rows.
 
 ```jsonc
 { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }

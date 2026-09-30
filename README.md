@@ -129,7 +129,7 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 |---|---|
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; always 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. More than `Limits:MaxBatchQueries` queries is `BATCH_TOO_LARGE`. Queries run sequentially on one host. |
-| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1`, and with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
+| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1`, `unwind.keepPath`, and with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
 | `POST /oxql/explain` | On by default; 404 while `Explain:Enabled` is false. Takes a query or the envelope `{ query, describe?, remote?, include? }` and never executes it. Answers 200 with `valid`, every error, the steps (shape, executor, phase and forwarded owner queries of each stage), the result columns, describe of child paths, engine-behaviour notes, and for a valid query the canonical bound form, the emitted page and count stages and the collation. The index advisory is opt-in (`include: ["indexes"]`) and reads only `listIndexes`. See [`oxql-operations.md`](src/docs/oxql-operations.md#post-oxqlexplain). |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
@@ -185,7 +185,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Representation:GuidTolerant` | `false` | also match legacy subtype 3 and string guids |
 | `Representation:DecimalMode` | `tolerant` | match Decimal128 and string decimals; `typed` after a migration |
 | `Representation:Collation:Locale` / `Strength` | `de` / `1` | the collation a contract 2 string comparison, sort and group key folds under; strength 1 folds case and accents, 2 case only, 3 and above tell both apart (clamped to 1–5; an empty locale falls back to `de`) |
-| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | resolved rows of the keyed fetch and semi-join ids (formerly `ResolveCacheMaxEntries`, still bound for one release) |
+| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | resolved rows of the keyed fetch and, apart, semi-join ids (formerly `ResolveCacheMaxEntries`, still bound for one release; the new key wins when both are set) |
 | `Cache:NegativeResolveTtlSeconds` | 10 | how long a key an owner answered as not found is cached; a `strict` request reads past it; `0` caches none |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
 | `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
@@ -320,8 +320,16 @@ add a case and how to export the Angular studio's fixtures is in
 
 ## Upgrading from 2.0 to 2.1
 
-A host bumps the packages; nothing in the registration changes. What a host, a caller and an
+A host bumps the packages; nothing in the registration changes. A host other services call as an
+owner also needs the base package whose internal batch and explain routes use the internal-call
+overloads (see *Hosts serving other services* below): on an older one it answers `keyedBy` with
+`UNKNOWN_REQUEST_MEMBER`, which its callers see as `RESOLVE_REFUSED`. What a host, a caller and an
 operator notice:
+
+- **New in the language.** A `lookup` whose `from` is another service's entity (or its item
+  collection, `service.entity#item`) runs through the keyed fetch at that owner (capability
+  `lookup.remote`); `unwind.keepPath: false` takes the unwound collection out of the row (capability
+  `unwind.keepPath`). A caller gates on the capability before sending either.
 
 - **Explain.** `OxQL:Explain:Enabled` defaults to `true`; set it to `false` to keep the route off.
   Explain never executes a query any more (2.0 ran the server's `executionStats` explain for a
@@ -337,13 +345,20 @@ operator notice:
 - **Requests.** A contract 2 request with a top-level member other than `entityType`, `variables`,
   `pipeline` and `strict` is refused with `UNKNOWN_REQUEST_MEMBER`; 2.0 ignored it. A resolve path
   under a collection that is not unwound is refused with `RESOLVE_ON_COLLECTION` unless it says
-  `elements`; 2.0 joined an arbitrary element. A remote resolve's `filter` holding a `$var` now
+  `elements` (under two or more such collections, `UNWIND_ORDER`); 2.0 joined an arbitrary element.
+  A condition nests at most 32 levels of `and`, `or`, `not` and `any` (`MAX_CONDITIONS_EXCEEDED`;
+  2.0 read no request that deep). A strict report page beyond `MaxPageSize` joins at most
+  `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` lookup rows (`PAGE_SIZE_EXCEEDED`).
+  `Limits:MaxFlattenDepth` is clamped to 12. A remote resolve's `filter` holding a `$var` now
   works: the variable is substituted before the owner is called.
 - **Diagnostics** that 2.0 did not raise: a lookup over its `limit` is `LOOKUP_TRUNCATED`; a key
   more than one record holds, where the keyed fetch sees it, is `RESOLVE_AMBIGUOUS`.
-- **Rows.** A polymorphic value renders the members of the variant it is stored as, which 2.0
-  dropped; an interface-typed member whose implementations are registered is an object instead of
-  `unknown`.
+- **Rows and model.** A polymorphic value renders the members of the variant it is stored as, which
+  2.0 dropped; an interface-typed member whose implementations are registered is an object instead of
+  `unknown`. A polymorphic entity or type whose subclasses have class maps (or `[BsonKnownTypes]`) is
+  modelled as its declared class with the subclasses as variants, their own members marked `onlyFor`
+  (2.0 took the most-derived class); a subclass without a class map is the log-only build finding
+  `polymorphic-subtype-unregistered`, so a host with class hierarchies may log new findings.
 - **Cursors** of 2.0 continue: a 2.1 member enters the fingerprint only when it changes what the
   stage does.
 - **Hosts serving other services** route their internal batch and explain through the query
@@ -355,7 +370,10 @@ operator notice:
   `RESOLVE_PARENT_NOT_ITEM`, `MAX_CONTINUED_STAGES_EXCEEDED`, `OWNER_NOT_CAPABLE`,
   `PAGE_INCOMPLETE`) and five diagnostics (`RESOLVE_MISSING`, `RESOLVE_AMBIGUOUS`,
   `RESOLVE_TRUNCATED`, `LOOKUP_TRUNCATED`, `UNWIND_DEPTH_TRUNCATED`); `RESOLVE_UNAVAILABLE` stays.
-- **The console** is served at `RoutePath` under the path base (see *Studio console*).
+- **The console** is served at `RoutePath` under the path base (see *Studio console*). A host that set
+  `RoutePath` with its path base spelled in (the 2.0-era base package set
+  `/{ApiName}/{ApiVersion}/oxql`) now serves it under the doubled path; set `RoutePath` to `/oxql`.
+  `OxQLStudioOptions.EnableExplain` defaults to `true`, as the engine's explain does.
 - **Resolve outcomes do not depend on the page, the cache or the executor.** Under `strict` or an
   `onMissing` other than `null` a remote resolve onto a non-key field is grouped per key (2.0
   owners: the plain match with two rows per key); an inline resolve onto a non-key field is flagged
@@ -366,16 +384,37 @@ operator notice:
 - **Batches.** A batch's `maxTimeMs` bounds the whole batch, not each query; the keyed fetch sends
   it a tenth (at most 250 ms) below its own wait. A batch member other than `queries` and
   `maxTimeMs` is `UNKNOWN_REQUEST_MEMBER` under contract 2.
-- **Public API.** `IOxQLQueryService` gained `BatchAsync(batch, internalCall, …)` and
-  `ExplainAsync(request, internalCall, …)`, and `IQueryEngine.ExplainAsync` takes an
-  `ExplainRequest`: an implementation of either interface outside this package must add them.
-  `IRemoteOwnerInfo` gained default members `OwnerOfAsync` (read an owner's facts before its first
-  batch) and `ApiVersionOf` (explain's `route.apiVersion`), `RemoteOwnerInfo` a `MaxPageSize`, and
-  `IEntityModelProvider` a default `SchemaRevision` (explain's `schemaRevision`); a host fills them
-  to have them used.
+- **Public API.** An unchanged service that only registers and calls the engine keeps compiling and
+  running (the Simplic base package of 2.0 builds and runs on 2.1, recompiled or not; only its test
+  of the exact model findings sees the new polymorphism finding).
+  What changed for code outside the package:
+  - `IOxQLQueryService.ExplainAsync` takes an `ExplainRequest` (a `QueryRequest` converts to one); the
+    2.0 `ExplainAsync(QueryRequest)` stays as a default member. The new `BatchAsync(batch,
+    internalCall, …)` and `ExplainAsync(request, internalCall, …)` default to the public form and throw
+    `NotSupportedException` for an internal call. An implementation written against 2.0 must change its
+    explain to the `ExplainRequest` form. `IQueryEngine.ExplainAsync` takes an `ExplainRequest`.
+  - `IRemoteQueryClient` gained a default `ExplainAsync`; `IRemoteOwnerInfo` and `RemoteOwnerInfo` are
+    new (a client implements them to report owners' shallow health: `OwnerOf`, `OwnerOfAsync`,
+    `ApiVersionOf`); `IEntityModelProvider` gained a default `SchemaRevision`.
+  - Removed or changed: `IIndexSource.ExplainAsync`, `MongoIndexSource.ExplainAsync` and
+    `ExplainCommand` (explain never executes); `IndexAdvisor.Advise`'s third parameter; `ResolveCache`
+    and `SemiJoinCache` (replaced by `OwnerFetchCache`, which the `MongoQueryEngine` constructor now
+    takes, with an `ExplainForwardCache`; the obsolete `RemoteResolver` forwarder takes the new cache);
+    `ReferenceDef` (`Targets` is required, `TargetEntity`, `TargetField` and `IsRemote` derive from
+    it); `EnumValueDef` gained `Description`; `CompiledQuery.RemoteResolves`; the positional records
+    of `OxQL.Core.Binding` (`BoundStage.*`, `ShapeNode.Remote`), `Shape.WithUnwound` and
+    `BoundCanonical.Render`/`Fingerprint`, which are engine internals.
 - **Request depth.** Hosts read request bodies to `OxQLJson.MaxDepth` (256), the depth explain's
   answers need; every host of a fleet runs the same limit, so a body one host accepts its owners
-  read too.
+  read too. `AddOxQLAspNetCore` sets it on the host's MVC and minimal-API JSON options, so it applies
+  to every JSON body the host reads, not only OxQL's.
+- **Mixed fleets.** A 2.1 host gates 2.1 vocabulary on an owner's shallow health, read through a
+  remote client that implements `IRemoteOwnerInfo` (`OWNER_NOT_CAPABLE` for an owner before 2.1). An
+  owner whose facts it cannot read is sent the query; a 2.0 owner then ignores `keyedBy`, and the
+  answer is refused or its keys reported unanswered, never taken as values. A 2.0 origin calling a
+  2.1 owner is unaffected.
+- **Owner faults** reach the caller with a fixed text; an owner's exception detail never passes
+  through another service.
 
 ## Upgrading from 1.x
 

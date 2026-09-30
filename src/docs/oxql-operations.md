@@ -167,7 +167,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
 | `Limits:MaxGroupFields` | 20 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` | yes | — |
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | a remote `select` becomes the owner's projection and is checked against the owner's value |
-| `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
+| `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
 | `Limits:MaxOffset` | 5 000 | binder, `page.offset`; not an offset cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
 | `Limits:CountCap` | 100 000 | compiler: the count stops at the cap | diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
@@ -179,7 +179,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:RegexMaxLength` | 200 | binder | `REGEX_TOO_LONG` | yes | a `regex` under a remote alias is checked by the owner |
 | `Limits:MaxLookupLimit` | 100 | binder: the largest lookup `limit` and the default when none is given; the most targets an `elements: "all"` alias holds | `LOOKUP_LIMIT_EXCEEDED`; diagnostics `LOOKUP_TRUNCATED`, `RESOLVE_TRUNCATED` | yes | — |
 | `Limits:MaxFlattenDepth` | 5, clamped to 1–12 | compiler: the levels an `unwind` with `flatten` descends | diagnostic `UNWIND_DEPTH_TRUNCATED` | yes | — |
-| `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without `cursor` or `offset` (at least `MaxPageSize`) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
+| `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without `cursor` or `offset` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate; a batch's `maxTimeMs` only lowers it | 504 `QUERY_TIMEOUT` | no | the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
@@ -220,7 +220,7 @@ Anonymous, always 200, and never waits for another service:
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
   "capabilities": ["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath",
-                   "resolve.remote", "semiJoin", "resolve.chain", "explain", "compat.v1"],
+                   "resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
     "maxUnwindStages": 5, "maxResolveStages": 8, "maxGroupFields": 20, "maxProjectionFields": 500,
@@ -241,7 +241,8 @@ Anonymous, always 200, and never waits for another service:
 - `capabilities`: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1` and `unwind.keepPath` always
   (`unwind.keepPath`: an unwind may take its collection out of the row; a caller gates on it before
   sending `keepPath`, which an engine without it refuses as an unknown member);
-  `resolve.remote`, `semiJoin` and `resolve.chain` when the host installed a remote query client;
+  `resolve.remote`, `semiJoin`, `resolve.chain` and `lookup.remote` (a `lookup` whose `from` is another
+  service's entity) when the host installed a remote query client;
   `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`. `oxql.2.1`
   covers every language feature of 2.1 and the explain answer described below; a caller gates on it
   before sending `strict`, `is`, `flatten` or a 2.1 stage member, or before reading an explain answer
@@ -437,8 +438,22 @@ owning service, owners in parallel:
   `keyedBy`) to an owner whose engine is older (`OWNER_NOT_CAPABLE`), all read from the owner's
   shallow health by a remote client that implements `IRemoteOwnerInfo`. Before the first batch of a
   request the fetch asks the client for each owner's facts (`OwnerOfAsync`), which may read the
-  owner's shallow health right then; a client that does not know them yet leaves the host's own cap,
-  and an old owner then refuses the unknown members inside `RESOLVE_REFUSED`.
+  owner's shallow health right then, within a tenth of the phase (at most 250 ms); explain reads them
+  the same way, within its owner budget, and answers `OWNER_NOT_CAPABLE` where the run would. A
+  client that does not know them in time leaves the host's own caps (an owner configured with a
+  smaller page then refuses `PAGE_SIZE_EXCEEDED` inside `RESOLVE_REFUSED`; the next request, with the
+  facts read, succeeds). An owner still on 2.0 whose facts are unknown ignores `keyedBy` and answers
+  rows not grouped per key: the fetch refuses them (`RESOLVE_REFUSED`, a row without its key) or
+  reports the keys it did not get as `owner_unanswered`, never as values. An owner on 2.1 packages
+  behind a base package whose internal route does not use the internal-call overloads refuses
+  `keyedBy` as `UNKNOWN_REQUEST_MEMBER`, which the caller sees as `RESOLVE_REFUSED`: an owner other
+  services call needs the matching base package.
+- **Remote lookups** rank each key's children at the owner in the lookup's sort, then by record key;
+  elements of one owning row that tie there come back in no guaranteed order (sort by an element
+  member to fix it).
+- **Owner faults.** An owner error coded `INTERNAL_ERROR` (and the title of an `internal_error`
+  envelope) reaches the caller with a fixed text, whatever the owner's `IncludeErrorDetails`; the
+  detail stays in the owner's log.
 - **Union select paths.** A select path an owner says one target of a union lacks is dropped for
   that target and the query asked again, for every chunk that carried it; what was learned is kept
   in the cache per organisation, service and plan, so later requests do not send it and still
@@ -454,10 +469,13 @@ owning service, owners in parallel:
   `strict: true` when the origin is strict. Variables are substituted at the origin.
 - **Security** is that of a remote resolve: the internal route is admitted by the internal key and
   scoped by the forwarded identity; continued stages read owner entities under the caller's
-  organisation, which that user can already query directly.
+  organisation, which that user can already query directly. The owner-fetch cache below is keyed by
+  organisation, not by user: it assumes an owner answers every user of an organisation alike, as the
+  fleet's owners do (they scope by organisation only). An owner that filters rows per user must not
+  be reached through a caching host.
 
 **The owner-fetch cache** holds, per mode, the owner's answers for `Cache:ResolveTtlSeconds` (60 s),
-at most `Cache:OwnerFetchCacheMaxEntries` rows or ids. A by-keys entry is keyed by target entity,
+at most `Cache:OwnerFetchCacheMaxEntries` rows or ids (an answer weighs the rows it holds). A by-keys entry is keyed by target entity,
 item, target field, organisation, key and a hash of the substituted owner query without its keys
 (select, filter, parent select, continued stages, case), so requests that differ in any of these, or
 in their variables, never share an entry. A key the owner answered as not found is kept for

@@ -165,6 +165,29 @@ public class ContractATests
         answer.ErrorCodes.Should().Equal(["LEGACY_STAGE_UNSUPPORTED"], label);
     }
 
+    /// <summary>
+    /// Contract 1 never reaches an owner (Q14): a v2-shaped lookup of another service's entity, at a host
+    /// that reaches its owner, is refused as every contract 1 lookup is, by the run and by explain alike,
+    /// before anything is bound or sent.
+    /// </summary>
+    [Fact]
+    public async Task A33b_under_contract_1_a_lookup_of_another_services_entity_is_refused_as_a_legacy_stage_not_looked_up_at_its_owner()
+    {
+        var ledger = await Lab.ClientAsync(LabService.Ledger, contract: null);
+        var stage = """{ "lookup": { "from": "transport.shipment", "path": "customer.id", "as": "shipments" } }""";
+
+        var answer = await ledger.SendAsync("ledger.transaction", $"[ {stage}, {Page1} ]");
+
+        answer.ShouldRefuse("LEGACY_STAGE_UNSUPPORTED", 400)["message"]!.GetValue<string>().Should().Contain("X-OxQL-Contract: 2");
+        answer.ErrorCodes.Should().Equal(["LEGACY_STAGE_UNSUPPORTED"]);
+
+        var explained = await ledger.ExplainHereAsync($$"""{ "entityType": "ledger.transaction", "pipeline": [ {{stage}} ] }""");
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse(explained.Text);
+        explained.Body!["errors"]!.AsArray().Select(error => error!["code"]!.GetValue<string>()).Should().Equal(["LEGACY_STAGE_UNSUPPORTED"]);
+        explained.Body!["steps"]?.AsArray().Should().NotContain(step => step!["owner"] != null, "no owner is planned for contract 1");
+    }
+
     [Fact]
     public async Task A34_under_contract_2_a_lookup_carrying_v1_members_is_refused_and_the_message_names_the_accepted_ones()
     {

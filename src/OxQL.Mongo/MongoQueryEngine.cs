@@ -377,6 +377,10 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
         var diagnostics = bound.Diagnostics.ToList();
         var strict = context.Contract == 2 && request.Query.IsStrict;
+
+        // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
+        // as a run does, within the explain budget (RL-3).
+        await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, TimeSpan.FromMilliseconds(Math.Max(1, options.Explain.RemoteTimeoutMs)), cancellationToken).ConfigureAwait(false);
         var indexes = Notes.CallerIndexes(bound, request.Query);
         var notes = Notes.Of(bound, request.Query, indexes, strict, context.Contract, options);
 
@@ -390,6 +394,12 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return new ExplainOutcome.Success(Answer(context, valid: false,
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }],
                 diagnostics, steps, result, request) with { Notes = Ordered(notes), Describe = describe });
+
+        // An owner known to run an engine before 2.1 is refused by a run before anything is sent; explain
+        // says so at the same stage (RL-2).
+        if (KeyedFetch.IncapableOwner(bound, compiled.KeyedResolves, strict, remote) is { } incapable)
+            return new ExplainOutcome.Success(Answer(context, valid: false, [incapable], diagnostics,
+                steps.Select(step => step.Index == incapable.Stage ? step with { Status = "error" } : step).ToList(), result, request) with { Notes = Ordered(notes), Describe = describe });
 
         // The remote check (DESIGN §4.3): the stages continued at an owner are bound by the owner's
         // internal explain; an owner error there is this request's, at the caller's stage.

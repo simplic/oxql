@@ -255,6 +255,32 @@ public class ContinuationExecutionTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Explain_says_OWNER_NOT_CAPABLE_where_the_run_refuses_reading_the_owner_facts_first_as_the_run_does(bool known)
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+
+        if (known)
+            client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
+        else
+            client.Probe = _ => new RemoteOwnerInfo("2.0.126.924", 2, null);
+
+        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, ContactChain), BindHost.Context());
+        var answer = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        answer.Valid.Should().BeFalse();
+        var error = answer.Errors.Should().ContainSingle().Which;
+        error.Code.Should().Be(Codes.OwnerNotCapable);
+        client.Probed.Should().Contain("crm", "explain reads the owner facts before it plans, as a run does");
+
+        var run = RefusedWith(await RunAsync(engine, ContactChain));
+        run.Errors![0].Code.Should().Be(Codes.OwnerNotCapable);
+        run.Errors[0].Stage.Should().Be(error.Stage);
+    }
+
+    [Theory]
     [InlineData("2.0.126.924", true)]
     [InlineData("2.0.3-beta", true)]
     [InlineData("2.1.0.0", false)]

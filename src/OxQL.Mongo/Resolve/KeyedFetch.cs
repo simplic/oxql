@@ -2337,38 +2337,73 @@ public sealed class KeyedFetch
     /// <summary>
     /// <c>OWNER_NOT_CAPABLE</c> (DESIGN §3.5.4): a remote target whose query needs 2.1 — continued
     /// stages or <c>keyedBy</c> — at an owner whose shallow health reports an older engine, refused
-    /// before anything is sent. An owner not yet probed, or reporting a version this host cannot read,
-    /// is sent the query, and an old owner refuses its unknown members inside <c>RESOLVE_REFUSED</c>.
+    /// before anything is sent. An owner whose facts are still unknown after the read before the plan,
+    /// or that reports a version this host cannot read, is sent the query: a 2.0 owner ignores
+    /// <c>keyedBy</c> and answers rows that are not grouped per key, which the fetch refuses
+    /// (<c>RESOLVE_REFUSED</c>, a row without its key) or reports as unanswered keys, never as values.
     /// </summary>
     private Refusal? Incapable(BoundPipeline bound, IReadOnlyList<TargetPlan> targets)
     {
-        if (client is not IRemoteOwnerInfo owners)
-            return null;
-
         foreach (var target in targets)
         {
-            if (target.Service == SelfService || !target.NeedsOwner21 || (target.Chunks.Count == 0 && target.Continued.IsEmpty))
+            if (target.Chunks.Count == 0 && target.Continued.IsEmpty)
                 continue;
 
-            if (owners.OwnerOf(target.Service)?.EngineVersion is not { } version || EngineVersionOf(version) is not { } parsed || parsed >= Owner21)
-                continue;
-
-            var stage = target.Continued.IsEmpty ? StageIndexOf(bound, target.Stage) : target.Continued.Origins[0].OriginIndex;
-            var message = $"{target.Service} runs OxQL {version}; this stage needs 2.1.";
-
-            return Refusal.NotExecutable(Codes.OwnerNotCapable, message, stage,
-            [
-                new QueryValidationError
-                {
-                    Code = Codes.OwnerNotCapable,
-                    Message = message,
-                    Stage = stage,
-                    Params = new Dictionary<string, object?> { ["service"] = target.Service, ["version"] = version, ["needs"] = "2.1" },
-                },
-            ]);
+            if (IncapableError(bound, target, client) is { } error)
+                return Refusal.NotExecutable(Codes.OwnerNotCapable, error.Message, error.Stage, [error]);
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The <c>OWNER_NOT_CAPABLE</c> error explain reports for a keyed stage whose run would be refused
+    /// by <see cref="Incapable"/> (explain assumes the page holds keys), or null. Planned by the same
+    /// owner facts; <see cref="ReadOwnerFactsAsync"/> reads them first, as a run does.
+    /// </summary>
+    public static QueryValidationError? IncapableOwner(BoundPipeline bound, IEnumerable<BoundStage.Resolve> stages, bool strict, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(stages);
+
+        foreach (var stage in stages)
+            foreach (var target in PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client))
+                if (IncapableError(bound, target, client) is { } error)
+                    return error;
+
+        return null;
+    }
+
+    /// <summary>The <c>OWNER_NOT_CAPABLE</c> error of one target whose query needs 2.1 at an owner known to run an older engine, or null.</summary>
+    private static QueryValidationError? IncapableError(BoundPipeline bound, TargetPlan target, IRemoteQueryClient? client)
+    {
+        if (client is not IRemoteOwnerInfo owners || target.Service == SelfService || !target.Target.IsRemote || !target.NeedsOwner21)
+            return null;
+
+        if (owners.OwnerOf(target.Service)?.EngineVersion is not { } version || EngineVersionOf(version) is not { } parsed || parsed >= Owner21)
+            return null;
+
+        var stage = target.Continued.IsEmpty ? StageIndexOf(bound, target.Stage) : target.Continued.Origins[0].OriginIndex;
+
+        return new QueryValidationError
+        {
+            Code = Codes.OwnerNotCapable,
+            Message = $"{target.Service} runs OxQL {version}; this stage needs 2.1.",
+            Stage = stage,
+            Params = new Dictionary<string, object?> { ["service"] = target.Service, ["version"] = version, ["needs"] = "2.1" },
+        };
+    }
+
+    /// <summary>
+    /// Reads the facts of the owners of <paramref name="stages"/>' remote targets within
+    /// <paramref name="slice"/>, as a run reads them before it plans (explain plans by the same facts).
+    /// </summary>
+    public static Task ReadOwnerFactsAsync(IRemoteQueryClient? client, IEnumerable<BoundStage.Resolve> stages, TimeSpan slice, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stages);
+
+        return ReadOwnersAsync(client, stages.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), slice, cancellationToken);
     }
 
     /// <summary>
@@ -2376,17 +2411,20 @@ public sealed class KeyedFetch
     /// client that has not read an owner's shallow health yet may read it now. Bounded by the time
     /// left; a client that does not answer in time leaves the facts unknown, as they were.
     /// </summary>
-    private async Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken)
+    // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
+    // its facts unknown and this host's own caps apply, rather than the probe eating the time
+    // the owner's answer needs (D-ENG-2).
+    private Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken) =>
+        ReadOwnersAsync(client, services, OwnerFactsSlice(remaining), cancellationToken);
+
+    private static async Task ReadOwnersAsync(IRemoteQueryClient? client, IEnumerable<string> services, TimeSpan slice, CancellationToken cancellationToken)
     {
         if (client is not IRemoteOwnerInfo owners)
             return;
 
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
-        // its facts unknown and this host's own caps apply, rather than the probe eating the time
-        // the owner's answer needs (D-ENG-2).
-        bounded.CancelAfter(OwnerFactsSlice(remaining));
+        bounded.CancelAfter(slice);
 
         try
         {

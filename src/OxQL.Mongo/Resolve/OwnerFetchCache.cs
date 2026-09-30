@@ -49,8 +49,8 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 ///   the answer, so each caller encodes the values for its own member.</item>
 /// </list>
 /// <para>
-/// Each mode keeps its own budget of <c>Cache:OwnerFetchCacheMaxEntries</c>: an answer costs one unit, a
-/// list of ids one unit per id, and a semi-join answer of several thousand ids never evicts the rows
+/// Each mode keeps its own budget of <c>Cache:OwnerFetchCacheMaxEntries</c>: an answer costs one unit per
+/// row it holds (at least one), a list of ids one unit per id, and a semi-join answer of several thousand ids never evicts the rows
 /// of the resolves beside it. An empty by-condition answer lives as long as a negative by-keys one.
 /// </para>
 /// <para>
@@ -150,7 +150,7 @@ public sealed class OwnerFetchCache : IDisposable
         if (lifetime <= TimeSpan.Zero)
             return;
 
-        rows.Set(key, new Entry(Clone(answer), time.GetUtcNow() + lifetime), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = lifetime });
+        rows.Set(key, new Entry(Clone(answer), time.GetUtcNow() + lifetime), new MemoryCacheEntryOptions { Size = Math.Max(1, answer.Rows.Count), AbsoluteExpirationRelativeToNow = lifetime });
     }
 
     /// <summary>The cached by-condition wire values, or false. The list is shared and read-only; a caller encodes it for its own reference member.</summary>

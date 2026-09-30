@@ -139,6 +139,23 @@ public class OwnerFetchCacheTests
         select.Should().Equal("number");
     }
 
+    [Fact]
+    public void An_answer_costs_the_budget_one_unit_per_row_it_holds()
+    {
+        var options = BindHost.Options();
+        options.Cache.OwnerFetchCacheMaxEntries = 150;
+
+        using var cache = new OwnerFetchCache(options);
+        var rows = Enumerable.Range(0, 101).Select(index => new System.Text.Json.Nodes.JsonObject { ["id"] = index }).ToList();
+        var first = OwnerFetchCache.KeyOf("logistics.shipment", null, "id", BindHost.Organisation, "k1", "plan");
+        var second = OwnerFetchCache.KeyOf("logistics.shipment", null, "id", BindHost.Organisation, "k2", "plan");
+
+        cache.Set(first, new OwnerAnswer(rows));
+        cache.Set(second, new OwnerAnswer(rows));
+
+        cache.TryGet(second, strict: false, out _).Should().BeFalse("two answers of 101 rows do not fit a budget of 150");
+    }
+
     private sealed class BinaryReference
     {
         public Guid Id { get; set; }

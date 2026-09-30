@@ -611,4 +611,46 @@ public class ExplainDescribeTests
         policies[0].Message.Should().NotContain("owner");
         policies[1].Message.Should().Contain("RESOLVE_AMBIGUOUS");
     }
+    // ---- the target of a resolve continued under a union alias ------------------------------------------
+
+    /// <summary>The billing reference's local union (a shipment or a tour), and each one's driver continued under it.</summary>
+    private static string DriverUnder(string? forTarget) => $$"""
+        [{ "resolve": { "path": "billing.referenceId", "as": "b" } },
+         { "resolve": { "path": "b.driverId", "as": "d"{{(forTarget is null ? "" : $", \"forTarget\": \"{forTarget}\"")}} } }]
+        """;
+
+    [Fact]
+    public async Task A_resolve_continued_under_a_union_alias_creates_the_target_of_the_reference_on_its_forTarget_not_the_unions_first()
+    {
+        var explain = await ExplainAsync(DriverUnder("rc.tour"), """[{ "id": "d", "at": 2, "prefix": "d", "usage": "project" }]""");
+
+        explain.Valid.Should().BeTrue(string.Join("; ", explain.Errors.Select(error => error.Message)));
+        explain.Steps[1].Creates.Should().ContainSingle().Which.Entities.Should().Equal(["rc.customer"], "the tour's driverId references a customer; the shipment, the union's first target, is not followed");
+        Strings(Answer(explain, "d")["root"]!["entities"]).Should().Equal(["rc.customer"], "describe reports the alias as explain creates it");
+
+        var shipment = await ExplainAsync(DriverUnder("rc.shipment"), """[{ "id": "d", "at": 2, "prefix": "d", "usage": "project" }]""");
+        shipment.Steps[1].Creates.Single().Entities.Should().Equal(["crm.contact"]);
+        Strings(Answer(shipment, "d")["root"]!["entities"]).Should().Equal(["crm.contact"]);
+    }
+
+    [Fact]
+    public async Task A_resolve_continued_under_a_union_alias_without_forTarget_creates_the_targets_of_the_reference_on_every_target()
+    {
+        var explain = await ExplainAsync(DriverUnder(null), """[{ "id": "d", "at": 2, "prefix": "d", "usage": "project" }]""");
+
+        explain.Steps[1].Creates.Single().Entities.Should().Equal(["crm.contact", "rc.customer"], "each target of the union follows its own driverId");
+        Strings(Answer(explain, "d")["root"]!["entities"]).Should().Equal(["crm.contact", "rc.customer"]);
+    }
+
+    [Fact]
+    public async Task A_continued_resolve_whose_reference_no_owner_describes_creates_no_entity_rather_than_the_unions_first_target()
+    {
+        var explain = await ExplainAsync("""
+            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
+            """, """[{ "id": "co", "at": 2, "prefix": "co", "usage": "project" }]""");
+
+        explain.Steps[1].Creates.Single().Should().Match<ExplainCreated>(created => created.Alias == "co" && created.Node == "remote");
+        explain.Steps[1].Creates.Single().Entities.Should().BeEmpty("the reference lies in crm's model, which did not answer; 'crm.contact' is the anchor's target, not co's");
+    }
 }

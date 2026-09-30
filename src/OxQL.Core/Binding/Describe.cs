@@ -605,11 +605,10 @@ public sealed class Describe
     /// for a local target, the owner's answer for a remote one), merged by path, the first target's
     /// description winning, and every child re-described at the origin under the alias.
     /// </summary>
-    private async Task AliasChildrenAsync(Entry entry, Shape origin, string alias, ShapeNode node, string rest, IReadOnlyList<string>? paths, Collected collected)
+    private async Task AliasChildrenAsync(Entry entry, Shape origin, string alias, ShapeNode node, string rest, IReadOnlyList<string>? paths, Collected collected,
+        IReadOnlyList<(string Entity, string? Item)>? only = null)
     {
-        IReadOnlyList<(string Entity, string? Item)> targets = node is ShapeNode.Keyed keyed
-            ? keyed.Targets.Select(target => (target.Entity.Id, target.Item?.Wire)).Distinct().ToList()
-            : await RemoteTargetsAsync(alias, entry.At!.Value).ConfigureAwait(false);
+        var targets = only ?? await AliasTargetsAsync(alias, node, entry.At!.Value).ConfigureAwait(false);
 
         foreach (var (entityId, item) in targets)
         {
@@ -742,7 +741,7 @@ public sealed class Describe
             if (stage.Resolve is not { } resolve || (resolve.As != alias && resolve.ParentAs != alias) || resolve.Path is null)
                 continue;
 
-            var cases = await ReferenceTargetsAsync(resolve.Path, index).ConfigureAwait(false);
+            var cases = await ReferenceTargetsAsync(resolve.Path, index, resolve.ForTarget).ConfigureAwait(false);
 
             if (resolve.Target is { } wanted)
                 cases = cases.Where(target => target.Entity == wanted).ToList();
@@ -753,11 +752,22 @@ public sealed class Describe
             return cases.Distinct().ToList();
         }
 
-        return trace?.ShapeAt(at).Roots.GetValueOrDefault(alias) is ShapeNode.Remote remote ? [(remote.TargetEntity, null)] : [];
+        return trace?.ShapeAt(at).Roots.GetValueOrDefault(alias) is ShapeNode.Remote { TargetOpen: false } remote ? [(remote.TargetEntity, null)] : [];
     }
 
-    /// <summary>The targets the reference at <paramref name="path"/> declares, in the shape before stage <paramref name="index"/>.</summary>
-    private async Task<IReadOnlyList<(string Entity, string? Item)>> ReferenceTargetsAsync(string path, int index)
+    /// <summary>The targets of a remote or keyed alias before <paramref name="at"/>, in declaration order.</summary>
+    private async Task<IReadOnlyList<(string Entity, string? Item)>> AliasTargetsAsync(string alias, ShapeNode node, int at) =>
+        node is ShapeNode.Keyed keyed
+            ? keyed.Targets.Select(target => (target.Entity.Id, target.Item?.Wire)).Distinct().ToList()
+            : await RemoteTargetsAsync(alias, at).ConfigureAwait(false);
+
+    /// <summary>
+    /// The targets the reference at <paramref name="path"/> declares, in the shape before stage
+    /// <paramref name="index"/>. Under another alias, the reference on each of its targets (only on the
+    /// <paramref name="forTarget"/> entity when named), each described on its own: a target that lacks
+    /// the path adds nothing and never hides the reference another target declares there.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Entity, string? Item)>> ReferenceTargetsAsync(string path, int index, string? forTarget = null)
     {
         var shape = trace!.ShapeAt(index);
 
@@ -768,16 +778,25 @@ public sealed class Describe
                 .ToList() ?? [];
 
         // A continued resolve: the reference lies under another alias, whose targets hold it.
-        var described = new Collected();
         var probe = new Entry("reference", index, null, null, [under.Below], "resolve", 1, false);
+        var reached = new List<(string Entity, string? Item)>();
 
-        await AliasChildrenAsync(probe, shape, under.Name, under.Node, under.Below, [under.Below], described).ConfigureAwait(false);
+        foreach (var target in await AliasTargetsAsync(under.Name, under.Node, index).ConfigureAwait(false))
+        {
+            if (forTarget is not null && target.Entity != forTarget)
+                continue;
 
-        return described.Children
-            .SelectMany(child => child["reference"]?["cases"]?.AsArray().OfType<JsonObject>() ?? [])
-            .SelectMany(declared => declared["targets"]?.AsArray().OfType<JsonObject>() ?? [])
-            .Select(target => (target["entity"]!.GetValue<string>(), target["item"]?.GetValue<string>()))
-            .ToList();
+            var described = new Collected();
+
+            await AliasChildrenAsync(probe, shape, under.Name, under.Node, under.Below, [under.Below], described, [target]).ConfigureAwait(false);
+
+            reached.AddRange(described.Children
+                .SelectMany(child => child["reference"]?["cases"]?.AsArray().OfType<JsonObject>() ?? [])
+                .SelectMany(declared => declared["targets"]?.AsArray().OfType<JsonObject>() ?? [])
+                .Select(declared => (declared["entity"]!.GetValue<string>(), declared["item"]?.GetValue<string>())));
+        }
+
+        return reached;
     }
 
     /// <summary>

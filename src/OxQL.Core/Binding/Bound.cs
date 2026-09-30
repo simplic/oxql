@@ -76,9 +76,13 @@ public abstract record ShapeNode(string StoragePrefix)
     /// A resolved remote target under its alias: its shape lives on another host. A condition on
     /// a member of it is a semi-join on the owner only when <paramref name="SemiJoinable"/>: a plain
     /// remote resolve, whose key set is one <c>$in</c> on one local member. The alias of a typed,
-    /// item, converted or element-wise resolve is not.
+    /// item, converted or element-wise resolve is not. <paramref name="TargetOpen"/> for the alias of a
+    /// resolve continued under another alias without a <c>target</c>: the reference it follows lies
+    /// in the model of the entities it continues on, which their owners hold, so
+    /// <paramref name="TargetEntity"/> is the keyed stage's first target and not the alias's entity;
+    /// explain asks the owners for that (DESIGN §4.3).
     /// </summary>
-    public sealed record Remote(string TargetEntity, ResolvedPath Reference, string StoragePrefix, bool SemiJoinable = true) : ShapeNode(StoragePrefix);
+    public sealed record Remote(string TargetEntity, ResolvedPath Reference, string StoragePrefix, bool SemiJoinable = true, bool TargetOpen = false) : ShapeNode(StoragePrefix);
 
     /// <summary>
     /// The rows a keyed fetch joins after the page is taken, from local targets (DESIGN §3.4.1

@@ -3,6 +3,7 @@ using FluentAssertions;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Suites.Report;
 using Xunit;
 
 namespace OxQL.IntegrationTests.Suites.Joins;
@@ -142,5 +143,66 @@ public class JoinsRouteChainTests
         scenario.Should().OnlyContain(row => row["sourceParent"]!["tours"]!.AsArray().OfType<JsonObject>().All(tour => tour.Select(pair => pair.Key).SequenceEqual(new[] { "tourId" })),
             "each element carries the selected member, and only it");
         scenario.Should().OnlyContain(row => row["deliveringTour"] is JsonObject, "and the continued hop resolves the first tour from it");
+    }
+    /// <summary>
+    /// A resolve continued under the union's owning row for each of its targets: the shipment's first
+    /// tour, and the tour's resource. The explain of the continued stages at their stages, with a
+    /// describe of each new alias in the final shape.
+    /// </summary>
+    private static string ContinuedPerTarget() => $$"""
+        {
+          "query": {
+            "entityType": "ledger.transaction",
+            "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
+            "pipeline": [
+              { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+              { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+              { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+              { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id"] } },
+              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number"] } },
+              { "resolve": { "path": "sourceParent.resource.id", "as": "tourResource", "forTarget": "{{ReportSeed.Tour}}" } }
+            ]
+          },
+          "describe": [
+            { "id": "tour", "at": 7, "prefix": "deliveringTour", "usage": "project" },
+            { "id": "resource", "at": 7, "prefix": "tourResource", "usage": "project" }
+          ]
+        }
+        """;
+
+    private static IReadOnlyList<string> Created(JsonNode explained, int stage, string alias) =>
+        explained["steps"]!.AsArray().Single(step => step!["index"]!.GetValue<int>() == stage)!["creates"]!.AsArray()
+            .Single(created => created!["alias"]!.GetValue<string>() == alias)!["entities"]!.AsArray().Select(entity => entity!.GetValue<string>()).ToList();
+
+    private static IReadOnlyList<string> Described(JsonNode explained, string id) =>
+        explained["describe"]!.AsArray().Single(answer => answer!["id"]!.GetValue<string>() == id)!["root"]!["entities"]!.AsArray()
+            .Select(entity => entity!.GetValue<string>()).ToList();
+
+    [Fact]
+    public async Task A_resolve_continued_under_a_union_owning_row_creates_the_target_of_the_reference_it_follows_for_its_forTarget()
+    {
+        var ledger = await LedgerClient();
+        var explained = await ledger.ExplainHereAsync(ContinuedPerTarget());
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        Created(explained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour], "the shipment's tours.tourId references a tour, not the union's first target");
+        Created(explained.Body!, 6, "tourResource").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "the tour's resource.id references an employee or a vehicle by its variant");
+        Described(explained.Body!, "tour").Should().Equal([ReportSeed.Tour], "describe reports the alias as explain creates it");
+        Described(explained.Body!, "resource").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle]);
+    }
+
+    [Fact]
+    public async Task A_resolve_continued_under_a_nested_alias_creates_the_target_its_owner_binds()
+    {
+        var ledger = await LedgerClient();
+        var explained = await ledger.ExplainHereAsync(NestedChain(target: null, forTarget: ReportSeed.Shipment));
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        Created(explained.Body!, 3, "deliveringTour").Should().Equal([ReportSeed.Tour]);
+
+        var chained = await ledger.ExplainHereAsync(ReportScenarios.Request("A4"));
+        Created(chained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour], "A4's delivering tour, continued under the line's shipment");
+        Created(chained.Body!, 6, "tourVehicle").Should().Equal([ReportSeed.Vehicle], "a continued resolve with a target creates that target");
     }
 }

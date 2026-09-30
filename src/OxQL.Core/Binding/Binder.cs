@@ -1844,11 +1844,14 @@ public sealed class Binder
 
             // The added aliases are the owner's rows under the origin row: projected, never
             // filtered or sorted here, and further stages under them continue at the same owner.
+            // Their entity is the lookup's child or the resolve's target; a resolve without a target
+            // follows a reference of the owner's model, which explain asks the owner for.
             var many = raw.Resolve?.Elements == "all";
+            var known = raw.Lookup?.From ?? raw.Resolve?.Target;
 
             foreach (var alias in added)
             {
-                shape = shape.WithRoot(alias, new ShapeNode.Remote(raw.Lookup?.From ?? raw.Resolve?.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false));
+                shape = shape.WithRoot(alias, new ShapeNode.Remote(known ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false, TargetOpen: known is null));
                 anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many, Nested: true);
             }
         }

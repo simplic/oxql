@@ -131,6 +131,16 @@ public sealed class RemoteExplain : IDescribeOwners
     /// <inheritdoc/>
     public bool Knows(string service) => client?.IsConfigured(service) == true;
 
+    private readonly Dictionary<string, List<string>> reached = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: per alias a continued stage adds, the entities its owners' answers
+    /// say it creates (DESIGN §4.3), in the order of the checks; an alias no owner answered for is absent.
+    /// A resolve continued without a target follows a reference of the owner's model, so only the owner
+    /// that binds it knows what it reaches.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Reached => reached.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value, StringComparer.Ordinal);
+
     /// <inheritdoc/>
     /// <remarks>A describe is not a check: it is forwarded under <c>remote: "skip"</c> too, since nothing else can answer it.</remarks>
     public async Task<(JsonObject? Answer, string? Reason)> DescribeAsync(string service, JsonObject entry, CancellationToken cancellationToken)
@@ -201,6 +211,7 @@ public sealed class RemoteExplain : IDescribeOwners
                 answered.Add(check);
 
                 OwnerFaults.Scrubbed(answer);
+                Remember(check, answer);
 
                 if (answer["errors"] is JsonArray owned)
                     foreach (var error in owned.OfType<JsonObject>())
@@ -233,6 +244,33 @@ public sealed class RemoteExplain : IDescribeOwners
         }
 
         return (errors, notes);
+    }
+
+    /// <summary>The entities the owner's steps say each alias of a stage continued at it creates: <c>entity</c>, or <c>entities</c>.</summary>
+    private void Remember(OwnerCheck check, JsonObject answer)
+    {
+        foreach (var step in answer["steps"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            if (step["index"] is not JsonValue at || !at.TryGetValue<int>(out var index) || check.OriginOf(index) is not { } origin)
+                continue;
+
+            foreach (var created in step["creates"]?.AsArray().OfType<JsonObject>() ?? [])
+            {
+                if (created["alias"]?.GetValue<string>() is not { } alias || !origin.Aliases.Contains(alias, StringComparer.Ordinal))
+                    continue;
+
+                var entities = created["entities"] is JsonArray many
+                    ? many.OfType<JsonValue>().Select(value => value.ToString())
+                    : created["entity"] is JsonValue one ? [one.ToString()] : [];
+
+                if (!reached.TryGetValue(alias, out var list))
+                    reached[alias] = list = [];
+
+                foreach (var entity in entities)
+                    if (!list.Contains(entity, StringComparer.Ordinal))
+                        list.Add(entity);
+            }
+        }
     }
 
     /// <summary>A path a remote target's owner said the target lacks, at the check query's projection: relative to the alias, or to the owning row.</summary>

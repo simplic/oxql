@@ -411,6 +411,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var (checkErrors, checkNotes) = await owners.CheckAsync(bound, strict, cancellationToken).ConfigureAwait(false);
 
         notes.AddRange(checkNotes);
+        steps = WithReached(steps, binding.Trace, owners.Reached);
 
         if (checkErrors.Count > 0)
         {
@@ -874,7 +875,34 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             ShapeAfter = Summary(stage.After),
         }).ToList();
 
-    /// <summary>The roots <paramref name="after"/> has that <paramref name="before"/> did not, or holds differently; poisoned ones are not created.</summary>
+    /// <summary>
+    /// The steps with the entities the owners bound for each alias a resolve continued without a target
+    /// created (<see cref="RemoteExplain.Reached"/>): the target its reference reaches at the owner, as
+    /// the run binds it there. An alias no owner answered for keeps no entity.
+    /// </summary>
+    private static IReadOnlyList<ExplainStep> WithReached(IReadOnlyList<ExplainStep> steps, BindTrace? trace, IReadOnlyDictionary<string, IReadOnlyList<string>> reached)
+    {
+        if (trace is null || reached.Count == 0)
+            return steps;
+
+        var open = trace.Stages
+            .SelectMany(stage => stage.After.Roots.Where(root => root.Value is ShapeNode.Remote { TargetOpen: true }).Select(root => root.Key))
+            .ToHashSet(StringComparer.Ordinal);
+
+        return steps.Select(step => step with
+        {
+            Creates = step.Creates.Select(created => created.Node == "remote" && open.Contains(created.Alias) && reached.TryGetValue(created.Alias, out var entities)
+                ? created with { Entities = entities }
+                : created).ToList(),
+        }).ToList();
+    }
+
+    /// <summary>
+    /// The roots <paramref name="after"/> has that <paramref name="before"/> did not, or holds differently;
+    /// poisoned ones are not created. The alias of a resolve continued without a target holds what the
+    /// reference it follows reaches, which only its owners' models declare: no entity until the remote
+    /// check hears it from them (<see cref="WithReached"/>).
+    /// </summary>
     private static IReadOnlyList<ExplainCreated> Created(Shape before, Shape after)
     {
         var created = new List<ExplainCreated>();
@@ -892,6 +920,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 ShapeNode.Entity entity => new ExplainCreated { Alias = alias, Node = "entity", Entity = entity.Def.Id },
                 ShapeNode.Element element => new ExplainCreated { Alias = alias, Node = "element", Entity = element.Def.Id, Source = element.Source.Wire },
                 ShapeNode.Array array => new ExplainCreated { Alias = alias, Node = "array", Entity = array.Target.Id },
+                ShapeNode.Remote { TargetOpen: true } => new ExplainCreated { Alias = alias, Node = "remote", Entities = [] },
                 ShapeNode.Remote remote => new ExplainCreated { Alias = alias, Node = "remote", Entities = [remote.TargetEntity] },
                 ShapeNode.Keyed keyed => new ExplainCreated
                 {

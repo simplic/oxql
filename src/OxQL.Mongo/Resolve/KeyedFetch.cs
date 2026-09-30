@@ -123,6 +123,9 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
 
     /// <summary>Whether the target is an item: its members travel under <see cref="BoundKeyedBy.Element"/>.</summary>
     public bool Item { get; init; }
+
+    /// <summary>The continued stage an owner's stage index of the check query names; null for a stage of the query itself.</summary>
+    public Func<int?, ContinuedStage?> OriginOf { get; init; } = _ => null;
 }
 
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
@@ -1149,6 +1152,7 @@ public sealed class KeyedFetch
                     ProjectStage = projectStage,
                     ProjectAt = projectAt,
                     Item = item,
+                    OriginOf = plan.OriginOf,
                 };
             })
             .ToList();

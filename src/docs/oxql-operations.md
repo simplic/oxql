@@ -326,7 +326,9 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   elided as `"…"` (`route.apiVersion` is the version the remote client routes the service to,
   `IRemoteOwnerInfo.ApiVersionOf`, or `null` when it does not say); `reference` for a
   resolve, as bound; `creates`, the aliases added (`node` `entity`, `element`, `array`, `remote`,
-  `keyed`, `scalar`, `group`); `continued` on a keyed stage; `shapeAfter` (`paging` is `cursor`
+  `keyed`, `scalar`, `group`; a resolve continued under another alias without a `target` lists the
+  targets its owners bound the reference to, on its `forTarget` entity or on each target of the
+  alias, and none when no owner answered the check); `continued` on a keyed stage; `shapeAfter` (`paging` is `cursor`
   while every row is one entity row, `offset` after an unwind or group).
 - **`result.columns`**: the final shape's visible members and roots, each with `path`, `kind`,
   `nullable`, the `stage` that created it (`null`: the entry shape) and its `root`. Members of a

@@ -128,6 +128,10 @@ public class RcShipment
     public Guid OrganizationId { get; set; }
     public string Number { get; set; } = "";
     public List<RcBillingLine> BillingLines { get; set; } = [];
+
+    /// <summary>A driver of the shipment's own: a remote contact, where the tour's is a local customer.</summary>
+    [OxQLReference("crm.contact", "id")]
+    public Guid? DriverId { get; set; }
 }
 
 public class RcTour
@@ -136,6 +140,10 @@ public class RcTour
     public Guid OrganizationId { get; set; }
     public string Name { get; set; } = "";
     public List<RcBillingLine> BillingLines { get; set; } = [];
+
+    /// <summary>The tour's driver: a local customer, where the shipment's is a remote contact.</summary>
+    [OxQLReference("rc.customer")]
+    public Guid? DriverId { get; set; }
 }
 
 public class RcBillingLine

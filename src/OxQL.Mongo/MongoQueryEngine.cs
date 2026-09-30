@@ -351,7 +351,7 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         ExplainAsync(request, context, null, cancellationToken);
 
     /// <summary>The explain of <paramref name="request"/>, its owners within <paramref name="remoteBudget"/> (<c>Explain.RemoteTimeoutMs</c> when null).</summary>
-    private async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, TimeSpan? remoteBudget, CancellationToken cancellationToken)
+    private async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, TimeSpan? remoteBudget, CancellationToken cancellationToken, bool part = false)
     {
         ArgumentNullException.ThrowIfNull(request);
         context = Reaching(context);
@@ -372,11 +372,18 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var describe = await Describe.AnswerAsync(request, binding.Trace, models.Model, context, owners, describeNotes, cancellationToken).ConfigureAwait(false);
 
         if (binding is BindOutcome.Failed failed)
+        {
+            // An owner check that does not bind still says what the continued resolves of the part that
+            // binds reach, so an origin hears it for an alias continued under a continued alias.
+            if (context.Internal && !part && request.Remote != ExplainRequest.RemoteSkip)
+                steps = await ReachedOfBoundPartAsync(request, context, failed.Refusal.Errors ?? [], binding.Trace, steps, owners.Remaining, cancellationToken).ConfigureAwait(false);
+
             return new ExplainOutcome.Success(Answer(context, valid: false, failed.Refusal.Errors ?? [], [], steps, result, request) with
             {
                 Notes = Ordered(describeNotes),
                 Describe = describe,
             });
+        }
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
@@ -459,6 +466,48 @@ public sealed class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Collation = compiled.Collation is null ? null : Relaxed(compiled.Collation),
             Advisory = advisory,
         });
+    }
+
+    /// <summary>
+    /// The steps of an owner check that does not bind, with what each remote alias reaches in the part of
+    /// it that binds: every target of a remote union (a binding that fails lists its first), and for a
+    /// resolve continued without a target what its owners bound (<see cref="WithReached"/>). The
+    /// origin's projection probes every path it selects on every target of a union (DESIGN §4.3), so a
+    /// check fails here at that projection for a target that lacks one, though its joins bind as the
+    /// run binds them; without this, an alias continued under an alias of this host's (a stage its own
+    /// owners bind) would reach nothing at the origin although this host answered. The part is the
+    /// query without its failing stages, explained once as a check within what is left of the budget;
+    /// its errors and notes are not this answer's. An error without a stage leaves the steps.
+    /// </summary>
+    private async Task<IReadOnlyList<ExplainStep>> ReachedOfBoundPartAsync(ExplainRequest request, RequestContext context, IReadOnlyList<QueryValidationError> errors,
+        BindTrace? trace, IReadOnlyList<ExplainStep> steps, TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        if (trace is null || errors.Count == 0 || errors.Any(error => error.Stage is null)
+            || !trace.Stages.Any(stage => stage.After.Roots.Values.Any(node => node is ShapeNode.Remote)))
+            return steps;
+
+        var failing = errors.Select(error => error.Stage!.Value).ToHashSet();
+        var pipeline = request.Query.Pipeline.Where((_, index) => !failing.Contains(index)).ToList();
+
+        if (pipeline.Count == 0 || pipeline.Count == request.Query.Pipeline.Count)
+            return steps;
+
+        var bound = new ExplainRequest { Query = request.Query with { Pipeline = pipeline }, Remote = request.Remote, IsEnvelope = true };
+
+        if (await ExplainAsync(bound, context, remaining, cancellationToken, part: true).ConfigureAwait(false) is not ExplainOutcome.Success { Result: var answer })
+            return steps;
+
+        var reached = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        foreach (var created in answer.Steps.SelectMany(step => step.Creates).Where(created => created.Node == "remote" && created.Entities is not null))
+            reached.TryAdd(created.Alias, created.Entities!);
+
+        return steps.Select(step => step with
+        {
+            Creates = step.Creates.Select(created => created.Node == "remote" && reached.TryGetValue(created.Alias, out var entities)
+                ? created with { Entities = entities }
+                : created).ToList(),
+        }).ToList();
     }
 
     /// <summary>

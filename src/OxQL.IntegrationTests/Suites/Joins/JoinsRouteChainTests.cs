@@ -205,4 +205,54 @@ public class JoinsRouteChainTests
         Created(chained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour], "A4's delivering tour, continued under the line's shipment");
         Created(chained.Body!, 6, "tourVehicle").Should().Equal([ReportSeed.Vehicle], "a continued resolve with a target creates that target");
     }
+
+    /// <summary>
+    /// The fleet analogue of the studio's reference query: the shipment's delivering tour continued under
+    /// the union's owning row, and the vehicle continued under that continued alias without a target
+    /// (EXAMPLE-CASE's <c>shipmentVehicle</c>), next to the tour's own resource. The owning row selects a
+    /// member of each target (the shipment's number, the tour's), so the check query the owner is sent
+    /// does not bind at its projection for either target, as in the studio's reference query.
+    /// </summary>
+    private static string ContinuedUnderContinued() => $$"""
+        {
+          "query": {
+            "entityType": "ledger.transaction",
+            "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
+            "pipeline": [
+              { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+              { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+              { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+              { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id", "shipmentNumber", "number"] } },
+              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number", "resource.id"] } },
+              { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "onMissing": "report" } },
+              { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "onMissing": "report" } }
+            ]
+          },
+          "describe": [
+            { "id": "shipmentVehicle", "at": 8, "prefix": "shipmentVehicle", "usage": "project" }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task A_resolve_continued_without_a_target_under_a_continued_alias_creates_the_target_its_owner_binds()
+    {
+        var ledger = await LedgerClient();
+        var explained = await ledger.ExplainHereAsync(ContinuedUnderContinued());
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        Created(explained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour]);
+        Created(explained.Body!, 6, "shipmentVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "the delivering tour's resource.id, bound at its owner, the owner answered");
+        Created(explained.Body!, 7, "tourVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle]);
+        Described(explained.Body!, "shipmentVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "describe reports the alias as explain creates it");
+
+        var request = ReportScenarios.Request("A4");
+        var pipeline = request["pipeline"]!.AsArray();
+        pipeline.OfType<JsonObject>().Single(stage => stage["resolve"]?["as"]?.GetValue<string>() == "tourVehicle")["resolve"]!.AsObject().Remove("target");
+
+        var chained = await ledger.ExplainHereAsync(request.ToJsonString());
+        chained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(chained.Text);
+        Created(chained.Body!, 6, "tourVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "A4's vehicle without its target, continued under the continued delivering tour");
+    }
 }

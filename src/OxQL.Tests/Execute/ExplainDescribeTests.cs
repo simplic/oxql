@@ -653,4 +653,46 @@ public class ExplainDescribeTests
         explain.Steps[1].Creates.Single().Should().Match<ExplainCreated>(created => created.Alias == "co" && created.Node == "remote");
         explain.Steps[1].Creates.Single().Entities.Should().BeEmpty("the reference lies in crm's model, which did not answer; 'crm.contact' is the anchor's target, not co's");
     }
+
+    // ---- the target of a continued resolve in an owner check that does not bind ----------------------
+
+    /// <summary>
+    /// A check query as an origin sends it to an owner: the driver continued under a local union, then
+    /// the origin's projection, which probes a path the owner lacks (<c>nope</c>), so it does not bind.
+    /// </summary>
+    private const string DriverUnderProbe = """
+        [{ "resolve": { "path": "billing.referenceId", "as": "b" } },
+         { "resolve": { "path": "b.driverId", "as": "d", "forTarget": "rc.shipment" } },
+         { "project": { "b": 1, "d": 1, "nope": 1 } }]
+        """;
+
+    private static async Task<ExplainResult> ExplainInternalAsync(string pipeline, bool internalCall)
+    {
+        var body = $$"""{ "query": { "entityType": "{{Invoice}}", "pipeline": {{pipeline}} } }""";
+        var request = JsonSerializer.Deserialize<ExplainRequest>(body, OxQLJson.Wire)!;
+        var context = BindHost.Context(BindHost.Options()) with { Internal = internalCall };
+        var outcome = await Engine().ExplainAsync(request, context);
+
+        return outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+    }
+
+    [Fact]
+    public async Task An_owner_check_that_does_not_bind_at_the_origins_projection_still_creates_the_target_of_a_continued_resolve()
+    {
+        var explain = await ExplainInternalAsync(DriverUnderProbe, internalCall: true);
+
+        explain.Valid.Should().BeFalse();
+        explain.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Stage == 2);
+        explain.Steps[1].Creates.Single().Entities.Should().Equal(["crm.contact"],
+            "the joins before the probe bind, and this host checks them as a valid check query, so the origin hears what its alias continued under a continued alias reaches");
+    }
+
+    [Fact]
+    public async Task A_public_explain_that_does_not_bind_creates_no_entity_for_a_continued_resolve()
+    {
+        var explain = await ExplainInternalAsync(DriverUnderProbe, internalCall: false);
+
+        explain.Valid.Should().BeFalse();
+        explain.Steps[1].Creates.Single().Entities.Should().BeEmpty("a request that does not bind asks no owner");
+    }
 }

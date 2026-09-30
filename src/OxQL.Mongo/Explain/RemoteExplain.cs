@@ -102,9 +102,11 @@ public sealed class RemoteExplain : IDescribeOwners
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         skip = request?.Remote == ExplainRequest.RemoteSkip;
+        // A nested explain whose outer one spent the budget asks no owner at all.
         this.budget = budget is { } given
-            ? TimeSpan.FromMilliseconds(Math.Max(1, given.TotalMilliseconds))
+            ? (given > TimeSpan.Zero ? given : TimeSpan.Zero)
             : TimeSpan.FromMilliseconds(Math.Max(1, context.Options.Explain.RemoteTimeoutMs));
+        spent = this.budget == TimeSpan.Zero;
     }
 
     /// <summary>

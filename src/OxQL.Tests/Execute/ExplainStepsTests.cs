@@ -294,7 +294,7 @@ public class ExplainStepsTests
 
         var result = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
         result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
-        client.ExplainCalls.Should().ContainSingle("the nested explain gets what is left of the budget, which the silent owner spent");
+        client.ExplainCalls.Select(call => call.Service + ":" + call.Budget.TotalMilliseconds).Should().ContainSingle("the nested explain gets what is left of the budget, which the silent owner spent");
     }
 
     [Fact]

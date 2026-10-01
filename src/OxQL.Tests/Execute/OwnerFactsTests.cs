@@ -110,6 +110,6 @@ public class OwnerFactsTests
         owner["service"]!.GetValue<string>().Should().Be("crm");
         owner["route"]!.ToJsonString().Should().Be("""{"apiName":"crm-api","apiVersion":"v2"}""");
         result.Target("r", "crm.contact")["owner"]!.GetValue<int>().Should().Be(result.Stage(0).Placement!.Owner);
-        result.Revision.Schema.Should().Be("sha256:abc");
+        result.Revision.Schema.Should().Contain("rc", "sha256:abc");
     }
 }

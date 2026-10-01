@@ -211,10 +211,10 @@ public sealed class ExplainOptions
     /// </summary>
     public int TimeoutMs { get; set; } = 2_000;
 
-    /// <summary>The members one type of the answer's type table lists; a type with more is <c>truncated</c>, and a <c>catalog</c> entry reads the rest.</summary>
+    /// <summary>With <c>include: "types"</c>, the member rows one type lists; a type with more is <c>truncated</c>, and a <c>catalog</c> entry reads the rest. An answer by reference lists no member.</summary>
     public int MaxTypeMembers { get; set; } = 300;
 
-    /// <summary>How many levels of members below each root the type table lists when the request names no <c>shape.depth</c>.</summary>
+    /// <summary>With <c>include: "types"</c>, how many levels of member rows below each root are listed when the request names no <c>shape.depth</c>.</summary>
     public int DefaultShapeDepth { get; set; } = 2;
 
     /// <summary>

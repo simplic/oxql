@@ -6,11 +6,18 @@ using OxQL.Core.Models;
 
 namespace OxQL.Tests.Execute;
 
-/// <summary>Reads an explain answer the way a consumer does: stages, aliases, owners, the type table and the flags of a member at a stage.</summary>
+/// <summary>
+/// Reads an explain answer the way a consumer without schema documents does: stages, aliases, owners,
+/// the type table and the flags of a member at a stage. Its requests ask for the member rows
+/// (<c>include: "types"</c>) unless they name their own <c>include</c>.
+/// </summary>
 internal static class ExplainAnswer
 {
-    /// <summary>Every include: the shape, the notes and the plan (the bound form, the emitted stages, the owner queries).</summary>
-    public static readonly IReadOnlyList<string> WithPlan = [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, ExplainRequest.IncludePlan];
+    /// <summary>The shape with its member rows, the notes and the plan (the bound form, the emitted stages, the owner queries).</summary>
+    public static readonly IReadOnlyList<string> WithPlan = [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, ExplainRequest.IncludeTypes, ExplainRequest.IncludePlan];
+
+    /// <summary>The default includes with the member rows.</summary>
+    public static readonly IReadOnlyList<string> WithTypes = [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, ExplainRequest.IncludeTypes];
 
     /// <summary>The request that also asks for the plan.</summary>
     public static ExplainRequest Planned(this QueryRequest query) => new() { Query = query, Include = WithPlan, IsEnvelope = true };
@@ -77,7 +84,7 @@ internal static class ExplainAnswer
 
     /// <summary>The flags a member has in its type's own entry shape.</summary>
     public static JsonObject OwnFlags(this ExplainResult answer, string type, string path) =>
-        answer.FlagSets[answer.OwnFlagsId(type, path)]!.AsObject();
+        answer.FlagSets![answer.OwnFlagsId(type, path)]!.AsObject();
 
     /// <summary>The variants that carry a member, as its row points to them in the type's <c>onlyFor</c> list; null on a member every value has.</summary>
     public static List<string>? OnlyFor(this ExplainResult answer, string type, string path) =>
@@ -92,7 +99,7 @@ internal static class ExplainAnswer
 
     /// <summary>The override set of a root after a stage, or null when its members have their own flags there.</summary>
     public static JsonObject? Overrides(this ExplainResult answer, int stage, string root) =>
-        answer.ShapeAt(stage).Flags[root] is JsonValue pointer ? answer.FlagSets[pointer.GetValue<string>()]!.AsObject() : null;
+        answer.ShapeAt(stage).Flags![root] is JsonValue pointer ? answer.FlagSets![pointer.GetValue<string>()]!.AsObject() : null;
 
     /// <summary>
     /// The flags of a member of <paramref name="root"/> after a stage (-1: at the entry), as a consumer
@@ -109,7 +116,7 @@ internal static class ExplainAnswer
 
         var overrides = answer.Overrides(stage, root);
 
-        JsonObject? Read(JsonNode? pointer) => pointer is null ? null : answer.FlagSets[pointer.GetValue<string>()]!.AsObject();
+        JsonObject? Read(JsonNode? pointer) => pointer is null ? null : answer.FlagSets![pointer.GetValue<string>()]!.AsObject();
 
         if (overrides is not null && overrides.TryGetPropertyValue(path, out var here))
             return Read(here);
@@ -122,13 +129,21 @@ internal static class ExplainAnswer
         if (overrides is not null && overrides.TryGetPropertyValue(ExplainTypes.Every, out var every))
             return Read(every);
 
-        return own is null ? null : answer.FlagSets[own]!.AsObject();
+        return own is null ? null : answer.FlagSets![own]!.AsObject();
     }
 
     public static List<string> Operators(this JsonObject flags) => flags["operators"]!.AsArray().Select(op => op!.GetValue<string>()).ToList();
 
     public static List<string> Strings(this JsonNode? array) => array!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
-    /// <summary>An explain envelope from its JSON text.</summary>
-    public static ExplainRequest Envelope(string body) => JsonSerializer.Deserialize<ExplainRequest>(body, OxQLJson.Wire)!;
+    /// <summary>An explain envelope from its JSON text; one that names no <c>include</c> asks for the member rows beside the defaults.</summary>
+    public static ExplainRequest Envelope(string body)
+    {
+        var request = JsonSerializer.Deserialize<ExplainRequest>(body, OxQLJson.Wire)!;
+
+        return ReferenceEquals(request.Include, ExplainRequest.DefaultIncludes) ? request with { Include = WithTypes } : request;
+    }
+
+    /// <summary>An explain envelope exactly as its JSON text says: the types by reference unless it asks for the rows.</summary>
+    public static ExplainRequest Plain(string body) => JsonSerializer.Deserialize<ExplainRequest>(body, OxQLJson.Wire)!;
 }

@@ -243,14 +243,22 @@ public sealed record ExplainBudget(int Ms, int Calls);
 /// The body of <c>POST /oxql/explain</c>: a plain query, or the envelope
 /// <c>{ query, include?, shape?: { depth }, remote?, catalog? }</c>. A body with <c>entityType</c> at
 /// the top is a plain query, which is the envelope with its defaults: include <c>shape</c> and
-/// <c>notes</c>, shape depth <see cref="Models.ExplainOptions.DefaultShapeDepth"/>, remote <c>check</c>,
-/// no catalog. A plain <see cref="QueryRequest"/> converts to one.
+/// <c>notes</c>, remote <c>check</c>, no catalog. The types are answered by reference: a caller that
+/// holds no schema document asks for the member rows with <c>include: "types"</c>, to which alone the
+/// shape depth (<see cref="Models.ExplainOptions.DefaultShapeDepth"/>) applies. A plain
+/// <see cref="QueryRequest"/> converts to one.
 /// </summary>
 [JsonConverter(typeof(ExplainRequestConverter))]
 public sealed record ExplainRequest
 {
-    /// <summary>The <see cref="Include"/> value for the per-stage shapes, the type table and the flag sets (default).</summary>
+    /// <summary>The <see cref="Include"/> value for the per-stage shapes, the type references and the flag rules (default).</summary>
     public const string IncludeShape = "shape";
+
+    /// <summary>
+    /// The <see cref="Include"/> value for the member rows of every type, the flag sets and the per-root
+    /// overrides: what a caller without the services' schema documents needs. It implies <see cref="IncludeShape"/>.
+    /// </summary>
+    public const string IncludeTypes = "types";
 
     /// <summary>The <see cref="Include"/> value for the engine-behaviour notes (default).</summary>
     public const string IncludeNotes = "notes";
@@ -286,7 +294,7 @@ public sealed record ExplainRequest
     public static readonly IReadOnlyList<string> DefaultIncludes = [IncludeShape, IncludeNotes];
 
     /// <summary>The <c>include</c> values the engine knows.</summary>
-    public static readonly IReadOnlyList<string> KnownIncludes = [IncludeShape, IncludeNotes, IncludeDocs, IncludePlan, IncludeIndexes];
+    public static readonly IReadOnlyList<string> KnownIncludes = [IncludeShape, IncludeNotes, IncludeTypes, IncludeDocs, IncludePlan, IncludeIndexes];
 
     /// <summary>The <c>remote</c> values the engine knows.</summary>
     public static readonly IReadOnlyList<string> KnownRemotes = [RemoteCheck, RemoteCached];
@@ -297,7 +305,7 @@ public sealed record ExplainRequest
     /// </summary>
     public IReadOnlyList<JsonObject> Catalog { get; init; } = [];
 
-    /// <summary>The <c>shape.depth</c> the caller asked for (at most <c>Explain.MaxShapeDepth</c>), or null for the default.</summary>
+    /// <summary>The <c>shape.depth</c> the caller asked for (at most <c>Explain.MaxShapeDepth</c>), or null for the default: the levels of member rows <c>include: "types"</c> answers.</summary>
     public int? ShapeDepth { get; init; }
 
     /// <summary>
@@ -312,8 +320,11 @@ public sealed record ExplainRequest
     /// <summary>What an internal explain may still spend of its origin's explain; null on a public one.</summary>
     public ExplainBudget? Budget { get; init; }
 
-    /// <summary>Whether the per-stage shapes, the types and the flag sets were asked for.</summary>
-    public bool IncludesShape => Include.Contains(IncludeShape, StringComparer.Ordinal);
+    /// <summary>Whether the per-stage shapes, the type references and the flag rules were asked for.</summary>
+    public bool IncludesShape => Include.Contains(IncludeShape, StringComparer.Ordinal) || IncludesTypes;
+
+    /// <summary>Whether the member rows, the flag sets and the overrides were asked for.</summary>
+    public bool IncludesTypes => Include.Contains(IncludeTypes, StringComparer.Ordinal);
 
     /// <summary>Whether the notes were asked for.</summary>
     public bool IncludesNotes => Include.Contains(IncludeNotes, StringComparer.Ordinal);
@@ -579,15 +590,27 @@ public sealed record ExplainResult
     [JsonPropertyName("aliases")]
     public JsonObject Aliases { get; init; } = [];
 
-    /// <summary>The shared type table: each member described once, by <c>t:&lt;entity&gt;[#item]</c>, and the unions by <c>u:&lt;alias&gt;</c>.</summary>
+    /// <summary>
+    /// The types the roots point to: <c>t:&lt;entity&gt;[#item]</c> names an entity (or the element of an item
+    /// collection on it) of a service's schema document at a revision, <c>u:&lt;alias&gt;</c> the union of several.
+    /// With <c>include: "types"</c> each also carries its member rows.
+    /// </summary>
     [JsonPropertyName("types")]
     public JsonObject Types { get; init; } = [];
 
-    /// <summary>The flag sets the type rows (by the id of the flags) and the stage shapes (<c>o:n</c>) point to.</summary>
-    [JsonPropertyName("flagSets")]
-    public JsonObject FlagSets { get; init; } = [];
+    /// <summary>
+    /// The flag rules the stage shapes point to (<c>r:n</c>): where the members of one root stand at one
+    /// point of the pipeline, from which a reader of the schema documents derives each member's flags.
+    /// </summary>
+    [JsonPropertyName("rules")]
+    public JsonObject Rules { get; init; } = [];
 
-    /// <summary>The final shape: paging, the visible columns and the outcomes a join may have. Absent when the entity itself did not bind.</summary>
+    /// <summary>The flag sets the type rows (by the id of the flags) and the stage shapes (<c>o:n</c>) point to; only with <c>include: "types"</c>.</summary>
+    [JsonPropertyName("flagSets")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? FlagSets { get; init; }
+
+    /// <summary>The final shape: paging and the visible columns. Absent when the entity itself did not bind.</summary>
     [JsonPropertyName("result")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExplainShapeResult? Result { get; init; }
@@ -642,19 +665,18 @@ public sealed record ExplainEngine
 /// <summary>The revisions an explain answer was bound against.</summary>
 public sealed record ExplainRevision
 {
-    /// <summary>The revision of the schema document the host publishes; null when it publishes none.</summary>
+    /// <summary>
+    /// The revision of the schema document of each service the answer names a type of or asked, this
+    /// host's included: a reader whose document of a service has another revision loads it again. Null
+    /// for a service that publishes none.
+    /// </summary>
     [JsonPropertyName("schema")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-    public string? Schema { get; init; }
+    public IReadOnlyDictionary<string, string?> Schema { get; init; } = new Dictionary<string, string?>(StringComparer.Ordinal);
 
     /// <summary>A hash of the asking organisation's addon definitions the answer read; null when it read none.</summary>
     [JsonPropertyName("addons")]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Addons { get; init; }
-
-    /// <summary>The schema revision of each owner that answered, by service.</summary>
-    [JsonPropertyName("owners")]
-    public IReadOnlyDictionary<string, string?> Owners { get; init; } = new Dictionary<string, string?>(StringComparer.Ordinal);
 }
 
 /// <summary>How an explain answer may be kept.</summary>
@@ -700,9 +722,9 @@ public sealed record ExplainStage
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
-    /// <summary>Where a join stage runs; null for a stage that is no join, a join nothing reads or shows, and a request that does not bind.</summary>
+    /// <summary>Where a join stage runs; absent for a stage that is no join, a join nothing reads or shows, and a request that does not bind.</summary>
     [JsonPropertyName("placement")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExplainPlacement? Placement { get; init; }
 
     /// <summary>
@@ -740,9 +762,9 @@ public sealed record ExplainPlacement
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Host { get; init; }
 
-    /// <summary>For a keyed or continued stage: the index of its owner in <see cref="ExplainResult.Owners"/> (the first remote target's, else the first); null elsewhere.</summary>
+    /// <summary>For a keyed or continued stage: the index of its owner in <see cref="ExplainResult.Owners"/> (the first remote target's, else the first); absent elsewhere.</summary>
     [JsonPropertyName("owner")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Owner { get; init; }
 }
 
@@ -761,9 +783,9 @@ public sealed record ExplainShape
     [JsonPropertyName("unwound")]
     public required IReadOnlyList<string> Unwound { get; init; }
 
-    /// <summary>The paths an inclusion projection kept, in ordinal order; null while no inclusion projection ran.</summary>
+    /// <summary>The paths an inclusion projection kept, in ordinal order; absent while no inclusion projection ran.</summary>
     [JsonPropertyName("projection")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Projection { get; init; }
 
     /// <summary>
@@ -775,11 +797,29 @@ public sealed record ExplainShape
     public required JsonObject Roots { get; init; }
 
     /// <summary>
-    /// Per root whose members differ here from their type's own flags, the override set (<c>o:n</c>) in
-    /// <see cref="ExplainResult.FlagSets"/>; a root without an entry has its type's flags.
+    /// The paths that left the row and are not named by <see cref="Projection"/>: what an exclusion
+    /// projection removed and the collections an unwind with <c>keepPath: false</c> took out, as wire
+    /// paths in ordinal order. A path at or under one is not in the row. Absent when there is none.
+    /// </summary>
+    [JsonPropertyName("removed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Removed { get; init; }
+
+    /// <summary>
+    /// Per root whose members stand differently here than in their type, or that is no row of a type,
+    /// the rule (<c>r:n</c>) in <see cref="ExplainResult.Rules"/>; the members of a root without an entry
+    /// have their own flags.
+    /// </summary>
+    [JsonPropertyName("rules")]
+    public required JsonObject Rules { get; init; }
+
+    /// <summary>
+    /// Only with <c>include: "types"</c>: per root whose members differ here from their type's own flags,
+    /// the override set (<c>o:n</c>) in <see cref="ExplainResult.FlagSets"/>; a root without an entry has its type's flags.
     /// </summary>
     [JsonPropertyName("flags")]
-    public required JsonObject Flags { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Flags { get; init; }
 }
 
 /// <summary>The final shape of the query.</summary>
@@ -789,16 +829,9 @@ public sealed record ExplainShapeResult
     [JsonPropertyName("paging")]
     public required string Paging { get; init; }
 
-    /// <summary>The final shape's visible members and roots.</summary>
+    /// <summary>The final shape's visible members and roots. The outcomes a join may have are its alias's (<c>aliases.*.outcome</c>).</summary>
     [JsonPropertyName("columns")]
     public required IReadOnlyList<ExplainColumn> Columns { get; init; }
-
-    /// <summary>
-    /// Per join that may lose data, <c>{ alias, as, stage, values }</c>: the data-loss outcomes its
-    /// rows may have. <c>as</c> is the row member that carries the outcome, null until a stage names one.
-    /// </summary>
-    [JsonPropertyName("outcomes")]
-    public IReadOnlyList<JsonNode> Outcomes { get; init; } = [];
 }
 
 /// <summary>One visible member or root of the final shape.</summary>
@@ -828,9 +861,9 @@ public sealed record ExplainColumn
     [JsonPropertyName("nullable")]
     public required bool Nullable { get; init; }
 
-    /// <summary>The stage that created the member, or null for a member of the entry shape.</summary>
+    /// <summary>The stage that created the member; absent for a member of the entry shape.</summary>
     [JsonPropertyName("stage")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Stage { get; init; }
 
     /// <summary>The root the member lies under, <c>""</c> for the entity itself.</summary>

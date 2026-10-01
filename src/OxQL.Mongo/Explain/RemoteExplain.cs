@@ -106,9 +106,6 @@ public sealed class ExplainOwnerUse(string service, string? via)
     /// <summary>The milliseconds its calls took together.</summary>
     public long Ms { get; set; }
 
-    /// <summary>The schema revision its answer names.</summary>
-    public string? Revision { get; set; }
-
     /// <summary>The engine block of its answer.</summary>
     public JsonNode? Engine { get; set; }
 
@@ -141,6 +138,7 @@ public sealed class RemoteExplain : IExplainOwners
     private readonly RequestContext context;
     private readonly ExplainTypes? types;
     private readonly bool shape;
+    private readonly bool tables;
     private readonly bool docs;
     private readonly int? depth;
     private readonly TimeSpan budget;
@@ -177,6 +175,7 @@ public sealed class RemoteExplain : IExplainOwners
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         this.types = types;
         shape = request.IncludesShape && types is not null;
+        tables = shape && request.IncludesTypes;
         docs = request.IncludesDocs;
         depth = request.ShapeDepth;
 
@@ -262,6 +261,14 @@ public sealed class RemoteExplain : IExplainOwners
     /// <summary>The owners this explain reached, in the order they were first asked; the ones reached through another owner after it.</summary>
     public IReadOnlyList<ExplainOwnerUse> Owners => uses;
 
+    private readonly Dictionary<string, string?> revisions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The revision of each service's schema document as the answers named it (<c>revision.schema</c>): an
+    /// owner's own and those of the owners it asked. Null for a service that publishes none.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> Revisions => revisions;
+
     /// <summary>The <c>EXPLAIN_LIMIT</c> notes of the parts a limit left out.</summary>
     public IReadOnlyList<Diagnostic> LimitNotes => limitNotes;
 
@@ -279,7 +286,7 @@ public sealed class RemoteExplain : IExplainOwners
         {
             Query = new QueryRequest { EntityType = hash < 0 ? entity : entity[..hash], Pipeline = [] },
             Catalog = [(JsonObject)entry.DeepClone()],
-            Include = docs ? [ExplainRequest.IncludeDocs] : [],
+            Include = [.. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
             ShapeDepth = depth,
             IsEnvelope = true,
         };
@@ -322,9 +329,10 @@ public sealed class RemoteExplain : IExplainOwners
                 {
                     Query = check.Query,
                     Remote = ExplainRequest.RemoteCheck,
+                    // The owner writes its member rows out only for an origin that was asked to.
                     Include = !shape ? [ExplainRequest.IncludeNotes]
-                        : docs ? [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, ExplainRequest.IncludeDocs]
-                        : ExplainRequest.DefaultIncludes,
+                        : !tables && !docs ? ExplainRequest.DefaultIncludes
+                        : [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, .. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
                     ShapeDepth = shape ? depth : null,
                     IsEnvelope = true,
                 };
@@ -619,6 +627,8 @@ public sealed class RemoteExplain : IExplainOwners
         if (answer is null)
             return (null, Unsupported);
 
+        Revise(answer);
+
         // The owners this host's own explain asked are this explain's: their calls are spent here.
         foreach (var nested in answer["owners"]?.AsArray().OfType<JsonObject>() ?? [])
         {
@@ -753,16 +763,30 @@ public sealed class RemoteExplain : IExplainOwners
 
         use.Reason ??= nested["reason"]?.GetValue<string>();
         use.Cached &= calls == 0;
-        use.Revision = nested["revision"]?.GetValue<string>() ?? use.Revision;
         use.Engine = nested["engine"]?.DeepClone() ?? use.Engine;
     }
 
-    private static void ReadFacts(ExplainOwnerUse use, JsonObject answer)
+    private void ReadFacts(ExplainOwnerUse use, JsonObject answer)
     {
-        use.Revision = answer["revision"]?["schema"]?.GetValue<string>() ?? use.Revision;
+        Revise(answer);
 
         if (answer["engine"] is JsonObject engine)
             use.Engine = new JsonObject { ["version"] = engine["version"]?.DeepClone(), ["contract"] = engine["contract"]?.DeepClone() };
+    }
+
+    /// <summary>Takes the schema revisions an answer names; a revision once named is not replaced by none.</summary>
+    private void Revise(JsonObject answer)
+    {
+        if (answer["revision"]?["schema"] is not JsonObject named)
+            return;
+
+        foreach (var (service, value) in named)
+        {
+            var text = value is JsonValue stated && stated.TryGetValue<string>(out var read) ? read : null;
+
+            if (!revisions.TryGetValue(service, out var known) || known is null)
+                revisions[service] = text;
+        }
     }
 
     /// <summary>A part the time ran out before: the explain's own wall time is a limit, the owners' budget an unchecked part.</summary>

@@ -198,12 +198,12 @@ public class ExplainTypesTests
     {
         var result = await ExplainAsync(Joins, client: OwnerFleet.Client());
 
-        result.Entry!.Shape.Flags.Count.Should().Be(0, "at the entry every member has its type's own flags");
+        result.Entry!.Shape.Flags!.Count.Should().Be(0, "at the entry every member has its type's own flags");
         result.OwnFlags("t:rc.invoice", "lines.customerId")["sortable"]!.GetValue<bool>().Should().BeFalse();
         result.FlagsAt(0, "", "lines.customerId")!["sortable"]!.GetValue<bool>().Should().BeTrue("the collection is unwound: one element per row");
         result.FlagsAt(0, "", "lines.customerId")!["underCollection"]!.GetValue<int>().Should().Be(0);
         result.FlagsAt(0, "", "number").Should().BeEquivalentTo(result.OwnFlags("t:rc.invoice", "number"), "a member the unwind does not touch keeps its own");
-        result.ShapeAt(1).Flags[""]!.GetValue<string>().Should().Be(result.ShapeAt(0).Flags[""]!.GetValue<string>(), "the same overrides are one set, said once");
+        result.ShapeAt(1).Flags![""]!.GetValue<string>().Should().Be(result.ShapeAt(0).Flags![""]!.GetValue<string>(), "the same overrides are one set, said once");
 
         // A keyed alias is joined after the page: its members can be projected, never filtered or sorted.
         foreach (var path in result.Paths("t:rc.shipment#billingLines"))
@@ -213,7 +213,7 @@ public class ExplainTypesTests
         result.OwnFlags("t:rc.shipment#billingLines", "code").Operators().Should().Contain("eq", "the type's own flags are the owner entity's");
 
         // An inline join's members keep their own flags; an element alias's are the element's.
-        result.ShapeAt(1).Flags["c"].Should().NotBeNull("the alias itself has flags");
+        result.ShapeAt(1).Flags!["c"].Should().NotBeNull("the alias itself has flags");
         result.FlagsAt(1, "c", "name").Should().BeEquivalentTo(result.OwnFlags("t:rc.customer", "name"));
         result.FlagsAt(0, "line", "customerId")!["sortable"]!.GetValue<bool>().Should().BeTrue();
         result.FlagsAt(0, "line", "parts.customerId")!["underCollection"]!.GetValue<int>().Should().Be(1);
@@ -240,7 +240,7 @@ public class ExplainTypesTests
         result.Overrides(1, "")!.TryGetPropertyValue("*", out var every).Should().BeTrue("most members are gone: said once");
         every.Should().BeNull();
         result.ShapeAt(1).Projection.Should().Equal("c.name", "id", "lines.id", "number");
-        result.ShapeAt(2).Flags[""]!.GetValue<string>().Should().Be(result.ShapeAt(1).Flags[""]!.GetValue<string>());
+        result.ShapeAt(2).Flags![""]!.GetValue<string>().Should().Be(result.ShapeAt(1).Flags![""]!.GetValue<string>());
         result.ShapeAt(0).Projection.Should().BeNull();
     }
 
@@ -326,7 +326,7 @@ public class ExplainTypesTests
         price.Fact(ExplainTypes.Row.Description).Should().BeNull("descriptions come with include docs only");
         price.More()["displayName"]!.GetValue<string>().Should().Be("Price");
 
-        var documented = await ExplainAsync("[]", """ "include": ["shape", "notes", "docs"] """, entity: Order, model: BindHost.Probe, addons: new Definitions());
+        var documented = await ExplainAsync("[]", """ "include": ["shape", "notes", "types", "docs"] """, entity: Order, model: BindHost.Probe, addons: new Definitions());
 
         documented.Member("t:probe.order", bag + ".Preis")![ExplainTypes.Row.Description]!.GetValue<string>().Should().Be("The agreed price.");
         result.OwnFlags("t:probe.order", bag + ".Preis").Operators().Should().Contain("gt");
@@ -372,7 +372,7 @@ public class ExplainTypesTests
         result.OwnerOf("crm").Should().Match<JsonObject>(owner => owner["answered"]!.GetValue<bool>() && owner["calls"]!.GetValue<int>() == 1 && !owner["cached"]!.GetValue<bool>());
         result.Cache.DependsOn.Should().Equal("crm");
         result.Cache.Complete.Should().BeTrue();
-        result.Revision.Owners.Should().ContainKey("crm");
+        result.Revision.Schema.Should().ContainKey("crm");
     }
 
     [Fact]
@@ -542,7 +542,7 @@ public class ExplainTypesTests
         result.Catalog[0]["members"]!.AsArray().Select(row => row![0]!.GetValue<string>()).Should().Equal("lines.parts.customerId");
         result.Catalog[0]["truncated"]!.GetValue<bool>().Should().BeFalse();
         result.Catalog[1]["members"]!.AsArray().Select(row => row![0]!.GetValue<string>()).Should().Equal("lines.id", "lines.customerId", "lines.parts");
-        result.FlagSets.ContainsKey(result.Catalog[0]["members"]![0]![ExplainTypes.Row.Flags]!.GetValue<string>()).Should().BeTrue("the rows point to the answer's flag sets");
+        result.FlagSets!.ContainsKey(result.Catalog[0]["members"]![0]![ExplainTypes.Row.Flags]!.GetValue<string>()).Should().BeTrue("the rows point to the answer's flag sets");
 
         var variants = await ExplainAsync("[]", """ "catalog": [{ "id": "slot", "entity": "rc.invoice", "prefix": "slot" }] """);
 
@@ -580,11 +580,11 @@ public class ExplainTypesTests
         result.Paths("t:crm.contact").Should().Contain("email");
         result.OwnFlags("t:crm.contact", "name")["sortable"]!.GetValue<bool>().Should().BeTrue("an entity's own flags are its owner's answer as it stands");
         result.Catalog[1]["members"]!.AsArray().Select(row => row![0]!.GetValue<string>()).Should().Equal("phones.number", "phones.label");
-        result.FlagSets.ContainsKey(result.Catalog[1]["members"]![0]![ExplainTypes.Row.Flags]!.GetValue<string>()).Should().BeTrue();
+        result.FlagSets!.ContainsKey(result.Catalog[1]["members"]![0]![ExplainTypes.Row.Flags]!.GetValue<string>()).Should().BeTrue();
 
         client.ExplainCalls.Should().HaveCount(2);
         client.ExplainCalls.Should().OnlyContain(call => call.Service == "crm" && call.Budget <= TimeSpan.FromMilliseconds(1_500) && call.Request.Catalog.Single()["id"]!.GetValue<string>() == "forwarded");
-        client.ExplainCalls[0].Request.Include.Should().BeEmpty("the owner answers the lookup, not the shape of an empty query");
+        client.ExplainCalls[0].Request.Include.Should().Equal(["types"], "the owner answers the lookup with the member rows this answer was asked for, not the shape of an empty query");
     }
 
     [Fact]
@@ -613,7 +613,7 @@ public class ExplainTypesTests
         result.Stages.Should().OnlyContain(stage => stage.Shape == null);
         result.Entry.Should().BeNull();
         result.Types.Count.Should().Be(0);
-        result.FlagSets.Count.Should().Be(0);
+        result.FlagSets.Should().BeNull();
         result.Alias("c")["node"]!.GetValue<string>().Should().Be("entity");
         result.Alias("c").ContainsKey("type").Should().BeFalse();
         result.Notes.Should().NotBeEmpty();
@@ -646,11 +646,11 @@ public class ExplainTypesTests
     [Fact]
     public async Task An_answer_over_MaxAnswerBytes_keeps_the_first_level_of_its_types_then_drops_the_plan_and_says_so()
     {
-        var whole = await ExplainAsync(Joins, """ "include": ["shape", "notes", "plan"] """, client: OwnerFleet.Client());
+        var whole = await ExplainAsync(Joins, """ "include": ["shape", "notes", "types", "plan"] """, client: OwnerFleet.Client());
         var size = JsonSerializer.SerializeToUtf8Bytes(whole, OxQLJson.Wire).Length;
 
         // The etag is written after the size is taken, so the cap lies a little below the whole answer.
-        var trimmed = await ExplainAsync(Joins, """ "include": ["shape", "notes", "plan"] """, client: OwnerFleet.Client(), configure: options => options.Explain.MaxAnswerBytes = size - 200);
+        var trimmed = await ExplainAsync(Joins, """ "include": ["shape", "notes", "types", "plan"] """, client: OwnerFleet.Client(), configure: options => options.Explain.MaxAnswerBytes = size - 200);
 
         trimmed.Paths("t:rc.invoice").Should().OnlyContain(path => !path.Contains('.'));
         trimmed.Type("t:rc.invoice")["truncated"]!.GetValue<bool>().Should().BeTrue();
@@ -662,7 +662,7 @@ public class ExplainTypesTests
         note.Params["bytes"].Should().BeOfType<int>().Which.Should().BeInRange(size - 200, size);
         note.Params["max"].Should().Be(size - 200);
 
-        var smallest = await ExplainAsync(Joins, """ "include": ["shape", "notes", "plan"] """, client: OwnerFleet.Client(), configure: options => options.Explain.MaxAnswerBytes = 1_024);
+        var smallest = await ExplainAsync(Joins, """ "include": ["shape", "notes", "types", "plan"] """, client: OwnerFleet.Client(), configure: options => options.Explain.MaxAnswerBytes = 1_024);
 
         smallest.Plan.Should().BeNull();
         ((IEnumerable<string>)smallest.Notes.Single(note => note.Code == Notes.ExplainTrimmed).Params!["dropped"]!).Should().Equal("types", "plan");

@@ -126,7 +126,7 @@ public class HostHardeningExplainTests
 
         stages.Select(stage => stage["kind"]!.GetValue<string>()).Should().Equal(["match", "unwind", "match", "sort", "page"]);
         stages.Select(stage => stage["status"]!.GetValue<string>()).Should().Equal(["error", "error", "skipped", "ok", "ok"]);
-        stages.Should().OnlyContain(stage => stage.ContainsKey("placement") && stage["placement"] == null);
+        stages.Should().OnlyContain(stage => !stage.ContainsKey("placement"));
         stages[4]["shape"]!["paging"]!.GetValue<string>().Should().Be("cursor");
         body["result"]!["paging"]!.GetValue<string>().Should().Be("cursor");
         host.Runner.Calls.Should().BeEmpty();

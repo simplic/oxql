@@ -77,7 +77,7 @@ public class ExplainStagesTests
         owner["service"]!.GetValue<string>().Should().Be("rc");
         owner["remote"]!.GetValue<bool>().Should().BeFalse();
         owner["answered"]!.GetValue<bool>().Should().BeTrue("this host answers its own keyed stages in process");
-        owner["route"]!.ToJsonString().Should().Be("""{"apiName":"rc-api","apiVersion":null}""");
+        owner["route"]!.ToJsonString().Should().Be("""{"apiName":"rc-api"}""", "the client names no version for it");
 
         var query = explain.Query(0);
         query["entityType"]!.GetValue<string>().Should().Be("rc.shipment");
@@ -134,7 +134,7 @@ public class ExplainStagesTests
         explain.Target("r", "crm.contact")["continued"]!.ToJsonString().Should().Be("[1]");
         explain.Stage(1).Placement.Should().Match<ExplainPlacement>(placed => placed.Executor == "continued" && placed.Phase == "owner" && placed.Host == "crm");
         explain.Owner(1)!["service"]!.GetValue<string>().Should().Be("crm");
-        explain.Alias("co")["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"r","target":null}""");
+        explain.Alias("co")["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"r"}""");
         explain.Alias("co")["heldBy"]!.GetValue<string>().Should().Be("crm");
 
         var sent = explain.Query(0)["pipeline"]!.AsArray();
@@ -198,16 +198,15 @@ public class ExplainStagesTests
     }
 
     [Fact]
-    public async Task A_stage_serialises_with_every_member_and_a_null_placement_where_it_is_no_join()
+    public async Task A_stage_serialises_with_every_member_and_no_placement_where_it_is_no_join()
     {
         var stage = (await ExplainAsync("""[{ "match": { "number": { "eq": "x" } } }]""")).Stage(0);
 
         var json = JsonSerializer.SerializeToNode(stage, OxQLJson.Wire)!.AsObject();
 
-        json.Select(pair => pair.Key).Should().Equal("index", "kind", "status", "placement", "reads", "creates", "shape");
-        json["placement"].Should().BeNull();
+        json.Select(pair => pair.Key).Should().Equal(["index", "kind", "status", "reads", "creates", "shape"], "a stage that is no join has no placement");
         json["reads"]!.ToJsonString().Should().Be("""[{"path":"number","use":"match"}]""", "the read ledger: what the stage reads off the row, and no alias for a path of the entity row");
-        json["shape"]!.AsObject().Select(pair => pair.Key).Should().Equal("paging", "grouped", "unwound", "projection", "roots", "flags");
+        json["shape"]!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "grouped", "unwound", "roots", "rules", "flags"], "no projection ran, nothing left the row, and the overrides were asked for with the types");
     }
 
     [Fact]
@@ -249,10 +248,10 @@ public class ExplainStagesTests
              { "resolve": { "path": "contactId", "as": "r", "select": ["name"], "onMissing": "report" } }]
             """);
 
-        explain.Result!.Outcomes.Select(outcome => outcome.ToJsonString()).Should().Equal(
-            """{"alias":"c","as":null,"stage":0,"values":["not_found"]}""",
-            """{"alias":"r","as":null,"stage":1,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}""");
-        explain.Alias("r")["outcome"]!.ToJsonString().Should().Be("""{"as":null,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}""");
+        explain.Alias("c")["outcome"]!.ToJsonString().Should().Be("""{"values":["not_found"]}""");
+        explain.Alias("c")["stage"]!.GetValue<int>().Should().Be(0);
+        explain.Alias("r")["outcome"]!.ToJsonString().Should().Be("""{"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}""");
+        JsonSerializer.SerializeToNode(explain.Result, OxQLJson.Wire)!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "columns"], "a join's outcomes are its alias's, said once");
     }
 
     // ---- the remote check of the paths the caller wrote under a remote alias -----------------------

@@ -15,8 +15,9 @@ namespace OxQL.Mongo;
 
 /// <summary>
 /// Explain: the bind trace, normalised (improvement plan §3.E). One answer says everything a builder
-/// shows: each stage with its placement and the shape after it, every alias, one shared table of
-/// types, the result columns, the owners asked. Nothing is derived a second way: the shapes are the
+/// shows beyond the schema documents it already holds: each stage with its placement and the shape
+/// after it, every alias, the types of the roots by reference with the rules that say where their
+/// members stand, the result columns, the owners asked. Nothing is derived a second way: the shapes are the
 /// binder's (<see cref="BindTrace"/>), the owner facts are the plan a run builds
 /// (<see cref="KeyedFetch.Explain(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?)"/>,
 /// <see cref="KeyedFetch.Checks(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?, bool)"/>),
@@ -45,9 +46,9 @@ public sealed partial class MongoQueryEngine
             return new ExplainOutcome.Refused(refused.Refusal);
 
         var depth = Math.Clamp(request.ShapeDepth ?? context.Options.Explain.DefaultShapeDepth, 1, Math.Max(1, context.Options.Explain.MaxShapeDepth));
-        var types = new ExplainTypes(models.Model, context, binding.Trace, depth, request.IncludesDocs, cancellationToken);
+        var types = new ExplainTypes(models.Model, context, binding.Trace, depth, request.IncludesDocs, cancellationToken, request.IncludesTypes, models.SchemaRevision);
 
-        // The entity the pipeline entered leads the type table, before what the owners answer.
+        // The entity the pipeline entered leads the types, before what the owners answer.
         if (request.IncludesShape && binding.Trace is { } entered)
             await types.LocalAsync(entered.Entry.Entity, null).ConfigureAwait(false);
 
@@ -321,13 +322,17 @@ public sealed partial class MongoQueryEngine
             .ToList();
         // Complete while every owner asked answered, no limit left a part out, and every alias has its type.
         var complete = draft.Owners.Complete && aliases.All(alias => alias.Value?["complete"]?.GetValue<bool>() != false);
-        var revision = new ExplainRevision
-        {
-            Schema = models.SchemaRevision,
-            Addons = draft.Types.AddonRevision(),
-            Owners = draft.Owners.Owners.Where(owner => owner.Via is null && owner.Answered == true)
-                .ToDictionary(owner => owner.Service, owner => owner.Revision, StringComparer.Ordinal),
-        };
+        // This host's document, and each owner's as its answer named it (its own owners' among them).
+        var schema = new SortedDictionary<string, string?>(StringComparer.Ordinal);
+
+        if ((draft.Host ?? models.Model.Entities.Values.FirstOrDefault()?.Namespace) is { } host)
+            schema[host] = models.SchemaRevision;
+
+        foreach (var (service, named) in draft.Owners.Revisions)
+            if (!schema.TryGetValue(service, out var known) || known is null)
+                schema[service] = named;
+
+        var revision = new ExplainRevision { Schema = schema, Addons = draft.Types.AddonRevision() };
         var engine = new ExplainEngine
         {
             Version = EngineCapabilities.Version,
@@ -340,7 +345,6 @@ public sealed partial class MongoQueryEngine
             {
                 Paging = trace.Final.IsRootShape ? "cursor" : "offset",
                 Columns = draft.Bound is { } bound ? Columns(bound, trace) : [],
-                Outcomes = Outcomes(draft),
             };
 
         var answer = new ExplainResult
@@ -363,7 +367,8 @@ public sealed partial class MongoQueryEngine
             Stages = stages,
             Aliases = aliases,
             Types = draft.Types.Types,
-            FlagSets = draft.Types.FlagSets,
+            Rules = draft.Types.Rules,
+            FlagSets = draft.Types.Tables ? draft.Types.FlagSets : null,
             Result = result,
             Owners = owners.Entries.Select(owner => (JsonNode)owner).ToList(),
             Catalog = catalog,
@@ -436,7 +441,9 @@ public sealed partial class MongoQueryEngine
 
         var dropped = new List<string>();
         var types = new JsonObject();
+        var cut = false;
 
+        // Only an answer that writes the member rows out (include: "types") has levels to lose.
         foreach (var (key, type) in answer.Types)
         {
             var copy = (JsonObject)type!.DeepClone();
@@ -445,24 +452,34 @@ public sealed partial class MongoQueryEngine
             {
                 copy["members"] = new JsonArray(rows.OfType<JsonArray>().Where(row => !row[0]!.GetValue<string>().Contains('.', StringComparison.Ordinal)).Select(row => row.DeepClone()).ToArray());
                 copy["truncated"] = true;
+                cut = true;
             }
 
             types[key] = copy;
         }
 
-        dropped.Add("types");
-        answer = answer with { Types = types };
+        if (cut)
+        {
+            dropped.Add("types");
+            answer = answer with { Types = types };
+        }
 
-        if (answer.Plan is not null && JsonSerializer.SerializeToUtf8Bytes(answer, OxQLJson.Wire).Length > max)
+        if (answer.Plan is not null && (!cut || JsonSerializer.SerializeToUtf8Bytes(answer, OxQLJson.Wire).Length > max))
         {
             dropped.Add("plan");
             answer = answer with { Plan = null };
         }
 
+        // Nothing an explain can leave out: the answer stands as it is.
+        if (dropped.Count == 0)
+            return answer;
+
+        var left = string.Join(" and ", dropped.Select(part => part == "types" ? "the types keep their first level only" : "the plan is left out"));
+
         notes.Add(new Diagnostic
         {
             Code = Notes.ExplainTrimmed,
-            Message = $"The answer was {bytes} bytes, more than the {max} an explain answers; {(dropped.Count > 1 ? "the types keep their first level only and the plan is left out" : "the types keep their first level only")}. A catalog entry reads the members of one entity.",
+            Message = $"The answer was {bytes} bytes, more than the {max} an explain answers; {left}.{(cut ? " A catalog entry reads the members of one entity." : "")}",
             Params = new Dictionary<string, object?> { ["dropped"] = dropped, ["bytes"] = bytes, ["max"] = max },
         });
 
@@ -478,9 +495,8 @@ public sealed partial class MongoQueryEngine
             .Append(answer.Contract).Append('\n')
             .Append(answer.Engine.Version).Append('\n')
             .AppendJoin(',', answer.Engine.Capabilities).Append('\n')
-            .Append(answer.Revision.Schema).Append('\n')
+            .AppendJoin(',', answer.Revision.Schema.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value)).Append('\n')
             .Append(answer.Revision.Addons).Append('\n')
-            .AppendJoin(',', answer.Revision.Owners.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value)).Append('\n')
             .Append(answer.Cache.Complete);
 
         return "W/\"x3:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..32].ToLowerInvariant() + "\"";
@@ -504,16 +520,17 @@ public sealed partial class MongoQueryEngine
                 return at;
 
             keys.Add((service, remote, via));
-            Entries.Add(new JsonObject
-            {
-                ["service"] = service,
-                ["remote"] = remote,
-                ["via"] = via,
-                ["route"] = route(service),
-                // This host answers its own keyed stages in process; an owner is not asked until a check asks it.
-                ["answered"] = remote ? (bool?)null : true,
-                ["calls"] = 0,
-            });
+
+            var entry = new JsonObject { ["service"] = service, ["remote"] = remote };
+
+            if (via is not null)
+                entry["via"] = via;
+
+            entry["route"] = route(service);
+            // This host answers its own keyed stages in process; an owner is not asked until a check asks it.
+            entry["answered"] = remote ? (bool?)null : true;
+            entry["calls"] = 0;
+            Entries.Add(entry);
 
             return Entries.Count - 1;
         }
@@ -533,7 +550,6 @@ public sealed partial class MongoQueryEngine
                 entry["calls"] = use.Calls;
                 entry["cached"] = use.Answered == true && use.Cached;
                 entry["ms"] = use.Ms;
-                entry["revision"] = use.Revision;
 
                 if (use.Engine is not null)
                     entry["engine"] = use.Engine.DeepClone();
@@ -584,7 +600,15 @@ public sealed partial class MongoQueryEngine
     /// An owner's route. The engine knows an owner's service, which names its API (<c>&lt;service&gt;-api</c>);
     /// the version the host routes to is the remote client's (<see cref="IRemoteOwnerInfo.ApiVersionOf"/>), null when it does not say.
     /// </summary>
-    private JsonObject Route(string service) => new() { ["apiName"] = service + "-api", ["apiVersion"] = (remote as IRemoteOwnerInfo)?.ApiVersionOf(service) };
+    private JsonObject Route(string service)
+    {
+        var route = new JsonObject { ["apiName"] = service + "-api" };
+
+        if ((remote as IRemoteOwnerInfo)?.ApiVersionOf(service) is { } version)
+            route["apiVersion"] = version;
+
+        return route;
+    }
 
     /// <summary>An owner query in wire form, the page's size elided with its keys: it is the number of keys times the rows per key.</summary>
     private static JsonNode QueryOf(ExplainedOwnerQuery owner)
@@ -851,7 +875,10 @@ public sealed partial class MongoQueryEngine
                             continue;
 
                         entry["heldBy"] = first?.Service ?? host;
-                        entry["continuedFrom"] = new JsonObject { ["alias"] = root.Length == 0 ? continued.Anchor : root, ["target"] = continued.ForTarget };
+                        entry["continuedFrom"] = new JsonObject { ["alias"] = root.Length == 0 ? continued.Anchor : root };
+
+                        if (continued.ForTarget is { } forTarget)
+                            entry["continuedFrom"]!["target"] = forTarget;
 
                         if (continued.Stage.Resolve is { } written)
                         {
@@ -880,24 +907,11 @@ public sealed partial class MongoQueryEngine
         }
     }
 
-    /// <summary>The outcome block of a join: the row member that carries the outcome (none until a stage names one) and the data-loss outcomes it may have.</summary>
+    /// <summary>The outcome block of a join: the data-loss outcomes its rows may have. No row member carries the outcome until a stage names one.</summary>
     private static JsonObject OutcomeOf(Diagnostic policy) => new()
     {
-        ["as"] = null,
         ["values"] = new JsonArray((policy.Params?["dataLoss"] as IEnumerable<string> ?? []).Select(value => (JsonNode)value).ToArray()),
     };
-
-    /// <summary>Per join that may lose data, its alias, stage and outcomes (<see cref="OutcomeOf"/>), in stage order.</summary>
-    private static List<JsonNode> Outcomes(Draft draft) =>
-        draft.Notes.Where(note => note.Code == Notes.MissingPolicy && note.Params?["alias"] is string)
-            .OrderBy(note => note.Stage ?? int.MaxValue)
-            .Select(note =>
-            {
-                var outcome = OutcomeOf(note);
-
-                return (JsonNode)new JsonObject { ["alias"] = (string)note.Params!["alias"]!, ["as"] = null, ["stage"] = note.Stage, ["values"] = outcome["values"]!.DeepClone() };
-            })
-            .ToList();
 
     /// <summary>
     /// The type of an alias whose rows an owner holds, from the owners' answers (plan §3.E, K14): the
@@ -1023,34 +1037,52 @@ public sealed partial class MongoQueryEngine
             ? bound.Select(selected => (selected.Declared.When, selected.KeyAs, Targets: selected.Targets.Select(target => target.Declared).ToList())).ToList()
             : [(When: (ReferenceCondition?)null, KeyAs: KeyAs.None, Targets: new List<ReferenceTarget> { new(resolve.TargetEntity, resolve.TargetField, null, resolve.IsRemote, resolve.TargetField == "id") })];
 
-        return new JsonObject
+        // A member that would be null is left out: no condition, no conversion, no item, no elements.
+        var reference = new JsonObject
         {
             ["path"] = resolve.Reference.Wire,
-            ["cases"] = new JsonArray(cases.Select(selected => (JsonNode)new JsonObject
+            ["cases"] = new JsonArray(cases.Select(selected =>
             {
-                ["when"] = selected.When switch
+                var written = new JsonObject();
+
+                switch (selected.When)
                 {
-                    ReferenceCondition.PathEquals equals => new JsonObject { ["path"] = equals.Path, ["equals"] = new JsonArray(equals.Values.Select(value => (JsonNode)value).ToArray()) },
-                    ReferenceCondition.Variant variant => new JsonObject { ["variant"] = new JsonArray(variant.Names.Select(name => (JsonNode)name).ToArray()) },
-                    _ => null,
-                },
-                ["keyAs"] = KeyAsName(selected.KeyAs),
-                ["targets"] = new JsonArray(selected.Targets.Select(target => (JsonNode)new JsonObject
+                    case ReferenceCondition.PathEquals equals:
+                        written["when"] = new JsonObject { ["path"] = equals.Path, ["equals"] = new JsonArray(equals.Values.Select(value => (JsonNode)value).ToArray()) };
+                        break;
+
+                    case ReferenceCondition.Variant variant:
+                        written["when"] = new JsonObject { ["variant"] = new JsonArray(variant.Names.Select(name => (JsonNode)name).ToArray()) };
+                        break;
+                }
+
+                if (KeyAsName(selected.KeyAs) is { } converted)
+                    written["keyAs"] = converted;
+
+                written["targets"] = new JsonArray(selected.Targets.Select(target =>
                 {
-                    ["entity"] = target.Entity,
-                    ["item"] = target.Item,
-                    ["field"] = target.Field,
-                    ["remote"] = target.IsRemote,
-                }).ToArray()),
+                    var named = new JsonObject { ["entity"] = target.Entity };
+
+                    if (target.Item is not null)
+                        named["item"] = target.Item;
+
+                    named["field"] = target.Field;
+                    named["remote"] = target.IsRemote;
+
+                    return (JsonNode)named;
+                }).ToArray());
+
+                return (JsonNode)written;
             }).ToArray()),
-            ["keyAs"] = cases.Select(selected => selected.KeyAs).Distinct().Count() == 1 ? KeyAsName(cases[0].KeyAs) : null,
-            ["elements"] = resolve.Elements switch
-            {
-                ResolveElements.First => "first",
-                ResolveElements.All => "all",
-                _ => null,
-            },
         };
+
+        if (cases.Select(selected => selected.KeyAs).Distinct().Count() == 1 && KeyAsName(cases[0].KeyAs) is { } keyAs)
+            reference["keyAs"] = keyAs;
+
+        if (resolve.Elements is ResolveElements.First or ResolveElements.All)
+            reference["elements"] = resolve.Elements == ResolveElements.First ? "first" : "all";
+
+        return reference;
     }
 
     private static string? KeyAsName(KeyAs keyAs) => keyAs == KeyAs.Guid ? "guid" : null;

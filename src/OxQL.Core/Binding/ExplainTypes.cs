@@ -92,9 +92,18 @@ public readonly record struct MemberFlags(int Operators, bool Sortable, bool Gro
 }
 
 /// <summary>
-/// The shape side of an explain answer: the shared <c>types</c> table (each member of each concrete
-/// type described once), the <c>flagSets</c> it and the stage shapes point to, the shape of the row
-/// after each stage, and the <c>catalog</c> lookups of entities outside the query.
+/// The shape side of an explain answer: the <c>types</c> the roots point to, the shape of the row
+/// after each stage with the <c>rules</c> that say where each root's members stand there, and the
+/// <c>catalog</c> lookups of entities outside the query.
+/// <para>
+/// By default a type is a reference: the entity (or the element of an item collection on it), the
+/// service that owns it and the revision of that service's schema document, which describes every
+/// member. What the query changes is said per root and stage as a rule (<see cref="Rule"/>): a reader
+/// of the document derives a member's flags from its descriptor and the rule. With
+/// <c>include: "types"</c> (<c>tables</c>) the answer also writes the members out: the member rows of
+/// each type with their own flags, the <c>flagSets</c>, and per root and stage the override set of
+/// the members that differ.
+/// </para>
 /// <para>
 /// Everything a member can do at a point of the pipeline is what <see cref="Shape.Resolve"/> answers
 /// for it there, for every usage: the resolution code a run binds with is the flag engine, nothing is
@@ -178,26 +187,41 @@ public sealed class ExplainTypes
     private readonly int depth;
     private readonly int memberCap;
     private readonly bool docs;
+    private readonly bool tables;
+    private readonly string? revision;
     private readonly CancellationToken cancellationToken;
     private readonly Dictionary<string, IReadOnlyList<AddonDefinition>> loadedAddons = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<(string Path, MemberFlags? Flags)>> members = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> overrideIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> ruleIds = new(StringComparer.Ordinal);
     private readonly List<(string Root, ShapeNode Node, object? Included, object? Excluded, object Unset, string Unwound, string? Type, string? Id)> rootFlags = [];
 
-    /// <summary>The types engine of one explain: <paramref name="depth"/> levels of members below each root; with <paramref name="docs"/> each member's description.</summary>
-    public ExplainTypes(EntityModel model, RequestContext context, BindTrace? trace, int depth, bool docs = false, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The types engine of one explain. With <paramref name="tables"/> the member rows are written out,
+    /// <paramref name="depth"/> levels below each root and with <paramref name="docs"/> each member's
+    /// description; without, a type is a reference to the schema document at <paramref name="revision"/>.
+    /// </summary>
+    public ExplainTypes(EntityModel model, RequestContext context, BindTrace? trace, int depth, bool docs = false, CancellationToken cancellationToken = default, bool tables = true, string? revision = null)
     {
         this.model = model ?? throw new ArgumentNullException(nameof(model));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         this.trace = trace;
         this.depth = Math.Max(1, depth);
         this.docs = docs;
+        this.tables = tables;
+        this.revision = revision;
         memberCap = Math.Max(1, context.Options.Explain.MaxTypeMembers);
         this.cancellationToken = cancellationToken;
     }
 
     /// <summary>The type table: <c>t:&lt;entity&gt;[#item]</c> and <c>u:&lt;alias&gt;</c> entries, in the order they were first needed.</summary>
     public JsonObject Types { get; } = [];
+
+    /// <summary>The flag rules (<c>r:n</c>): where the members of one root stand at one shape.</summary>
+    public JsonObject Rules { get; } = [];
+
+    /// <summary>Whether the member rows, the flag sets and the overrides are written out.</summary>
+    public bool Tables => tables;
 
     /// <summary>The flag sets: one member's flags under their id, and under <c>o:n</c> the overrides of one root at one shape.</summary>
     public JsonObject FlagSets { get; } = [];
@@ -233,6 +257,17 @@ public sealed class ExplainTypes
             return key;
 
         var shape = await EntryShapeAsync(entity).ConfigureAwait(false);
+
+        if (!tables)
+        {
+            if (item is not null && ElementOf(shape, item) is null)
+                return null;
+
+            Types[key] = Reference(entity, item);
+
+            return key;
+        }
+
         // The asking organisation's addon definitions are members of the type: such a type is built for this answer alone.
         var shared = !shape.Addons.TryGetValue(entity.Id, out var definitions) || definitions.Count == 0;
         var cache = shared ? Built.GetValue(model, _ => new ConcurrentDictionary<string, Template>(StringComparer.Ordinal)) : null;
@@ -247,8 +282,14 @@ public sealed class ExplainTypes
             cache?.TryAdd(cacheKey, template);
         }
 
-        // The kept entry is never changed: an answer takes a copy, which is the same parsed text until it is read.
-        Types[key] = template.Entry.DeepClone();
+        // The kept entry is never changed: an answer takes a copy of its members beside the reference.
+        var written = Reference(entity, item);
+
+        foreach (var (name, value) in template.Entry)
+            if (!written.ContainsKey(name))
+                written[name] = value?.DeepClone();
+
+        Types[key] = written;
         members[key] = template.Members.Select(member => (member.Path, (MemberFlags?)member.Flags)).ToList();
 
         foreach (var (_, flags) in template.Members)
@@ -257,27 +298,52 @@ public sealed class ExplainTypes
         return key;
     }
 
+    /// <summary>
+    /// A type as a reference: the entity, the item collection whose element it is, the service that owns
+    /// the entity and the revision of the schema document that service publishes (absent when it publishes none).
+    /// </summary>
+    private JsonObject Reference(EntityDef entity, string? item)
+    {
+        var reference = new JsonObject { ["entity"] = entity.Id };
+
+        if (item is not null)
+            reference["item"] = item;
+
+        reference["service"] = entity.Namespace;
+
+        if (revision is not null)
+            reference["schemaRevision"] = revision;
+
+        return reference;
+    }
+
+    /// <summary>The collection <paramref name="item"/> of the entity whose elements are objects, with their type; null when it is none.</summary>
+    private static (ResolvedPath Collection, TypeDef Type)? ElementOf(Shape shape, string item)
+    {
+        if (item.Length == 0 || shape.Resolve(item, PathUsage.Unwind) is not { Succeeded: true, Path: { Path: not null } collection })
+            return null;
+
+        var element = collection.Path!.Shape.Kind switch
+        {
+            Kind.Array => collection.Path.Shape.Of,
+            Kind.Dictionary => collection.Path.Shape.Value,
+            _ => null,
+        };
+
+        return element is { Kind: Kind.Object, Type: { } elementType } ? (collection, elementType) : null;
+    }
+
     private Template? Build(EntityDef entity, string? item, Shape shape)
     {
         var type = entity.Root;
 
         if (item is not null)
         {
-            if (item.Length == 0 || shape.Resolve(item, PathUsage.Unwind) is not { Succeeded: true, Path: { Path: not null } collection })
+            if (ElementOf(shape, item) is not { } found)
                 return null;
 
-            var element = collection.Path!.Shape.Kind switch
-            {
-                Kind.Array => collection.Path.Shape.Of,
-                Kind.Dictionary => collection.Path.Shape.Value,
-                _ => null,
-            };
-
-            if (element is not { Kind: Kind.Object, Type: { } elementType })
-                return null;
-
-            shape = shape.ForElement(collection);
-            type = elementType;
+            shape = shape.ForElement(found.Collection);
+            type = found.Type;
         }
 
         var entry = new JsonObject { ["entity"] = entity.Id };
@@ -552,7 +618,8 @@ public sealed class ExplainTypes
         ArgumentNullException.ThrowIfNull(ownerTypes);
 
         var roots = new JsonObject();
-        var flags = new JsonObject();
+        var rules = new JsonObject();
+        var flags = tables ? new JsonObject() : null;
         Shape? plain = null;
 
         foreach (var (name, node) in shape.Roots)
@@ -566,10 +633,16 @@ public sealed class ExplainTypes
             var type = await RootTypeAsync(name, node, ownerTypes).ConfigureAwait(false);
 
             roots[name] = type;
+            plain ??= shape.Unprojected();
 
-            if (RootFlags(shape, ref plain, name, node, type) is { } overrides)
+            if (Rule(shape, plain, name, node) is { } rule)
+                rules[name] = rule;
+
+            if (flags is not null && RootFlags(shape, ref plain, name, node, type) is { } overrides)
                 flags[name] = overrides;
         }
+
+        var removed = (shape.Excluded ?? Enumerable.Empty<string>()).Concat(shape.Unset.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
 
         return new ExplainShape
         {
@@ -581,9 +654,94 @@ public sealed class ExplainTypes
                 .Order(StringComparer.Ordinal)
                 .ToList(),
             Projection = shape.Included?.Order(StringComparer.Ordinal).ToList(),
+            Removed = removed.Count == 0 ? null : removed,
             Roots = roots,
+            Rules = rules,
             Flags = flags,
         };
+    }
+
+    /// <summary>
+    /// The rule of one root at one shape, or null when its members stand as in their type: what a reader
+    /// of the schema document needs beside a member's descriptor to say what can be done with it here.
+    /// <list type="bullet">
+    /// <item><c>self</c>: the flags of the root itself, as a flag id (a named root only).</item>
+    /// <item><c>under</c>: <c>collection</c> for a lookup's array (every member lies under one more
+    /// collection), <c>afterPage</c> for rows joined after the page from local targets (a member is read
+    /// and followed, nothing else; with <c>many</c> the alias holds an array of them), <c>owner</c> for
+    /// rows another service holds (with <c>filter</c> a condition may compare a member's value, as a
+    /// semi-join on the owner; nothing sorts, groups or unwinds).</item>
+    /// <item><c>unwound</c>: the collections below the root that are unwound here, relative to it: such a
+    /// collection is its element, and what lies below it lies under one collection fewer.</item>
+    /// <item><c>shows</c>: the paths the row carries under a join's alias, where that is not every member.</item>
+    /// </list>
+    /// What a projection kept or removed is the shape's (<c>projection</c>, <c>removed</c>), not the rule's.
+    /// </summary>
+    private string? Rule(Shape shape, Shape plain, string root, ShapeNode node)
+    {
+        var named = root != Shape.ImplicitRoot;
+        var rule = new JsonObject();
+
+        if (named)
+            rule["self"] = FlagsAt(plain, root).Id;
+
+        IEnumerable<string> unwound = [];
+        IReadOnlyList<string>? shown = null;
+
+        switch (node)
+        {
+            case ShapeNode.Array array:
+                rule["under"] = "collection";
+                shown = array.Select;
+                break;
+
+            case ShapeNode.Keyed keyed:
+                rule["under"] = "afterPage";
+
+                if (keyed.Many)
+                    rule["many"] = true;
+                break;
+
+            case ShapeNode.Remote:
+                rule["under"] = "owner";
+
+                // The origin answers every path below a remote alias alike, so one stands for all.
+                if (Below(plain, root + ".id").Filterable)
+                    rule["filter"] = true;
+                break;
+
+            case ShapeNode.Entity entity:
+                unwound = shape.Unwound.Where(key => key.StartsWith(root + "|", StringComparison.Ordinal)).Select(key => key[(root.Length + 1)..]);
+                shown = entity.Select;
+                break;
+
+            // An element's members are resolved by their paths on the entity, whatever the alias is called.
+            case ShapeNode.Element element:
+                var below = "|" + element.Source.Wire + ".";
+
+                unwound = shape.Unwound.Where(key => key.StartsWith(below, StringComparison.Ordinal)).Select(key => key[below.Length..]);
+                break;
+        }
+
+        if (unwound.Order(StringComparer.Ordinal).ToList() is { Count: > 0 } collections)
+            rule["unwound"] = new JsonArray(collections.Select(path => (JsonNode)path).ToArray());
+
+        if (shown is not null)
+            rule["shows"] = new JsonArray(shown.Select(path => (JsonNode)path).ToArray());
+
+        if (rule.Count == 0)
+            return null;
+
+        var text = rule.ToJsonString();
+
+        if (ruleIds.TryGetValue(text, out var id))
+            return id;
+
+        id = "r:" + (ruleIds.Count + 1);
+        ruleIds[text] = id;
+        Rules[id] = rule;
+
+        return id;
     }
 
     /// <summary>The type a root points to: a local type, the union of a keyed alias's targets, a kind, or what its owners said.</summary>
@@ -653,6 +811,14 @@ public sealed class ExplainTypes
 
         if (Types[key] is JsonObject known && known["of"] is JsonArray of && of.Select(node => node!.GetValue<string>()).SequenceEqual(targets, StringComparer.Ordinal))
             return key;
+
+        // By reference a union is its targets: a reader merges their members, each from the first target that has it.
+        if (!tables)
+        {
+            Types[key] = new JsonObject { ["of"] = new JsonArray(targets.Select(target => (JsonNode)target).ToArray()) };
+
+            return key;
+        }
 
         var rows = new List<(string Path, string? Kind, List<int> Have, MemberFlags? Flags)>();
         var byPath = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -848,6 +1014,26 @@ public sealed class ExplainTypes
         if (answer["types"] is not JsonObject types)
             return;
 
+        // By reference an owner's type is what the owner named: the entity, its service and the revision, or a union's targets.
+        if (!tables)
+        {
+            foreach (var (key, value) in types.ToList())
+            {
+                if (Types.ContainsKey(key) || value is not JsonObject named)
+                    continue;
+
+                var reference = new JsonObject();
+
+                foreach (var member in (string[])["entity", "item", "service", "schemaRevision", "of"])
+                    if (named[member] is { } fact)
+                        reference[member] = fact.DeepClone();
+
+                Types[key] = reference;
+            }
+
+            return;
+        }
+
         // The concrete types first: a union reads its targets' members.
         foreach (var key in types.Select(pair => pair.Key).OrderBy(key => key.StartsWith("u:", StringComparison.Ordinal) ? 1 : 0).ToList())
         {
@@ -978,14 +1164,18 @@ public sealed class ExplainTypes
             if (shape.Resolve(prefix, PathUsage.Project) is { Succeeded: false } failed)
                 return Failed(head, failed.Code!, failed.Message!, prefix);
 
-            // The rows of a lookup stand alone: each names its variants itself.
-            var (rows, flags, truncated) = Rows(shape, prefix, levels, onlyFor: null);
+            // By reference the schema document lists the members below the prefix; the entry said whether it is a path.
+            if (tables)
+            {
+                // The rows of a lookup stand alone: each names its variants itself.
+                var (rows, flags, truncated) = Rows(shape, prefix, levels, onlyFor: null);
 
-            foreach (var (_, each) in flags)
-                Set(each);
+                foreach (var (_, each) in flags)
+                    Set(each);
 
-            head["members"] = rows;
-            head["truncated"] = truncated;
+                head["members"] = rows;
+                head["truncated"] = truncated;
+            }
         }
 
         if (referencing)
@@ -1035,6 +1225,12 @@ public sealed class ExplainTypes
 
         result["id"] = head["id"]!.DeepClone();
         result["forwarded"] = true;
+
+        if (!tables)
+        {
+            result.Remove("members");
+            result.Remove("truncated");
+        }
 
         // The rows of a lookup point to flag sets, which this answer must hold as the owner's did.
         foreach (var row in result["members"]?.AsArray().OfType<JsonArray>() ?? [])

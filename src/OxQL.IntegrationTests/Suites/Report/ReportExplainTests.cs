@@ -133,7 +133,7 @@ public class ReportExplainTests
         answer["result"]!["columns"]!.AsArray().Select(column => Text(column, "path"))
             .Should().Contain(["position", "sourceLine.id", "sourceParent.entity", "sourceParent.id", "sourceParent.shipmentNumber", "sourceParent.number"]);
         answer["result"]!["columns"]!.AsArray().Single(column => Text(column, "path") == "sourceLine.id")!["present"]!.GetValue<string>().Should().Be(ExplainColumn.IfJoined);
-        answer["result"]!["outcomes"]!.AsArray().Select(outcome => Text(outcome, "alias")).Should().Equal("erpLine", "sourceLine");
+        answer["aliases"]!.AsObject().Where(alias => alias.Value!["outcome"] is not null).Select(alias => alias.Key).Should().Equal(["erpLine", "sourceLine"], "each join that may lose data says its outcomes on its alias");
     }
 
     [Fact]

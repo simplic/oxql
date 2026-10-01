@@ -232,6 +232,74 @@ public class OutcomePolicyTests
         strict.Errors!.Select(error => error.Code).Should().Equal([Codes.ResolveUnreachable], "strict refuses on an owner failure whatever onMissing says");
     }
 
+    // ---- the outcome under its name (outcomeAs): the two outcomes only a keyed stage has -------------------
+
+    [Fact]
+    public async Task The_outcome_under_its_name_says_invalid_key_for_a_key_that_does_not_convert()
+    {
+        var (engine, runner, _) = Host();
+        runner.Rows[Invoice] =
+        [
+            InvoiceRow(row => row["ShipmentKey"] = "SHIP-12"),
+            InvoiceRow(row => row["ShipmentKey"] = BsonNull.Value),
+            InvoiceRow(row => row["ShipmentKey"] = Shipment1.ToString()),
+        ];
+        runner.Rows["rc.shipment"] = [new BsonDocument { ["_id"] = Id(Shipment1), ["OrganizationId"] = Id(BindHost.Organisation), ["Number"] = "SND-1" }];
+
+        var result = await SuccessAsync(engine, """
+            [{ "resolve": { "path": "shipmentKey", "as": "shipment", "outcomeAs": "shipmentOutcome" } },
+             { "project": { "number": 1, "shipment.number": 1, "shipmentOutcome": 1 } }]
+            """);
+
+        result.Items.Select(row => row!["shipmentOutcome"]!.GetValue<string>()).Should().Equal("invalid_key", "reference_null", "resolved");
+        result.Items[0]!["shipment"].Should().BeNull();
+        result.Items[2]!["shipment"]!["number"]!.GetValue<string>().Should().Be("SND-1");
+        result.Diagnostics.Should().BeNull("the member reports nothing by itself: onMissing is null");
+
+        // With a policy the same row is reported, under the same word.
+        var reported = await SuccessAsync(engine, """[{ "resolve": { "path": "shipmentKey", "as": "shipment", "onMissing": "report", "outcomeAs": "shipmentOutcome" } }]""");
+
+        reported.Items[0]!["shipmentOutcome"]!.GetValue<string>().Should().Be("invalid_key");
+        Wire(Single(reported, Codes.ResolveMissing).Params)["rows"]!.ToJsonString().Should().Be("""[{"row":0,"key":"SHIP-12","outcome":"invalid_key"}]""");
+    }
+
+    [Fact]
+    public async Task The_outcome_under_its_name_says_owner_unanswered_where_the_owner_did_not_answer_and_never_not_found()
+    {
+        var (engine, runner, client) = Host();
+        runner.Rows[Invoice] = [InvoiceRow(row => row["ContactId"] = Id(Contact1)), InvoiceRow(row => row["ContactId"] = BsonNull.Value)];
+        client.Unreachable.Add("crm");
+
+        var result = await SuccessAsync(engine, """
+            [{ "resolve": { "path": "contactId", "as": "contact", "select": ["name"], "outcomeAs": "contactOutcome" } },
+             { "project": { "number": 1, "contact.name": 1, "contactOutcome": 1 } }]
+            """);
+
+        result.Items.Select(row => row!["contactOutcome"]!.GetValue<string>()).Should().Equal(["owner_unanswered", "reference_null"],
+            "a record nobody could ask for is not a record that does not exist");
+        result.Items[0]!["contact"].Should().BeNull();
+        result.Diagnostics!.Select(diagnostic => diagnostic.Code).Should().Equal(Codes.ResolveUnreachable);
+
+        // The owner answers again: the same row resolves, or is not found, and says so.
+        client.Unreachable.Clear();
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
+
+        var missing = await SuccessAsync(engine, """
+            [{ "resolve": { "path": "contactId", "as": "contact", "select": ["name"], "outcomeAs": "contactOutcome" } },
+             { "project": { "number": 1, "contactOutcome": 1 } }]
+            """);
+
+        missing.Items.Select(row => row!["contactOutcome"]!.GetValue<string>()).Should().Equal("not_found", "reference_null");
+
+        // Under strict the unanswered owner refuses the page, with or without the member.
+        client.Unreachable.Add("crm");
+
+        var strict = await RefusedAsync(engine, """[{ "resolve": { "path": "contactId", "as": "contact", "outcomeAs": "contactOutcome" } }]""", strict: true);
+
+        strict.Status.Should().Be(422);
+        strict.Errors!.Select(error => error.Code).Should().Contain(Codes.ResolveUnreachable, "the member never turns a refusal into an answer");
+    }
+
     // ---- ambiguity and truncation -----------------------------------------------------------------
 
     [Fact]

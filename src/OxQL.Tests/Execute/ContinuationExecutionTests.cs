@@ -342,6 +342,53 @@ public class ContinuationExecutionTests
     }
 
     [Fact]
+    public async Task A_branch_that_reaches_none_of_the_paths_asked_under_the_alias_still_says_whether_its_record_is_there()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        // A second beta whose memo names no gamma: its record is not there.
+        var beta2 = Guid.Parse("be000000-0000-0000-0000-000000000002");
+        var orphan = ChainModel.Row(beta2, "Beta 2");
+
+        orphan["memo"] = BsonNull.Value;
+        host.Runner.Rows["ct.beta"].Add(orphan);
+        host.Runner.Rows[ChainModel.Invoice].Add(ChainModel.InvoiceRow(Guid.Parse("10000000-0000-0000-0000-0000000000a4"), "RE-4", row => row["Source"] = new BsonDocument { ["Type"] = "b", ["_id"] = Id(beta2) }));
+
+        // Only a note has a text: the beta's branch (a gamma) reaches nothing that is asked.
+        const string Projection = """{ "project": { "number": 1, "memo.text": 1 } },""";
+
+        var result = Succeeded(await host.RunAsync(Memo(Projection)));
+
+        result.Items[0]!["memo"]!.ToJsonString().Should().Be("""{"text":"hello"}""");
+        result.Items[1]!.AsObject().ContainsKey("memo").Should().BeTrue();
+        result.Items[1]!["memo"].Should().NotBeNull("the gamma exists: an alias is null only where its record is not there");
+        result.Items[1]!["memo"]!.ToJsonString().Should().Be("{}", "none of what the gamma has was asked for");
+        result.Items[2]!["memo"].Should().BeNull("a gamma has no branch");
+        result.Items[3]!["memo"].Should().BeNull("the second beta's memo names no record");
+
+        result.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget)
+            .Select(diagnostic => (diagnostic.Path, diagnostic.Params!["branch"])).Should().Equal(("text", (object?)"ct.beta"));
+
+        // The beta's owner is asked for the alias itself, so it joins; the alpha's for the path.
+        var beta = host.Runner.Calls.Last(call => call.Entity.Id == "ct.beta");
+
+        beta.Stages.Should().Contain(stage => stage.Contains("$lookup") && stage["$lookup"]["from"] == "gammas", "the branch still runs at its owner");
+
+        // The same from what was learned and kept: the next request answers the same rows and says the same.
+        var again = Succeeded(await host.RunAsync(Memo(Projection)));
+
+        again.Items.Select(row => row!["memo"]?.ToJsonString()).Should().Equal(result.Items.Select(row => row!["memo"]?.ToJsonString()));
+        again.Diagnostics!.Count(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget).Should().Be(1);
+
+        // Explain says the same of the branch: the path is dropped for it, and the answer is valid.
+        var explained = (await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo(Projection)), BindHost.Context())).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        explained.Valid.Should().BeTrue(string.Join("; ", explained.Errors.Select(error => error.Message)));
+        explained.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Path, note.Params!["branch"])).Should().Equal(("text", (object?)"ct.beta"));
+    }
+
+    [Fact]
     public async Task A_path_of_the_select_hint_one_branch_does_not_reach_is_dropped_for_that_branch_too()
     {
         var host = ChainHost.Start();

@@ -1440,6 +1440,12 @@ public sealed class KeyedFetch
                 foreach (var path in kept is { Carried: true, Whole: false } ? kept.Projected : [])
                     if (!DroppedContinued.Contains(alias + "." + path))
                         projection[alias + "." + path] = 1;
+
+                // A branch that reaches none of the paths asked under the alias is asked for the alias
+                // itself, so its owner still joins and says whether the record is there; what comes
+                // back is cut to nothing here (Lifted), since none of it was asked for.
+                if (Emptied(alias))
+                    projection[alias] = 1;
             }
 
             pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
@@ -1469,6 +1475,19 @@ public sealed class KeyedFetch
             ownerStage is { } index && index >= ContinuedAt && index - ContinuedAt < Continued.Origins.Count ? Continued.Origins[index - ContinuedAt] : null;
 
         /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
+        /// <summary>
+        /// Whether this target's branch reaches none of the paths the row shows under
+        /// <paramref name="alias"/>: every one of them was dropped for it. The alias then holds an
+        /// empty object on the rows of this target whose record exists, and null only where it does not.
+        /// </summary>
+        public bool Emptied(string alias) =>
+            final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false, Projected: { Count: > 0 } projected }
+            && projected.All(path => DroppedContinued.Contains(alias + "." + path));
+
+        /// <summary>The value a continued stage's alias has on an owner row of this target, as the origin row carries it.</summary>
+        public JsonNode? LiftedOf(JsonObject row, string alias) =>
+            Emptied(alias) ? Shown(Lifted(row, alias), []) : Lifted(row, alias);
+
         public static JsonNode? Lifted(JsonObject row, string alias) =>
             row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
@@ -2296,7 +2315,7 @@ public sealed class KeyedFetch
                     origins.Add(rowIndex);
 
                 foreach (var alias in continued.Aliases)
-                    values[alias] = TargetPlan.Lifted(hit.Row, alias);
+                    values[alias] = hit.Target.LiftedOf(hit.Row, alias);
 
                 continue;
             }

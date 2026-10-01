@@ -455,6 +455,41 @@ public class ExplainRemoteCheckTests
         warm.Alias("c")["type"]!.GetValue<string>().Should().Be("t:transport.carrier");
     }
 
+    // ---- a branch of a union join whose owner does not answer ------------------------------------------
+
+    [Fact]
+    public async Task A_branch_of_a_union_join_whose_owner_does_not_answer_is_unanswered_and_the_alias_is_not_complete()
+    {
+        // The source line is a local shipment's or a remote (transport) shipment's; each has its own driver or carrier.
+        const string UnionJoin = """
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+             { "resolve": { "as": "who", "byTarget": { "rc.shipment": "owner.driverId", "transport.shipment": "owner.carrierId" } } }]
+            """;
+        var client = OwnerFleet.Client();
+
+        client.Unreachable.Add("transport");
+
+        var result = await ExplainAsync(UnionJoin, client, envelope: """ "include": ["shape", "notes"] """);
+
+        result.Valid.Should().BeTrue("a branch nobody checked is not an error");
+        result.Cache.Complete.Should().BeFalse();
+
+        var branches = result.Alias("who")["branches"]!.AsArray().Select(branch => branch!.AsObject()).ToList();
+
+        branches.Select(branch => (branch["anchorTarget"]!.GetValue<string>(), branch["status"]!.GetValue<string>()))
+            .Should().Equal(("rc.shipment", "ok"), ("transport.shipment", "unanswered"));
+        branches[1]["entities"]!.AsArray().Should().BeEmpty("what the branch reaches is its owner's to say");
+        branches[1]["types"]!.AsArray().Should().BeEmpty();
+        branches[1]["heldBy"]!.GetValue<string>().Should().Be("transport");
+        branches[0]["entities"].Strings().Should().Equal("crm.contact");
+        branches[0]["heldBy"]!.GetValue<string>().Should().Be("rc");
+
+        result.Alias("who")["complete"]!.GetValue<bool>().Should().BeFalse("one branch's owner did not say what it reaches");
+        result.Alias("who")["type"]!.GetValue<string>().Should().Be("t:crm.contact", "what the answered branch reaches is known all the same");
+        result.Stage(1).Status.Should().Be("ok");
+        result.Notes.Should().Contain(note => note.Code == Notes.RemoteUnchecked && Equals(note.Params!["service"], "transport") && Equals(note.Params["reason"], RemoteExplain.Unreachable));
+    }
+
     // ---- a lookup of an entity only another owner reaches ----------------------------------------------
 
     [Fact]

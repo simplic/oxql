@@ -73,6 +73,12 @@ public static class Codes
     /// alias, or a projection that keeps a continued alias but drops the alias it continues under.
     /// </summary>
     public const string NotContinuable = "NOT_CONTINUABLE";
+
+    /// <summary>
+    /// The branches of a union join (<c>byTarget</c>) do not yield one shape: some resolve one record
+    /// per row and another every element (<c>elements: "all"</c>). The message names the branch to change.
+    /// </summary>
+    public const string UnionCardinalityMismatch = "UNION_CARDINALITY_MISMATCH";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
 
     /// <summary>A resolve's path lies under a collection that is not unwound, and the stage does not say which elements it resolves (<c>elements</c>).</summary>

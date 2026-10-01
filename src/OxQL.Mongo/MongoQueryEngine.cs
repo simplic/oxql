@@ -198,7 +198,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             // A path under a union's alias that an owner said its target lacks was dropped for that target; only
             // the run learns it, so the run says it (DESIGN §3.4.1; explain notes the local ones).
-            diagnostics.AddRange(resolution.Dropped.Select(drop => Notes.SelectPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path, drop.Parent)));
+            diagnostics.AddRange(resolution.Dropped.Select(drop => drop.Branch
+                ? Notes.BranchPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path)
+                : Notes.SelectPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path, drop.Parent)));
 
             var report = OutcomePolicy.Report(bound, resolution.Outcomes, resolution.Truncations, strict, options);
 

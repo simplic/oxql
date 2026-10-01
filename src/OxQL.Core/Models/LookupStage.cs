@@ -110,6 +110,13 @@ public sealed record ResolveStage
     /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
     public string? ForTarget { get; init; }
 
+    /// <summary>
+    /// The union join: one path per target of the alias the stage continues under, all filling the one
+    /// alias <see cref="As"/>, in place of <see cref="Path"/>. The branches in the order written; a
+    /// target written twice keeps both entries, which the binder refuses. Contract 2.
+    /// </summary>
+    public IReadOnlyList<ResolveBranch>? ByTarget { get; init; }
+
     /// <summary>Members the caller wrote with a value of the wrong JSON kind or outside their values, such as an <c>elements</c> of <c>"some"</c>.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Malformed { get; init; } = [];
@@ -118,6 +125,13 @@ public sealed record ResolveStage
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
 }
+
+/// <summary>
+/// One branch of a union join (<c>byTarget</c>): for the rows the alias it continues under resolved
+/// to <paramref name="Target"/>, the member carrying the reference, and how a path that crosses one
+/// collection which is not unwound resolves (<c>"first"</c> or <c>"all"</c>).
+/// </summary>
+public sealed record ResolveBranch(string Target, string? Path, string? Elements = null);
 
 internal sealed class LookupStageConverter : JsonConverter<LookupStage>
 {
@@ -254,11 +268,65 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
                     else
                         malformed.Add(property.Name);
                     break;
+                case "byTarget":
+                    if (ReadBranches(property.Value) is { } branches)
+                        stage = stage with { ByTarget = branches };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
         return stage with { Unknown = unknown, Malformed = malformed };
+    }
+
+    /// <summary>
+    /// The branches of a <c>byTarget</c>: an object whose members are a path, or <c>{ path, elements }</c>;
+    /// null when it is anything else.
+    /// </summary>
+    private static List<ResolveBranch>? ReadBranches(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var branches = new List<ResolveBranch>();
+
+        foreach (var branch in value.EnumerateObject())
+        {
+            if (branch.Value.ValueKind == JsonValueKind.String)
+            {
+                branches.Add(new ResolveBranch(branch.Name, branch.Value.GetString()));
+                continue;
+            }
+
+            if (branch.Value.ValueKind != JsonValueKind.Object)
+                return null;
+
+            string? path = null, elements = null;
+
+            foreach (var member in branch.Value.EnumerateObject())
+            {
+                switch (member.Name)
+                {
+                    case "path" when member.Value.ValueKind == JsonValueKind.String:
+                        path = member.Value.GetString();
+                        break;
+                    case "elements" when StageJson.OneOf(member.Value, "first", "all") is { } written:
+                        elements = written;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+
+            if (path is null)
+                return null;
+
+            branches.Add(new ResolveBranch(branch.Name, path, elements));
+        }
+
+        return branches;
     }
 
     public override void Write(Utf8JsonWriter writer, ResolveStage value, JsonSerializerOptions options)
@@ -273,6 +341,28 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
         if (value.OnMissing is not null) writer.WriteString("onMissing", value.OnMissing);
         if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
+
+        if (value.ByTarget is not null)
+        {
+            writer.WriteStartObject("byTarget");
+
+            foreach (var branch in value.ByTarget)
+            {
+                if (branch.Elements is null)
+                {
+                    writer.WriteString(branch.Target, branch.Path);
+                    continue;
+                }
+
+                writer.WriteStartObject(branch.Target);
+                writer.WriteString("path", branch.Path);
+                writer.WriteString("elements", branch.Elements);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
         writer.WriteEndObject();
     }
 }

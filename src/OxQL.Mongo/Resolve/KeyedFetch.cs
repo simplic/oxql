@@ -79,8 +79,12 @@ public enum KeyedOutcome
 /// </summary>
 public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
 
-/// <summary>A path asked under the alias (<paramref name="Parent"/>: under the owning row) that one target of a union's keyed stage lacks, dropped for it.</summary>
-public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent);
+/// <summary>
+/// A path asked under the alias (<paramref name="Parent"/>: under the owning row) that one target of a union's keyed stage lacks, dropped for it.
+/// With <paramref name="Branch"/> the alias is a union join's (<c>byTarget</c>) and the path is one the branch of that target of the anchor
+/// does not reach: <paramref name="Stage"/> is the union join's stage and <paramref name="Target"/> the branch's target.
+/// </summary>
+public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent, bool Branch = false);
 
 /// <summary>
 /// One target's owner query of a keyed stage as explain shows it: the target (<c>entity</c> or
@@ -759,9 +763,10 @@ public sealed class KeyedFetch
             pending = retry;
         }
 
-        // A path asked under the alias is refused only when no target of the stage has it.
+        // A path asked under the alias is refused only when no target of the stage has it; one asked
+        // under a union join's alias only when no branch reaches it.
         foreach (var stage in stages)
-            if (NoTargetHas(stage) is { } refusal)
+            if ((NoTargetHas(stage) ?? NoBranchHas(stage)) is { } refusal)
                 return new ResolveResult { Refusal = refusal, Calls = calls, CacheHits = cacheHits };
 
         // Round two: the existence probe of the keys a filtered query did not return.
@@ -806,6 +811,11 @@ public sealed class KeyedFetch
 
             if (target.DroppedSelect.Count > 0 || target.DroppedParent.Count > 0)
                 cache.SetDrops(target.DropsKey, target.DroppedSelect, target.DroppedParent);
+
+            // What a branch of a union join does not reach is a fact of that branch: kept by its stage.
+            foreach (var group in target.DroppedContinued.GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
+                if (target.BranchDropsKey(group.Key) is { } key)
+                    cache.SetDrops(key, group, []);
         }
 
         var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
@@ -823,6 +833,9 @@ public sealed class KeyedFetch
             .SelectMany(target => target.DroppedSelect.Select(path => (Target: target, Path: path, Parent: false))
                 .Concat(target.DroppedParent.Select(path => (Target: target, Path: path, Parent: true))))
             .Select(drop => new DroppedSelectPath(StageIndexOf(compiled.Bound, drop.Target.Stage), drop.Target.Stage.As, drop.Target.TargetName, drop.Path, drop.Parent))
+            .Concat(targets.SelectMany(target => target.DroppedContinued.Order(StringComparer.Ordinal).Select(path => (Target: target, Alias: path.Split('.')[0], Path: path[(path.IndexOf('.', StringComparison.Ordinal) + 1)..])))
+                .Where(drop => drop.Target.UnionJoinOf(drop.Alias) is not null)
+                .Select(drop => new DroppedSelectPath(drop.Target.UnionJoinOf(drop.Alias)!.OriginIndex, drop.Alias, drop.Target.Entity, drop.Path, Parent: false, Branch: true)))
             .ToList();
 
         return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Dropped = dropped, Calls = calls, CacheHits = cacheHits };
@@ -949,6 +962,37 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
+    /// A path asked under a union join's alias that no branch reaches (improvement plan §3.S): refused,
+    /// as a path no target of a union has is. A branch drops what its owner said its join lacks; a
+    /// branch not asked on this page is taken to reach every path.
+    /// </summary>
+    private static Refusal? NoBranchHas(StagePlan plan)
+    {
+        foreach (var union in plan.Continued.Where(stage => stage.Branches is not null))
+        {
+            var branches = plan.Targets.Where(target => target.Continued.Origins.Contains(union)).ToList();
+
+            foreach (var path in branches.SelectMany(target => target.DroppedContinued).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList())
+            {
+                if (path.Split('.')[0] != union.Aliases[0] || branches.Count < union.Branches!.Count || !branches.All(target => target.DroppedContinued.Contains(path)))
+                    continue;
+
+                var message = $"'{path}' is not a path of what any branch of '{union.Aliases[0]}' joins ({string.Join(", ", branches.Select(target => target.Entity).Distinct(StringComparer.Ordinal))}).";
+                var head = new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = union.OriginIndex };
+
+                // A path of the hint is the stage's own, as written; any other is the projection's, under the alias.
+                var rest = path[(union.Aliases[0].Length + 1)..];
+                var hinted = union.Stage.Resolve?.Select?.Contains(rest, StringComparer.Ordinal) == true;
+
+                return Refusal.NotExecutable(Codes.ResolveRefused, message, union.OriginIndex,
+                    [head, new QueryValidationError { Code = Codes.UnknownPath, Message = message, Stage = union.OriginIndex, Path = hinted ? rest : path }]);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// The owners' diagnostics about continued stages as this host's (DESIGN §3.5.3): each at the
     /// caller's stage and path with <c>params.owner</c> saying where the owner saw it, its rows moved
     /// from the owner's answer rows to the page rows that took them, one diagnostic per code, stage and
@@ -1032,7 +1076,7 @@ public sealed class KeyedFetch
                     Code = diagnostic["code"]?.ToString() ?? Codes.InternalError,
                     Message = diagnostic["message"]?.ToString() ?? "",
                     Stage = continued.OriginIndex,
-                    Path = ownerPath is null ? null : Continuation.ToOrigin(ownerPath, continued, target.Stage, target.Target.Declared.Item is not null),
+                    Path = ownerPath is null ? null : Continuation.ToOrigin(ownerPath, continued, target.Stage, target.Target.Declared.Item is not null, target.Entity),
                 }, parameters, rows, count, rowCount, truncated));
                 continue;
             }
@@ -1369,15 +1413,32 @@ public sealed class KeyedFetch
                 if (kept.Whole && kept.Carried)
                     projection[alias] = 1;
 
+                // What this target's branch of a union join does not reach is not asked of it.
                 foreach (var path in kept is { Carried: true, Whole: false } ? kept.Projected : [])
-                    projection[alias + "." + path] = 1;
+                    if (!DroppedContinued.Contains(alias + "." + path))
+                        projection[alias + "." + path] = 1;
             }
 
             pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
-            pipeline.InsertRange(at, Continued.Stages);
+            pipeline.InsertRange(at, Continued.Stages.Select((stage, index) => Reaching(stage, Continued.Origins[index])));
             ContinuedAt = at;
 
             return query with { Pipeline = pipeline, Strict = strict ? true : null };
+        }
+
+        /// <summary>
+        /// A continued stage as this target is sent it: the branch of a union join without the paths of
+        /// its <c>select</c> hint that this target's branch does not reach (none left: the join's own
+        /// key and display); every other stage as it is.
+        /// </summary>
+        private PipelineStage Reaching(PipelineStage stage, ContinuedStage origin)
+        {
+            if (origin.Branches is null || stage.Resolve is not { Select: { Count: > 0 } hint } resolve)
+                return stage;
+
+            var reached = hint.Where(path => !DroppedContinued.Contains(origin.Aliases[0] + "." + path)).ToList();
+
+            return reached.Count == hint.Count ? stage : stage with { Resolve = resolve with { Select = reached.Count == 0 ? null : reached } };
         }
 
         /// <summary>The continued stage an owner's stage index names, or null for a stage of the query itself.</summary>
@@ -1401,6 +1462,34 @@ public sealed class KeyedFetch
         public HashSet<string> DroppedParent { get; } = new(StringComparer.Ordinal);
 
         /// <summary>
+        /// The paths under a union join's alias (<c>alias.path</c>) that this target's branch does not
+        /// reach, as its owner said: dropped from this target's query, so the alias carries them on the
+        /// rows of the other branches only (improvement plan §3.S).
+        /// </summary>
+        public HashSet<string> DroppedContinued { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The union join (<c>byTarget</c>) this target's owner runs a branch of that adds <paramref name="alias"/>; null for any other alias.</summary>
+        public ContinuedStage? UnionJoinOf(string alias) =>
+            Continued.Origins.FirstOrDefault(origin => origin.Branches is not null && origin.Aliases.Contains(alias, StringComparer.Ordinal));
+
+        /// <summary>The cache key of what this target's branch of the union join adding <paramref name="alias"/> does not reach: per target and stage as sent.</summary>
+        public string? BranchDropsKey(string alias) => UnionJoinOf(alias) is { } union
+            ? DropsKey + "|" + alias + "|" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(Continuation.BranchOf(union, Entity), OxQLJson.Wire)))[..16]
+            : null;
+
+        /// <summary>Takes what an earlier request learned this target's branch does not reach, as far as this plan asks it.</summary>
+        public void LearnedContinued(string alias, IEnumerable<string> paths)
+        {
+            // What this plan asks under the alias: the paths the projection names there, and the hint.
+            var asked = HintOf(alias).Concat(final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected : []).ToList();
+
+            DroppedContinued.UnionWith(paths.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal) && asked.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal)));
+        }
+
+        /// <summary>The <c>select</c> hint of the union join adding <paramref name="alias"/>, as written; empty when it has none.</summary>
+        private IReadOnlyList<string> HintOf(string alias) => UnionJoinOf(alias)?.Stage.Resolve?.Select ?? [];
+
+        /// <summary>
         /// The target as its owner query carries it: the paths the binder inferred for it (improvement
         /// plan §3.S), less what the owner said this target lacks. A local target's are bound, and
         /// already without what it lacks.
@@ -1414,15 +1503,18 @@ public sealed class KeyedFetch
             : Target;
 
         /// <summary>
-        /// A remote union target's owner refused its query only because paths asked under the alias or
-        /// its owning row are not paths of this target: they are dropped for it and the query is asked
-        /// again. Anything else in the refusal is the refusal. True when the query as sent projected
-        /// every refused path, so the query asked again does not: newly learned, or learned from another
-        /// chunk of the same round that was sent before the drop (RE-5).
+        /// The owner refused this target's query only because paths it was asked do not exist there, and
+        /// a run drops them for the target and asks again: for a remote target of a union, paths asked
+        /// under the alias or its owning row that are not paths of this target; for any target that runs
+        /// a branch of a union join (<c>byTarget</c>), paths asked under that join's alias that the branch
+        /// does not reach, said by the owner at its projection or, where the branch is a join the owner
+        /// sends on, inside its refusal of that join. Anything else in the refusal is the refusal. True
+        /// when the query as sent projected every refused path, so the query asked again does not: newly
+        /// learned, or learned from another chunk of the same round that was sent before the drop (RE-5).
         /// </summary>
         public bool DropUnknown(JsonNode? result, QueryRequest sent)
         {
-            if (!Target.IsRemote || !Union || result?["errors"] is not JsonArray { Count: > 0 } errors)
+            if (result?["errors"] is not JsonArray { Count: > 0 } errors)
                 return false;
 
             var projectAt = sent.Pipeline.ToList().FindLastIndex(stage => stage.Project is not null);
@@ -1434,12 +1526,57 @@ public sealed class KeyedFetch
             var element = BoundKeyedBy.Element + ".";
             var select = new List<string>();
             var parent = new List<string>();
+            var continued = new List<string>();
+
+            // The union join whose branch the owner refused to run: the paths its own owner lacked follow it.
+            (string Alias, int Stage)? refused = null;
 
             foreach (var error in errors)
             {
-                if (error?["code"]?.ToString() != Codes.UnknownPath
-                    || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage) || stage != projectAt
-                    || error["path"]?.ToString() is not { Length: > 0 } path)
+                var code = error?["code"]?.ToString();
+                int? stage = error?["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : null;
+
+                if (code == Codes.ResolveRefused)
+                {
+                    // A branch of a union join that is a join of its own at the owner: the owner's owner
+                    // refused it; whether only for paths the branch lacks, the errors after it say.
+                    if (stage is { } index && OriginOf(index) is { Branches: not null } union)
+                    {
+                        refused = (union.Aliases[0], index);
+                        continue;
+                    }
+
+                    if (refused is not null && stage is null)
+                        continue;
+
+                    return false;
+                }
+
+                if (code != Codes.UnknownPath || error!["path"]?.ToString() is not { Length: > 0 } path)
+                    return false;
+
+                // A path asked under a union join's alias that this target's branch does not reach.
+                if (stage == projectAt && UnionJoinOf(path.Split('.')[0]) is not null)
+                {
+                    continued.Add(path);
+                    continue;
+                }
+
+                if (refused is { } branch && (stage is null || stage == branch.Stage))
+                {
+                    continued.Add(branch.Alias + "." + path);
+                    continue;
+                }
+
+                // A path of a union join's select hint that this target's branch does not reach, said at the branch's own stage.
+                // (An owner that sends the join on names the path under the alias, as its own explain does.)
+                if (stage is { } hinted && OriginOf(hinted) is { Branches: not null } hinting)
+                {
+                    continued.Add(path.StartsWith(hinting.Aliases[0] + ".", StringComparison.Ordinal) ? path : hinting.Aliases[0] + "." + path);
+                    continue;
+                }
+
+                if (stage != projectAt || !Target.IsRemote || !Union)
                     return false;
 
                 if (Target.Declared.Item is null)
@@ -1449,6 +1586,9 @@ public sealed class KeyedFetch
                 else
                     parent.Add(path);
             }
+
+            if (select.Count + parent.Count + continued.Count == 0)
+                return false;
 
             var sentSelect = Target.RemoteSelect ?? [];
             var sentParent = Target.RemoteParentSelect ?? [];
@@ -1460,24 +1600,42 @@ public sealed class KeyedFetch
             if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
                 return false;
 
+            // A path under a union join's alias was asked by the projection or by the hint of the stage as sent.
+            bool Asked(string path)
+            {
+                var alias = path.Split('.')[0];
+                var at = Continued.Origins.ToList().FindIndex(origin => origin.Branches is not null && origin.Aliases[0] == alias);
+
+                return sentFields.ContainsKey(path)
+                    || (at >= 0 && ContinuedAt + at < sent.Pipeline.Count && sent.Pipeline[ContinuedAt + at].Resolve?.Select?.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal) == true);
+            }
+
+            if (!continued.All(Asked))
+                return false;
+
             DroppedSelect.UnionWith(select);
             DroppedParent.UnionWith(parent);
+            DroppedContinued.UnionWith(continued);
 
             return true;
         }
 
         /// <summary>
         /// Whether one owner error is a path this remote union target lacks at the projection of the
-        /// query <paramref name="sent"/>: what <see cref="DropUnknown"/> drops for the target.
+        /// query <paramref name="sent"/>, or one a branch of a union join does not reach there: what
+        /// <see cref="DropUnknown"/> drops for the target.
         /// </summary>
         public bool Droppable(JsonObject error, QueryRequest sent)
         {
             ArgumentNullException.ThrowIfNull(error);
             ArgumentNullException.ThrowIfNull(sent);
 
-            if (!Target.IsRemote || !Union || error["code"]?.ToString() != Codes.UnknownPath
+            if (error["code"]?.ToString() != Codes.UnknownPath
                 || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage)
                 || error["path"]?.ToString() is not { Length: > 0 } path)
+                return false;
+
+            if (!(Target.IsRemote && Union) && UnionJoinOf(path.Split('.')[0]) is null)
                 return false;
 
             var projectAt = sent.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
@@ -1756,6 +1914,10 @@ public sealed class KeyedFetch
                     // asked again, and reported whether or not this page reaches the owner (RE-6).
                     if (target.IsRemote && union && cache.TryGetDrops(shared.DropsKey, out var select, out var parent))
                         shared.Learned(select, parent);
+
+                    foreach (var joined in shared.Continued.Origins.Where(origin => origin.Branches is not null).Select(origin => origin.Aliases[0]))
+                        if (cache.TryGetDrops(shared.BranchDropsKey(joined)!, out var unreached, out _))
+                            shared.LearnedContinued(joined, unreached);
                 }
 
                 plan.ByTarget[target] = shared;
@@ -2342,7 +2504,7 @@ public sealed class KeyedFetch
         return mapped with
         {
             Stage = origin.OriginIndex,
-            Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null),
+            Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null, target.Entity),
             Params = parameters,
         };
     }

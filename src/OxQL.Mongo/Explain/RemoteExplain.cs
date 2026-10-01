@@ -255,6 +255,27 @@ public sealed class RemoteExplain : IExplainOwners
     /// </summary>
     public JsonObject? LoadsOf(string alias) => aliasLoads.GetValueOrDefault(alias);
 
+    private readonly Dictionary<(string Alias, string Target), (List<string> Entities, List<string> Types)> branchAnswers = [];
+    private readonly HashSet<(int Stage, string Target)> refusedAt = [];
+    private readonly Dictionary<string, JsonArray> ownerBranches = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: what the branch of a union join (<c>byTarget</c>) for the anchor's
+    /// target <paramref name="target"/> reaches under <paramref name="alias"/>, as that target's owner
+    /// answered: the entities and the types; null when no owner answered for the branch.
+    /// </summary>
+    public (IReadOnlyList<string> Entities, IReadOnlyList<string> Types)? BranchOf(string alias, string target) =>
+        branchAnswers.TryGetValue((alias, target), out var answered) ? (answered.Entities, answered.Types) : null;
+
+    /// <summary>After <see cref="CheckAsync"/>: whether the owner of the anchor's <paramref name="target"/> refused the stage at the caller's index <paramref name="stage"/>.</summary>
+    public bool RefusedAt(int stage, string target) => refusedAt.Contains((stage, target));
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: the branches of a union join an owner split itself (one under an
+    /// alias a continued stage added), as that owner answered them; null when none did.
+    /// </summary>
+    public JsonArray? OwnerBranchesOf(string alias) => ownerBranches.GetValueOrDefault(alias);
+
     /// <summary>After <see cref="CheckAsync"/>: whether the owner of <paramref name="target"/> of the keyed stage creating <paramref name="alias"/> did not answer its check.</summary>
     public bool Unanswered(string alias, string target) => unanswered.Contains(alias + "\n" + target);
 
@@ -361,9 +382,13 @@ public sealed class RemoteExplain : IExplainOwners
                 // What it lacked stays a miss; an answer that does not come leaves the first.
                 var sent = check.Query;
 
-                for (var round = 0; !local && round < KeyedFetch.MaxDropRounds && check.Again(answer, sent) is { } again; round++)
+                // A local target is asked again as well: what a branch of a union join does not reach
+                // is its SelfOwner's to say, and a run drops it the same way.
+                for (var round = 0; round < KeyedFetch.MaxDropRounds && check.Again(answer, sent) is { } again; round++)
                 {
-                    var (asked, _) = await CallAsync(check.Service, request with { Query = again }, round + 1, check.Target, check.FirstContinued, cancellationToken).ConfigureAwait(false);
+                    var (asked, _) = local
+                        ? await SelfAsync(request with { Query = again }, cancellationToken).ConfigureAwait(false)
+                        : await CallAsync(check.Service, request with { Query = again }, round + 1, check.Target, check.FirstContinued, cancellationToken).ConfigureAwait(false);
 
                     if (asked is null)
                         break;
@@ -384,10 +409,13 @@ public sealed class RemoteExplain : IExplainOwners
                     {
                         if (check.Map(error) is { } mapped)
                         {
+                            if (mapped.Stage is { } at && check.Bound is { } refusing)
+                                refusedAt.Add((at, refusing.Declared.Entity));
+
                             if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && other.Path == mapped.Path))
                                 errors.Add(mapped);
                         }
-                        else if (!local && MissOf(check, error) is { } miss)
+                        else if (MissOf(check, error) is { } miss && (!local || miss.Continued))
                         {
                             misses.Add(miss);
                         }
@@ -424,6 +452,12 @@ public sealed class RemoteExplain : IExplainOwners
     /// </summary>
     private void Remember(OwnerCheck check, JsonObject answer)
     {
+        // What each union of the answer is made of, read before the table takes the answer's types: two
+        // owners may each name a union after the one alias, and the alias here is the union of both.
+        var unions = (answer["types"] as JsonObject)?
+            .Where(pair => pair.Key.StartsWith("u:", StringComparison.Ordinal) && pair.Value?["of"] is JsonArray)
+            .ToDictionary(pair => pair.Key, pair => pair.Value!["of"]!.AsArray().Select(each => each!.GetValue<string>()).ToList(), StringComparer.Ordinal) ?? [];
+
         if (shape)
             types!.Import(answer);
 
@@ -463,35 +497,67 @@ public sealed class RemoteExplain : IExplainOwners
                 if (!reached.TryGetValue(alias, out var list))
                     reached[alias] = list = [];
 
+                // What this target's owner said the alias reaches: of a union join, what its branch reaches.
+                var branch = (alias, check.Bound?.Declared.Entity ?? check.Target);
+
+                if (!branchAnswers.TryGetValue(branch, out var reachedHere))
+                    branchAnswers[branch] = reachedHere = ([], []);
+
                 foreach (var entity in described["entities"]?.AsArray().OfType<JsonValue>().Select(value => value.ToString()) ?? [])
+                {
                     if (!list.Contains(entity, StringComparer.Ordinal))
                         list.Add(entity);
 
-                if (described["type"] is JsonValue pointer && pointer.TryGetValue<string>(out var type))
+                    if (!reachedHere.Entities.Contains(entity, StringComparer.Ordinal))
+                        reachedHere.Entities.Add(entity);
+                }
+
+                if (described["type"] is JsonValue pointer && pointer.TryGetValue<string>(out var named))
                 {
                     if (!aliasTypes.TryGetValue(alias, out var pointers))
                         aliasTypes[alias] = pointers = [];
 
-                    if (!pointers.Contains(type, StringComparer.Ordinal))
-                        pointers.Add(type);
+                    foreach (var type in unions.TryGetValue(named, out var of) ? of : [named])
+                    {
+                        if (!pointers.Contains(type, StringComparer.Ordinal))
+                            pointers.Add(type);
+
+                        if (!reachedHere.Types.Contains(type, StringComparer.Ordinal))
+                            reachedHere.Types.Add(type);
+                    }
                 }
+
+                // A union join the owner split itself: its branches are the owner's to say.
+                if (origin.Branches is null && described["branches"] is JsonArray split && !ownerBranches.ContainsKey(alias))
+                    ownerBranches[alias] = (JsonArray)split.DeepClone();
             }
         }
     }
 
     /// <summary>A path a remote target's owner said the target lacks, at the check query's projection: relative to the alias, or to the owning row.</summary>
-    private sealed record Miss(OwnerCheck Check, string Path, bool Parent, string OwnerPath);
+    private sealed record Miss(OwnerCheck Check, string Path, bool Parent, string OwnerPath)
+    {
+        /// <summary>Whether the path lies under an alias a stage continued at the owner adds: that stage's join lacks it, not the target.</summary>
+        public bool Continued => !Parent && Check.ContinuedAliases.Contains(Path.Split('.')[0], StringComparer.Ordinal);
+    }
 
     /// <summary>An owner's <c>UNKNOWN_PATH</c> at the check query's projection as a path of the alias or of the owning row; null for any other error.</summary>
     private static Miss? MissOf(OwnerCheck check, JsonObject error)
     {
-        if (error["code"]?.ToString() != Codes.UnknownPath || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage) || stage != check.ProjectAt
+        if (error["code"]?.ToString() != Codes.UnknownPath || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage)
             || error["path"]?.ToString() is not { Length: > 0 } path)
             return null;
 
+        // A path of a union join's select hint that this target's branch does not reach: the owner says it at the branch's stage.
+        if (stage != check.ProjectAt)
+            return check.OriginOf(stage) is { Branches: not null } union
+                ? new Miss(check, path.StartsWith(union.Aliases[0] + ".", StringComparison.Ordinal) ? path : union.Aliases[0] + "." + path, Parent: false, path)
+                : null;
+
         var element = BoundKeyedBy.Element + ".";
 
-        if (!check.Item)
+        // A path under an alias a continued stage added is that stage's, whatever the target is.
+        if (!check.Item || check.ContinuedAliases.Contains(path.Split('.')[0], StringComparer.Ordinal))
             return new Miss(check, path, Parent: false, path);
 
         return path.StartsWith(element, StringComparison.Ordinal)
@@ -527,7 +593,25 @@ public sealed class RemoteExplain : IExplainOwners
             if (!parent && first.Check.ContinuedAliases.Contains(path.Split('.')[0], StringComparer.Ordinal))
             {
                 var continued = path.Split('.')[0];
-                var at = first.Check.ProjectStage ?? first.Check.Stage;
+                var hinted = first.Check.Continued.FirstOrDefault(stage => stage.Branches is not null && stage.Aliases.Contains(continued, StringComparer.Ordinal)) is { } hinting
+                    && hinting.Stage.Resolve?.Select?.Contains(path[(continued.Length + 1)..], StringComparer.Ordinal) == true ? hinting : null;
+                // The hint is written at the union join; every other path asked under its alias is the projection's.
+                var at = hinted?.OriginIndex ?? first.Check.ProjectStage ?? first.Check.Stage;
+
+                if (hinted is not null)
+                    path = path[(continued.Length + 1)..];
+
+                // Under a union join's alias the path is dropped for the branches that do not reach it, as
+                // a run drops it; only one no branch reaches is unknown. A branch whose owner did not
+                // answer is taken to reach it.
+                if (first.Check.Continued.FirstOrDefault(stage => stage.Branches is not null && stage.Aliases.Contains(continued, StringComparer.Ordinal)) is { } union
+                    && checks.Where(check => check.Continued.Contains(union)).Any(check => !answered.Contains(check) || !lacking.Contains(check)))
+                {
+                    foreach (var check in lacking.DistinctBy(check => check.Bound?.Declared.Entity ?? check.Target))
+                        notes.Add(Notes.BranchPathDropped(union.OriginIndex, continued, check.Bound?.Declared.Entity ?? check.Target, hinted is null ? path[(continued.Length + 1)..] : path));
+
+                    continue;
+                }
 
                 if (!errors.Any(other => other.Code == Codes.UnknownPath && other.Stage == at && other.Path == path))
                     errors.Add(new QueryValidationError

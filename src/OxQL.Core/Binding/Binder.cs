@@ -168,12 +168,17 @@ public sealed class Binder
 
         /// <summary>
         /// An alias a stage may continue under: the keyed <paramref name="Stage"/> whose owner runs the
-        /// continuation, the one target the alias exists on (<c>forTarget</c> of the stage that added
-        /// it), whether it holds every resolved target of a row (<c>elements: "all"</c>), and whether a
+        /// continuation, the targets of that stage the alias exists on (<c>forTarget</c> of the stage
+        /// that added it, or the targets a union join has a branch for; null for every target), whether
+        /// it holds every resolved target of a row (<c>elements: "all"</c>), and whether a
         /// continued stage added it (<paramref name="Nested"/>): the owner then binds that stage's own
         /// join, so its targets are the owner's to know and a <c>forTarget</c> under it is the owner's to check.
         /// </summary>
-        private sealed record ContinuationAnchor(BoundStage.Resolve Stage, string? ForTarget, bool Many, bool Nested = false);
+        private sealed record ContinuationAnchor(BoundStage.Resolve Stage, IReadOnlyList<string>? Targets, bool Many, bool Nested = false)
+        {
+            /// <summary>The one target the alias exists on, when it is one.</summary>
+            public string? ForTarget => Targets is [var only] ? only : null;
+        }
 
         /// <summary>Contract 2, where a string comparison, sort or group key folds case unless it opts out.</summary>
         private readonly bool contract2 = context.Contract != 1;
@@ -1762,7 +1767,7 @@ public sealed class Binder
             var contract2Members = new (string Name, bool Written)[]
             {
                 ("elements", resolve.Elements is not null), ("target", resolve.Target is not null), ("parentAs", resolve.ParentAs is not null),
-                ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null),
+                ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null), ("byTarget", resolve.ByTarget is not null),
             };
             IReadOnlyList<string> unknown = contract2
                 ? resolve.Unknown
@@ -1771,7 +1776,7 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget" : "path, as, select, filter")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget, byTarget" : "path, as, select, filter")}."
                     + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
                 return;
             }
@@ -1783,8 +1788,16 @@ public sealed class Binder
                     {
                         "elements" => "A resolve's 'elements' is \"first\" or \"all\".",
                         "onMissing" => "A resolve's 'onMissing' is \"null\", \"report\" or \"refuse\".",
+                        "byTarget" => "A resolve's 'byTarget' is an object with one member per target: its path, or { \"path\": …, \"elements\": \"first\" | \"all\" }.",
                         _ => $"A resolve's '{name}' is a string.",
                     }, index, null));
+                return;
+            }
+
+            // A union join: one path per target of the alias it continues under, one alias.
+            if (resolve.ByTarget is not null)
+            {
+                BindUnionJoin(resolve, index);
                 return;
             }
 
@@ -2053,7 +2066,7 @@ public sealed class Binder
             }
 
             var targets = TargetsOf(anchor.Stage);
-            var effective = anchor.ForTarget;
+            var effective = anchor.Targets;
 
             // Under an alias a continued stage added, forTarget names a target of that alias, whose join
             // the owner binds with its own model (DESIGN §3.5.3): the stage carries it to the owner, which
@@ -2068,7 +2081,7 @@ public sealed class Binder
                     return;
                 }
 
-                effective = forTarget;
+                effective = [forTarget];
             }
 
             var count = continuedPerAnchor.GetValueOrDefault(anchor.Stage.As) + 1;
@@ -2117,7 +2130,7 @@ public sealed class Binder
             var stage = OperandCoercer.HoldsVariable(written) ? JsonSerializer.Deserialize<PipelineStage>(sent.GetRawText(), OxQLJson.Wire)! : raw;
 
             continuedPerAnchor[anchor.Stage.As] = count;
-            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective, added));
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective is [var only] ? only : null, added) { Targets = effective is { Count: > 1 } ? effective : null });
 
             // What this host can see of the stage's reads: the path it roots at. Its owner binds it and
             // answers the rest (a case member, the parent's key), which explain takes from the owner.
@@ -2135,6 +2148,224 @@ public sealed class Binder
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(known ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false, TargetOpen: known is null));
                 anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many, Nested: true);
             }
+        }
+
+        /// <summary>
+        /// A union join (improvement plan §3.U): <c>resolve { as, byTarget: { target: path | { path, elements } } }</c>,
+        /// one stage continued under a keyed or remote alias with several targets, one branch per target,
+        /// all filling the one alias. It binds as one <see cref="ContinuedStage"/>: the owner of each
+        /// target named runs its branch as an ordinary resolve (<see cref="Continuation.BranchOf"/>), and
+        /// a target without a branch is not sent the stage, as with a foreign <c>forTarget</c>.
+        /// <para>
+        /// Checked here: no <c>path</c>, <c>elements</c>, <c>forTarget</c> or <c>parentAs</c> beside it
+        /// (the first two are the branch's; the stage is every target's; a branch's owning row would be
+        /// one alias of several shapes); at least two branches, each target once; every branch path under
+        /// an alias of one keyed stage (its alias, its owning row, or an alias continued under them that
+        /// exists on the branch's target); every target named a target of that stage; one cardinality
+        /// (every branch one record, or every branch <c>elements: "all"</c>). The paths themselves are
+        /// the owners' to bind.
+        /// </para>
+        /// <para>
+        /// When the branches root at one alias a continued stage added and name targets that are not the
+        /// keyed stage's, they name targets of that alias, which only its owner knows (the nested rule of
+        /// <c>forTarget</c>): the stage travels as written and the owner splits it.
+        /// </para>
+        /// </summary>
+        private void BindUnionJoin(ResolveStage resolve, int index)
+        {
+            var branches = resolve.ByTarget!;
+
+            QueryValidationError NotApplicable(string message, string reason, string? path = null, Dictionary<string, object?>? more = null)
+            {
+                var parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["option"] = "byTarget", ["reason"] = reason };
+
+                foreach (var (name, value) in more ?? [])
+                    parameters[name] = value;
+
+                return new QueryValidationError { Code = Codes.OptionNotApplicable, Message = message, Stage = index, Path = path, Params = parameters };
+            }
+
+            foreach (var (name, given) in new[] { ("path", resolve.Path is not null), ("elements", resolve.Elements is not null), ("forTarget", resolve.ForTarget is not null), ("parentAs", resolve.ParentAs is not null) })
+            {
+                if (!given)
+                    continue;
+
+                errors.Add(NotApplicable(name switch
+                {
+                    "path" => "'byTarget' takes the place of 'path': a resolve names one path, or one path per target.",
+                    "elements" => "'elements' is each branch's own under 'byTarget': write it beside the branch's path ({ \"path\": …, \"elements\": … }).",
+                    "forTarget" => "'forTarget' picks one target; 'byTarget' names a path for each of several. Write one of them.",
+                    _ => "'parentAs' does not apply to a union join: the owning rows of its branches have no one shape.",
+                }, "with" + char.ToUpperInvariant(name[0]) + name[1..], null, new() { ["member"] = name }));
+                return;
+            }
+
+            if (branches.GroupBy(branch => branch.Target, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice)
+            {
+                errors.Add(NotApplicable($"'byTarget' names '{twice.Key}' twice; a target has one branch.", "duplicateTarget", null, new() { ["target"] = twice.Key }));
+                return;
+            }
+
+            // One branch is the plain form: a path for one target (K12).
+            if (branches.Count < 2)
+            {
+                errors.Add(NotApplicable(branches is [var single]
+                    ? $"'byTarget' names one target; a resolve for one target is written with 'path' and 'forTarget': {{ \"path\": \"{single.Path}\", \"forTarget\": \"{single.Target}\", \"as\": … }}."
+                    : "'byTarget' names no target; it carries one path per target, for at least two.", "singleBranch", branches is [var one] ? one.Path : null,
+                    new() { ["target"] = branches is [var named] ? named.Target : null, ["form"] = "forTarget" }));
+                return;
+            }
+
+            // Every branch continues under an alias of one keyed stage.
+            var roots = new List<(ResolveBranch Branch, string Head, ContinuationAnchor Anchor)>();
+
+            foreach (var branch in branches)
+            {
+                var path = branch.Path ?? "";
+                var head = path.Split('.')[0];
+
+                if (path.Length == 0 || path.Split('.').Any(segment => segment.Length == 0))
+                {
+                    errors.Add(Error(Codes.InvalidPath, $"'{branch.Path}' is not a path; the branch of '{branch.Target}' names the member carrying the reference.", index, branch.Path));
+                    return;
+                }
+
+                if (!anchors.TryGetValue(head, out var under))
+                {
+                    // not a read: why a branch path is not one a union join continues from
+                    var here = shape.Resolve(path, PathUsage.Project);
+
+                    errors.Add(here.Succeeded || shape.Roots.ContainsKey(head)
+                        ? NotApplicable($"'byTarget' applies to a stage continued under an alias with several targets; '{path}' is a path of this host's row. Write it with 'path'.", "notContinued", path, new() { ["target"] = branch.Target })
+                        : Unresolved(here, index, path));
+                    return;
+                }
+
+                if (!shape.IsVisible(path))
+                {
+                    errors.Add(Error(Codes.UnknownPath, $"'{path}' was removed by the projection.", index, path));
+                    return;
+                }
+
+                if (under.Many)
+                {
+                    errors.Add(Error(Codes.NotContinuable, under.Stage.RemoteLookup is not null
+                        ? $"'resolve' cannot run on '{head}', which holds every child the lookup found for a row; a continued stage would lose which child it belongs to. Look up with 'first' to continue from one child."
+                        : $"'resolve' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, path));
+                    return;
+                }
+
+                roots.Add((branch, head, under));
+            }
+
+            var anchor = roots[0].Anchor;
+
+            if (roots.FirstOrDefault(root => !ReferenceEquals(root.Anchor.Stage, anchor.Stage)) is { Branch: not null } other)
+            {
+                errors.Add(NotApplicable(
+                    $"The branches of 'byTarget' continue under one alias with several targets; '{roots[0].Branch.Path}' lies under '{anchor.Stage.As}' and '{other.Branch.Path}' under '{other.Anchor.Stage.As}'.",
+                    "anchors", other.Branch.Path, new() { ["target"] = other.Branch.Target, ["aliases"] = new List<string> { anchor.Stage.As, other.Anchor.Stage.As } }));
+                return;
+            }
+
+            var targets = TargetsOf(anchor.Stage);
+            var direct = branches.All(branch => targets.Contains(branch.Target, StringComparer.Ordinal));
+
+            // Under one alias a continued stage added, the targets are that alias's, which its owner knows.
+            var nested = !direct && roots.All(root => root.Head == roots[0].Head && root.Anchor.Nested);
+
+            if (!direct && !nested)
+            {
+                var unknown = branches.First(branch => !targets.Contains(branch.Target, StringComparer.Ordinal));
+
+                errors.Add(NotApplicable(
+                    $"'byTarget' names '{unknown.Target}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.",
+                    "notATarget", unknown.Path, new() { ["target"] = unknown.Target, ["alias"] = anchor.Stage.As, ["targets"] = targets }));
+                return;
+            }
+
+            // A branch roots at an alias that exists on its target's rows: one continued for another target does not.
+            if (direct && roots.FirstOrDefault(root => root.Anchor.Targets is { } exists && !exists.Contains(root.Branch.Target, StringComparer.Ordinal)) is { Branch: not null } foreign)
+            {
+                errors.Add(NotApplicable(
+                    $"'{foreign.Branch.Path}' is the branch of '{foreign.Branch.Target}', but '{foreign.Head}' belongs to the rows of {string.Join(", ", foreign.Anchor.Targets!.Select(target => $"'{target}'"))}.",
+                    "otherBranch", foreign.Branch.Path, new() { ["target"] = foreign.Branch.Target, ["alias"] = foreign.Head, ["targets"] = foreign.Anchor.Targets }));
+                return;
+            }
+
+            // One alias, one shape: every branch one record, or every branch an array.
+            var all = branches[0].Elements == "all";
+
+            if (branches.FirstOrDefault(branch => (branch.Elements == "all") != all) is { } mixed)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnionCardinalityMismatch,
+                    Message = $"The branch of '{mixed.Target}' resolves {(all ? "one record" : "every element ('elements: \"all\"')")} while the branch of '{branches[0].Target}' resolves {(all ? "every element ('elements: \"all\"')" : "one record")}; "
+                        + $"'{resolve.As}' holds one record per row or an array, not both. Change the branch of '{mixed.Target}' to {(all ? "'elements: \"all\"'" : "'elements: \"first\"' (or a path that crosses no collection)")}.",
+                    Stage = index,
+                    Path = mixed.Path,
+                    Params = new Dictionary<string, object?>
+                    {
+                        ["alias"] = resolve.As,
+                        ["branch"] = mixed.Target,
+                        ["elements"] = mixed.Elements,
+                        ["expected"] = all ? "all" : "one",
+                    },
+                });
+                return;
+            }
+
+            // The stage counts once under its keyed stage, however many branches it has.
+            var count = continuedPerAnchor.GetValueOrDefault(anchor.Stage.As) + 1;
+
+            if (count > options.Limits.MaxContinuedStages)
+            {
+                errors.Add(Error(Codes.MaxContinuedStagesExceeded,
+                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, roots[0].Branch.Path));
+                return;
+            }
+
+            if (!CheckAlias(resolve.As, index, out var alias))
+                return;
+
+            // What the wire form cannot carry to the owner is refused here, not dropped on the way.
+            if (RefuseUnknownOptions(resolve.Filter?.Condition, index))
+                return;
+
+            // The stage as the owners are sent it: every variable bound here.
+            var raw = new PipelineStage { Resolve = resolve, Keys = ["resolve"] };
+            var substitution = new List<QueryValidationError>();
+            var written = JsonSerializer.SerializeToElement(raw, OxQLJson.Wire);
+            var sent = coercer.SubstituteVariables(written, index, roots[0].Branch.Path, substitution);
+
+            if (substitution.Count > 0)
+            {
+                errors.AddRange(substitution);
+                return;
+            }
+
+            var stage = OperandCoercer.HoldsVariable(written) ? JsonSerializer.Deserialize<PipelineStage>(sent.GetRawText(), OxQLJson.Wire)! : raw;
+
+            // The rows the alias exists on: those of the targets it has a branch for; under a nested
+            // alias, wherever that alias exists.
+            var applies = direct ? branches.Select(branch => branch.Target).ToList() : anchor.Targets;
+
+            continuedPerAnchor[anchor.Stage.As] = count;
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, applies is [var only] ? only : null, [alias])
+            {
+                Targets = applies is { Count: > 1 } ? applies : null,
+                Branches = direct ? stage.Resolve!.ByTarget : null,
+            });
+
+            // What this host can see of the stage's reads: the path each branch roots at.
+            foreach (var (branch, head, _) in roots)
+                reads.Add(new PathRead(index, branch.Path!, ReadUse.ResolveKey, head, branch.Path!.Length > head.Length ? branch.Path[(head.Length + 1)..] : ""));
+
+            // The alias holds the owners' rows: projected, never filtered or sorted here; what each
+            // branch reaches is its owner's to say, unless the stage names the one target.
+            shape = shape.WithRoot(alias, new ShapeNode.Remote(resolve.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false, TargetOpen: resolve.Target is null));
+            anchors[alias] = new ContinuationAnchor(anchor.Stage, applies, all, Nested: true);
         }
 
         /// <summary>
@@ -2173,8 +2404,8 @@ public sealed class Binder
         /// <summary>Whether every target a stage continued under the anchor reaches (after <c>forTarget</c>) is an item target.</summary>
         private static bool ItemTargetsOnly(ContinuationAnchor anchor, string? forTarget)
         {
-            var effective = forTarget ?? anchor.ForTarget;
-            var targets = (anchor.Stage.Cases ?? []).SelectMany(bound => bound.Targets).Where(target => effective is null || target.Declared.Entity == effective).ToList();
+            IReadOnlyList<string>? effective = forTarget is null ? anchor.Targets : [forTarget];
+            var targets = (anchor.Stage.Cases ?? []).SelectMany(bound => bound.Targets).Where(target => effective is null || effective.Contains(target.Declared.Entity, StringComparer.Ordinal)).ToList();
 
             return targets.Count > 0 && targets.All(target => target.Declared.Item is not null);
         }

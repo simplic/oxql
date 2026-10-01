@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -229,6 +230,245 @@ public class ContinuationExecutionTests
         var report = OutcomePolicy.Report(bound, resolved.Outcomes, resolved.Truncations, strict: true, BindHost.Options());
         report.Diagnostics.Should().BeEmpty();
         report.Refusing.Should().BeEmpty();
+    }
+
+    // ---- byTarget: the union join ----------------------------------------------------------------------
+
+    /// <summary>The memo of whatever the source is: the alpha's note, the beta's gamma; a gamma has none.</summary>
+    private static string Memo(string project, string hint = "") => $$"""
+        [{ "resolve": { "path": "source.id", "as": "src" } },
+         { "resolve": { "as": "memo", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.memoId" }{{hint}} } },
+         {{project}}
+         { "sort": [{ "number": "asc" }] }]
+        """;
+
+    private static BsonDocument Scoped(Guid id, Action<BsonDocument> fill)
+    {
+        var row = new BsonDocument { ["_id"] = Id(id), ["OrganizationId"] = Id(BindHost.Organisation) };
+
+        fill(row);
+
+        return row;
+    }
+
+    /// <summary>An alpha, a beta and a gamma invoice; each owner row holds what its branch's join left under <c>memo</c>.</summary>
+    private static void SeedMemos(ChainHost host)
+    {
+        host.Runner.Rows[ChainModel.Invoice] =
+        [
+            ChainModel.InvoiceRow(ChainModel.Invoice1, "RE-1", row => row["Source"] = new BsonDocument { ["Type"] = "a", ["_id"] = Id(ChainModel.Alpha1) }),
+            ChainModel.InvoiceRow(ChainModel.Invoice2, "RE-2", row => row["Source"] = new BsonDocument { ["Type"] = "b", ["_id"] = Id(ChainModel.Beta1) }),
+            ChainModel.InvoiceRow(ChainModel.Invoice3, "RE-3", row => row["Source"] = new BsonDocument { ["Type"] = "c", ["_id"] = Id(ChainModel.Gamma1) }),
+        ];
+
+        var alpha = ChainModel.Row(ChainModel.Alpha1, "Alpha");
+        alpha["NoteId"] = Id(ChainModel.Note1);
+        alpha["memo"] = Scoped(ChainModel.Note1, row => row["Text"] = "hello");
+
+        var beta = ChainModel.Row(ChainModel.Beta1, "Beta");
+        beta["MemoId"] = Id(ChainModel.Gamma1);
+        beta["memo"] = Scoped(ChainModel.Gamma1, row => { row["Name"] = "Gamma"; row["Colour"] = "red"; });
+
+        host.Runner.Rows["ct.alpha"] = [alpha];
+        host.Runner.Rows["ct.beta"] = [beta];
+        host.Runner.Rows["ct.gamma"] = [ChainModel.Row(ChainModel.Gamma1, "Gamma")];
+    }
+
+    [Fact]
+    public async Task A_union_join_fills_one_alias_from_each_targets_branch_and_a_target_without_a_branch_is_null_and_not_applicable()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        var result = Succeeded(await host.RunAsync(Memo("""{ "project": { "number": 1, "src": 1, "memo.id": 1 } },"""), strict: true));
+
+        result.Items[0]!["memo"]!["id"]!.GetValue<string>().Should().Be(ChainModel.Note1.ToString(), "the alpha's branch: its note");
+        result.Items[1]!["memo"]!["id"]!.GetValue<string>().Should().Be(ChainModel.Gamma1.ToString(), "the beta's branch: its gamma, under the same alias");
+        result.Items[2]!["memo"].Should().BeNull("a gamma has no branch");
+        result.Items[2]!["src"]!["name"]!.GetValue<string>().Should().Be("Gamma");
+        result.Items.Should().OnlyContain(row => !row!["src"]!.AsObject().ContainsKey("memo"), "the lifted alias is not the owner row's");
+        result.Diagnostics.Should().BeNull("not applicable loses nothing, also under strict");
+
+        host.Runner.Calls.Single(call => call.Entity.Id == "ct.alpha").Stages.Should().Contain(stage => stage.Contains("$lookup") && stage["$lookup"]["from"] == "notes", "the alpha's owner runs its branch");
+        host.Runner.Calls.Single(call => call.Entity.Id == "ct.beta").Stages.Should().Contain(stage => stage.Contains("$lookup") && stage["$lookup"]["from"] == "gammas", "the beta's owner runs its own");
+        host.Runner.Calls.Single(call => call.Entity.Id == "ct.gamma").Stages.Should().NotContain(stage => stage.Contains("$lookup"), "a target without a branch is never sent the stage");
+        host.Runner.Calls.Should().HaveCount(4, "the page and one owner query per target: a union join adds no call");
+    }
+
+    [Fact]
+    public async Task The_outcome_of_a_union_join_row_on_a_target_without_a_branch_is_not_applicable_once_for_the_stage()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+        var bound = ((BindOutcome.Bound)await new Binder(ChainModel.Model, BindHost.Cursors).BindAsync(BindHost.Request(ChainModel.Invoice, Memo("")), BindHost.Context(), CancellationToken.None)).Pipeline;
+        var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
+        var fetch = new KeyedFetch(host.Client, host.Engine, new OwnerFetchCache(BindHost.Options()), BindHost.Options());
+
+        var resolved = await fetch.ByKeysAsync(compiled, host.Runner.Rows[ChainModel.Invoice], BindHost.Context(), TimeSpan.FromSeconds(5), strict: true, CancellationToken.None);
+
+        resolved.Outcomes.Should().Equal(new KeyedRowOutcome(1, "memo", 2, null, ChainModel.Gamma1.ToString(), KeyedOutcome.NotApplicable));
+        resolved.Rows.Select(row => row["memo"] is null).Should().Equal(false, false, true);
+    }
+
+    [Fact]
+    public async Task A_path_one_branch_does_not_reach_is_dropped_for_that_branch_and_asked_again_and_the_drop_is_kept()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+        const string Projection = """{ "project": { "number": 1, "memo.text": 1, "memo.colour": 1 } },""";
+
+        var result = Succeeded(await host.RunAsync(Memo(Projection)));
+
+        result.Items[0]!["memo"]!.ToJsonString().Should().Be("""{"text":"hello"}""", "a note has no colour");
+        result.Items[1]!["memo"]!.ToJsonString().Should().Be("""{"colour":"red"}""", "a gamma has no text");
+        result.Items[2]!.AsObject()["memo"].Should().BeNull();
+
+        var dropped = result.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget).ToList();
+        dropped.Select(diagnostic => (diagnostic.Stage, diagnostic.Path, diagnostic.Params!["alias"], diagnostic.Params["branch"])).Should().BeEquivalentTo(
+            new (int?, string?, object?, object?)[] { (1, "colour", "memo", "ct.alpha"), (1, "text", "memo", "ct.beta") });
+        dropped.Should().OnlyContain(diagnostic => !diagnostic.Params!.ContainsKey("target") && Equals(diagnostic.Params["parent"], false));
+
+        host.Runner.Calls.Count(call => call.Entity.Id == "ct.alpha").Should().Be(1, "the first query does not bind at the owner; the one asked again runs");
+        host.Runner.Calls.Count(call => call.Entity.Id == "ct.beta").Should().Be(1);
+
+        // The next request knows what each branch does not reach and asks once.
+        host.Runner.Rows[ChainModel.Invoice].Reverse();
+        host.Runner.Calls.Clear();
+
+        var again = Succeeded(await host.RunAsync(Memo(Projection)));
+
+        again.Diagnostics!.Count(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget).Should().Be(2, "reported from what the earlier request learned");
+        again.Items[2]!["memo"]!.ToJsonString().Should().Be("""{"text":"hello"}""");
+    }
+
+    [Fact]
+    public async Task A_path_of_the_select_hint_one_branch_does_not_reach_is_dropped_for_that_branch_too()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        var result = Succeeded(await host.RunAsync(Memo("", hint: """, "select": ["text", "colour"]""")));
+
+        result.Items[0]!["memo"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "text"], "the hint as far as a note has it, with the key");
+        result.Items[1]!["memo"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "colour"]);
+        result.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget)
+            .Select(diagnostic => (diagnostic.Stage, diagnostic.Path, diagnostic.Params!["branch"])).Should().BeEquivalentTo(new (int?, string?, object?)[] { (1, "colour", "ct.alpha"), (1, "text", "ct.beta") });
+
+        var refusal = RefusedWith(await host.RunAsync(Memo("", hint: """, "select": ["nope"]""")));
+
+        refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
+        refusal.Errors![1].Should().Match<QueryValidationError>(error => error.Stage == 1 && error.Path == "nope", "a hint path no branch reaches is the stage's own");
+
+        var explained = await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("", hint: """, "select": ["text", "colour"]""")), BindHost.Context());
+        var answer = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        answer.Valid.Should().BeTrue(string.Join("; ", answer.Errors.Select(error => error.Message)));
+        answer.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Stage, note.Path, note.Params!["branch"]))
+            .Should().BeEquivalentTo(new (int?, string?, object?)[] { (1, "colour", "ct.alpha"), (1, "text", "ct.beta") });
+
+        var unknown = (await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("", hint: """, "select": ["nope"]""")), BindHost.Context())).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        unknown.Valid.Should().BeFalse();
+        unknown.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Stage == 1 && error.Path == "nope");
+    }
+
+    [Fact]
+    public async Task A_path_no_branch_reaches_is_refused_with_the_path_under_the_alias()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        var refusal = RefusedWith(await host.RunAsync(Memo("""{ "project": { "number": 1, "memo.nope": 1 } },""")));
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
+        refusal.Errors![1].Should().Match<QueryValidationError>(error => error.Stage == 1 && error.Path == "memo.nope");
+    }
+
+    [Fact]
+    public async Task An_owners_refusal_of_a_branch_maps_back_to_the_union_join_with_the_branchs_path_and_target()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        // 'src.name' declares no reference at the beta: its owner refuses its branch.
+        var refusal = RefusedWith(await host.RunAsync("""
+            [{ "resolve": { "path": "source.id", "as": "src" } },
+             { "resolve": { "as": "memo", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.name" } } }]
+            """));
+
+        refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.ResolveNotDeclared);
+        refusal.Errors![1].Stage.Should().Be(1);
+        refusal.Errors[1].Path.Should().Be("src.name", "the branch's path as the caller wrote it");
+        ((IReadOnlyDictionary<string, object?>)refusal.Errors[1].Params!["owner"]!)["target"].Should().Be("ct.beta", "params.owner.target names the branch");
+    }
+
+    [Fact]
+    public async Task Explain_says_of_a_union_join_what_the_run_does_its_branches_its_union_type_and_what_each_branch_lacks()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        var explained = await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("""{ "project": { "number": 1, "memo.text": 1, "memo.colour": 1 } },""")), BindHost.Context());
+        var answer = JsonSerializer.SerializeToNode(explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result, OxQLJson.Wire)!;
+
+        answer["valid"]!.GetValue<bool>().Should().BeTrue(answer["errors"]!.ToJsonString());
+
+        var memo = answer["aliases"]!["memo"]!;
+        memo["type"]!.GetValue<string>().Should().Be("u:memo");
+        answer["types"]!["u:memo"]!["of"]!.ToJsonString().Should().Be("""["t:ct.note","t:ct.gamma"]""");
+        memo["entities"]!.ToJsonString().Should().Be("""["ct.note","ct.gamma"]""");
+        memo["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"src"}""");
+        memo["complete"]!.GetValue<bool>().Should().BeTrue();
+        memo["branches"]!.ToJsonString().Should().Be(
+            """[{"anchorTarget":"ct.alpha","path":"src.noteId","entities":["ct.note"],"heldBy":"ct","status":"ok","types":["t:ct.note"]},"""
+            + """{"anchorTarget":"ct.beta","path":"src.memoId","entities":["ct.gamma"],"heldBy":"ct","status":"ok","types":["t:ct.gamma"]}]""");
+
+        var targets = answer["aliases"]!["src"]!["targets"]!.AsArray();
+        targets.Select(target => (target!["target"]!.GetValue<string>(), target["continued"]!.ToJsonString(), target["notApplicable"]!.ToJsonString()))
+            .Should().Equal(("ct.alpha", "[1]", "[]"), ("ct.beta", "[1]", "[]"), ("ct.gamma", "[]", "[1]"));
+
+        answer["stages"]![1]!["placement"]!["executor"]!.GetValue<string>().Should().Be("continued");
+        answer["stages"]![1]!["creates"]!.ToJsonString().Should().Be("""["memo"]""");
+
+        var dropped = answer["notes"]!.AsArray().Where(note => note!["code"]!.GetValue<string>() == Notes.SelectPathNotOnTarget).ToList();
+        dropped.Select(note => (note!["stage"]!.GetValue<int>(), note["path"]!.GetValue<string>(), note["params"]!["branch"]!.GetValue<string>()))
+            .Should().BeEquivalentTo([(1, "colour", "ct.alpha"), (1, "text", "ct.beta")], "what the run drops per branch, explain says per branch");
+
+        answer["result"]!["columns"]!.AsArray().Select(column => column!["path"]!.GetValue<string>()).Should().Contain(["memo.text", "memo.colour"]);
+
+        // A path no branch reaches is the request's error where the caller wrote it, as the run refuses it.
+        var unknown = await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("""{ "project": { "number": 1, "memo.nope": 1 } },""")), BindHost.Context());
+        var invalid = unknown.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        invalid.Valid.Should().BeFalse();
+        invalid.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Path == "memo.nope" && error.Stage == 2);
+    }
+
+    [Fact]
+    public async Task Explain_names_the_branch_an_owner_refuses_and_leaves_the_stage_without_a_placement()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        var explained = await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, """
+            [{ "resolve": { "path": "source.id", "as": "src" } },
+             { "resolve": { "as": "memo", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.name" } } }]
+            """), BindHost.Context());
+        var answer = JsonSerializer.SerializeToNode(explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result, OxQLJson.Wire)!;
+
+        answer["valid"]!.GetValue<bool>().Should().BeFalse();
+
+        var error = answer["errors"]!.AsArray().Should().ContainSingle().Subject!;
+        error["code"]!.GetValue<string>().Should().Be(Codes.ResolveNotDeclared);
+        error["stage"]!.GetValue<int>().Should().Be(1);
+        error["path"]!.GetValue<string>().Should().Be("src.name");
+        error["params"]!["owner"]!["target"]!.GetValue<string>().Should().Be("ct.beta");
+
+        answer["stages"]![1]!["status"]!.GetValue<string>().Should().Be("error");
+        answer["stages"]![1]!.AsObject().ContainsKey("placement").Should().BeFalse();
+        answer["aliases"]!["memo"]!["branches"]!.AsArray().Select(branch => (branch!["anchorTarget"]!.GetValue<string>(), branch["status"]!.GetValue<string>()))
+            .Should().Equal(("ct.alpha", "ok"), ("ct.beta", "error"));
     }
 
     // ---- refusals -------------------------------------------------------------------------------------
@@ -544,6 +784,8 @@ internal static class ChainModel
     public static readonly Guid Alpha1 = Guid.Parse("a0000000-0000-0000-0000-000000000001");
     public static readonly Guid Beta1 = Guid.Parse("be000000-0000-0000-0000-000000000001");
     public static readonly Guid Note1 = Guid.Parse("40000000-0000-0000-0000-000000000001");
+    public static readonly Guid Invoice3 = Guid.Parse("10000000-0000-0000-0000-0000000000a3");
+    public static readonly Guid Gamma1 = Guid.Parse("9a000000-0000-0000-0000-000000000001");
 
     private static readonly Lazy<EntityModel> model = new(() => ClrModelBuilder.Build(
     new EntityDeclaration[]
@@ -551,6 +793,7 @@ internal static class ChainModel
         new(Invoice, Invoice, typeof(CtInvoice), "invoices", null, false),
         new("ct.alpha", "ct.alpha", typeof(CtAlpha), "alphas", null, false),
         new("ct.beta", "ct.beta", typeof(CtBeta), "betas", null, false),
+        new("ct.gamma", "ct.gamma", typeof(CtGamma), "gammas", null, false),
         new("ct.note", "ct.note", typeof(CtNote), "notes", null, false),
     }, retiredIds: null, new ReferenceDeclarations()));
 
@@ -597,6 +840,7 @@ public class CtSource
 
     [OxQLReferenceWhen("type", "a", "ct.alpha")]
     [OxQLReferenceWhen("type", "b", "ct.beta")]
+    [OxQLReferenceWhen("type", "c", "ct.gamma")]
     public Guid Id { get; set; }
 }
 
@@ -605,6 +849,10 @@ public class CtAlpha
     public Guid Id { get; set; }
     public Guid OrganizationId { get; set; }
     public string Name { get; set; } = "";
+
+    /// <summary>The alpha's memo is a note.</summary>
+    [OxQLReference("ct.note")]
+    public Guid? NoteId { get; set; }
 }
 
 public class CtBeta
@@ -612,6 +860,18 @@ public class CtBeta
     public Guid Id { get; set; }
     public Guid OrganizationId { get; set; }
     public string Name { get; set; } = "";
+
+    /// <summary>The beta's memo is a gamma: another entity than the alpha's, with other members.</summary>
+    [OxQLReference("ct.gamma")]
+    public Guid? MemoId { get; set; }
+}
+
+public class CtGamma
+{
+    public Guid Id { get; set; }
+    public Guid OrganizationId { get; set; }
+    public string Name { get; set; } = "";
+    public string? Colour { get; set; }
 }
 
 public class CtNote

@@ -133,14 +133,24 @@ public static class BoundCanonical
     /// storage form here; two requests continuing different stages never share a fingerprint. No
     /// 2.0 request continues a stage, so no earlier render changes.
     /// </summary>
-    private static JsonObject RenderContinued(ContinuedStage continued) => new()
+    private static JsonObject RenderContinued(ContinuedStage continued)
     {
-        ["anchor"] = continued.Anchor,
-        ["kind"] = continued.Kind,
-        ["forTarget"] = continued.ForTarget,
-        ["aliases"] = new JsonArray(continued.Aliases.Select(alias => (JsonNode)alias).ToArray()),
-        ["stage"] = JsonSerializer.SerializeToNode(continued.Stage, Models.OxQLJson.Wire),
-    };
+        var node = new JsonObject
+        {
+            ["anchor"] = continued.Anchor,
+            ["kind"] = continued.Kind,
+            ["forTarget"] = continued.ForTarget,
+            ["aliases"] = new JsonArray(continued.Aliases.Select(alias => (JsonNode)alias).ToArray()),
+            ["stage"] = JsonSerializer.SerializeToNode(continued.Stage, Models.OxQLJson.Wire),
+        };
+
+        // Written only for a stage that applies to several targets and not all (a union join, or a stage
+        // under its alias), so every other continued stage renders as it did.
+        if (continued.Targets is { } targets)
+            node["targets"] = new JsonArray(targets.Select(target => (JsonNode)target).ToArray());
+
+        return node;
+    }
 
     /// <summary>
     /// A lookup. <c>sort</c>, <c>first</c> and <c>on</c> are written only when they differ from

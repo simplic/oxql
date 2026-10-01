@@ -189,14 +189,23 @@ public static class Notes
                     break;
 
                 case ContinuedStage continued:
-                    collector.Add(OwnerBinds, stage, continued.Root,
-                        $"This {continued.Kind} continues under '{continued.Anchor}' at its owner, which binds and runs it{(continued.ForTarget is { } only ? $" for rows resolved to '{only}' only" : "")}.",
-                        new() { ["alias"] = continued.Anchor, ["services"] = collector.ServicesOf(continued.Anchor), ["forTarget"] = continued.ForTarget });
+                {
+                    var binds = new Dictionary<string, object?> { ["alias"] = continued.Anchor, ["services"] = collector.ServicesOf(continued.Anchor), ["forTarget"] = continued.ForTarget };
+
+                    // Several targets, not all: the branches of a union join, or a stage under its alias.
+                    if (continued.Targets is { } several)
+                        binds["targets"] = several;
+
+                    collector.Add(OwnerBinds, stage, continued.Root, continued.Stage.Resolve?.ByTarget is not null
+                        ? $"This resolve continues under '{continued.Anchor}' at its owners, each of which binds and runs the branch of its target{(continued.Targets is { } branched ? $" ({string.Join(", ", branched.Select(target => $"'{target}'"))})" : "")}; rows resolved to another target leave the alias null."
+                        : $"This {continued.Kind} continues under '{continued.Anchor}' at its owner, which binds and runs it{(continued.ForTarget is { } only ? $" for rows resolved to '{only}' only" : continued.Targets is { } some ? $" for rows resolved to {string.Join(", ", some.Select(target => $"'{target}'"))} only" : "")}.",
+                        binds);
 
                     // A continued resolve loses data at its owner as any resolve does (R3 F8).
                     if (continued.Stage.Resolve is { } written)
                         collector.Continued(written, continued.Root, stage, strict);
                     break;
+                }
 
                 case BoundStage.Unwind unwind:
                     collector.Path(unwind.Path, stage);
@@ -306,6 +315,21 @@ public static class Notes
         Stage = stage,
         Path = path,
         Params = new Dictionary<string, object?> { ["alias"] = alias, ["target"] = target, ["parent"] = parent },
+    };
+
+    /// <summary>
+    /// A path asked under a union join's alias (<c>byTarget</c>) that the branch of one target does not
+    /// reach, dropped for that branch: the alias carries it on the rows of the other branches only. Said
+    /// by the remote check and by a run, at the union join's stage (params <c>alias</c>, <c>branch</c>:
+    /// the target of the anchor whose branch lacks it, <c>parent</c> false).
+    /// </summary>
+    public static Diagnostic BranchPathDropped(int? stage, string alias, string branch, string path) => new()
+    {
+        Code = SelectPathNotOnTarget,
+        Message = $"'{path}' is not a member of what the branch of '{branch}' joins; '{alias}' carries it only for the other branches.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["branch"] = branch, ["parent"] = false },
     };
 
     /// <summary>One line of the opt-in index advisory as a note.</summary>

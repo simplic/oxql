@@ -881,10 +881,14 @@ public sealed partial class MongoQueryEngine
                             continue;
 
                         entry["heldBy"] = first?.Service ?? host;
-                        entry["continuedFrom"] = new JsonObject { ["alias"] = root.Length == 0 ? continued.Anchor : root };
+                        // A union join continues from the keyed stage's alias: each branch names its own root.
+                        entry["continuedFrom"] = new JsonObject { ["alias"] = root.Length == 0 || continued.Branches is not null ? continued.Anchor : root };
 
                         if (continued.ForTarget is { } forTarget)
                             entry["continuedFrom"]!["target"] = forTarget;
+
+                        if (continued.Stage.Resolve is { ByTarget: not null, As: var joined } && joined == alias && Branches(draft, continued, alias) is { } branches)
+                            entry["branches"] = branches;
 
                         if (continued.Stage.Resolve is { } written)
                         {
@@ -911,6 +915,47 @@ public sealed partial class MongoQueryEngine
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// The branches of a union join (<c>byTarget</c>, improvement plan §3.U), in the order written: the
+    /// target of the anchor each belongs to, its path and <c>elements</c>, the service that runs it, what
+    /// it reaches as that owner answered (<c>entities</c>, <c>types</c>; none when it did
+    /// not answer) and its <c>status</c>: <c>ok</c>, <c>error</c> (its owner refused it) or
+    /// <c>unanswered</c>. A union join under an alias a continued stage added is split by that alias's
+    /// owner, whose answer names the branches; null when it did not answer.
+    /// </summary>
+    private static JsonArray? Branches(Draft draft, ContinuedStage continued, string alias)
+    {
+        if (continued.Branches is not { } written)
+            return draft.Owners.OwnerBranchesOf(alias) is { } answered ? (JsonArray)answered.DeepClone() : null;
+
+        var explained = draft.Explained.GetValueOrDefault(continued.Anchor) ?? [];
+        var branches = new JsonArray();
+
+        foreach (var branch in written)
+        {
+            var owner = explained.FirstOrDefault(each => each.Target.Split('#')[0] == branch.Target);
+            var answer = draft.Owners.BranchOf(alias, branch.Target);
+            var entry = new JsonObject { ["anchorTarget"] = branch.Target, ["path"] = branch.Path };
+
+            if (branch.Elements is not null)
+                entry["elements"] = branch.Elements;
+
+            entry["entities"] = new JsonArray((answer?.Entities ?? []).Select(entity => (JsonNode)entity).ToArray());
+            entry["heldBy"] = owner?.Service ?? branch.Target.Split('.')[0];
+            entry["status"] = draft.Owners.RefusedAt(continued.OriginIndex, branch.Target) ? "error"
+                : answer is null || explained.Where(each => each.Target.Split('#')[0] == branch.Target).Any(each => draft.Owners.Unanswered(continued.Anchor, each.Target)) ? "unanswered"
+                : "ok";
+
+            // The types the branch reaches, each an entry of the answer's table; the alias's own type is the union of every branch's.
+            if (draft.Request.IncludesShape)
+                entry["types"] = new JsonArray((answer?.Types ?? []).Where(draft.Types.Types.ContainsKey).Select(pointer => (JsonNode)pointer).ToArray());
+
+            branches.Add(entry);
+        }
+
+        return branches;
     }
 
     /// <summary>The outcome block of a join: the data-loss outcomes its rows may have. No row member carries the outcome until a stage names one.</summary>
@@ -1018,7 +1063,8 @@ public sealed partial class MongoQueryEngine
                 : [(child[..hash].ToLowerInvariant(), null)];
         }
 
-        if (written.Resolve is not { } resolve || node.Reference.Path?.References is not { Count: > 0 } cases)
+        // A union join names its target itself, or follows references of its owners' models.
+        if (written.Resolve is not { ByTarget: null } resolve || node.Reference.Path?.References is not { Count: > 0 } cases)
             return [(node.TargetEntity, null)];
 
         var targets = cases.SelectMany(declared => declared.Targets).Select(target => (target.Entity, target.Item));

@@ -92,8 +92,9 @@ public partial class ReadLedgerCallSiteTests
             "resolved here, recorded below as a read of the object's variant only",
             "the matched member of the join's own target",
             "why no target has a hint path",
+            "why a branch path is not one a union join continues from",
         ]);
-        direct.Should().HaveCount(18);
+        direct.Should().HaveCount(19);
     }
 
     [Fact]
@@ -115,10 +116,10 @@ public partial class ReadLedgerCallSiteTests
             ["LookupOn"] = 2,       // a local lookup's parent key, a remote lookup's
         });
 
-        // Beside them, two reads are recorded without resolving: the variant of the object holding a
-        // reference (resolved the line above), and the root of a stage continued at an owner, which the
-        // owner binds.
+        // Beside them, three reads are recorded without resolving: the variant of the object holding a
+        // reference (resolved the line above), the root of a stage continued at an owner, and the root of
+        // each branch of a union join, which the owners bind.
         Regex.Matches(binder, @"\bRecord\(index, ").Count.Should().Be(2, "Read's own call and the variant read");
-        Regex.Matches(binder, @"reads\.Add\(new PathRead\(").Count.Should().Be(2, "Record's own, and the continued stage's root");
+        Regex.Matches(binder, @"reads\.Add\(new PathRead\(").Count.Should().Be(3, "Record's own, the continued stage's root, and a union join's branch roots");
     }
 }

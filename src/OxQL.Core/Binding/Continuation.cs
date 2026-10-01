@@ -11,7 +11,7 @@ namespace OxQL.Core.Binding;
 /// stage as the caller wrote it, every variable substituted (DESIGN §3.5.5), its paths still the
 /// origin's: <see cref="Continuation.For"/> rewrites them per target. <paramref name="OriginIndex"/>
 /// is the caller's stage index; <paramref name="ForTarget"/> the one target of the anchor it applies
-/// to, inherited from an alias it continues under; <paramref name="Aliases"/> the aliases it adds,
+/// to, inherited from an alias it continues under (several: <see cref="Targets"/>); <paramref name="Aliases"/> the aliases it adds,
 /// which the owner projects and the keyed fetch lifts to the origin row.
 /// </summary>
 public sealed record ContinuedStage(string Anchor, PipelineStage Stage, int OriginIndex, string? ForTarget, IReadOnlyList<string> Aliases) : BoundStage
@@ -19,8 +19,34 @@ public sealed record ContinuedStage(string Anchor, PipelineStage Stage, int Orig
     /// <summary>The stage kind: <c>resolve</c> or <c>lookup</c>.</summary>
     public string Kind => Stage.Resolve is not null ? "resolve" : "lookup";
 
-    /// <summary>What roots the stage in the origin row: a resolve's path, a lookup's <c>on</c>.</summary>
-    public string Root => Stage.Resolve?.Path ?? Stage.Lookup?.On ?? "";
+    /// <summary>
+    /// What roots the stage in the origin row: a resolve's path, a lookup's <c>on</c>; for a union join
+    /// the path of its first branch (<see cref="RootFor"/> is the one of a target's branch).
+    /// </summary>
+    public string Root => Stage.Resolve?.Path ?? Stage.Resolve?.ByTarget?.FirstOrDefault()?.Path ?? Stage.Lookup?.On ?? "";
+
+    /// <summary>
+    /// The targets of the anchor the stage applies to when they are several and not all of them: the
+    /// targets a union join has a branch for, and under its alias the same for every stage continued
+    /// there. Null when <see cref="ForTarget"/> says it (one target) or the stage applies to every target.
+    /// </summary>
+    public IReadOnlyList<string>? Targets { get; init; }
+
+    /// <summary>
+    /// The branches of a union join (<c>byTarget</c>) this host splits: per target of the anchor the
+    /// branch its owner runs as an ordinary resolve under the one alias. Null for every other stage,
+    /// and for a union join under an alias a continued stage added, whose targets only the owner knows:
+    /// that one travels as written and the owner splits it.
+    /// </summary>
+    public IReadOnlyList<ResolveBranch>? Branches { get; init; }
+
+    /// <summary>Whether the owner of <paramref name="target"/> runs the stage.</summary>
+    public bool AppliesTo(string target) =>
+        (ForTarget is null || ForTarget == target) && (Targets is null || Targets.Contains(target, StringComparer.Ordinal));
+
+    /// <summary>What roots the stage in the origin row for the rows of <paramref name="target"/>: the path of its branch, else <see cref="Root"/>.</summary>
+    public string RootFor(string? target) =>
+        Branches?.FirstOrDefault(branch => branch.Target == target)?.Path ?? Root;
 }
 
 /// <summary>
@@ -71,15 +97,31 @@ public static class Continuation
 
         foreach (var stage in continued)
         {
-            if (stage.ForTarget is { } only && only != targetEntity)
+            if (!stage.AppliesTo(targetEntity))
                 continue;
 
-            stages.Add(Rewrite(stage.Stage, anchor, itemTarget));
+            stages.Add(Rewrite(BranchOf(stage, targetEntity), anchor, itemTarget));
             origins.Add(stage);
             aliases.AddRange(stage.Aliases);
         }
 
         return stages.Count == 0 ? OwnerContinuation.None : new OwnerContinuation(stages, origins, aliases);
+    }
+
+    /// <summary>
+    /// A continued stage as one target's owner is sent it, before the rewrite of its root. A union join
+    /// this host splits is the branch of that target: an ordinary resolve with the branch's path and
+    /// <c>elements</c> under the stage's alias, exactly what a <c>forTarget</c> stage sends. Every other
+    /// stage is the stage itself.
+    /// </summary>
+    public static PipelineStage BranchOf(ContinuedStage stage, string targetEntity)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+
+        if (stage.Branches?.FirstOrDefault(each => each.Target == targetEntity) is not { } branch || stage.Stage.Resolve is not { } resolve)
+            return stage.Stage;
+
+        return stage.Stage with { Resolve = resolve with { ByTarget = null, Path = branch.Path, Elements = branch.Elements } };
     }
 
     /// <summary>
@@ -92,6 +134,13 @@ public static class Continuation
     {
         ArgumentNullException.ThrowIfNull(stage);
         ArgumentNullException.ThrowIfNull(anchor);
+
+        // A union join under an alias a continued stage added travels as written: the owner splits it.
+        if (stage.Resolve is { ByTarget: { } branches } union)
+            return stage with
+            {
+                Resolve = union with { ByTarget = branches.Select(branch => branch with { Path = ToOwner(branch.Path, anchor, itemTarget) }).ToList() },
+            };
 
         if (stage.Resolve is { } resolve)
             return stage with
@@ -150,16 +199,19 @@ public static class Continuation
     /// back to the origin's, a path under the element back under the anchor's alias; anything else
     /// (a path of the continued stage's own target) as it is.
     /// </summary>
-    public static string? ToOrigin(string? ownerPath, ContinuedStage origin, BoundStage.Resolve anchor, bool itemTarget)
+    public static string? ToOrigin(string? ownerPath, ContinuedStage origin, BoundStage.Resolve anchor, bool itemTarget, string? targetEntity = null)
     {
         ArgumentNullException.ThrowIfNull(origin);
         ArgumentNullException.ThrowIfNull(anchor);
 
-        if (ownerPath is null)
-            return origin.Root;
+        // A union join's root is the path of the branch the owner was sent.
+        var root = origin.RootFor(targetEntity);
 
-        if (ownerPath == ToOwner(origin.Root, anchor, itemTarget))
-            return origin.Root;
+        if (ownerPath is null)
+            return root;
+
+        if (ownerPath == ToOwner(root, anchor, itemTarget))
+            return root;
 
         if (itemTarget && Strip(ownerPath, BoundKeyedBy.Element) is { } underElement)
             return Join(anchor.As, underElement);

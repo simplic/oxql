@@ -201,6 +201,21 @@ public class StudioConsoleTests
     }
 
     [Fact]
+    public void The_console_asks_explain_for_the_plan_and_reads_the_answer_it_gets()
+    {
+        var assembly = typeof(OxQLStudioOptions).Assembly;
+        using var stream = assembly.GetManifestResourceStream(assembly.GetManifestResourceNames().Single(name => name.EndsWith(".wwwroot.app.js", StringComparison.Ordinal)))!;
+        using var reader = new StreamReader(stream);
+        var script = reader.ReadToEnd();
+
+        script.Should().Contain("""["notes", "plan", "indexes"]""", "the plan and the advisory are opt-in, and the console shows both");
+        script.Should().Contain("answer.plan").And.Contain("plan.stages").And.Contain("plan.count").And.Contain("answer.advisory");
+        script.Should().Contain("answer.stages").And.Contain("s.placement?.executor").And.Contain("answer.owners");
+        script.Should().NotContain("answer.steps").And.NotContain("json.steps").And.NotContain("answer.bound").And.NotContain("describe", "the former answer and its describe are gone");
+        script.Should().Contain("res.status === 429", "an explain over the rate says when to retry");
+    }
+
+    [Fact]
     public async Task The_console_defaults_agree_with_the_engine_and_log_no_warning()
     {
         var logs = new LogCapture();

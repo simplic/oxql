@@ -343,19 +343,23 @@
         const body = documentOrNull();
         if (!body) return;
         if (Array.isArray(body.queries)) { setStatus("Explain takes one query, not a batch.", "err"); return; }
-        const envelope = { query: body };
-        if (withIndexes) envelope.include = ["indexes"];
+        // The console shows the plan beside the verdict: the notes, the bound form, the compiled stages and
+        // the owner queries. It draws no shape, so it does not ask for the types.
+        const envelope = { query: body, include: withIndexes ? ["notes", "plan", "indexes"] : ["notes", "plan"] };
         setStatus(withIndexes ? "Explaining with the index advisory…" : "Explaining…", "");
         try {
             const { res, json, elapsed } = await post("/explain", envelope);
             if (res.ok && json && typeof json.valid === "boolean") {
-                const errors = json.errors || [], notes = json.notes || [], steps = json.steps || [];
+                const errors = json.errors || [], notes = json.notes || [], stages = json.stages || [];
                 setStatus(`Explain · ${elapsed} ms · ` + (json.valid ? "valid" : `invalid · ${errors.length} error(s)`) +
-                    ` · ${steps.length} step(s) · ${notes.length} note(s)`, json.valid ? "ok" : "err");
+                    ` · ${stages.length} stage(s) · ${notes.length} note(s)` + (json.cache && json.cache.complete === false ? " · incomplete" : ""), json.valid ? "ok" : "err");
                 setMarkers(errors, notes);
                 renderExplain(json);
             } else if (res.status === 404) {
                 setStatus("404 · explain is switched off on this host (OxQL:Explain:Enabled)", "err");
+                renderRaw(json);
+            } else if (res.status === 429) {
+                setStatus(`429 · explain paused, retry in ${res.headers.get("Retry-After") || "a few"} s`, "err");
                 renderRaw(json);
             } else {
                 setStatus(`${res.status} · ${elapsed} ms · ${refusalText(json)}`, "err");
@@ -402,7 +406,8 @@
 
     function renderExplain(answer) {
         lastAnswer = answer;
-        const errors = answer.errors || [], notes = answer.notes || [], steps = answer.steps || [];
+        const errors = answer.errors || [], notes = answer.notes || [], stages = answer.stages || [];
+        const owners = answer.owners || [], aliases = answer.aliases || {}, plan = answer.plan || {};
         const parts = [];
         parts.push(`<div class="verdict ${answer.valid ? "ok" : "err"}">${answer.valid ? "Valid" : "Invalid"} · contract ${esc(answer.contract)}` +
             (answer.engine ? ` · engine ${esc(answer.engine.version)}` : "") + "</div>");
@@ -411,10 +416,11 @@
             parts.push(section(`Errors · ${errors.length}`, table(["code", "stage", "path", "message"], errors.map((e, i) =>
                 `<tr class="jump" data-kind="error" data-i="${i}"><td>${esc(e.code)}</td><td>${esc(e.stage ?? "")}</td><td>${esc(e.path ?? "")}</td><td>${esc(e.message)}</td></tr>`)), true));
         }
-        if (steps.length) {
-            parts.push(section(`Steps · ${steps.length}`, table(["#", "kind", "status", "executor", "phase", "owner", "creates"], steps.map(s =>
-                `<tr class="st-${esc(s.status)}"><td>${esc(s.index)}</td><td>${esc(s.kind ?? "")}</td><td>${esc(s.status)}</td><td>${esc(s.executor ?? "")}</td>` +
-                `<td>${esc(s.phase ?? "")}</td><td>${esc(s.owner?.service ?? "")}</td><td>${esc((s.creates || []).map(c => `${c.alias}:${c.node}`).join(", "))}</td></tr>`)), true));
+        if (stages.length) {
+            parts.push(section(`Stages · ${stages.length}`, table(["#", "kind", "status", "executor", "phase", "owner", "creates"], stages.map(s =>
+                `<tr class="st-${esc(s.status)}"><td>${esc(s.index)}</td><td>${esc(s.kind ?? "")}</td><td>${esc(s.status)}</td><td>${esc(s.placement?.executor ?? "")}</td>` +
+                `<td>${esc(s.placement?.phase ?? "")}</td><td>${esc(owners[s.placement?.owner]?.service ?? "")}</td>` +
+                `<td>${esc((s.creates || []).map(alias => `${alias}:${aliases[alias]?.node ?? "?"}`).join(", "))}</td></tr>`)), true));
         }
         if (notes.length) {
             parts.push(section(`Notes · ${notes.length}`, table(["code", "stage", "path", "message"], notes.map((n, i) =>
@@ -422,22 +428,27 @@
         }
         const columns = answer.result?.columns || [];
         if (columns.length) {
-            parts.push(section(`Result · ${answer.result.paging} · ${columns.length} column(s)`, table(["path", "kind", "nullable", "root", "stage"], columns.map(c =>
-                `<tr><td>${esc(c.path)}</td><td>${esc(c.kind)}</td><td>${c.nullable ? "yes" : "no"}</td><td>${esc(c.root)}</td><td>${esc(c.stage ?? "")}</td></tr>`)), false));
+            parts.push(section(`Result · ${answer.result.paging} · ${columns.length} column(s)`, table(["path", "kind", "nullable", "present", "root", "stage"], columns.map(c =>
+                `<tr><td>${esc(c.path)}</td><td>${esc(c.kind)}</td><td>${c.nullable ? "yes" : "no"}</td><td>${esc(c.present ?? "")}</td><td>${esc(c.root)}</td><td>${esc(c.stage ?? "")}</td></tr>`)), false));
         }
-        const owners = steps.filter(s => s.owner);
         if (owners.length) {
-            parts.push(section(`Owner queries · ${owners.length}`, owners.map(s =>
-                `<div class="sub">step ${esc(s.index)} → ${esc(s.owner.service)}${s.owner.route ? ` (${esc(s.owner.route.apiName)})` : ""}</div><pre class="raw">${highlight(s.owner.query)}</pre>`).join(""), false));
+            parts.push(section(`Owners · ${owners.length}`, table(["service", "via", "answered", "calls", "ms"], owners.map(o =>
+                `<tr><td>${esc(o.service)}${o.remote ? "" : " (this host)"}</td><td>${esc(o.via ?? "")}</td><td>${o.answered === true ? "yes" : o.answered === false ? esc(o.reason ?? "no") : ""}</td>` +
+                `<td>${esc(o.calls ?? "")}</td><td>${esc(o.ms ?? "")}</td></tr>`)), false));
+        }
+        const queries = owners.flatMap(o => (o.queries || []).map(q => ({ owner: o, query: q })));
+        if (queries.length) {
+            parts.push(section(`Owner queries · ${queries.length}`, queries.map(({ owner, query }) =>
+                `<div class="sub">stage ${esc(query.stage)} · ${esc(query.target)} → ${esc(owner.service)}${owner.route ? ` (${esc(owner.route.apiName)})` : ""}</div><pre class="raw">${highlight(query.query)}</pre>`).join(""), false));
         }
         if (Array.isArray(answer.advisory)) {
             parts.push(section(`Index advisory · ${answer.advisory.length}`, table(["field", "used", "index", "note"], answer.advisory.map(a =>
                 `<tr><td>${esc(a.field)}</td><td class="used-${a.used === true ? "yes" : a.used === false ? "no" : "unknown"}">${a.used === true ? "yes" : a.used === false ? "no" : "?"}</td><td>${esc(a.index ?? "")}</td><td>${esc(a.note ?? "")}</td></tr>`)), true));
         }
         if (Array.isArray(answer.diagnostics) && answer.diagnostics.length) parts.push(section(`Diagnostics · ${answer.diagnostics.length}`, `<pre class="raw">${highlight(answer.diagnostics)}</pre>`, true));
-        if (Array.isArray(answer.stages)) parts.push(section(`Compiled page stages · ${answer.stages.length}`, `<pre class="raw">${highlight(answer.stages)}</pre>`, false));
-        if (Array.isArray(answer.count)) parts.push(section(`Compiled count stages · ${answer.count.length}`, `<pre class="raw">${highlight(answer.count)}</pre>`, false));
-        if (answer.bound !== undefined) parts.push(section("Bound form", `<pre class="raw">${highlight(answer.bound)}</pre>`, false));
+        if (Array.isArray(plan.stages)) parts.push(section(`Compiled page stages · ${plan.stages.length}`, `<pre class="raw">${highlight(plan.stages)}</pre>`, false));
+        if (Array.isArray(plan.count)) parts.push(section(`Compiled count stages · ${plan.count.length}`, `<pre class="raw">${highlight(plan.count)}</pre>`, false));
+        if (plan.bound !== undefined) parts.push(section("Bound form", `<pre class="raw">${highlight(plan.bound)}</pre>`, false));
         parts.push(section("Raw answer", `<pre class="raw">${highlight(answer)}</pre>`, false));
 
         resultsEl.innerHTML = parts.join("");

@@ -146,6 +146,16 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
     /// the run's does; null when a run would not ask again.
     /// </summary>
     public Func<JsonObject, QueryRequest, QueryRequest?> Again { get; init; } = (_, _) => null;
+
+    /// <summary>
+    /// The paths an earlier request learned this target lacks, which the check query therefore does not
+    /// ask (as a run does not): under the alias, under the owning row (<c>Parent</c>), or, as
+    /// <c>alias.path</c>, under the alias of a union join whose branch for this target does not reach them.
+    /// </summary>
+    public IReadOnlyList<(string Path, bool Parent)> Learned { get; init; } = [];
+
+    /// <summary>Keeps what this check's answers said the target lacks, as a run keeps it: the next request asks without it.</summary>
+    public Action<OwnerFetchCache> Keep { get; init; } = _ => { };
 }
 
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
@@ -809,13 +819,7 @@ public sealed class KeyedFetch
                 if (!target.Unanswered.Contains(key) && !target.Uncached.Contains(key))
                     cache.Set(target.CacheKey(key), target.Cached(key));
 
-            if (target.DroppedSelect.Count > 0 || target.DroppedParent.Count > 0)
-                cache.SetDrops(target.DropsKey, target.DroppedSelect, target.DroppedParent);
-
-            // What a branch of a union join does not reach is a fact of that branch: kept by its stage.
-            foreach (var group in target.DroppedContinued.GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
-                if (target.BranchDropsKey(group.Key) is { } key)
-                    cache.SetDrops(key, group, []);
+            target.Keep(cache);
         }
 
         var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
@@ -1130,14 +1134,17 @@ public sealed class KeyedFetch
     public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Explain(bound, stage, strict, null);
 
     /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by (a known pre-2.1 owner is asked the plain query).</summary>
-    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client) => Explain(bound, stage, strict, client, null);
+
+    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?)"/>, without the paths <paramref name="drops"/> holds as lacked by a target, as a run sends the queries.</summary>
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, OwnerFetchCache? drops)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
 
         var continued = Continuation.Of(bound, stage);
 
-        return PlansOf(bound, stage, strict, continued, client).Select(plan => new ExplainedOwnerQuery(
+        return PlansOf(bound, stage, strict, continued, client, drops).Select(plan => new ExplainedOwnerQuery(
             plan.TargetName,
             plan.Target.IsRemote,
             plan.Target.Declared.Entity.Split('.')[0],
@@ -1167,7 +1174,17 @@ public sealed class KeyedFetch
     /// wrote nothing under: its owner's answer to the query the run sends is where explain reads the
     /// target's type from (improvement plan §3.E), so there is nothing to check only when nothing is asked.
     /// </summary>
-    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, bool everyRemoteTarget = false)
+    /// <param name="bound">The bound request.</param>
+    /// <param name="stage">The keyed stage.</param>
+    /// <param name="strict">Whether the request is strict.</param>
+    /// <param name="client">The remote client whose owner facts a run plans by.</param>
+    /// <param name="everyRemoteTarget">Whether every remote target is checked.</param>
+    /// <param name="drops">
+    /// The cache a run keeps what owners said a target lacks in: what it holds is dropped from the check
+    /// query before it is asked, as a run drops it (<see cref="OwnerCheck.Learned"/>), so a warm explain
+    /// needs no second round. Null: nothing is known beforehand.
+    /// </param>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, bool everyRemoteTarget = false, OwnerFetchCache? drops = null)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
@@ -1186,12 +1203,15 @@ public sealed class KeyedFetch
         // A local target is checked only for the stages continued under it: this host binds the paths
         // asked of it itself, but the continued stages are bound by its own SelfOwner when the query runs,
         // with its own model and, for a join there that reaches another service, that owner's.
-        return PlansOf(bound, stage, strict, continued, client)
+        return PlansOf(bound, stage, strict, continued, client, drops)
             .Where(plan => plan.Target.IsRemote
                 ? everyRemoteTarget || !plan.Continued.IsEmpty || Writes(plan.Target) || stage.RemoteLookup is not null
                 : !plan.Continued.IsEmpty)
             .Select(plan =>
             {
+                // What an earlier request learned the target lacks, before this check learns more.
+                var learned = plan.Dropped();
+
                 // The query a run sends, with the check key: what explain says of an owner is what the
                 // owner answers to the run's own query (improvement plan P12).
                 var query = plan.Query([CheckKey]);
@@ -1212,6 +1232,8 @@ public sealed class KeyedFetch
                     // What a run does with the refusal (DropUnknown) is done to the check: the paths the
                     // target lacks leave the query, which is asked again.
                     Again = (answer, sent) => plan.DropUnknown(answer, sent) ? plan.Query([CheckKey]) : null,
+                    Learned = learned,
+                    Keep = plan.Keep,
                 };
             })
             .ToList();
@@ -1221,7 +1243,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
-    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued, IRemoteQueryClient? client = null)
+    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued, IRemoteQueryClient? client = null, OwnerFetchCache? drops = null)
     {
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
@@ -1229,8 +1251,15 @@ public sealed class KeyedFetch
 
         foreach (var target in cases.SelectMany(selected => selected.Targets))
             if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
-                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape,
-                    legacyOwner: target.IsRemote && IsBefore21(client, ServiceKeyOf(target.Declared.Entity))));
+            {
+                var plan = new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape,
+                    legacyOwner: target.IsRemote && IsBefore21(client, ServiceKeyOf(target.Declared.Entity)));
+
+                if (drops is not null)
+                    plan.Learn(drops);
+
+                plans.Add(plan);
+            }
 
         return plans;
     }
@@ -1659,6 +1688,58 @@ public sealed class KeyedFetch
             DroppedParent.UnionWith(parent.Where(path => Target.RemoteParentSelect?.Contains(path, StringComparer.Ordinal) == true));
         }
 
+        /// <summary>
+        /// Takes what earlier requests learned this target lacks from <paramref name="cache"/>: for a
+        /// remote target of a union the paths under the alias and the owning row, for any target that
+        /// runs a branch of a union join the paths that branch does not reach.
+        /// </summary>
+        public void Learn(OwnerFetchCache cache)
+        {
+            if (Target.IsRemote && Union && cache.TryGetDrops(DropsKey, out var select, out var parent))
+                Learned(select, parent);
+
+            foreach (var joined in Continued.Origins.Where(origin => origin.Branches is not null).Select(origin => origin.Aliases[0]))
+                if (cache.TryGetDrops(BranchDropsKey(joined)!, out var unreached, out _))
+                    LearnedContinued(joined, unreached);
+        }
+
+        /// <summary>
+        /// The paths dropped for this target so far (under the alias, under the owning row, and as
+        /// <c>alias.path</c> under a union join's alias), in the order the owner query would have asked
+        /// them: the order an owner refuses them in, so what is said of them does not depend on whether
+        /// an owner said it now or an earlier request learned it.
+        /// </summary>
+        public List<(string Path, bool Parent)> Dropped()
+        {
+            var dropped = new List<(string, bool)>();
+
+            dropped.AddRange((Target.RemoteSelect ?? []).Where(DroppedSelect.Contains).Select(path => (path, false)));
+            dropped.AddRange((Target.RemoteParentSelect ?? []).Where(DroppedParent.Contains).Select(path => (path, true)));
+
+            foreach (var alias in Continued.Aliases)
+            {
+                var asked = HintOf(alias).Concat(final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected : []).ToList();
+
+                dropped.AddRange(DroppedContinued.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal))
+                    .OrderBy(path => asked.IndexOf(path[(alias.Length + 1)..]) is >= 0 and var at ? at : int.MaxValue).ThenBy(path => path, StringComparer.Ordinal)
+                    .Select(path => (path, false)));
+            }
+
+            return dropped;
+        }
+
+        /// <summary>Keeps what the owners said this target lacks in <paramref name="cache"/>, for the requests after this one.</summary>
+        public void Keep(OwnerFetchCache cache)
+        {
+            if (DroppedSelect.Count > 0 || DroppedParent.Count > 0)
+                cache.SetDrops(DropsKey, DroppedSelect, DroppedParent);
+
+            // What a branch of a union join does not reach is a fact of that branch: kept by its stage.
+            foreach (var group in DroppedContinued.GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
+                if (BranchDropsKey(group.Key) is { } key)
+                    cache.SetDrops(key, group, []);
+        }
+
         /// <summary>The keys the filtered query was sent and answered without a row, in chunks of <paramref name="size"/>.</summary>
         public IEnumerable<IReadOnlyList<string>> ProbeChunks(int size)
         {
@@ -1912,12 +1993,7 @@ public sealed class KeyedFetch
 
                     // What an owner said this union target lacks, an earlier request learned: not
                     // asked again, and reported whether or not this page reaches the owner (RE-6).
-                    if (target.IsRemote && union && cache.TryGetDrops(shared.DropsKey, out var select, out var parent))
-                        shared.Learned(select, parent);
-
-                    foreach (var joined in shared.Continued.Origins.Where(origin => origin.Branches is not null).Select(origin => origin.Aliases[0]))
-                        if (cache.TryGetDrops(shared.BranchDropsKey(joined)!, out var unreached, out _))
-                            shared.LearnedContinued(joined, unreached);
+                    shared.Learn(cache);
                 }
 
                 plan.ByTarget[target] = shared;

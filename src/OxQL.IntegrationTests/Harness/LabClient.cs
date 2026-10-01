@@ -47,6 +47,9 @@ public sealed class LabClient
     /// <summary>The same client as any organisation id; null sends no organisation (the engine answers 403).</summary>
     public LabClient As(Guid? organisation) => new(Fleet, Service, host, Who with { Organisation = organisation });
 
+    /// <summary>The same client as another user of its organisation: what an explain keeps of its owners' answers is kept per user.</summary>
+    public LabClient AsUser(Guid user) => new(Fleet, Service, host, Who with { User = user });
+
     /// <summary>The same client with no identity at all: no organisation, no user.</summary>
     public LabClient Anonymous() => new(Fleet, Service, host, Who with { Organisation = null, User = null });
 

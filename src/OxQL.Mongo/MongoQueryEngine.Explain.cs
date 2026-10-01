@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -25,6 +26,43 @@ namespace OxQL.Mongo;
 /// </summary>
 public sealed partial class MongoQueryEngine
 {
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The checks are explained side by side through one <see cref="ExplainOwnerPool"/>: what they ask
+    /// this host's own owners in a round goes out as one call per owner, and the owner calls the origin
+    /// has left are theirs together. A check that faults is refused on its own; the others are answered.
+    /// </remarks>
+    public async Task<IReadOnlyList<ExplainOutcome>> ExplainBatchAsync(IReadOnlyList<ExplainRequest> requests, RequestContext context, ExplainBudget? budget, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var limit = Math.Max(0, context.Options.Explain.MaxOwnerCalls);
+        var pool = new ExplainOwnerPool(requests.Count, budget is null ? limit : Math.Min(limit, budget.Calls));
+        var clock = Stopwatch.StartNew();
+        var shared = context with { ExplainOwners = pool };
+
+        return await Task.WhenAll(requests.Select(request => pool.RunAsync(async () =>
+        {
+            try
+            {
+                var left = budget is null ? null : new ExplainBudget(budget.Ms - (int)Math.Min(int.MaxValue, clock.ElapsedMilliseconds), pool.CallsLeft);
+
+                // A check the origin's time ran out before binds nothing.
+                if (left is { Ms: <= 0 })
+                    return new ExplainOutcome.Refused(Refusal.Timeout("The time of the explain this check belongs to ran out before it."));
+
+                return await ExplainAsync(request with { Budget = left }, shared, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogError(exception, "OxQL unhandled fault explaining one check of an internal explain batch; the check is left unanswered correlation={CorrelationId}", context.CorrelationId);
+
+                return (ExplainOutcome)new ExplainOutcome.Refused(Refusal.Internal("The engine could not explain this check."));
+            }
+        }))).ConfigureAwait(false);
+    }
+
     /// <inheritdoc/>
     public async Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
@@ -53,7 +91,10 @@ public sealed partial class MongoQueryEngine
             await types.LocalAsync(entered.Entry.Entity, null).ConfigureAwait(false);
 
         // The owners' answers share one budget of time and calls (DESIGN §4.3, plan §3.E protection).
-        var owners = new RemoteExplain(remote, explainCache, context, request, (owned, token) => ExplainOwnedAsync(owned, context, token), types, wall.Elapsed);
+        RemoteExplain? asking = null;
+        // An explain this one runs at this host asks its owners through this explain's pool.
+        var owners = asking = new RemoteExplain(remote, explainCache, context, request,
+            (owned, token) => ExplainOwnedAsync(owned, context with { ExplainOwners = asking!.Pool }, token), types, wall.Elapsed, ownerCache);
         var draft = new Draft(request, context, binding, types, owners, depth);
 
         if (binding is BindOutcome.Failed failed)
@@ -67,8 +108,10 @@ public sealed partial class MongoQueryEngine
         draft.Strict = strict;
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
-        // as a run does, within the explain budget (RL-3).
-        await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, owners.Remaining, cancellationToken).ConfigureAwait(false);
+        // as a run does, within the explain budget (RL-3). The cached tier asks no owner anything: it
+        // plans by the facts already known.
+        if (request.Remote != ExplainRequest.RemoteCached)
+            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, owners.Remaining, cancellationToken).ConfigureAwait(false);
 
         draft.Indexes = Notes.CallerIndexes(bound, request.Query);
         draft.Notes.AddRange(Notes.Of(bound, request.Query, draft.Indexes, strict, context.Contract, options));
@@ -232,7 +275,7 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Resolve resolve when resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed:
                 {
-                    var explained = KeyedFetch.Explain(bound, resolve, draft.Strict, remote);
+                    var explained = KeyedFetch.Explain(bound, resolve, draft.Strict, remote, ownerCache);
                     var first = explained.FirstOrDefault(owner => owner.Remote) ?? explained[0];
 
                     draft.Explained[resolve.As] = explained;
@@ -387,8 +430,33 @@ public sealed partial class MongoQueryEngine
         if (answer.Plan is not null || catalog.Count > 0 || request.IncludesDocs || draft.Types.MemberCount * 200L + 100_000 > context.Options.Explain.MaxAnswerBytes)
             answer = Trimmed(answer, notes, context.Options.Explain.MaxAnswerBytes);
 
+        // An owner answering an origin says what the origin reads, and nothing it would throw away.
+        if (request.Slim && context.Internal)
+            return Slim(answer);
+
         return answer with { Etag = EtagOf(request, answer) };
     }
+
+    /// <summary>
+    /// The answer an origin reads of an owner (improvement plan §3.E "owners answer slim"): whether the
+    /// query binds and its errors, the notes about the answer itself, each stage with its reads and
+    /// creates, the aliases, the types, the catalog, the owners it asked in turn, the revisions, the
+    /// engine and whether it is complete. The shapes, placements, rules, flag sets, result columns,
+    /// diagnostics, the other notes and the validator are this host's own to compute for its own
+    /// callers; an origin computes its own and would drop these.
+    /// </summary>
+    private static ExplainResult Slim(ExplainResult answer) => answer with
+    {
+        Diagnostics = [],
+        Notes = answer.Notes.Where(IsAboutTheAnswer).ToList(),
+        Entry = null,
+        Stages = answer.Stages.Select(stage => stage with { Placement = null, Shape = null }).ToList(),
+        Rules = [],
+        FlagSets = null,
+        Result = null,
+        Plan = null,
+        Advisory = null,
+    };
 
     /// <summary>
     /// What one stage reads (<c>{ path, use, alias? }</c>, each once, in the order bound): the binder's
@@ -497,7 +565,8 @@ public sealed partial class MongoQueryEngine
     {
         var text = new StringBuilder();
 
-        text.Append(JsonSerializer.Serialize(request with { Budget = null }, OxQLJson.Wire)).Append('\n')
+        // The tier is not part of it: a cached answer that is complete is the answer a check gives.
+        text.Append(JsonSerializer.Serialize(request with { Budget = null, Remote = ExplainRequest.RemoteCheck }, OxQLJson.Wire)).Append('\n')
             .Append(answer.Contract).Append('\n')
             .Append(answer.Engine.Version).Append('\n')
             .AppendJoin(',', answer.Engine.Capabilities).Append('\n')
@@ -727,6 +796,23 @@ public sealed partial class MongoQueryEngine
 
         if (draft.Bound is { } bound)
             Joins(draft, bound, owners, aliases, host);
+
+        // A request that does not bind has no run plan to check: the owners describe their entities
+        // themselves, all of them asked in one round.
+        if (shapes && draft.Bound is null)
+        {
+            var wanted = nodes.Where(pair => pair.Value.Node is ShapeNode.Remote)
+                .SelectMany(pair => UnboundTargets(draft.Request.Query, trace, pair.Value.Stage, pair.Key, (ShapeNode.Remote)pair.Value.Node))
+                .Distinct()
+                .Where(target => !models.Model.TryResolve(target.Entity, out _, out _) && draft.Owners.Knows(target.Entity.Split('.')[0]))
+                .Select(target => (Service: target.Entity.Split('.')[0], Entry: new JsonObject { ["id"] = "forwarded", ["entity"] = target.Item is null ? target.Entity : target.Entity + "#" + target.Item }, draft.Depth))
+                .ToList();
+
+            if (wanted.Count > 0)
+                foreach (var (answer, _) in await draft.Owners.CatalogAsync(wanted, cancellationToken).ConfigureAwait(false))
+                    if (answer is not null)
+                        draft.Types.Import(answer);
+        }
 
         // The types: this host's own for what it holds; for what an owner holds, what the owners answered.
         foreach (var (alias, (node, stage)) in nodes)
@@ -1035,13 +1121,9 @@ public sealed partial class MongoQueryEngine
             {
                 var key = ExplainTypes.TypeKey(entityId, item);
 
+                // An owner's entity of a request that does not bind was described by its owner before (AliasesAsync).
                 if (models.Model.TryResolve(entityId, out var local, out _))
                     key = await types.LocalAsync(local, item).ConfigureAwait(false);
-                else if (bound is null && !types.Types.ContainsKey(key))
-                    // No run plan to check: the owner describes its entity itself.
-                    if (await draft.Owners.CatalogAsync(entityId.Split('.')[0], new JsonObject { ["id"] = "forwarded", ["entity"] = item is null ? entityId : entityId + "#" + item }, draft.Depth, cancellationToken)
-                        .ConfigureAwait(false) is { Answer: { } answer })
-                        types.Import(answer);
 
                 if (key is not null && types.Types.ContainsKey(key))
                     pointers.Add(key);

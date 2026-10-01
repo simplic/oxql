@@ -44,4 +44,11 @@ public sealed record RequestContext
     /// on this host.
     /// </summary>
     public Func<string, bool>? RemoteService { get; init; }
+
+    /// <summary>
+    /// What the explains that belong together share of their owner calls (the engine's own type); null
+    /// for a request that is none of them. The engine sets it: for the checks of one internal explain
+    /// batch, and for an explain it runs at this host for another. A host never sets it.
+    /// </summary>
+    public object? ExplainOwners { get; init; }
 }

@@ -19,6 +19,43 @@ public interface IQueryEngine
     /// <see cref="QueryRequest"/> converts to a request with the default includes.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Explains the checks of one internal explain batch (improvement plan §3.E), each as
+    /// <see cref="ExplainAsync"/> explains it, within <paramref name="budget"/> together: the time the
+    /// origin has left and the owner calls it may still cause. One outcome per request, in order; a
+    /// request the time ran out before is refused. The default explains them one after another, each
+    /// with what the ones before it left; an engine that asks owners of its own asks them once per
+    /// round for all of the requests together.
+    /// </summary>
+    async Task<IReadOnlyList<ExplainOutcome>> ExplainBatchAsync(IReadOnlyList<ExplainRequest> requests, RequestContext context, ExplainBudget? budget, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+
+        var outcomes = new List<ExplainOutcome>(requests.Count);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var calls = budget?.Calls ?? 0;
+
+        foreach (var request in requests)
+        {
+            var left = budget is null ? null : new ExplainBudget(budget.Ms - (int)Math.Min(int.MaxValue, clock.ElapsedMilliseconds), Math.Max(0, calls));
+
+            if (left is { Ms: <= 0 })
+            {
+                outcomes.Add(new ExplainOutcome.Refused(Refusal.Timeout("The time of the explain this check belongs to ran out before it.")));
+                continue;
+            }
+
+            var outcome = await ExplainAsync(request with { Budget = left }, context, cancellationToken).ConfigureAwait(false);
+
+            if (outcome is ExplainOutcome.Success { Result.Owners: { } owners })
+                calls -= owners.OfType<System.Text.Json.Nodes.JsonObject>().Sum(ExplainBatchRequest.CallsOfOwner);
+
+            outcomes.Add(outcome);
+        }
+
+        return outcomes;
+    }
 }
 
 /// <summary>Where the engine gets the host's entity model: built once, after every service registration, before the first request.</summary>

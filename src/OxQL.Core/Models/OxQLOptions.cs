@@ -109,6 +109,7 @@ public sealed class OxQLOptions
         Explain.MaxAnswerBytes = AtLeast(1_024, Explain.MaxAnswerBytes, nameof(ExplainOptions.MaxAnswerBytes), adjustments, "Explain");
         Explain.MaxOwnerServices = AtLeast(0, Explain.MaxOwnerServices, nameof(ExplainOptions.MaxOwnerServices), adjustments, "Explain");
         Explain.MaxOwnerCalls = AtLeast(0, Explain.MaxOwnerCalls, nameof(ExplainOptions.MaxOwnerCalls), adjustments, "Explain");
+        Explain.MaxBatchChecks = AtLeast(1, Explain.MaxBatchChecks, nameof(ExplainOptions.MaxBatchChecks), adjustments, "Explain");
         Explain.RatePerMinute = AtLeast(1, Explain.RatePerMinute, nameof(ExplainOptions.RatePerMinute), adjustments, "Explain");
         Explain.RateBurst = AtLeast(1, Explain.RateBurst, nameof(ExplainOptions.RateBurst), adjustments, "Explain");
         Explain.MaxConcurrentPerUser = AtLeast(1, Explain.MaxConcurrentPerUser, nameof(ExplainOptions.MaxConcurrentPerUser), adjustments, "Explain");
@@ -233,6 +234,13 @@ public sealed class ExplainOptions
     /// carries what is left, so an owner never spends more than its origin has.
     /// </summary>
     public int MaxOwnerCalls { get; set; } = 8;
+
+    /// <summary>
+    /// The most checks one internal explain carries (<c>POST internal/oxql/explain</c>, <c>checks</c>):
+    /// what one round of an origin's explain asks one owner. An origin leaves what exceeds it unchecked
+    /// (<c>EXPLAIN_LIMIT</c>); an owner refuses a larger batch 400 <c>EXPLAIN_LIMIT</c> before anything is bound.
+    /// </summary>
+    public int MaxBatchChecks { get; set; } = 64;
 
     /// <summary>The explains one user of one organisation may send per minute on the public route (a token bucket refilled evenly); more is 429 with <c>Retry-After</c> before any work.</summary>
     public int RatePerMinute { get; set; } = 20;

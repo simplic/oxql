@@ -138,6 +138,79 @@ public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor ht
             });
     }
 
+    /// <summary>The internal explains sent, by owner service: one per call, with the checks it carried and the bytes of its answer.</summary>
+    public ConcurrentQueue<(string Service, ExplainBatchRequest Batch, int Bytes)> ExplainCalls { get; } = new();
+
+    /// <summary>
+    /// The bytes the owner would answer <paramref name="batch"/> with if it wrote each check's whole answer,
+    /// as a public explain does: what a slim answer is measured against.
+    /// </summary>
+    public async Task<int> WholeAnswerBytesAsync(string serviceKey, ExplainBatchRequest batch, Guid organisation, Guid user, CancellationToken cancellationToken = default)
+    {
+        var served = LabService.All.First(service => service.Key == serviceKey);
+        IReadOnlyList<(string Name, string Value)> identity =
+        [
+            (LabIdentity.ContractHeader, EngineCapabilities.Contract.ToString()),
+            (LabIdentity.OrganisationHeader, organisation.ToString()),
+            (LabIdentity.UserHeader, user.ToString()),
+        ];
+        var bytes = 0;
+
+        foreach (var check in batch.Checks)
+        {
+            var sent = JsonSerializer.Deserialize<ExplainRequest>(JsonSerializer.SerializeToUtf8Bytes(check, OxQLJson.Wire), OxQLJson.Wire)!;
+
+            bytes += await OnOwnerAsync(served, identity, cancellationToken, async (services, token) =>
+                await services.GetRequiredService<IOxQLQueryService>().ExplainAsync(sent, internalCall: true, token) is ExplainOutcome.Success success
+                    ? JsonSerializer.SerializeToUtf8Bytes(success.Result, OxQLJson.Wire).Length
+                    : 0);
+        }
+
+        return bytes;
+    }
+
+    /// <summary>
+    /// One round's checks for one owner as one call (<c>POST internal/oxql/explain</c>, body
+    /// <c>{ checks, budget }</c>): the owner's query service explains the batch
+    /// (<see cref="IOxQLQueryService.ExplainBatchAsync"/>) in a request scope of the owner carrying the
+    /// forwarded identity, the batch and the answers travelling as wire JSON. A batch the owner refuses
+    /// whole is the HTTP error its route would answer.
+    /// </summary>
+    public async Task<IReadOnlyList<JsonObject?>?> ExplainBatchAsync(string serviceKey, ExplainBatchRequest batch, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+
+        if (LabService.All.FirstOrDefault(service => service.Key == serviceKey) is not { } served)
+            return null;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(budget > TimeSpan.Zero ? budget : FallbackBudget);
+
+        var identity = await IdentityAsync(cancellationToken);
+        var sent = JsonSerializer.Deserialize<ExplainBatchRequest>(JsonSerializer.SerializeToUtf8Bytes(batch, OxQLJson.Wire), OxQLJson.Wire)!;
+
+        try
+        {
+            var wire = await OnOwnerAsync(served, identity, timeout.Token, async (services, token) =>
+                await services.GetRequiredService<IOxQLQueryService>().ExplainBatchAsync(sent, token) switch
+                {
+                    ExplainBatchOutcome.Success success => JsonSerializer.SerializeToUtf8Bytes(success.Response, OxQLJson.Wire),
+                    ExplainBatchOutcome.Refused refused => throw new HttpRequestException(
+                        $"The owner of '{serviceKey}' refused the explain: {refused.Refusal.Title}", null, (HttpStatusCode)refused.Refusal.Status),
+                    _ => throw new InvalidOperationException("An unknown explain outcome."),
+                });
+
+            ExplainCalls.Enqueue((serviceKey, batch, wire.Length));
+
+            return JsonSerializer.Deserialize<ExplainBatchResponse>(wire, OxQLJson.Wire)!.Answers.Select(answer => answer as JsonObject).ToList();
+        }
+        catch
+        {
+            ExplainCalls.Enqueue((serviceKey, batch, 0));
+            throw;
+        }
+    }
+
     /// <summary>
     /// The batch run by the owner's query service through its internal overload. A batch the owner
     /// refuses whole is the HTTP error its route would answer.

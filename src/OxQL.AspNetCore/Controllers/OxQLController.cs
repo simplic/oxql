@@ -186,12 +186,19 @@ public class OxQLController : ControllerBase
     /// <c>EXPLAIN_LIMIT</c>, both before anything is bound. More explains than one user may send
     /// (<c>Explain:RatePerMinute</c>, <c>RateBurst</c>) or have in flight (<c>MaxConcurrentPerUser</c>,
     /// <c>MaxConcurrentPerHost</c>) is 429 with <c>Retry-After</c>, before the body is read.
+    /// <para>
+    /// An answer carries its validator as <c>ETag</c> (the answer's <c>etag</c>). A caller that holds an
+    /// answer sends that value as <c>If-None-Match</c> and gets 304 without a body while the answer
+    /// still stands: the same request, revisions, capabilities and completeness. The body is written in
+    /// the content coding the caller accepts (<c>Accept-Encoding</c>: Brotli, else gzip).
+    /// </para>
     /// </summary>
     [HttpPost("explain")]
     [ExplainBody]
     [TypeFilter(typeof(ExplainRateFilter), Order = -1)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status304NotModified)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -205,10 +212,29 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            ExplainOutcome.Success success => Ok(success.Result),
+            ExplainOutcome.Success success => Answered(success.Result),
             ExplainOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
+    }
+
+    /// <summary>
+    /// The explain answer under its validator: 304 when the caller's <c>If-None-Match</c> names it (weak
+    /// comparison, as the header requires; <c>*</c> matches any), else the answer in the coding the caller accepts.
+    /// </summary>
+    private IActionResult Answered(ExplainResult result)
+    {
+        if (result.Etag is { } etag && Microsoft.Net.Http.Headers.EntityTagHeaderValue.TryParse(etag, out var tag))
+        {
+            Response.Headers.ETag = etag;
+            // The answer is one identity's (its organisation's addons, what its owners answer it): never a shared cache's.
+            Response.Headers.CacheControl = "private, no-cache";
+
+            if (Request.GetTypedHeaders().IfNoneMatch.Any(candidate => candidate.Equals(Microsoft.Net.Http.Headers.EntityTagHeaderValue.Any) || candidate.Compare(tag, useStrongComparison: false)))
+                return StatusCode(StatusCodes.Status304NotModified);
+        }
+
+        return new CompressedJsonResult(result);
     }
 
     private Refusal Log(Refusal refusal)

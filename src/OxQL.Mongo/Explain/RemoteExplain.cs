@@ -13,11 +13,22 @@ namespace OxQL.Mongo.Explain;
 
 /// <summary>
 /// What owners' internal explain answered (DESIGN §4.1): each answer kept 30 seconds by organisation,
-/// user, owner service and the hash of the forwarded body with its variables substituted, so the
-/// studio's debounced explains of one query do not ask the owner again and no user is answered from
-/// another's call (an owner may refuse one user what it answers another). The owner's schema revision
-/// is not part of the key, since the origin learns it only from the answer; the 30 seconds bound how
-/// long a changed owner model is answered from before. Only answers are kept, never a failed call.
+/// user, owner service, the revision of that owner's schema document and the hash of the forwarded body
+/// with its variables substituted, so the studio's debounced explains of one query do not ask the owner
+/// again and no user is answered from another's call (an owner may refuse one user what it answers another).
+/// <para>
+/// The revision is the one the owner's last answer named (<see cref="RevisionOf"/>): the origin learns it
+/// from answers only. An answer that names another revision of a service retires every answer kept for
+/// the old one at once, also those of other owners that reached that service (an answer is kept with the
+/// revision of every service it depended on, and is not handed out once one of them is known to have
+/// changed). Without a fresh answer the 30 seconds bound how long a changed owner model is answered from before.
+/// </para>
+/// <para>
+/// Only answers are kept, never a failed call, and never as more than they were: an answer that was not
+/// complete stays not complete. The cache also remembers through which owner a service this host does not
+/// know itself was reached (<see cref="RouteOf"/>), so a catalog lookup of such an entity can be routed.
+/// Nothing an explain answers depends on what is kept: with an empty cache the same answer is asked for again.
+/// </para>
 /// </summary>
 public sealed class ExplainForwardCache : IDisposable
 {
@@ -29,6 +40,8 @@ public sealed class ExplainForwardCache : IDisposable
 
     private readonly MemoryCache answers;
     private readonly TimeProvider time;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> revisions = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> routes = new(StringComparer.Ordinal);
 
     /// <summary>An empty cache; <paramref name="time"/> is the clock answers expire by.</summary>
     public ExplainForwardCache(TimeProvider? time = null)
@@ -37,45 +50,87 @@ public sealed class ExplainForwardCache : IDisposable
         answers = new MemoryCache(new MemoryCacheOptions { SizeLimit = MaxEntries });
     }
 
-    /// <summary>The key of one forwarded body, for no user in particular.</summary>
+    /// <summary>The key of one forwarded body, for no user in particular and no revision.</summary>
     public static string KeyOf(Guid organisation, string service, ExplainRequest request) => KeyOf(organisation, null, service, request);
 
     /// <summary>
-    /// The key of one forwarded body for one user of an organisation. The budget an internal explain
-    /// carries is not part of it: what is left of an origin's explain changes nothing an owner answers.
+    /// The key of one forwarded body for one user of an organisation, before the owner's revision. The
+    /// budget an internal explain carries is not part of it: what is left of an origin's explain changes
+    /// nothing an owner answers. Neither is the tier (<c>remote</c>): the cached tier reads what a check kept.
     /// </summary>
     public static string KeyOf(Guid organisation, string? user, string service, ExplainRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var body = JsonSerializer.SerializeToUtf8Bytes(request with { Budget = null }, OxQLJson.Wire);
+        var body = JsonSerializer.SerializeToUtf8Bytes(request with { Budget = null, Remote = ExplainRequest.RemoteCheck }, OxQLJson.Wire);
         var who = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(user ?? "")))[..16];
 
         return $"{organisation:N}|{who}|{service}|{Convert.ToHexString(SHA256.HashData(body))}";
     }
 
-    /// <summary>A kept answer, as a copy of its own, or null.</summary>
-    public JsonObject? Get(string key) =>
-        answers.TryGetValue(key, out Entry? kept) && kept is not null && time.GetUtcNow() < kept.Expires ? (JsonObject)kept.Answer.DeepClone() : null;
+    /// <summary>The revision of <paramref name="service"/>'s schema document as its last answer named it, or null while none did.</summary>
+    public string? RevisionOf(string service) => revisions.GetValueOrDefault(service);
+
+    /// <summary>The owner this host reached <paramref name="service"/> through, or null when it never was reached through another.</summary>
+    public string? RouteOf(string service) => routes.GetValueOrDefault(service);
+
+    /// <summary>Remembers that <paramref name="service"/> was reached through the owner <paramref name="via"/>.</summary>
+    public void Route(string service, string via)
+    {
+        if (service != via)
+            routes[service] = via;
+    }
+
+    /// <summary>A kept answer of <paramref name="service"/> for the key, as a copy of its own, or null.</summary>
+    public JsonObject? Get(string service, string key)
+    {
+        if (!answers.TryGetValue(Keyed(service, key), out Entry? kept) || kept is null || time.GetUtcNow() >= kept.Expires)
+            return null;
+
+        // An answer that depended on a revision a later answer replaced is no answer any more.
+        foreach (var (reached, revision) in kept.Revisions)
+            if (revisions.TryGetValue(reached, out var known) && known != revision)
+                return null;
+
+        return (JsonObject)kept.Answer.DeepClone();
+    }
+
+    /// <summary>A kept answer by its key alone (no revision), or null.</summary>
+    public JsonObject? Get(string key) => Get(ServiceOf(key), key);
 
     /// <summary>
-    /// Keeps an answer for <see cref="Ttl"/>. It is kept as parsed text, which nothing reads: a copy of
-    /// it costs nothing until its reader touches a part, and the parts it does not touch are written
-    /// on as they stand.
+    /// Keeps an answer of <paramref name="service"/> for <see cref="Ttl"/>, under the revisions it names.
+    /// It is kept as parsed text, which nothing reads: a copy of it costs nothing until its reader touches
+    /// a part, and the parts it does not touch are written on as they stand.
     /// </summary>
-    public void Set(string key, JsonObject answer)
+    public void Set(string service, string key, JsonObject answer)
     {
         ArgumentNullException.ThrowIfNull(answer);
 
-        answers.Set(key, new Entry(JsonNode.Parse(answer.ToJsonString(Compact))!.AsObject(), time.GetUtcNow() + Ttl), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = Ttl });
+        var named = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (answer["revision"]?["schema"] is JsonObject schema)
+            foreach (var (reached, value) in schema)
+                if (value is JsonValue stated && stated.TryGetValue<string>(out var revision))
+                    named[reached] = revisions[reached] = revision;
+
+        answers.Set(Keyed(service, key), new Entry(JsonNode.Parse(answer.ToJsonString(Compact))!.AsObject(), time.GetUtcNow() + Ttl, named), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = Ttl });
     }
+
+    /// <summary>Keeps an answer by its key alone.</summary>
+    public void Set(string key, JsonObject answer) => Set(ServiceOf(key), key, answer);
+
+    /// <summary>The key with the revision of the owner's schema document as last named: an answer of another revision is another entry.</summary>
+    private string Keyed(string service, string key) => key + "|" + (RevisionOf(service) ?? "");
+
+    private static string ServiceOf(string key) => key.Split('|') is { Length: >= 3 } parts ? parts[2] : "";
 
     private static readonly JsonSerializerOptions Compact = new() { MaxDepth = OxQLJson.MaxDepth };
 
     /// <inheritdoc/>
     public void Dispose() => answers.Dispose();
 
-    private sealed record Entry(JsonObject Answer, DateTimeOffset Expires);
+    private sealed record Entry(JsonObject Answer, DateTimeOffset Expires, IReadOnlyDictionary<string, string> Revisions);
 }
 
 /// <summary>
@@ -135,6 +190,9 @@ public sealed class RemoteExplain : IExplainOwners
     private readonly IRemoteQueryClient? client;
     private readonly Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self;
     private readonly ExplainForwardCache cache;
+    private readonly OwnerFetchCache? drops;
+    private readonly bool cachedOnly;
+    private readonly int maxChecks;
     private readonly RequestContext context;
     private readonly ExplainTypes? types;
     private readonly bool shape;
@@ -149,7 +207,7 @@ public sealed class RemoteExplain : IExplainOwners
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly List<ExplainOwnerUse> uses = [];
     private readonly List<Diagnostic> limitNotes = [];
-    private int callsLeft;
+    private readonly ExplainOwnerPool pool;
 
     /// <summary>The calls of one explain of <paramref name="request"/> under <paramref name="context"/>.</summary>
     public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request)
@@ -165,7 +223,7 @@ public sealed class RemoteExplain : IExplainOwners
     /// <paramref name="types"/> takes the types of the owners' answers.
     /// </summary>
     public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request,
-        Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self, ExplainTypes? types = null, TimeSpan elapsed = default)
+        Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self, ExplainTypes? types = null, TimeSpan elapsed = default, OwnerFetchCache? drops = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -174,6 +232,9 @@ public sealed class RemoteExplain : IExplainOwners
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
         this.types = types;
+        this.drops = drops;
+        cachedOnly = request.Remote == ExplainRequest.RemoteCached;
+        maxChecks = Math.Max(1, context.Options.Explain.MaxBatchChecks);
         shape = request.IncludesShape && types is not null;
         tables = shape && request.IncludesTypes;
         docs = request.IncludesDocs;
@@ -195,7 +256,8 @@ public sealed class RemoteExplain : IExplainOwners
         spent = budget == TimeSpan.Zero;
         maxServices = Math.Max(0, options.MaxOwnerServices);
         maxCalls = Math.Max(0, options.MaxOwnerCalls);
-        callsLeft = given is null ? maxCalls : Math.Min(maxCalls, given.Calls);
+        // The explains that belong together share what is left of the calls; an explain alone has its own.
+        pool = context.ExplainOwners as ExplainOwnerPool ?? new ExplainOwnerPool(1, given is null ? maxCalls : Math.Min(maxCalls, given.Calls));
     }
 
     /// <summary>
@@ -206,7 +268,10 @@ public sealed class RemoteExplain : IExplainOwners
     public TimeSpan Remaining => spent ? TimeSpan.Zero : budget - clock.Elapsed is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     /// <summary>The owner calls this explain may still cause.</summary>
-    public int CallsLeft => callsLeft;
+    public int CallsLeft => pool.CallsLeft;
+
+    /// <summary>The pool this explain's owner calls go out through: an explain this one runs at this host shares it.</summary>
+    public ExplainOwnerPool Pool => pool;
 
     /// <summary>The <c>reason</c> of a part whose owner cannot be explained at (no client, or one without internal explain).</summary>
     public const string Unsupported = "unsupported";
@@ -220,8 +285,11 @@ public sealed class RemoteExplain : IExplainOwners
     /// <summary>The <c>reason</c> of a part an explain limit left out (<c>EXPLAIN_LIMIT</c>).</summary>
     public const string Limit = "limit";
 
+    /// <summary>The <c>reason</c> of a part the cached tier (<c>remote: "cached"</c>) holds no kept owner answer for: no owner was asked.</summary>
+    public const string Cached = "cached";
+
     /// <inheritdoc/>
-    public bool Knows(string service) => client?.IsConfigured(service) == true;
+    public bool Knows(string service) => Reaching(service) is not null;
 
     private readonly Dictionary<string, List<string>> reached = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<string>> aliasTypes = new(StringComparer.Ordinal);
@@ -297,27 +365,85 @@ public sealed class RemoteExplain : IExplainOwners
     public bool Complete { get; private set; } = true;
 
     /// <inheritdoc/>
-    public async Task<(JsonObject? Answer, string? Reason)> CatalogAsync(string service, JsonObject entry, int depth, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<(JsonObject? Answer, string? Reason)>> CatalogAsync(IReadOnlyList<(string Service, JsonObject Entry, int Depth)> entries, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(entries);
 
-        var entity = entry["entity"]?.GetValue<string>() ?? "";
-        var hash = entity.IndexOf('#', StringComparison.Ordinal);
-        var request = new ExplainRequest
+        var asks = entries.Select(entry =>
         {
-            Query = new QueryRequest { EntityType = hash < 0 ? entity : entity[..hash], Pipeline = [] },
-            Catalog = [(JsonObject)entry.DeepClone()],
-            Include = [.. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
-            ShapeDepth = depth,
-            IsEnvelope = true,
-        };
+            var entity = entry.Entry["entity"]?.GetValue<string>() ?? "";
+            var hash = entity.IndexOf('#', StringComparison.Ordinal);
+            var owner = Reaching(entry.Service) ?? entry.Service;
 
-        var (answer, reason) = await CallAsync(service, request, 0, entity, null, cancellationToken).ConfigureAwait(false);
+            return new Ask(owner, new ExplainRequest
+            {
+                Query = new QueryRequest { EntityType = hash < 0 ? entity : entity[..hash], Pipeline = [] },
+                Remote = cachedOnly ? ExplainRequest.RemoteCached : ExplainRequest.RemoteCheck,
+                Catalog = [(JsonObject)entry.Entry.DeepClone()],
+                Include = [.. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
+                ShapeDepth = entry.Depth,
+                IsEnvelope = true,
+                Slim = true,
+            }, entity, null, owner != entry.Service);
+        }).ToList();
 
-        if (answer is null)
-            Complete = false;
+        // Every lookup of one explain rides in the one call its owner is asked in.
+        var answers = await RoundAsync(asks, CatalogRound, cancellationToken).ConfigureAwait(false);
 
-        return (answer, reason ?? (answer is null ? Unsupported : null));
+        return answers.Select(answer =>
+        {
+            if (answer.Answer is null)
+                Complete = false;
+
+            return (answer.Answer, answer.Reason ?? (answer.Answer is null ? Unsupported : null));
+        }).ToList();
+    }
+
+    /// <summary>The round the catalog lookups of an explain are asked in: one of their own, beside the checks'.</summary>
+    private const int CatalogRound = -1;
+
+    /// <summary>
+    /// The owner this host asks for <paramref name="service"/>: the service itself when the host knows it,
+    /// else the owner that reached it, in this explain or an earlier one (a transitive entity is answered
+    /// by the owner that knows its service); null when there is no way to it.
+    /// </summary>
+    private string? Reaching(string service)
+    {
+        if (client is null)
+            return null;
+
+        if (client.IsConfigured(service))
+            return service;
+
+        var via = uses.FirstOrDefault(use => use.Service == service && use.Via is not null)?.Via?.Split('>')[0] ?? cache.RouteOf(service);
+
+        return via is not null && client.IsConfigured(via) ? via : null;
+    }
+
+    /// <summary>One owner query of a keyed stage on its way through the rounds: what was sent last, and what came back for it.</summary>
+    private sealed class Asked(BoundStage.Resolve resolve, OwnerCheck check)
+    {
+        public BoundStage.Resolve Resolve { get; } = resolve;
+
+        public OwnerCheck Check { get; } = check;
+
+        public bool Local { get; } = check.Bound is { IsRemote: false };
+
+        /// <summary>The query the answer held is the answer to.</summary>
+        public QueryRequest Sent { get; set; } = check.Query;
+
+        public JsonObject? Answer { get; set; }
+
+        public string? Reason { get; set; }
+
+        /// <summary>The query a round asks again with, once the paths the target lacks left it.</summary>
+        public QueryRequest? Again { get; set; }
+
+        /// <summary>Whether an ask-again went unanswered: the answer before it stands, and nothing more is asked.</summary>
+        public bool Stopped { get; set; }
+
+        /// <summary>The paths earlier answers refused and a later query no longer asks.</summary>
+        public List<Miss> Misses { get; } = [];
     }
 
     /// <summary>
@@ -326,6 +452,13 @@ public sealed class RemoteExplain : IExplainOwners
     /// request's error at the caller's stage, and an owner's own <c>REMOTE_UNCHECKED</c> notes are passed
     /// on at the first continued stage. The answers also say what the stages continued there create and
     /// describe the owners' types. What was not checked is noted.
+    /// <para>
+    /// The checks go out in rounds (improvement plan §3.E): the first carries every owner query of every
+    /// keyed stage, one call per owner service, the services asked at once. A further round asks again
+    /// what a run asks again (<see cref="KeyedFetch.MaxDropRounds"/>): a target whose owner refused only
+    /// paths it lacks, without them. What an earlier request learned a target lacks is dropped before the
+    /// first round, as a run drops it, so a warm explain needs one round.
+    /// </para>
     /// </summary>
     public async Task<(List<QueryValidationError> Errors, List<Diagnostic> Notes)> CheckAsync(BoundPipeline bound, bool strict, CancellationToken cancellationToken)
     {
@@ -337,70 +470,90 @@ public sealed class RemoteExplain : IExplainOwners
         // A local keyed stage is checked too when stages continue under it: a run sends them to this
         // host's own SelfOwner, which binds them with its model and sends what continues further
         // (a union's every target, a third service) to those owners, whose refusals come back here.
-        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote || Continuation.Of(bound, stage).Count > 0))
+        var stages = bound.Stages.OfType<BoundStage.Resolve>().Where(stage => stage.IsRemote || Continuation.Of(bound, stage).Count > 0)
+            .Select(resolve => (Resolve: resolve, Checks: KeyedFetch.Checks(bound, resolve, strict, client, everyRemoteTarget: shape, drops)))
+            .ToList();
+        var asked = stages.SelectMany(stage => stage.Checks.Select(check => new Asked(stage.Resolve, check))).ToList();
+
+        var first = await RoundAsync(asked.Select(each => AskOf(each, each.Sent)).ToList(), 0, cancellationToken).ConfigureAwait(false);
+
+        for (var index = 0; index < asked.Count; index++)
         {
-            var checks = KeyedFetch.Checks(bound, resolve, strict, client, everyRemoteTarget: shape);
+            (asked[index].Answer, asked[index].Reason) = first[index];
+
+            if (asked[index].Answer is { } answer)
+                OwnerFaults.Scrubbed(answer);
+        }
+
+        // A remote union target whose owner refused only paths the target lacks is asked again
+        // without them, as a run asks it (DESIGN §3.4.1 flat paths): the owner then binds the
+        // stages continued at it, and checks theirs, exactly as the run's query has them bound.
+        // What it lacked stays a miss; an answer that does not come leaves the first. A local target
+        // is asked again as well: what a branch of a union join does not reach is its SelfOwner's to
+        // say, and a run drops it the same way.
+        for (var round = 1; round <= KeyedFetch.MaxDropRounds; round++)
+        {
+            var again = new List<Asked>();
+
+            foreach (var each in asked)
+            {
+                each.Again = each is { Stopped: false, Answer: { } answer } ? each.Check.Again(answer, each.Sent) : null;
+
+                if (each.Again is not null)
+                    again.Add(each);
+            }
+
+            if (again.Count == 0)
+                break;
+
+            var answers = await RoundAsync(again.Select(each => AskOf(each, each.Again!)).ToList(), round, cancellationToken).ConfigureAwait(false);
+
+            for (var index = 0; index < again.Count; index++)
+            {
+                var each = again[index];
+
+                // An ask-again that is not answered leaves the answer before it.
+                if (answers[index].Answer is not { } next)
+                {
+                    each.Stopped = true;
+                    continue;
+                }
+
+                foreach (var error in each.Answer!["errors"]!.AsArray().OfType<JsonObject>())
+                    if (MissOf(each.Check, error) is { } miss)
+                        each.Misses.Add(miss);
+
+                OwnerFaults.Scrubbed(next);
+                each.Answer = next;
+                each.Sent = each.Again!;
+            }
+        }
+
+        foreach (var (resolve, checks) in stages)
+        {
             var misses = new List<Miss>();
             var answered = new HashSet<OwnerCheck>(ReferenceEqualityComparer.Instance);
 
-            foreach (var check in checks)
+            foreach (var each in asked.Where(each => ReferenceEquals(each.Resolve, resolve)))
             {
-                var local = check.Bound is { IsRemote: false };
-                var request = new ExplainRequest
-                {
-                    Query = check.Query,
-                    Remote = ExplainRequest.RemoteCheck,
-                    // The owner writes its member rows out only for an origin that was asked to.
-                    Include = !shape ? [ExplainRequest.IncludeNotes]
-                        : !tables && !docs ? ExplainRequest.DefaultIncludes
-                        : [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, .. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
-                    ShapeDepth = shape ? depth : null,
-                    IsEnvelope = true,
-                };
-                var (answer, reason) = local
-                    ? await SelfAsync(request, cancellationToken).ConfigureAwait(false)
-                    : await CallAsync(check.Service, request, 0, check.Target, check.FirstContinued, cancellationToken).ConfigureAwait(false);
+                var check = each.Check;
 
-                if (answer is null)
+                // What an earlier request learned this target lacks was not asked at all: a miss all the same.
+                misses.AddRange(check.Learned.Select(learned => new Miss(check, learned.Path, learned.Parent, learned.Path)));
+
+                if (each.Answer is not { } answer)
                 {
                     Complete = false;
                     unanswered.Add(resolve.As + "\n" + check.Target);
 
-                    if (reason != Limit)
-                        notes.Add(Unchecked(check, reason ?? Unsupported));
+                    if (each.Reason != Limit)
+                        notes.Add(Unchecked(check, each.Reason ?? Unsupported));
 
                     continue;
                 }
 
                 answered.Add(check);
-
-                OwnerFaults.Scrubbed(answer);
-
-                // A remote union target whose owner refused only paths the target lacks is asked again
-                // without them, as a run asks it (DESIGN §3.4.1 flat paths): the owner then binds the
-                // stages continued at it, and checks theirs, exactly as the run's query has them bound.
-                // What it lacked stays a miss; an answer that does not come leaves the first.
-                var sent = check.Query;
-
-                // A local target is asked again as well: what a branch of a union join does not reach
-                // is its SelfOwner's to say, and a run drops it the same way.
-                for (var round = 0; round < KeyedFetch.MaxDropRounds && check.Again(answer, sent) is { } again; round++)
-                {
-                    var (asked, _) = local
-                        ? await SelfAsync(request with { Query = again }, cancellationToken).ConfigureAwait(false)
-                        : await CallAsync(check.Service, request with { Query = again }, round + 1, check.Target, check.FirstContinued, cancellationToken).ConfigureAwait(false);
-
-                    if (asked is null)
-                        break;
-
-                    foreach (var error in answer["errors"]!.AsArray().OfType<JsonObject>())
-                        if (MissOf(check, error) is { } miss)
-                            misses.Add(miss);
-
-                    OwnerFaults.Scrubbed(asked);
-                    answer = asked;
-                    sent = again;
-                }
+                misses.AddRange(each.Misses);
 
                 Remember(check, answer);
 
@@ -415,7 +568,7 @@ public sealed class RemoteExplain : IExplainOwners
                             if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && other.Path == mapped.Path))
                                 errors.Add(mapped);
                         }
-                        else if (MissOf(check, error) is { } miss && (!local || miss.Continued))
+                        else if (MissOf(check, error) is { } miss && (!each.Local || miss.Continued))
                         {
                             misses.Add(miss);
                         }
@@ -440,11 +593,33 @@ public sealed class RemoteExplain : IExplainOwners
                     Complete = false;
             }
 
+            var before = errors.Count;
+
             Judge(resolve, checks, answered, misses, errors, notes);
+
+            // What the owners said a target lacks is kept as a run keeps it, once it is known to be a
+            // drop and not a refusal: the next explain, and the next run, ask without it.
+            if (errors.Count == before && drops is not null)
+                foreach (var check in checks.Where(answered.Contains))
+                    check.Keep(drops);
         }
 
         return (errors, notes);
     }
+
+    /// <summary>The explain request one owner query travels in: the run's query, asked for what this explain was asked for.</summary>
+    private Ask AskOf(Asked asked, QueryRequest query) => new(asked.Local ? "" : asked.Check.Service, new ExplainRequest
+    {
+        Query = query,
+        Remote = cachedOnly ? ExplainRequest.RemoteCached : ExplainRequest.RemoteCheck,
+        // The owner writes its member rows out only for an origin that was asked to.
+        Include = !shape ? [ExplainRequest.IncludeNotes]
+            : !tables && !docs ? ExplainRequest.DefaultIncludes
+            : [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, .. tables ? [ExplainRequest.IncludeTypes] : Array.Empty<string>(), .. docs ? [ExplainRequest.IncludeDocs] : Array.Empty<string>()],
+        ShapeDepth = shape ? depth : null,
+        IsEnvelope = true,
+        Slim = true,
+    }, asked.Check.Target, asked.Check.FirstContinued, asked.Check.Continued.Count > 0);
 
     /// <summary>
     /// What an owner's answer says beyond its errors: its types go into this explain's table, and for
@@ -706,7 +881,7 @@ public sealed class RemoteExplain : IExplainOwners
         if (self is null)
             return (null, Unsupported);
 
-        var answer = await self(request with { Budget = new ExplainBudget((int)Math.Min(int.MaxValue, Remaining.TotalMilliseconds), callsLeft) }, cancellationToken).ConfigureAwait(false);
+        var answer = await self(request with { Budget = new ExplainBudget((int)Math.Min(int.MaxValue, Remaining.TotalMilliseconds), pool.CallsLeft) }, cancellationToken).ConfigureAwait(false);
 
         if (answer is null)
             return (null, Unsupported);
@@ -719,108 +894,210 @@ public sealed class RemoteExplain : IExplainOwners
             if (nested["remote"]?.GetValue<bool>() != true || nested["service"]?.GetValue<string>() is not { } service)
                 continue;
 
-            Nest(nested, service, nested["via"]?.GetValue<string>());
+            // It asked them through this explain's pool, so they are taken off what is left already.
+            Nest(nested, service, nested["via"]?.GetValue<string>(), spend: false);
         }
 
         return (answer, null);
     }
 
+    /// <summary>One explain request of a round: the owner it goes to (empty: this host itself), the target it speaks of and the caller's stage a note about it lies at.</summary>
+    /// <param name="Service">The owner asked; empty for this host itself.</param>
+    /// <param name="Request">The explain request.</param>
+    /// <param name="Target">The target the request speaks of.</param>
+    /// <param name="Stage">The caller's stage a note about it lies at.</param>
+    /// <param name="Nests">Whether the owner may have to ask owners of its own for it: a query that carries continued stages, or a lookup of an entity the owner reaches for this host.</param>
+    private sealed record Ask(string Service, ExplainRequest Request, string Target, int? Stage, bool Nests);
+
     /// <summary>
-    /// One forwarded body in round <paramref name="round"/> of its service: from the cache, else from
-    /// the owner within what is left of the time and the calls.
+    /// One round of an explain (improvement plan §3.E): the requests this host explains itself, in order;
+    /// then, of the others, what is kept is read from the cache, and what is left goes out through the
+    /// pool (<see cref="ExplainOwnerPool"/>) as one call per owner service
+    /// (<see cref="IRemoteQueryClient.ExplainBatchAsync"/>), the services asked at once, each within
+    /// what is left of the time and with its share of the calls left. A request the
+    /// cached tier finds no kept answer for is not asked. The answers come back in the order asked.
     /// </summary>
-    private async Task<(JsonObject? Answer, string? Reason)> CallAsync(string service, ExplainRequest request, int round, string target, int? stage, CancellationToken cancellationToken)
+    private async Task<(JsonObject? Answer, string? Reason)[]> RoundAsync(IReadOnlyList<Ask> asks, int round, CancellationToken cancellationToken)
     {
-        if (client is null)
-            return (null, Unsupported);
+        var results = new (JsonObject? Answer, string? Reason)[asks.Count];
+        var keys = new string?[asks.Count];
+        var open = new List<(string Service, List<int> Indexes)>();
 
-        var use = uses.FirstOrDefault(each => each.Service == service && each.Via is null);
-        var key = ExplainForwardCache.KeyOf(context.Organisation ?? Guid.Empty, context.UserId, service, request);
+        for (var index = 0; index < asks.Count; index++)
+            if (asks[index].Service.Length == 0)
+                results[index] = await SelfAsync(asks[index].Request, cancellationToken).ConfigureAwait(false);
 
-        if (cache.Get(key) is { } kept)
+        for (var index = 0; index < asks.Count; index++)
         {
-            use ??= Use(service, null);
-            use.Answered = true;
-            ReadFacts(use, kept);
+            var ask = asks[index];
 
-            // What the kept answer depended on is depended on still; nothing was called for it now.
-            foreach (var nested in kept["owners"]?.AsArray().OfType<JsonObject>() ?? [])
-                if (nested["remote"]?.GetValue<bool>() == true && nested["service"]?.GetValue<string>() is { } reachedService)
-                    Nest(nested, reachedService, nested["via"]?.GetValue<string>() is { } further ? service + ">" + further : service, called: false);
+            if (ask.Service.Length == 0)
+                continue;
 
-            return (kept, null);
-        }
-
-        var remaining = budget - clock.Elapsed;
-
-        // A call cut by the budget spent it, whatever the clock reads a moment later (the timer may
-        // fire a hair before the elapsed time reaches the budget).
-        if (spent || remaining <= TimeSpan.Zero)
-            return OutOfTime(use ?? Use(service, null), service, target, stage);
-
-        // One call per service and round: the checks of one round ride together once owners take
-        // them batched, so the round is what is counted, and what a limit leaves out.
-        if (use is null || !use.Rounds.Contains(round))
-        {
-            if (use is null && uses.Count(each => each.Via is null) >= maxServices)
-                return Limited("ownerServices", maxServices, service, target, stage);
-
-            if (callsLeft <= 0)
-                return Limited("ownerCalls", maxCalls, service, target, stage);
-
-            use ??= Use(service, null);
-            use.Rounds.Add(round);
-            use.Calls++;
-            callsLeft--;
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(remaining);
-
-        var started = clock.Elapsed;
-
-        try
-        {
-            var sent = request with { Budget = new ExplainBudget((int)Math.Min(int.MaxValue, remaining.TotalMilliseconds), callsLeft) };
-            var answer = await client.ExplainAsync(service, sent, remaining, timeout.Token).ConfigureAwait(false);
-
-            use.Ms += (long)(clock.Elapsed - started).TotalMilliseconds;
-
-            if (answer is null)
+            if (client is null)
             {
-                use.Answered ??= false;
-                use.Reason = Unsupported;
-
-                return (null, Unsupported);
+                results[index] = (null, Unsupported);
+                continue;
             }
 
-            cache.Set(key, answer);
-            use.Answered = true;
-            use.Cached = false;
-            ReadFacts(use, answer);
+            var use = uses.FirstOrDefault(each => each.Service == ask.Service && each.Via is null);
+            var key = keys[index] = ExplainForwardCache.KeyOf(context.Organisation ?? Guid.Empty, context.UserId, ask.Service, ask.Request);
 
-            // What the owner asked its own owners is spent of this explain's calls.
-            foreach (var nested in answer["owners"]?.AsArray().OfType<JsonObject>() ?? [])
-                if (nested["remote"]?.GetValue<bool>() == true && nested["service"]?.GetValue<string>() is { } reachedService)
-                    Nest(nested, reachedService, nested["via"]?.GetValue<string>() is { } further ? service + ">" + further : service);
+            if (cache.Get(ask.Service, key) is { } kept)
+            {
+                use ??= Use(ask.Service, null);
+                use.Answered = true;
+                ReadFacts(use, kept);
 
-            return (answer, null);
+                // What the kept answer depended on is depended on still; nothing was called for it now.
+                foreach (var nested in kept["owners"]?.AsArray().OfType<JsonObject>() ?? [])
+                    if (nested["remote"]?.GetValue<bool>() == true && nested["service"]?.GetValue<string>() is { } reachedService)
+                        Nest(nested, reachedService, nested["via"]?.GetValue<string>() is { } further ? ask.Service + ">" + further : ask.Service, called: false);
+
+                results[index] = (kept, null);
+                continue;
+            }
+
+            // The cached tier asks no owner: what is not kept is left out, and said to be.
+            if (cachedOnly)
+            {
+                use ??= Use(ask.Service, null);
+                use.Reason ??= Cached;
+                results[index] = (null, Cached);
+                continue;
+            }
+
+            if (open.FirstOrDefault(group => group.Service == ask.Service) is { Indexes: { } indexes })
+                indexes.Add(index);
+            else
+                open.Add((ask.Service, [index]));
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+
+        if (open.Count == 0)
+            return results;
+
+        // What may go out: within the time, the services and the calls an explain has, each service's
+        // checks as one call. A limit leaves a part out and notes it; nothing is retried.
+        var sending = new List<(ExplainOwnerUse Use, List<int> Indexes)>();
+        var remaining = budget - clock.Elapsed;
+
+        foreach (var (service, indexes) in open)
         {
-            use.Ms += (long)(clock.Elapsed - started).TotalMilliseconds;
-            spent = true;
+            var use = uses.FirstOrDefault(each => each.Service == service && each.Via is null);
+            var head = asks[indexes[0]];
 
-            return OutOfTime(use, service, target, stage);
+            // A call cut by the budget spent it, whatever the clock reads a moment later (the timer may
+            // fire a hair before the elapsed time reaches the budget).
+            if (spent || remaining <= TimeSpan.Zero)
+            {
+                var late = OutOfTime(use ?? Use(service, null), service, head.Target, head.Stage);
+
+                foreach (var index in indexes)
+                    results[index] = late;
+
+                continue;
+            }
+
+            // A service is counted once it is called: one the cache answered, or the cached tier left out, takes no place.
+            var refused = use is not { Calls: > 0 } && uses.Count(each => each.Via is null && each.Calls > 0) + sending.Count(group => group.Use.Calls == 0) >= maxServices
+                ? Limited("ownerServices", maxServices, service, head.Target, head.Stage)
+                : pool.CallsLeft <= 0 ? Limited("ownerCalls", maxCalls, service, head.Target, head.Stage)
+                : ((JsonObject?, string?)?)null;
+
+            if (refused is { } limited)
+            {
+                foreach (var index in indexes)
+                    results[index] = limited;
+
+                continue;
+            }
+
+            // What exceeds a batch is left out: one call per service and round, never a second.
+            foreach (var index in indexes.Skip(maxChecks).ToList())
+            {
+                results[index] = Limited("checks", maxChecks, service, asks[index].Target, asks[index].Stage);
+                indexes.Remove(index);
+            }
+
+            sending.Add((use ?? Use(service, null), indexes));
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+
+        if (sending.Count == 0)
+            return results;
+
+        // The asks go out through the pool: with those of the explains beside this one, one call per owner.
+        var called = await pool.AskAsync(client,
+            sending.Select(group => new ExplainOwnerPool.Group(group.Use.Service, group.Indexes.Select(index => asks[index].Request).ToList(), group.Indexes.Any(index => asks[index].Nests))).ToList(),
+            remaining, maxChecks, cancellationToken).ConfigureAwait(false);
+
+        // What came back is taken in the order asked, so the answer does not depend on who answered first.
+        for (var position = 0; position < sending.Count; position++)
         {
-            use.Ms += (long)(clock.Elapsed - started).TotalMilliseconds;
-            use.Answered ??= false;
-            use.Reason = Unreachable;
+            var (use, indexes) = sending[position];
+            var outcome = called[position];
+            var head = asks[indexes[0]];
 
-            return (null, Unreachable);
+            use.Ms += outcome.Ms;
+
+            // One call per service and round, counted for the explain that asked first.
+            if (outcome.Paid)
+            {
+                use.Rounds.Add(round);
+                use.Calls++;
+            }
+
+            if (outcome.Answers is not { } answers)
+            {
+                (JsonObject?, string?) failed;
+
+                if (outcome.Failure is ExplainOwnerPool.NoCalls or ExplainOwnerPool.TooManyChecks)
+                    failed = Limited(outcome.Failure == ExplainOwnerPool.NoCalls ? "ownerCalls" : "checks", outcome.Failure == ExplainOwnerPool.NoCalls ? maxCalls : maxChecks, use.Service, head.Target, head.Stage);
+                else if (outcome.Failure == Timeout)
+                {
+                    spent = true;
+                    failed = OutOfTime(use, use.Service, head.Target, head.Stage);
+                }
+                else
+                {
+                    use.Answered ??= false;
+                    use.Reason = outcome.Failure ?? Unsupported;
+                    failed = (null, use.Reason);
+                }
+
+                foreach (var index in indexes)
+                    results[index] = failed;
+
+                continue;
+            }
+
+            for (var at = 0; at < indexes.Count; at++)
+            {
+                var index = indexes[at];
+
+                // A check the owner left out of its answer (refused before binding, or past the batch's budget).
+                if (at >= answers.Count || answers[at] is not { } answer)
+                {
+                    use.Answered ??= false;
+                    use.Reason ??= Unreachable;
+                    results[index] = (null, Unreachable);
+                    continue;
+                }
+
+                cache.Set(use.Service, keys[index]!, answer);
+                use.Answered = true;
+                use.Cached = false;
+                ReadFacts(use, answer);
+
+                // What the owner asked its own owners is spent of this explain's calls.
+                foreach (var nested in answer["owners"]?.AsArray().OfType<JsonObject>() ?? [])
+                    if (nested["remote"]?.GetValue<bool>() == true && nested["service"]?.GetValue<string>() is { } reachedService)
+                        Nest(nested, reachedService, nested["via"]?.GetValue<string>() is { } further ? use.Service + ">" + further : use.Service);
+
+                results[index] = (answer, null);
+            }
         }
+
+        return results;
     }
 
     private ExplainOwnerUse Use(string service, string? via)
@@ -833,13 +1110,20 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>An owner another owner's answer names: its calls are counted here, and it is listed as reached through that owner.</summary>
-    private void Nest(JsonObject nested, string service, string? via, bool called = true)
+    private void Nest(JsonObject nested, string service, string? via, bool called = true, bool spend = true)
     {
         var use = uses.FirstOrDefault(each => each.Service == service && each.Via == via) ?? Use(service, via);
+
+        // A service this host does not know itself is reached again through the owner that reached it.
+        if (via is not null && client?.IsConfigured(service) != true)
+            cache.Route(service, via.Split('>')[0]);
+
         var calls = called && nested["calls"] is JsonValue count && count.TryGetValue<int>(out var number) ? number : 0;
 
         use.Calls += calls;
-        callsLeft = Math.Max(0, callsLeft - calls);
+
+        if (spend)
+            pool.Spend(calls);
 
         // An owner asked twice answered when one of the asks was answered; the first reason stays.
         if (nested["answered"] is JsonValue answered && answered.TryGetValue<bool>(out var flag))
@@ -903,6 +1187,7 @@ public sealed class RemoteExplain : IExplainOwners
                 {
                     "ownerServices" => $"This explain asks at most {max} owner services; what '{service}' binds for '{target}' was not checked.",
                     "ownerCalls" => $"This explain causes at most {max} owner calls in all; what '{service}' binds for '{target}' was not checked.",
+                    "checks" => $"One call to an owner carries at most {max} checks; what '{service}' binds for '{target}' was not checked.",
                     _ => $"This explain had {max} ms left of the time an explain may take; what '{service}' binds for '{target}' was not checked.",
                 },
                 Stage = stage,
@@ -918,7 +1203,9 @@ public sealed class RemoteExplain : IExplainOwners
     private static Diagnostic Unchecked(OwnerCheck check, string reason) => new()
     {
         Code = Notes.RemoteUnchecked,
-        Message = check.Service.Length == 0
+        Message = reason == Cached && check.Service.Length > 0
+            ? $"What '{check.Service}' binds for '{check.Target}' was not asked of its owner: this explain answers from the owner answers already kept (remote \"cached\"), and none is kept for it. Explain with remote \"check\" to ask the owner."
+            : check.Service.Length == 0
             ? $"The stages continued under '{check.Target}' at this host were not checked ({reason}); this host binds them when the query runs."
             : $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
         Stage = check.FirstContinued,

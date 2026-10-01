@@ -229,6 +229,16 @@ public abstract record ExplainOutcome
     public sealed record Refused(Refusal Refusal) : ExplainOutcome;
 }
 
+/// <summary>The outcome of an internal explain batch: one answer per check, or a refusal of the batch whole.</summary>
+public abstract record ExplainBatchOutcome
+{
+    /// <summary>The answers.</summary>
+    public sealed record Success(ExplainBatchResponse Response) : ExplainBatchOutcome;
+
+    /// <summary>A refusal of the whole batch.</summary>
+    public sealed record Refused(Refusal Refusal) : ExplainBatchOutcome;
+}
+
 /// <summary>
 /// What an internal explain may still spend of the explain it belongs to (no amplification): the
 /// time left of the origin's wall time and the owner calls left of its total. An owner asks its own
@@ -238,6 +248,54 @@ public abstract record ExplainOutcome
 /// <param name="Ms">The milliseconds left of the origin's explain.</param>
 /// <param name="Calls">The owner calls (one per service and round) left of the origin's explain.</param>
 public sealed record ExplainBudget(int Ms, int Calls);
+
+/// <summary>
+/// The body of <c>POST internal/oxql/explain</c>: what one round of an origin's explain asks one owner,
+/// as one request. Each check is an explain envelope (the owner query a run would send, or a catalog
+/// lookup); <see cref="Budget"/> is what is left of the origin's explain for all of them together. The
+/// owner answers them in order, each within what the ones before it left, and answers each slim
+/// (<see cref="ExplainRequest.Slim"/>).
+/// </summary>
+public sealed record ExplainBatchRequest
+{
+    /// <summary>The checks, at most <c>Explain.MaxBatchChecks</c>.</summary>
+    [JsonPropertyName("checks")]
+    public IReadOnlyList<ExplainRequest> Checks { get; init; } = [];
+
+    /// <summary>What the batch may still spend of its origin's explain; null on a call that names none.</summary>
+    [JsonPropertyName("budget")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExplainBudget? Budget { get; init; }
+
+    /// <summary>The owner calls an answer says it cost: the calls of every owner it reached, the ones reached through others included.</summary>
+    public static int CallsOf(JsonObject answer)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+
+        return answer["owners"]?.AsArray().OfType<JsonObject>().Sum(CallsOfOwner) ?? 0;
+    }
+
+    /// <summary>The calls one entry of an answer's <c>owners</c> says a remote owner cost; none for this host itself.</summary>
+    public static int CallsOfOwner(JsonObject owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+
+        return owner["remote"] is JsonValue remote && remote.TryGetValue<bool>(out var isRemote) && isRemote
+            && owner["calls"] is JsonValue count && count.TryGetValue<int>(out var number) ? number : 0;
+    }
+}
+
+/// <summary>
+/// The answer of <c>POST internal/oxql/explain</c>: one entry per check, in order. An entry is the
+/// check's explain answer, or null where the owner did not answer it: it refused the check before
+/// binding, or the batch's budget ran out before it.
+/// </summary>
+public sealed record ExplainBatchResponse
+{
+    /// <summary>The answers, index-aligned with the checks.</summary>
+    [JsonPropertyName("answers")]
+    public IReadOnlyList<JsonNode?> Answers { get; init; } = [];
+}
 
 /// <summary>
 /// The body of <c>POST /oxql/explain</c>: a plain query, or the envelope
@@ -276,8 +334,9 @@ public sealed record ExplainRequest
     public const string RemoteCheck = "check";
 
     /// <summary>
-    /// The value of <see cref="Remote"/> that answers from owner answers already kept and asks no owner.
-    /// Accepted; until the cached tier is built it is answered as <see cref="RemoteCheck"/>.
+    /// The value of <see cref="Remote"/> that answers from owner answers already kept and asks no owner:
+    /// what an owner was not asked before is left out, and the answer says so (<c>cache.complete</c>
+    /// false, a <c>REMOTE_UNCHECKED</c> note with reason <c>cached</c>). The tier for an edit in progress.
     /// </summary>
     public const string RemoteCached = "cached";
 
@@ -319,6 +378,15 @@ public sealed record ExplainRequest
 
     /// <summary>What an internal explain may still spend of its origin's explain; null on a public one.</summary>
     public ExplainBudget? Budget { get; init; }
+
+    /// <summary>
+    /// Whether an internal explain answers slim: what an origin reads of an owner's answer and nothing
+    /// else (<c>valid</c>, <c>errors</c>, the notes about the answer itself, <c>stages[]</c> with their
+    /// reads and creates, <c>aliases</c>, <c>types</c>, <c>catalog</c>, <c>owners</c>, <c>revision</c>,
+    /// <c>cache</c>, <c>engine</c>). Not a wire member: the internal route sets it for every check, and
+    /// a public explain is never slim.
+    /// </summary>
+    public bool Slim { get; init; }
 
     /// <summary>Whether the per-stage shapes, the type references and the flag rules were asked for.</summary>
     public bool IncludesShape => Include.Contains(IncludeShape, StringComparer.Ordinal) || IncludesTypes;

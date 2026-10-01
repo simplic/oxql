@@ -75,7 +75,13 @@ public sealed class FleetHost : IAsyncDisposable
 
         builder.WebHost.UseTestServer();
         builder.Configuration.Sources.Clear();
-        builder.Configuration.AddInMemoryCollection(Defaults(fleet).Concat(configuration ?? new Dictionary<string, string?>()));
+        // A variant's keys replace the defaults of the same name.
+        var settings = new Dictionary<string, string?>(Defaults(fleet), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, value) in configuration ?? new Dictionary<string, string?>())
+            settings[key] = value;
+
+        builder.Configuration.AddInMemoryCollection(settings);
 
         var logs = new LogCapture();
         builder.Logging.ClearProviders();

@@ -153,7 +153,8 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 
     public async Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken)
     {
-        ExplainCalls.Add((serviceKey, request, budget));
+        lock (ExplainCalls)
+            ExplainCalls.Add((serviceKey, request, budget));
 
         if (Unreachable.Contains(serviceKey))
             throw new HttpRequestException($"'{serviceKey}' is not reachable.");

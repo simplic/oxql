@@ -178,4 +178,120 @@ public class HostHardeningExplainTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
+
+    // ---- the validator and the content coding (improvement plan §3.E) ---------------------------------
+
+    private static HttpRequestMessage ExplainMessage(string body, string? ifNoneMatch = null, string? acceptEncoding = null)
+    {
+        var message = new HttpRequestMessage(HttpMethod.Post, "/OxQL/explain") { Content = SampleHost.Json(body) };
+
+        if (ifNoneMatch is not null)
+            message.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+
+        if (acceptEncoding is not null)
+            message.Headers.TryAddWithoutValidation("Accept-Encoding", acceptEncoding);
+
+        return message;
+    }
+
+    [Fact]
+    public async Task The_answer_carries_its_etag_as_a_header_and_If_None_Match_with_it_is_a_304_without_a_body()
+    {
+        using var host = new SampleHost();
+        var client = host.Client();
+
+        var first = await client.SendAsync(ExplainMessage(WithLookup));
+        var etag = first.Headers.ETag!.ToString();
+
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        etag.Should().Be(((JsonObject)(await SampleHost.Body(first))!)["etag"]!.GetValue<string>(), "the header is the answer's own validator");
+        first.Headers.CacheControl!.ToString().Should().Be("no-cache, private", "the answer is one identity's");
+
+        var again = await client.SendAsync(ExplainMessage(WithLookup, ifNoneMatch: etag));
+
+        again.StatusCode.Should().Be(HttpStatusCode.NotModified);
+        (await again.Content.ReadAsByteArrayAsync()).Should().BeEmpty();
+        again.Headers.ETag!.ToString().Should().Be(etag);
+
+        // A proxy may strengthen or list the tag; the comparison is weak, and * matches any.
+        (await client.SendAsync(ExplainMessage(WithLookup, ifNoneMatch: $"\"other\", {etag[2..]}"))).StatusCode.Should().Be(HttpStatusCode.NotModified);
+        (await client.SendAsync(ExplainMessage(WithLookup, ifNoneMatch: "*"))).StatusCode.Should().Be(HttpStatusCode.NotModified);
+
+        // Another request is another answer.
+        var other = await client.SendAsync(ExplainMessage("""{ "entityType": "probe.order", "pipeline": [] }""", ifNoneMatch: etag));
+
+        other.StatusCode.Should().Be(HttpStatusCode.OK);
+        other.Headers.ETag!.ToString().Should().NotBe(etag);
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task The_cached_tier_of_a_complete_answer_has_the_etag_of_its_check()
+    {
+        using var host = new SampleHost();
+        var client = host.Client();
+
+        var check = await client.SendAsync(ExplainMessage($$"""{ "query": {{WithLookup}}, "remote": "check" }"""));
+        var cached = await client.SendAsync(ExplainMessage($$"""{ "query": {{WithLookup}}, "remote": "cached" }""", ifNoneMatch: check.Headers.ETag!.ToString()));
+
+        cached.StatusCode.Should().Be(HttpStatusCode.NotModified, "what a check answered in full is what the cached tier answers");
+    }
+
+    [Theory]
+    [InlineData("br", "br")]
+    [InlineData("gzip", "gzip")]
+    [InlineData("gzip, deflate, br, zstd", "br")]
+    [InlineData("br;q=0, gzip", "gzip")]
+    [InlineData("*", "br")]
+    [InlineData("identity", null)]
+    [InlineData("deflate", null)]
+    [InlineData(null, null)]
+    public async Task The_answer_is_written_in_the_content_coding_the_caller_accepts(string? acceptEncoding, string? expected)
+    {
+        using var host = new SampleHost();
+        var client = host.Client();
+
+        var plain = await (await client.SendAsync(ExplainMessage(WithLookup))).Content.ReadAsByteArrayAsync();
+        var response = await client.SendAsync(ExplainMessage(WithLookup, acceptEncoding: acceptEncoding));
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.ToString().Should().Be("application/json; charset=utf-8");
+        response.Headers.Vary.Should().Contain("Accept-Encoding", "the body depends on that header, coded or not");
+        response.Content.Headers.ContentEncoding.Should().Equal(expected is null ? [] : [expected]);
+        response.Content.Headers.ContentLength.Should().Be(bytes.Length);
+
+        if (expected is null)
+        {
+            bytes.Should().Equal(plain);
+            return;
+        }
+
+        bytes.Length.Should().BeLessThan(plain.Length / 2, "an explain answer repeats its member names");
+
+        using var packed = new MemoryStream(bytes);
+        using Stream coder = expected == "br" ? new System.IO.Compression.BrotliStream(packed, System.IO.Compression.CompressionMode.Decompress) : new System.IO.Compression.GZipStream(packed, System.IO.Compression.CompressionMode.Decompress);
+        using var read = new MemoryStream();
+
+        await coder.CopyToAsync(read);
+        read.ToArray().Should().Equal(plain, "the coded body is the answer, byte for byte");
+    }
+
+    [Fact]
+    public async Task A_refusal_and_a_304_are_not_coded()
+    {
+        using var host = new SampleHost();
+        var client = host.Client();
+
+        var refused = await client.SendAsync(ExplainMessage("""{ "catalog": [] }""", acceptEncoding: "br"));
+
+        refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        refused.Content.Headers.ContentEncoding.Should().BeEmpty();
+
+        var first = await client.SendAsync(ExplainMessage(WithLookup, acceptEncoding: "br"));
+        var again = await client.SendAsync(ExplainMessage(WithLookup, ifNoneMatch: first.Headers.ETag!.ToString(), acceptEncoding: "br"));
+
+        again.StatusCode.Should().Be(HttpStatusCode.NotModified);
+        again.Content.Headers.ContentEncoding.Should().BeEmpty();
+    }
 }

@@ -30,6 +30,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly bool remoteClient;
     private readonly IRemoteQueryClient? remote;
     private readonly ExplainForwardCache explainCache;
+    private readonly OwnerFetchCache ownerCache;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -53,7 +54,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
         // remote target needs the remote client.
-        fetch = new KeyedFetch(remote, this, cache ?? new OwnerFetchCache(this.options), this.options);
+        ownerCache = cache ?? new OwnerFetchCache(this.options);
+        fetch = new KeyedFetch(remote, this, ownerCache, this.options);
         remoteClient = remote is not null;
         this.remote = remote;
         this.explainCache = explainCache ?? new ExplainForwardCache();

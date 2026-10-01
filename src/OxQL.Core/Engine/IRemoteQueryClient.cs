@@ -40,4 +40,45 @@ public interface IRemoteQueryClient
     /// </summary>
     Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
         Task.FromResult<JsonObject?>(null);
+
+    /// <summary>
+    /// Explains every request of <paramref name="batch"/> at the service behind <paramref name="serviceKey"/>
+    /// in one call (<c>POST internal/oxql/explain</c>, body <c>{ checks, budget }</c>): what one round of an
+    /// origin's explain asks that owner. The answers come back in the order of the checks; an entry is null
+    /// where the owner did not answer that check (it refused it, or the batch's budget ran out before it).
+    /// Null, for the whole call, is a client that cannot explain at owners; a failed call throws, as
+    /// <see cref="ExplainAsync"/> does, and none of its checks is answered.
+    /// <para>
+    /// The default asks check by check through <see cref="ExplainAsync"/>, each with what the checks before it
+    /// left of the batch's budget, so a client written for one check at a time keeps working; a client that
+    /// reaches a real owner sends the batch as one request.
+    /// </para>
+    /// </summary>
+    async Task<IReadOnlyList<JsonObject?>?> ExplainBatchAsync(string serviceKey, ExplainBatchRequest batch, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+
+        var answers = new List<JsonObject?>(batch.Checks.Count);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var calls = batch.Budget?.Calls ?? int.MaxValue;
+
+        foreach (var check in batch.Checks)
+        {
+            var left = budget - clock.Elapsed;
+
+            if (left <= TimeSpan.Zero)
+                throw new OperationCanceledException($"The budget of the explain batch for '{serviceKey}' ran out.");
+
+            var sent = batch.Budget is null ? check : check with { Budget = new ExplainBudget((int)Math.Min(int.MaxValue, Math.Min(batch.Budget.Ms, left.TotalMilliseconds)), calls) };
+            var answer = await ExplainAsync(serviceKey, sent, left, cancellationToken).ConfigureAwait(false);
+
+            if (answer is null)
+                return null;
+
+            calls = Math.Max(0, calls - ExplainBatchRequest.CallsOf(answer));
+            answers.Add(answer);
+        }
+
+        return answers;
+    }
 }

@@ -21,11 +21,13 @@ public interface IExplainOwners
     bool Knows(string service);
 
     /// <summary>
-    /// The owner's whole explain answer to one catalog entry of its own entity (its <c>catalog[0]</c>
-    /// with the types and flag sets it points to), or null when it did not answer; <c>Reason</c> then
-    /// says why (<c>unsupported</c>, <c>unreachable</c>, <c>timeout</c>, <c>limit</c>).
+    /// Per entry, the owner's whole explain answer to one catalog entry of its own entity (its
+    /// <c>catalog[0]</c> with the types and flag sets it points to), or null when it did not answer;
+    /// <c>Reason</c> then says why (<c>unsupported</c>, <c>unreachable</c>, <c>timeout</c>, <c>limit</c>,
+    /// <c>cached</c>). The entries of one owner travel in one call; an entity of a service this host
+    /// does not know is asked of the owner that reaches it.
     /// </summary>
-    Task<(JsonObject? Answer, string? Reason)> CatalogAsync(string service, JsonObject entry, int depth, CancellationToken cancellationToken);
+    Task<IReadOnlyList<(JsonObject? Answer, string? Reason)>> CatalogAsync(IReadOnlyList<(string Service, JsonObject Entry, int Depth)> entries, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -1124,14 +1126,27 @@ public sealed class ExplainTypes
         ArgumentNullException.ThrowIfNull(request);
 
         var answers = new List<JsonNode>(request.Catalog.Count);
+        var forwards = new List<Forward>();
 
         foreach (var entry in request.Catalog)
-            answers.Add(await CatalogEntryAsync(entry, owners).ConfigureAwait(false));
+            answers.Add(await CatalogEntryAsync(entry, owners, forwards).ConfigureAwait(false));
+
+        // The entities of other services are asked of their owners together: one call per owner.
+        if (forwards.Count > 0)
+        {
+            var asked = await owners!.CatalogAsync(forwards.Select(forward => (forward.Service, forward.Entry, forward.Levels)).ToList(), cancellationToken).ConfigureAwait(false);
+
+            for (var index = 0; index < forwards.Count; index++)
+                answers[answers.IndexOf(forwards[index].Head)] = Forwarded(forwards[index], asked[index].Answer, asked[index].Reason);
+        }
 
         return answers;
     }
 
-    private async Task<JsonObject> CatalogEntryAsync(JsonObject raw, IExplainOwners? owners)
+    /// <summary>A catalog entry of another service's entity on its way to its owner: the entry as sent, and the head its answer fills.</summary>
+    private sealed record Forward(JsonObject Head, string Service, string EntityId, JsonObject Entry, int Levels);
+
+    private async Task<JsonObject> CatalogEntryAsync(JsonObject raw, IExplainOwners? owners, List<Forward> forwards)
     {
         var head = new JsonObject { ["id"] = raw["id"] is JsonValue idValue && idValue.TryGetValue<string>(out var id) ? id : "" };
 
@@ -1176,7 +1191,20 @@ public sealed class ExplainTypes
             return Failed(head, Codes.InvalidOperand, "A catalog entry's 'referencing' is true or false.");
 
         if (!model.TryResolve(entityId, out var entity, out _))
-            return await ForwardedAsync(raw, head, entityId, levels, owners).ConfigureAwait(false);
+        {
+            var service = entityId.Split('.')[0];
+
+            if (owners is null || !owners.Knows(service))
+                return Failed(head, Codes.UnknownEntity, $"'{entityId}' is not an entity of this host, and this host knows no owner for '{service}'.");
+
+            var forwarded = (JsonObject)raw.DeepClone();
+
+            // One id for every caller: the same lookup is one cache entry at the origin.
+            forwarded["id"] = "forwarded";
+            forwards.Add(new Forward(head, service, entityId, forwarded, levels));
+
+            return head;
+        }
 
         var type = await LocalAsync(entity, item).ConfigureAwait(false);
 
@@ -1228,19 +1256,9 @@ public sealed class ExplainTypes
     }
 
     /// <summary>An entity of another service: its owner's answer to the same entry, its types taken into this table, marked forwarded.</summary>
-    private async Task<JsonObject> ForwardedAsync(JsonObject raw, JsonObject head, string entityId, int levels, IExplainOwners? owners)
+    private JsonObject Forwarded(Forward forward, JsonObject? answer, string? reason)
     {
-        var service = entityId.Split('.')[0];
-
-        if (owners is null || !owners.Knows(service))
-            return Failed(head, Codes.UnknownEntity, $"'{entityId}' is not an entity of this host, and this host knows no owner for '{service}'.");
-
-        var forwarded = (JsonObject)raw.DeepClone();
-
-        // One id for every caller: the same lookup is one cache entry at the origin.
-        forwarded["id"] = "forwarded";
-
-        var (answer, reason) = await owners.CatalogAsync(service, forwarded, levels, cancellationToken).ConfigureAwait(false);
+        var (head, service, entityId, _, _) = forward;
 
         if (answer?["catalog"] is not JsonArray { Count: > 0 } answered || answered[0] is not JsonObject first)
         {

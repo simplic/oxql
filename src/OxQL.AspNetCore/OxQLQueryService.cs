@@ -205,6 +205,58 @@ public sealed class OxQLQueryService : IOxQLQueryService
         return await engine.ExplainAsync(request, context, cancellationToken);
     }
 
+    /// <inheritdoc/>
+    public Task<ExplainBatchOutcome> ExplainBatchAsync(ExplainBatchRequest batch, CancellationToken cancellationToken = default) =>
+        Guarded(refusal => (ExplainBatchOutcome)new ExplainBatchOutcome.Refused(refusal), () => RunExplainBatchAsync(batch, cancellationToken), cancellationToken);
+
+    private async Task<ExplainBatchOutcome> RunExplainBatchAsync(ExplainBatchRequest batch, CancellationToken cancellationToken)
+    {
+        if (batch?.Checks is null || batch.Checks.Count == 0 || batch.Checks.Any(check => check?.Query is null))
+            return new ExplainBatchOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownStage,
+                Message = "The explain batch is empty; it carries checks, each an explain envelope with a query.",
+            }]));
+
+        // A batch past its bound costs its parse and nothing else.
+        if (batch.Checks.Count > options.Explain.MaxBatchChecks)
+            return new ExplainBatchOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.ExplainLimit,
+                Message = $"The explain batch carries {batch.Checks.Count} checks; it may carry at most {options.Explain.MaxBatchChecks}.",
+                Path = "checks",
+                Params = new Dictionary<string, object?> { ["limit"] = "checks", ["value"] = batch.Checks.Count, ["max"] = options.Explain.MaxBatchChecks },
+            }]));
+
+        var context = await ContextAsync(null, internalCall: true, cancellationToken);
+
+        // A contract 1 caller has no batch of its own: each check goes the way one explain goes.
+        if (context.Contract == 1)
+        {
+            var single = new List<System.Text.Json.Nodes.JsonNode?>(batch.Checks.Count);
+
+            foreach (var check in batch.Checks)
+                single.Add(await ExplainAsync(check with { Budget = batch.Budget, Slim = true }, internalCall: true, cancellationToken).ConfigureAwait(false) is ExplainOutcome.Success answered
+                    ? System.Text.Json.JsonSerializer.SerializeToNode(answered.Result, OxQLJson.Wire)
+                    : null);
+
+            return new ExplainBatchOutcome.Success(new ExplainBatchResponse { Answers = single });
+        }
+
+        // A check past the explain bounds costs its parse and nothing else; the others are explained
+        // together, sharing what the origin has left (time, and the owner calls this host may cause).
+        var bounded = batch.Checks.Select(check => ExplainLimits.Check(check, options.Explain) is null).ToList();
+        var asked = batch.Checks.Where((_, index) => bounded[index]).Select(check => check with { Budget = null, Slim = true }).ToList();
+        var outcomes = asked.Count == 0 ? [] : await engine.ExplainBatchAsync(asked, context, batch.Budget, cancellationToken).ConfigureAwait(false);
+        var answers = new List<System.Text.Json.Nodes.JsonNode?>(batch.Checks.Count);
+        var next = 0;
+
+        foreach (var within in bounded)
+            answers.Add(within && outcomes[next++] is ExplainOutcome.Success success ? System.Text.Json.JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire) : null);
+
+        return new ExplainBatchOutcome.Success(new ExplainBatchResponse { Answers = answers });
+    }
+
     /// <summary>The engine block of an explain answer: the version and this host's capabilities.</summary>
     private ExplainEngine EngineOf() => new()
     {

@@ -169,7 +169,8 @@ internal sealed class SchemaTypes
     /// <param name="Under"><c>collection</c>, <c>afterPage</c>, <c>owner</c>, or null.</param>
     /// <param name="Filter">With <c>owner</c>: whether a condition may compare the members' values.</param>
     /// <param name="Many">With <c>afterPage</c>: whether the alias holds an array of rows.</param>
-    public sealed record Standing(IReadOnlyList<string> Unwound, string? Under = null, bool Filter = false, bool Many = false)
+    /// <param name="UnwoundAbove">For the element of a nested collection: how many of the collections above its own are unwound.</param>
+    public sealed record Standing(IReadOnlyList<string> Unwound, string? Under = null, bool Filter = false, bool Many = false, int UnwoundAbove = 0)
     {
         public static readonly Standing Own = new([]);
     }
@@ -194,6 +195,8 @@ internal sealed class SchemaTypes
         for (var node = member.Parent; node is { Property: not null }; node = node.Parent)
             if (IsCollection(node) && !Unwound(node))
                 above++;
+
+        above -= standing.UnwoundAbove;
 
         if (standing.Under == "collection")
             above++;
@@ -477,7 +480,8 @@ internal sealed class SchemaTypes
             rule?["unwound"]?.AsArray().Select(collection => collection!.GetValue<string>()).ToList() ?? [],
             rule?["under"]?.GetValue<string>(),
             rule?["filter"]?.GetValue<bool>() == true,
-            rule?["many"]?.GetValue<bool>() == true);
+            rule?["many"]?.GetValue<bool>() == true,
+            rule?["unwoundAbove"]?.GetValue<int>() ?? 0);
 
         foreach (var target in targets)
         {

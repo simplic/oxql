@@ -145,7 +145,7 @@ public class ExplainByReferenceTests
                         shapes.Add(member);
         }
 
-        rules.Should().BeEquivalentTo(["self", "under:collection", "under:afterPage", "under:owner", "filter", "many", "unwound", "shows"]);
+        rules.Should().BeEquivalentTo(["self", "under:collection", "under:afterPage", "under:owner", "filter", "many", "unwound", "unwoundAbove", "shows"]);
         shapes.Should().BeEquivalentTo(["projection", "removed"]);
     }
 
@@ -172,6 +172,30 @@ public class ExplainByReferenceTests
         answer["rules"]![shape["rules"]!["ct"]!.GetValue<string>()]!.AsObject().Select(pair => pair.Key).Should().Equal("self", "under", "filter");
         answer["entry"]!["shape"]!["rules"]!.AsObject().Count.Should().Be(0, "at the entry every member has its own flags");
         shape.AsObject().ContainsKey("flags").Should().BeFalse("the per-member overrides are written with the types only");
+    }
+
+    [Fact]
+    public async Task The_element_of_a_nested_collection_lies_under_no_collection_once_the_outer_one_is_unwound()
+    {
+        const string Nested = """
+            [{ "unwind": { "path": "lines", "as": "line" } },
+             { "unwind": { "path": "line.parts", "as": "part" } },
+             { "sort": [{ "part.customerId": "asc" }] }]
+            """;
+
+        var answer = await ExplainAsync(Invoice, Nested, 2, "");
+        var tabled = await ExplainAsync(Invoice, Nested, 2, """, "include": ["shape", "notes", "types"], "shape": { "depth": 3 } """);
+
+        answer["valid"]!.GetValue<bool>().Should().BeTrue("the sort binds: the part's customer is under no collection that is not unwound");
+
+        // In its type the part's members lie under the lines; in this row the lines are unwound.
+        var shape = answer["stages"]![1]!["shape"]!.AsObject();
+        var rule = answer["rules"]![shape["rules"]!["part"]!.GetValue<string>()]!;
+
+        rule["unwoundAbove"]!.GetValue<int>().Should().Be(1);
+        SchemaTypes.FlagSet(Schema.Value.FlagsAt(answer, shape, "part", "customerId")!).ToJsonString().Should().Be(
+            """{"operators":["eq","neq","in","nin","exists"],"sortable":true,"groupable":true,"unwindable":false,"projectable":true,"folds":false,"underCollection":0,"follow":"one"}""");
+        Reconstruction.Assert(Schema.Value, answer, tabled, 3, published: false).Should().BeGreaterThan(0);
     }
 
     [Fact]

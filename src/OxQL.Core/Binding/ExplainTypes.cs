@@ -673,6 +673,8 @@ public sealed class ExplainTypes
     /// semi-join on the owner; nothing sorts, groups or unwinds).</item>
     /// <item><c>unwound</c>: the collections below the root that are unwound here, relative to it: such a
     /// collection is its element, and what lies below it lies under one collection fewer.</item>
+    /// <item><c>unwoundAbove</c>: for the element of a nested collection, how many of the collections
+    /// above its own are unwound here: its members lie under that many fewer than in their type.</item>
     /// <item><c>shows</c>: the paths the row carries under a join's alias, where that is not every member.</item>
     /// </list>
     /// What a projection kept or removed is the shape's (<c>projection</c>, <c>removed</c>), not the rule's.
@@ -720,6 +722,9 @@ public sealed class ExplainTypes
                 var below = "|" + element.Source.Wire + ".";
 
                 unwound = shape.Unwound.Where(key => key.StartsWith(below, StringComparison.Ordinal)).Select(key => key[below.Length..]);
+
+                if (UnwoundAbove(shape, element) is > 0 and var outer)
+                    rule["unwoundAbove"] = outer;
                 break;
         }
 
@@ -795,6 +800,27 @@ public sealed class ExplainTypes
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// For the element of a nested collection, the collections above its own that are unwound at
+    /// <paramref name="shape"/>: the element's type counts them above each member (its entry shape has
+    /// nothing unwound but the collection itself), the row here does not.
+    /// </summary>
+    private static int UnwoundAbove(Shape shape, ShapeNode.Element element)
+    {
+        var segments = element.Source.Wire.Split('.');
+        var above = 0;
+
+        for (var length = 1; length < segments.Length; length++)
+        {
+            var wire = string.Join('.', segments.Take(length));
+
+            if (element.Def.Path(wire) is { } path && Shape.IsCollection(path) && shape.Unwound.Contains(Shape.UnwoundKey(Shape.ImplicitRoot, wire)))
+                above++;
+        }
+
+        return above;
     }
 
     /// <summary>
@@ -910,7 +936,9 @@ public sealed class ExplainTypes
         // An entity or an element nothing unwound and no unwind took a collection out of resolves as its
         // type's own shape does: its members have their own flags here, and only what is in the row is asked.
         var own = node is ShapeNode.Entity or ShapeNode.Element && unwound.Length == 0
-            && !shape.Unset.Keys.Any(collection => !named || collection == root || collection.StartsWith(root + ".", StringComparison.Ordinal));
+            && !shape.Unset.Keys.Any(collection => !named || collection == root || collection.StartsWith(root + ".", StringComparison.Ordinal))
+            // The element of a nested collection lies under fewer collections here than in its type once the outer ones are unwound.
+            && !(node is ShapeNode.Element nested && UnwoundAbove(plain, nested) > 0);
         // On the entity row an unwind changes only what lies at or below the collection it unwound.
         var touched = !own && !named && node is ShapeNode.Entity && shape.Unset.Count == 0
             ? shape.Unwound.Where(key => key.StartsWith('|')).Select(key => key[1..]).ToList()

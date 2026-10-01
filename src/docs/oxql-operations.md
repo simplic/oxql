@@ -483,7 +483,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   more); `owner`, rows another service holds (nothing sorts, groups or unwinds; with `filter` a
   condition may compare a member's value, as a semi-join on the owner, never `is` or `any`; without
   it no condition). `unwound` lists the collections below the root that are unwound here, relative
-  to it. `shows` lists the paths the row carries under a join's alias where that is not every
+  to it. `unwoundAbove`, on the element of a nested collection, is the number of collections above
+  its own that are unwound here: its members count that many fewer `above` than in their type. `shows` lists the paths the row carries under a join's alias where that is not every
   member (under contract 1, the join's select). A member is not in the row when `shape.removed`
   holds its path or one above it, when `shape.projection` holds neither its path, one above it nor
   one below it, or when `shows` does not. Every flag so derived is the binder's own answer for

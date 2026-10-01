@@ -237,6 +237,13 @@ public sealed class TypeDef
     /// <summary>How the discriminator is stored; null when the type has no variants.</summary>
     public DiscriminatorForm? DiscriminatorForm { get; internal set; }
 
+    /// <summary>
+    /// The name a value stored as the polymorphic type itself goes by, as a schema document publishes it
+    /// (<c>baseVariant</c>); set only on a model read from a document, where no CLR type says whether the
+    /// type is concrete. Outside the fingerprint.
+    /// </summary>
+    public string? BaseVariant { get; internal set; }
+
     /// <summary>The normalised English description of the type (see <see cref="Build.XmlDocs"/>); null when nothing describes it. Outside the fingerprint.</summary>
     public string? Description { get; internal set; }
 

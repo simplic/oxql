@@ -33,8 +33,9 @@ public sealed record EntityStorage(string Collection, string? Database = null);
 /// Builds the model from an Ox Schema document (format 1.x). Storage names follow the
 /// document's rule: <c>storageName</c> where published, otherwise the wire name with its first
 /// letter upper-cased and <c>id</c> as <c>_id</c> at every depth. Representations are the
-/// defaults the services store each kind in. Tests, tooling and the Studio use it; a host uses
-/// <see cref="ClrModelBuilder"/>.
+/// defaults the services store each kind in, unless the document says otherwise (<c>storedAs</c>); a
+/// member it marks <c>stored: false</c> is not stored. Tests, tooling and the Studio use it; a host
+/// uses <see cref="ClrModelBuilder"/>.
 /// </summary>
 public sealed class DocumentModelBuilder
 {
@@ -196,6 +197,12 @@ public sealed class DocumentModelBuilder
             {
                 member.Stored = overridden is not null;
                 member.StorageName = overridden;
+            }
+            else if (descriptor.TryGetProperty("stored", out var stored) && stored.ValueKind == JsonValueKind.False)
+            {
+                // The service returns the member and does not store it.
+                member.Stored = false;
+                member.StorageName = null;
             }
             else
             {
@@ -359,6 +366,7 @@ public sealed class DocumentModelBuilder
             return;
 
         type.Variants = described;
+        type.BaseVariant = ReadString(entry, "baseVariant");
 
         if (entry.TryGetProperty("discriminator", out var discriminator) && discriminator.ValueKind == JsonValueKind.Object)
         {
@@ -379,6 +387,26 @@ public sealed class DocumentModelBuilder
         shape.Kind = kind;
         shape.Representation = DefaultRepresentation(kind);
         shape.SnapshotOf = ReadString(descriptor, "snapshotOf");
+
+        // Where the kind does not say how the value is stored, the document does.
+        switch (ReadString(descriptor, "storedAs"))
+        {
+            case "codePoint" when kind == Kind.String:
+                shape.Representation = Representation.Of(BsonType.Int32);
+                break;
+
+            case "document" when Kinds.IsScalar(kind):
+                shape.Representation = Representation.Of(BsonType.Document);
+                break;
+
+            case "arrayOfDocuments" when kind == Kind.Dictionary:
+                shape.DictionaryRepresentation = DictionaryRepresentation.ArrayOfDocuments;
+                break;
+
+            case "arrayOfArrays" when kind == Kind.Dictionary:
+                shape.DictionaryRepresentation = DictionaryRepresentation.ArrayOfArrays;
+                break;
+        }
 
         switch (kind)
         {

@@ -266,10 +266,14 @@ public sealed class OperandCoercer
     /// <summary>
     /// The name <c>is</c> accepts for a polymorphic type's own values: the type's name when it is
     /// a concrete class, whose values are stored without a discriminator under their own nominal
-    /// type. Null for an abstract class, an interface, or a type the model read from a document.
+    /// type. Null for an abstract class or an interface; for a type the model read from a document,
+    /// the name the document publishes (<c>baseVariant</c>).
     /// </summary>
     public static string? ConcreteBaseName(TypeDef type)
     {
+        if (type.ClrType is null)
+            return type.BaseVariant;
+
         if (type.ClrType is not { IsAbstract: false, IsInterface: false } clr)
             return null;
 

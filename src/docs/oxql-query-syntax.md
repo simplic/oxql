@@ -265,12 +265,13 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
 | `onMissing` | `"null"`, `"report"`, `"refuse"` | `"null"`, `"refuse"` under `strict` | what a reference that resolves to nothing does: stay `null` silently, stay `null` with a `RESOLVE_MISSING` diagnostic, or refuse (422) |
 | `forTarget` | an entity id | none | only on a continued stage (see *Continued stages*); elsewhere `OPTION_NOT_APPLICABLE` |
 | `byTarget` | `{ "<entity id>": "<path>" \| { "path": …, "elements": … }, … }` | none | in place of `path`, on a continued stage: one path per target of the alias it continues under, all filling the one `as` (see *The union join*) |
+| `outcomeAs` | an alias | none | a row member that says on every row what became of the reference: `resolved`, `not_found`, … (see *The outcome under a name*) |
 
 There is no `parentSelect`: the owning row shows what the projection names under `parentAs`
 (`UNKNOWN_STAGE_MEMBER` when written). The paths under an alias are flat; on a reference with several
 targets a path some target lacks (in `select`, or projected under the alias or its `parentAs`) is
 dropped for that target (note `SELECT_PATH_NOT_ON_TARGET`), its member is absent on that target's
-rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the six
+rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the seven
 members with `LEGACY_STAGE_UNSUPPORTED`.
 
 **The collection guard.** A `path` under a collection that is not unwound names one key per element.
@@ -279,9 +280,10 @@ Without `elements` it is `RESOLVE_ON_COLLECTION` ("unwind it first, or set 'elem
 arbitrary element.
 
 **Where it runs.** A resolve with one unconditional case, one local entity target, no item, no key
-conversion, no `elements`, and not a `filter` together with an `onMissing` other than `null` runs
-inline, as an indexed `$lookup` in the aggregate; its alias is an entity row that later stages may
-filter and sort. Every other resolve runs as a keyed fetch after the page is fixed, at the target's
+conversion and no `elements` runs inline, as an indexed `$lookup` in the aggregate; its alias is an
+entity row that later stages may filter and sort. (With a `filter` and outcomes that are read, an
+`onMissing` other than `null` or an `outcomeAs`, it stays inline and joins its target a second
+time without the filter, to tell an excluded record from a missing one.) Every other resolve runs as a keyed fetch after the page is fixed, at the target's
 owner: another service, or this host in process for a local target. Its alias may be projected and
 continued; a `match` on it is `RESOLVE_NOT_FILTERABLE` and a `sort` `RESOLVE_NOT_SORTABLE`, since it
 is joined after the page is taken.
@@ -294,6 +296,48 @@ null } }`, `{ "veh": { "exists": true } }`) is refused before the owner is calle
 semi-join condition under its own default; `caseSensitive` or `ignoreCase` travel to it as written.
 A typed, item, converted, element-wise or continued remote alias takes no semi-join
 (`RESOLVE_NOT_FILTERABLE`).
+
+**The outcome under a name.** A `null` alias does not say why it is `null`. `outcomeAs` names a
+member of the row that says it, on every row, for one join:
+
+```jsonc
+{ "resolve": { "path": "item.billingLineId", "as": "erpLine", "outcomeAs": "erpLineOutcome" } },
+{ "match":   { "erpLineOutcome": { "in": ["not_found", "reference_null"] } } }    // the broken lines only
+```
+
+- The value is the join's outcome as the diagnostics spell it
+  ([`oxql-semantics.md`](oxql-semantics.md#outcomes-and-data-loss)): `resolved`, `ambiguous`,
+  `reference_null`, `excluded`, `not_applicable`, `not_found`, `invalid_key`, `owner_unanswered`.
+  It is never `null` and `resolved` is said as well. Under `elements: "first"` it is the outcome of
+  the element taken, else the row's fold; under `"all"` it is `resolved` (`ambiguous` when a taken
+  element is) as soon as one element resolved, else the same fold.
+- The name is an alias like `as` and `parentAs`: a root of the row, a plain identifier, free in the
+  row and not one of the stage's own (`ALIAS_COLLISION`, `INVALID_ALIAS`). Nothing carries an
+  outcome unless a stage names one; there is no request-wide switch and no reserved member. A
+  `lookup` has none (`UNKNOWN_STAGE_MEMBER`): it has no missing reference.
+- **It follows its join.** The outcome of an inline resolve is written by the aggregate: a `match`
+  may compare it, a `group` may key on it and count it, and such a stage keeps the join before the
+  page. The outcome of every other resolve (keyed, remote, continued, a union join) is written
+  after the page with the join's rows and can only be projected: a `match` on it is
+  `RESOLVE_NOT_FILTERABLE`, a `group` key `UNKNOWN_PATH`. No outcome orders a page
+  (`RESOLVE_NOT_SORTABLE`), so none is ever in a cursor. A `group` ends the root like any alias.
+- A condition takes `eq`, `neq`, `in`, `nin` (any other operator: `INVALID_OPERAND`) against the
+  names above; a name that is no outcome is `UNKNOWN_ENUM_MEMBER` (`params.values` lists them). It
+  compares exactly: nothing folds and no option applies (`OPTION_NOT_APPLICABLE`).
+- **Projected, it keeps its join alive**: `{ "project": { "number": 1, "erpLineOutcome": 1 } }`
+  answers whether the record exists without loading more of it than its key.
+- **It reports and refuses nothing.** `onMissing` and `strict` keep their roles: under `onMissing:
+  "null"` a missing reference is `not_found` in the member and no diagnostic. Under `strict` a
+  row that loses data still refuses the request, so the member shows `not_found` only on a stage
+  that says `onMissing: "report"`; that is the pair a report uses to print "missing" instead of
+  failing. One thing a stage that names its outcome does differently: it *reads* its outcomes, as
+  under an `onMissing` other than `null`. So a key two records hold is looked for and, once seen,
+  reported (`RESOLVE_AMBIGUOUS`, as always), and a record its `filter` left out is told from a
+  missing one (`excluded`), which costs a filtered keyed stage one more owner query.
+- On a continued stage and a union join the owner of each target writes the member for the rows it
+  answers and this host for the others: `not_applicable` where the stage does not apply to the
+  row's target, `reference_null` where the alias it continues under is `null`.
+- The member changes the row's shape, so it enters the cursor fingerprint.
 
 ### Continued stages
 

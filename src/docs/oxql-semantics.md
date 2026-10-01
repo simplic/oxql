@@ -481,10 +481,10 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
 | lookup over its limit | | the first `limit` | **yes** (`LOOKUP_TRUNCATED`) |
 | `elements: "all"` over `MaxLookupLimit` | | the first targets | **yes** (`RESOLVE_TRUNCATED`) |
 
-- A filtered-out target reads as `not_found` unless the stage reports or refuses missing references
-  (`onMissing` other than `null`): then the keyed fetch asks the owner once more for the keys the
-  filtered answer lacked, without the filter, and a key present there is `excluded`. An inline
-  resolve with a `filter` and such an `onMissing` runs as a keyed fetch for this reason.
+- A filtered-out target reads as `not_found` unless the stage reads its outcomes (an `onMissing`
+  other than `null`, or an `outcomeAs`): then the keyed fetch asks the owner once more for the keys
+  the filtered answer lacked, without the filter, and a key present there is `excluded`. An inline
+  resolve with a `filter` does the same in the aggregate, with a second join without the filter.
 - `elements: "first"` takes the first `resolved` element; failing that the row is `not_found` or
   `invalid_key` if any element was, else `excluded` if any was, else `reference_null`.
 - `onMissing` decides what `not_found`, `invalid_key` and `owner_unanswered` do. `null` (the default
@@ -497,6 +497,16 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
 - Rows an owner reported are mapped back through the key to every row of the page holding it. An
   inline resolve reads its missing references off the page's rows, and only when its effective
   `onMissing` is not `null`.
+- **The outcome on the row.** The diagnostics name rows by their index on the page and list at most
+  `MaxReportedRows` of them; a report that prints "missing" per line needs the outcome where the line
+  is. `outcomeAs` on a resolve names a member that carries it on every row, `resolved` included
+  ([`oxql-query-syntax.md`](oxql-query-syntax.md#stage-resolve)). It is opt-in per join and named by
+  the caller, so no row gains a member nobody asked for. It is the same outcome the policy above
+  reads, written where the join runs: by the aggregate for an inline resolve (which is why such an
+  outcome can be filtered, grouped by and counted before the page), after the page for a keyed or
+  remote one, by the owner for a stage continued there and lifted to the origin row with its alias,
+  and by the origin itself for the rows no owner ran the stage for (`not_applicable`,
+  `reference_null`). It never reports or refuses; it only makes a stage read its outcomes.
 
 **Where ambiguity is seen.** The keyed fetch asks an owner for at most two records per key whenever
 the target is an item or a non-key field, so a second record is always seen. Two plain forms keep
@@ -504,7 +514,9 @@ the target is an item or a non-key field, so a second record is always seen. Two
 runs inline and takes the first match; a simple remote reference onto a non-key field sends the
 plain key match, so the second record is seen only when the owner's page happens to hold both, and
 not when the key is answered from the cache. Declare such a reference onto the target's key, or
-expect `ambiguous` to be reported only by the keyed forms.
+expect `ambiguous` to be reported only by the keyed forms. Both plain forms look for the second
+record once the request is `strict`, the stage's `onMissing` is not `null` or the stage names its
+outcome (`outcomeAs`): the outcome is then read, so it is told.
 
 ## Strict requests
 

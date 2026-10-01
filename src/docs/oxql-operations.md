@@ -60,7 +60,7 @@ the listed status.
 | `ALIAS_COLLISION` | 400 | an alias equal to a member's wire or storage name or an earlier alias; two group outputs of one name; an unwind's `as` equal to its `includeIndex` |
 | `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr` |
 | `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names |
-| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list |
+| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes) |
 | `OPERAND_NOT_ARRAY` | 400 | `in` or `nin` without an array |
 | `DECIMAL_TEXT_NOT_ORDERABLE` | 400 | `gt gte lt lte` on a decimal member whose declared storage is text |
 | `UNBOUND_VARIABLE` | 400 | `{ "$var": … }` names a variable the request does not bind |
@@ -94,7 +94,7 @@ the listed status.
 | `RESOLVE_TARGET_NOT_DECLARED` | 400 | a resolve's `target` is not a target of any case of the reference; the message lists them |
 | `RESOLVE_PARENT_NOT_ITEM` | 400 | a resolve's `parentAs` on a reference whose (narrowed) targets include an entity rather than an item |
 | `RESOLVE_NOT_FILTERABLE` | 400 | a condition on a remote resolve alias itself (`{"veh":{"eq":null}}`, `{"veh":{"exists":true}}`); the owner is not called. A condition on a member of a plain remote alias (`veh.matchCode`) is a semi-join; under a keyed, typed, item, converted, element-wise or continued alias any condition is refused, since the alias is joined after the page |
-| `RESOLVE_NOT_SORTABLE` | 400 | a sort on a path under a remote or keyed alias |
+| `RESOLVE_NOT_SORTABLE` | 400 | a sort on a path under a remote or keyed alias; a sort on a join's outcome (`outcomeAs`), wherever the join runs |
 | `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*) |
 | `INVALID_PAGE_LIMIT` | 400 | `limit` below 1, a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
 | `PAGE_SIZE_EXCEEDED` | 400 | `limit` above `MaxPageSize` |
@@ -433,8 +433,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   path, what it reaches as that target's owner answered (`entities`, and `types` as entries of
   `types`), the service that runs it, and `status` `ok`, `error` (its owner refused it; the error
   names it in `params.owner.target`) or `unanswered`; the alias's own `type` is the union of what
-  the branches reach), `outcome` (`{ values }`: the data-loss outcomes the join may have; no row member carries
-  the outcome until a stage names one), `droppedAt` (the stage whose projection
+  the branches reach), `outcome` (`{ as?, values }`: `as` the row member that carries the join's outcome, present when the
+  stage names one with `outcomeAs`; `values` the data-loss outcomes the join may have), `droppedAt` (the stage whose projection
   took it out of the row) and `becomes` (a later stage holds it differently: an unwound lookup
   alias). A join's alias (a resolve's or lookup's `as`, a `parentAs`, an alias a continued stage adds)
   also says what the join loads: `loads` (the paths fetched under the alias, in ordinal order: for a
@@ -444,6 +444,15 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   or `null`). `loads` and `shows` are `null` for an alias of an owner's rows kept whole without a
   hint: the owner's own key and display members. For an alias a continued stage adds, the three are
   its owner's answer, absent when the owner did not answer.
+  The member a stage names with `outcomeAs` is an alias of its own: `node: "scalar"`, `kind:
+  "string"`, `outcomeOf` (the alias of its join), `values` (every outcome the member may hold there:
+  an inline resolve's `resolved`, `reference_null`, `not_found`, with `ambiguous` onto a field that
+  is not the key and `excluded` with a filter; a keyed or remote one's every outcome but
+  `not_applicable`; a continued stage's all eight), `type: "k:string"` and `heldBy` (the service
+  that writes it). The stage lists it in `creates`, every shape after it in `roots`, and
+  `result.columns` as `{ kind: "string", nullable: false, root: "", present: "always" }`. Its rule
+  says what may be done with it: an inline resolve's is compared (`eq`, `neq`, `in`, `nin`) and
+  grouped by; one written after the page is projected only; none is sortable.
 - **`types`**, by reference. `t:<entity>[#item]` names a concrete type: `entity`, `item` (the item
   collection whose element it is), `service` (the service that owns the entity) and
   `schemaRevision` (the revision of that service's schema document; absent when it publishes none).
@@ -554,7 +563,9 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `PATTERN_FOLDS_CASE_ONLY`, `EXACT_FORCES_EXACT`, `SOME_ELEMENT`, `NEQ_MATCHES_ABSENT`,
   `ONLY_FOR_VARIANTS`, `SNAPSHOT_COPY`, `JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
   `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP`, `LOOKUP_LIMIT`, `OFFSET_PAGING`,
-  `MISSING_POLICY` (the effective `onMissing`, `strict`, and which outcomes lose data),
+  `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
+  `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
+  missing references the message says that no answered row shows that outcome),
   `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`; an index list that cannot be read
   is an `INDEX_ADVICE` note saying so), `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
   are stable; messages may change. Without `include: "notes"` only the notes about the answer itself

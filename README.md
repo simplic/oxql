@@ -10,8 +10,9 @@ breaking package upgrade for hosts; see *Upgrading from 1.x*.
 
 Version 2.1 is additive for queries and adds what reports need: polymorphic members and the `is`
 operator, flattened item trees, typed, item and key-converting references, `lookup` with `sort`,
-`first` and `on`, the outcome of every join with `onMissing` and `strict`, chains across services
-by remote continuation, and `POST /oxql/explain` as the one "all information about this query"
+`first` and `on`, the outcome of every join with `onMissing` and `strict` and on the row under a
+name (`outcomeAs`), chains across services by remote continuation, one alias across the targets of
+a union (`byTarget`), and `POST /oxql/explain` as the one "all information about this query"
 endpoint, on by default and never executing. Explain's answer changed shape; see *Upgrading from
 contract 1*.
 
@@ -251,7 +252,7 @@ caller's stages; a timeout or an unreachable owner yields `null` under the alias
 with an HTTP error or was not reached at all); a semi-join whose owner does not answer is 422
 `RESOLVE_UNAVAILABLE`. Each join's outcome (`resolved`, `ambiguous`, `reference_null`, `excluded`,
 `not_applicable`, `not_found`, `invalid_key`, `owner_unanswered`) is reported by `onMissing` and
-refused under `strict`. The details: [`oxql-semantics.md`](src/docs/oxql-semantics.md#chains-across-services)
+refused under `strict`; a resolve that names it (`outcomeAs`) carries it on every row. The details: [`oxql-semantics.md`](src/docs/oxql-semantics.md#chains-across-services)
 and [`oxql-operations.md`](src/docs/oxql-operations.md#keyed-fetch-and-remote-continuation).
 
 ## Addon definitions

@@ -264,12 +264,13 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
 | `parentAs` | an alias | none | for item targets: the row owning the item, as `{ "entity": "<entity id>", <members> }`: kept whole, the owner's key and display members; under a projection that names paths below it (`"sourceParent.shipmentNumber": 1`), `entity` and those paths. On a reference with an entity target: `RESOLVE_PARENT_NOT_ITEM`; equal to `as`: `ALIAS_COLLISION` |
 | `onMissing` | `"null"`, `"report"`, `"refuse"` | `"null"`, `"refuse"` under `strict` | what a reference that resolves to nothing does: stay `null` silently, stay `null` with a `RESOLVE_MISSING` diagnostic, or refuse (422) |
 | `forTarget` | an entity id | none | only on a continued stage (see *Continued stages*); elsewhere `OPTION_NOT_APPLICABLE` |
+| `byTarget` | `{ "<entity id>": "<path>" \| { "path": …, "elements": … }, … }` | none | in place of `path`, on a continued stage: one path per target of the alias it continues under, all filling the one `as` (see *The union join*) |
 
 There is no `parentSelect`: the owning row shows what the projection names under `parentAs`
 (`UNKNOWN_STAGE_MEMBER` when written). The paths under an alias are flat; on a reference with several
 targets a path some target lacks (in `select`, or projected under the alias or its `parentAs`) is
 dropped for that target (note `SELECT_PATH_NOT_ON_TARGET`), its member is absent on that target's
-rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the five
+rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the six
 members with `LEGACY_STAGE_UNSUPPORTED`.
 
 **The collection guard.** A `path` under a collection that is not unwound names one key per element.
@@ -335,6 +336,60 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
   `UNBOUND_VARIABLE` here. The same holds for the `filter` of every remote resolve.
 - An owner on an engine older than 2.1 (read from its health) is refused before anything is sent:
   422 `OWNER_NOT_CAPABLE`. Contract 1 refuses continued stages with `NOT_CONTINUABLE`.
+
+### The union join
+
+When the alias a stage continues under has several targets (a source line that is a shipment's or a
+tour's), the next record often lies at a different path per target. `forTarget` writes that as one
+stage and one alias per target. `byTarget` writes it as **one stage and one alias**: a path per
+target, each a branch.
+
+```jsonc
+{ "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent" } },
+{ "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "transport.shipment", "elements": "first" } },
+{ "resolve": { "as": "vehicle", "onMissing": "report",
+               "byTarget": { "transport.shipment": "deliveringTour.resource.id",
+                             "transport.tour":     "sourceParent.resource.id" } } },
+{ "project": { "number": 1, "vehicle.matchCode": 1 } }
+```
+
+- A branch is a path, or `{ "path": …, "elements": "first" | "all" }` where the path crosses a
+  collection that is not unwound. `as`, `select`, `filter`, `target` and `onMissing` are the
+  stage's and apply to every branch. `path`, `elements`, `forTarget` and `parentAs` beside
+  `byTarget` are `OPTION_NOT_APPLICABLE` (`params.reason` `withPath`, `withElements`,
+  `withForTarget`, `withParentAs`); a `byTarget` that is not an object of such branches is
+  `UNKNOWN_STAGE_MEMBER`.
+- **At least two branches.** One branch is the plain form and is refused naming it:
+  `OPTION_NOT_APPLICABLE`, `params { option: "byTarget", reason: "singleBranch", target, form:
+  "forTarget" }`; write `path` with `forTarget`. Both forms stay: `forTarget` says "only for this
+  target", `byTarget` "one alias across these targets".
+- **The keys** are targets of the alias the branches continue under (R, the keyed or remote alias,
+  or its `parentAs`). A key that is not one is `OPTION_NOT_APPLICABLE` (`reason: "notATarget"`,
+  `params.targets` lists them); a key written twice `reason: "duplicateTarget"`.
+- **Where a branch may start**: at R, at R's `parentAs`, or at an alias continued under them that
+  exists on the branch's target (`deliveringTour` above, continued for shipments). A branch that
+  starts at an alias of another target is refused (`reason: "otherBranch"`: "… belongs to the rows
+  of 'transport.shipment'"); branches under two different keyed aliases `reason: "anchors"`; a
+  branch on this host's own row `reason: "notContinued"`.
+- **One shape.** Every branch yields one record per row, or every branch an array (`elements:
+  "all"`). Mixing them is `UNION_CARDINALITY_MISMATCH`, whose message and `params.branch` name the
+  branch to change (`params { alias, branch, elements, expected: "one" | "all" }`).
+- **Rows.** The alias holds what the branch of the row's target resolved. A row resolved to a
+  target without a branch has `null` there (outcome `not_applicable`, no data loss); a row whose R
+  is `null` has `null` (`reference_null`). Which branch answered is `parentAs.entity` of R.
+- **Paths under the alias are flat**, as under any union: a path one branch does not reach (in
+  `select`, or projected under the alias) is dropped for that branch (`SELECT_PATH_NOT_ON_TARGET`
+  with `params.branch`) and absent on its rows; only a path no branch reaches is `UNKNOWN_PATH`.
+- **Like any continued alias** it is projected and continued (a stage under it goes to the owners
+  of the targets that have a branch), never sorted or filtered here (`RESOLVE_NOT_SORTABLE`,
+  `RESOLVE_NOT_FILTERABLE`); under `elements: "all"` nothing continues (`NOT_CONTINUABLE`). The
+  stage counts once toward `MaxContinuedStages` and adds no owner call: each branch rides in the
+  query its target's owner is sent anyway, as the ordinary resolve a `forTarget` stage sends.
+- **Under an alias a continued stage added**, the keys are that alias's targets, which only its
+  owner knows: when the branches all start at that one alias and the keys are not targets of R,
+  the stage travels as written and that owner checks and splits it.
+- An owner that cannot bind a branch refuses it as it refuses any continued stage; the error
+  comes back at this stage with the branch's path and `params.owner.target` naming the branch.
 
 ## Stage: `unwind`
 
@@ -574,7 +629,7 @@ carries no 'X-OxQL-Contract: 2' header." The codes are unchanged.
 
 ### Error codes
 
-The closed list, 71 codes (2.1 added the eleven marked †):
+The closed list, 72 codes (2.1 added the twelve marked †):
 
 | area | codes |
 |---|---|
@@ -583,7 +638,7 @@ The closed list, 71 codes (2.1 added the eleven marked †):
 | path | `INVALID_PATH`, `UNKNOWN_PATH`, `NOT_STORED`, `NOT_FILTERABLE`, `NOT_SORTABLE`, `NOT_A_COLLECTION`, `UNWIND_ORDER`, `ALIAS_COLLISION`, `INVALID_ALIAS` |
 | operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE` (also a stage option where it does not apply), `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE`, `UNKNOWN_VARIANT`† (`is`) |
-| stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `FLATTEN_NOT_RECURSIVE`†, `LOOKUP_NOT_DECLARED`, `LOOKUP_ON_NOT_ENTITY`†, `NOT_CONTINUABLE`†, `RESOLVE_NOT_DECLARED`, `RESOLVE_ON_COLLECTION`†, `RESOLVE_TARGET_NOT_DECLARED`†, `RESOLVE_PARENT_NOT_ITEM`†, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
+| stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `FLATTEN_NOT_RECURSIVE`†, `LOOKUP_NOT_DECLARED`, `LOOKUP_ON_NOT_ENTITY`†, `NOT_CONTINUABLE`†, `UNION_CARDINALITY_MISMATCH`† (`byTarget`), `RESOLVE_NOT_DECLARED`, `RESOLVE_ON_COLLECTION`†, `RESOLVE_TARGET_NOT_DECLARED`†, `RESOLVE_PARENT_NOT_ITEM`†, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
 | limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
 | cursor | `CURSOR_INVALID` |
 | access | `ACCESS_DENIED` (403) |

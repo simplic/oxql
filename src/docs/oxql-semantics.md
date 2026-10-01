@@ -473,7 +473,7 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
 | `ambiguous` | as resolved, but an item key or a non-key field matched more than one record | the first by target order, then key | **yes** |
 | `reference_null` | the reference is `null` or absent; an earlier hop was `null`; `elements` met no keyed element | `null` | no |
 | `excluded` | no case matches the stored value (a tariff reference among shipment references), `target` narrowed the case away, or the target fails `filter` | `null` | no |
-| `not_applicable` | a `forTarget` stage on a row resolved to another target | `null` | no |
+| `not_applicable` | a `forTarget` stage on a row resolved to another target; a union join (`byTarget`) on a row resolved to a target it has no branch for | `null` | no |
 | `not_found` | the key selects a case and target and no record exists in any target of the case | `null` | **yes** |
 | `invalid_key` | a key conversion case whose value does not parse | `null` | **yes** |
 | `owner_unanswered` | the owner timed out, was unreachable, cut its answer, or the key was over the key budget | `null` | **yes** |
@@ -561,6 +561,17 @@ Nothing else changes compared with a plain remote resolve:
   without `forTarget` goes to every target and must bind on each; with `forTarget` it goes only to
   that target's owner query, and on rows resolved to another target its alias is `null`
   (`not_applicable`).
+- **The union join.** A `resolve` with `byTarget` is one continued stage with a branch per target and
+  one alias. The origin splits it: each target's owner query carries that target's branch as an
+  ordinary resolve under the alias, exactly what a `forTarget` stage sends, and a target without a
+  branch is not sent the stage. So it costs what the stages it replaces cost and less of the budget:
+  no call beyond the one owner query per target and key chunk, one stage toward
+  `MaxContinuedStages`. The origin lifts the alias from whichever target's row answered. What a
+  branch reaches is its owner's to say: the alias's type is the union of what the branches reach, a
+  path under it that one branch does not reach is dropped for that branch and asked again (the
+  drop-and-ask-again of a union target, at most twice, kept per target and branch for the cache's
+  lifetime), and only a path no branch reaches refuses. A union join under an alias a continued stage
+  added is sent to that alias's owner as written, which splits it the same way.
 - **Owner version.** Continued stages and grouped owner queries need the owner on 2.1. An owner whose
   health reports an older engine is refused before anything is sent (`OWNER_NOT_CAPABLE`); an owner
   not yet probed is sent the query, and an old one refuses the unknown members inside

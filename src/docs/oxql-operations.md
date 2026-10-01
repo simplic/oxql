@@ -87,6 +87,7 @@ the listed status.
 | `INVALID_SORT_DIRECTION` | 400 | a direction other than `asc`/`desc`; the object form without `direction`; the object form under contract 1 |
 | `LOOKUP_NOT_DECLARED` | 400 | the child's `path` declares no reference to the current entity (or to the entity of the `on` alias), or the referenced key is not stored |
 | `LOOKUP_ON_NOT_ENTITY` | 400 | a lookup's `on` names a lookup array, an unwound element, a scalar or a group output |
+| `UNION_CARDINALITY_MISMATCH` | 400 | the branches of a union join (`byTarget`) do not yield one shape: one resolves one record per row and another every element (`elements: "all"`); `params` `alias`, `branch` (the branch to change), `elements`, `expected` (`one` or `all`) |
 | `NOT_CONTINUABLE` | 400 | on an alias that comes from an owner after the page, a stage other than a `resolve` or `lookup` (an `unwind`, a `group` key); a continued stage under an `elements: "all"` alias or under a remote `lookup` without `first`; any continued stage under contract 1 |
 | `RESOLVE_NOT_DECLARED` | 400 | the `resolve` path declares no reference (the message names its kind), the target key or items are not stored, or a case tests a sibling that is not stored |
 | `RESOLVE_ON_COLLECTION` | 400 | a resolve path under a collection that is not unwound, without `elements` |
@@ -426,7 +427,13 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   bound), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
   it is asked at, whether its owner query is `grouped`, and the stages `continued` there or
   `notApplicable` to its rows), `continuedFrom` (`{ alias, target }` of a stage continued at an
-  owner), `outcome` (`{ values }`: the data-loss outcomes the join may have; no row member carries
+  owner; for a union join the alias of the keyed stage and no target), `branches` (only on the
+  alias of a union join, `byTarget`: per branch in the order written `{ anchorTarget, path,
+  elements?, entities, heldBy, status, types }`: the target of the alias it continues under, its
+  path, what it reaches as that target's owner answered (`entities`, and `types` as entries of
+  `types`), the service that runs it, and `status` `ok`, `error` (its owner refused it; the error
+  names it in `params.owner.target`) or `unanswered`; the alias's own `type` is the union of what
+  the branches reach), `outcome` (`{ values }`: the data-loss outcomes the join may have; no row member carries
   the outcome until a stage names one), `droppedAt` (the stage whose projection
   took it out of the row) and `becomes` (a later stage holds it differently: an unwound lookup
   alias). A join's alias (a resolve's or lookup's `as`, a `parentAs`, an alias a continued stage adds)
@@ -555,7 +562,9 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check), which then
   checks that target again without the paths it lacks, as a run asks again, so the stages continued
   at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics,
-  from the cache as well. `MISSING_POLICY` names only the outcomes the stage can have: an inline
+  from the cache as well. Under a union join's alias the same note says what one branch does not
+  reach: at the union join's stage, with `params { alias, branch, parent: false }` in place of
+  `target`. `MISSING_POLICY` names only the outcomes the stage can have: an inline
   resolve has no `owner_unanswered` or `invalid_key`, and `ambiguous` only onto a target field that
   is not the key.
 - **Errors** carry `params` where a caller acts on them. A path that does not resolve says why in

@@ -44,7 +44,7 @@ public interface IOxQLQueryService
     /// Explains as <see cref="ExplainAsync(ExplainRequest, CancellationToken)"/> does; with
     /// <paramref name="internalCall"/> the request is explained as an internal call
     /// (<c>RequestContext.Internal</c>), so the owner queries an origin forwards for its remote check,
-    /// which carry <c>keyedBy</c>, bind. The base package's internal explain route
+    /// which carry <c>keyedBy</c>, bind, and the request may carry what is left of its origin's explain (<c>budget</c>). The base package's internal explain route
     /// (<c>POST internal/oxql/explain</c>, DESIGN §4.1) calls it with <c>true</c>; the public route never does.
     /// The default serves the public form and refuses an internal call.
     /// </summary>

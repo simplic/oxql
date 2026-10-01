@@ -113,6 +113,11 @@ public sealed class FleetHost : IAsyncDisposable
     private static IEnumerable<KeyValuePair<string, string?>> Defaults(LabFleet fleet) =>
     [
         new("OxQL:Cursor:SigningKey", fleet.SigningKey),
+        // The suites explain in bursts as one user; the limits of explain have tests of their own.
+        new("OxQL:Explain:RatePerMinute", "600000"),
+        new("OxQL:Explain:RateBurst", "100000"),
+        new("OxQL:Explain:MaxConcurrentPerUser", "1000"),
+        new("OxQL:Explain:MaxConcurrentPerHost", "1000"),
     ];
 
     /// <summary>A client for one organisation (organisation A when null) under the given contract; an anonymous client sends no identity.</summary>

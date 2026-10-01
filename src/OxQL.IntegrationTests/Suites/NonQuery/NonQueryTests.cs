@@ -25,7 +25,7 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath"];
+    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "unwind.keepPath"];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
 
@@ -131,7 +131,7 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y8_the_limits_member_publishes_all_thirty_two_limits_with_the_values_the_host_runs_under()
+    public async Task Y8_the_limits_member_publishes_every_limit_with_the_values_the_host_runs_under()
     {
         var defaults = new LimitOptions();
         var options = new OxQLOptions();
@@ -148,13 +148,19 @@ public class NonQueryTests
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
             ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
-            ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["maxDescribeChildren"] = options.Explain.MaxDescribeChildren,
-            ["maxDescribeRequests"] = options.Explain.MaxDescribeRequests,
+            ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["explainTimeoutMs"] = options.Explain.TimeoutMs,
             // the explain protection bounds, refused before anything is bound
             ["explainMaxRequestBytes"] = Math.Min(defaults.MaxRequestBytes, options.Explain.MaxRequestBytes), ["explainMaxStages"] = options.Explain.MaxStages,
             ["explainMaxCatalogEntries"] = options.Explain.MaxCatalogEntries, ["explainMaxShapeDepth"] = options.Explain.MaxShapeDepth,
+            // the size of an answer and the cost of one explain
+            ["explainDefaultShapeDepth"] = options.Explain.DefaultShapeDepth, ["explainMaxTypeMembers"] = options.Explain.MaxTypeMembers,
+            ["explainMaxAnswerBytes"] = options.Explain.MaxAnswerBytes, ["explainMaxOwnerServices"] = options.Explain.MaxOwnerServices,
+            ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls,
+            // the rate and concurrency of explain, which the fleet's hosts raise for the suites
+            ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
+            ["explainMaxConcurrentPerHost"] = 1_000, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
         };
-        expected.Should().HaveCount(32);
+        expected.Should().HaveCount(41);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

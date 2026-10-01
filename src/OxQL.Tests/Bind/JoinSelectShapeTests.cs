@@ -75,17 +75,18 @@ public class JoinSelectShapeTests
     }
 
     [Fact]
-    public async Task Describe_offers_under_a_join_alias_only_what_its_select_fetched()
+    public async Task Under_a_join_alias_the_row_holds_only_what_its_select_fetched()
     {
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options());
-        var request = JsonSerializer.Deserialize<ExplainRequest>($$"""
-            { "query": { "entityType": "{{Invoice}}", "pipeline": [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } }] },
-              "describe": [{ "id": "c", "at": 1, "prefix": "c", "usage": "match" }] }
-            """, OxQLJson.Wire)!;
+        var request = BindHost.Request(Invoice, """[{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } }]""");
 
         var result = (await engine.ExplainAsync(request, BindHost.Context())).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-        var children = result.Describe.Single()!["children"]!.AsArray().Select(child => child!["path"]!.GetValue<string>()).ToList();
+        var type = OxQL.Tests.Execute.ExplainAnswer.RootType(result, 0, "c")!;
+        var inTheRow = OxQL.Tests.Execute.ExplainAnswer.Paths(result, type)
+            .Where(path => OxQL.Tests.Execute.ExplainAnswer.FlagsAt(result, 0, "c", path) is not null)
+            .ToList();
 
-        children.Should().BeEquivalentTo(["c.id", "c.name"]);
+        type.Should().Be("t:rc.customer");
+        inTheRow.Should().BeEquivalentTo(["id", "name"]);
     }
 }

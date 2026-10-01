@@ -361,16 +361,16 @@ public class RemoteLookupTests
     {
         var client = new FakeRemoteClient();
         var engine = Engine(client);
-        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, $"[{Shipments}]"), BindHost.Context());
+        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, $"[{Shipments}]").Planned(), BindHost.Context());
         var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        var step = result.Steps.Single();
-        step.Kind.Should().Be("lookup");
-        step.Executor.Should().Be("keyed-remote");
-        step.Phase.Should().Be("afterPage");
-        step.Reference.Should().BeNull();
-        step.Owner!["service"]!.GetValue<string>().Should().Be("tr");
-        step.Owner["query"]!["keyedBy"]!["references"]!.GetValue<string>().Should().Be(Invoice);
+        var stage = result.Stages.Single();
+        stage.Kind.Should().Be("lookup");
+        stage.Placement!.Executor.Should().Be("keyed-remote");
+        stage.Placement.Phase.Should().Be("afterPage");
+        result.Alias(stage.Creates.First()).ContainsKey("reference").Should().BeFalse("a lookup follows no reference of this host");
+        result.Owner(0)!["service"]!.GetValue<string>().Should().Be("tr");
+        result.Query(0)["keyedBy"]!["references"]!.GetValue<string>().Should().Be(Invoice);
 
         var bounds = result.Notes.Single(note => note.Code == Notes.RemoteLookup);
         bounds.Params!["perKey"].Should().Be(101);

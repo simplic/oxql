@@ -10,14 +10,12 @@ public interface IEngineFeatures
 /// <summary>The capability names, in the fixed spelling of the design, and the contract number.</summary>
 public static class EngineCapabilities
 {
-    /// <summary>The contract this engine speaks.</summary>
-    public const int Contract = 2;
-
     /// <summary>
-    /// Every language feature of OxQL 2.1 and the explain envelope (DESIGN §3.11, §4): a caller gates
-    /// on it before sending a 2.1 construct or reading a 2.1 explain answer.
+    /// The contract this engine speaks. Contract 2 is the marker of this package: every engine that
+    /// reports it has the whole contract 2 language and the explain answer (DESIGN §3.11, §4), so a
+    /// caller gates on <c>engine.contract</c>, never on a capability per feature.
     /// </summary>
-    public const string Oxql21 = "oxql.2.1";
+    public const int Contract = 2;
 
     /// <summary>Chains across services by remote continuation (DESIGN §3.5.3); only with a remote query client.</summary>
     public const string ResolveChain = "resolve.chain";
@@ -37,7 +35,7 @@ public static class EngineCapabilities
     /// <summary>The capabilities of a host with the given features and options.</summary>
     public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain)
     {
-        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any", Oxql21, UnwindKeepPath };
+        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any", UnwindKeepPath };
 
         if (remoteResolve)
         {

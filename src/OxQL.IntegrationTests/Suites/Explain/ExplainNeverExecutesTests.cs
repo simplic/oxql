@@ -63,12 +63,13 @@ public class ExplainNeverExecutesTests
     public async Task X01_explain_of_a_lookup_with_a_count_sends_no_command_and_the_same_query_executed_sends_the_aggregate()
     {
         var (engine, direct, commands) = await MonitoredAsync();
-        var request = EngineDirect.Request(Corpus.Vehicle, LookupAndCount);
+        var request = new ExplainRequest { Query = EngineDirect.Request(Corpus.Vehicle, LookupAndCount), Include = [ExplainRequest.IncludeShape, ExplainRequest.IncludeNotes, ExplainRequest.IncludePlan] };
 
         var answer = Answer(await engine.ExplainAsync(request, direct.Context()));
 
         answer.Valid.Should().BeTrue(string.Join("; ", answer.Errors.Select(error => error.Code + ": " + error.Message)));
-        answer.Stages.Should().Contain(stage => stage.AsObject().ContainsKey("$lookup"));
+        answer.Plan!.Stages.Should().Contain(stage => stage.AsObject().ContainsKey("$lookup"));
+        answer.Types.Should().NotBeNull("the shape is answered from the model alone");
         answer.Advisory.Should().BeNull("the advisory is opt-in");
         commands.Should().BeEmpty("explain without include reads nothing from the database");
 
@@ -104,8 +105,8 @@ public class ExplainNeverExecutesTests
 
         answer.Valid.Should().BeFalse();
         answer.Errors.Select(error => error.Code).Should().Equal("UNKNOWN_PATH");
-        answer.Steps.Select(step => step.Status).Should().Equal("error", "ok");
-        answer.Stages.Should().BeNull();
+        answer.Stages.Select(stage => stage.Status).Should().Equal("error", "ok");
+        answer.Plan.Should().BeNull();
         commands.Should().BeEmpty("a query that does not bind is not compiled, so not even its indexes are read");
     }
 }

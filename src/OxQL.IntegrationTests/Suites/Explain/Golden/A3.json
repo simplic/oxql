@@ -19,11 +19,7 @@
         "resolve": {
           "path": "invoiceRecipient.address.id",
           "as": "recipientContact",
-          "select": [
-            "primaryEmailAddress.email",
-            "primaryPhoneNumber.number",
-            "address.companyName"
-          ]
+          "select": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"]
         }
       },
       {
@@ -40,171 +36,112 @@
     "valid": true,
     "contract": 2,
     "engine": {
-      "capabilities": [
-        "batch",
-        "group.page",
-        "page.offset",
-        "any",
-        "oxql.2.1",
-        "unwind.keepPath",
-        "resolve.remote",
-        "semiJoin",
-        "resolve.chain",
-        "lookup.remote",
-        "explain",
-        "compat.v1"
-      ]
+      "contract": 2,
+      "capabilities": ["batch","group.page","page.offset","any","unwind.keepPath","resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": ["directory"],
+      "complete": true
     },
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {
-        "code": "OWNER_BINDS",
-        "message": "'recipientContact' comes from another service; its owner binds the select, the filter and every path under the alias.",
-        "stage": 1,
-        "path": "invoiceRecipient.address.id",
-        "params": {
-          "alias": "recipientContact",
-          "services": [
-            "directory"
-          ],
-          "forTarget": null
-        }
-      },
-      {
-        "code": "MISSING_POLICY",
-        "message": "A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).",
-        "stage": 1,
-        "path": "invoiceRecipient.address.id",
-        "params": {
-          "alias": "recipientContact",
-          "onMissing": "refuse",
-          "strict": true,
-          "dataLoss": [
-            "ambiguous",
-            "not_found",
-            "invalid_key",
-            "owner_unanswered"
-          ]
-        }
-      },
-      {
-        "code": "JOIN_AFTER_PAGE",
-        "message": "'recipientContact' is joined after the page is taken, for the page's rows only.",
-        "stage": 1,
-        "path": "recipientContact",
-        "params": {
-          "alias": "recipientContact",
-          "kind": "resolve"
-        }
-      },
-      {
-        "code": "REPORT_PAGE",
-        "message": "A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.",
-        "params": {
-          "limit": 100,
-          "max": 5000
-        }
-      }
+      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null}},
+      {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
+      {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"}},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000}}
     ],
-    "steps": [
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "projection": null,
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "flags": {}
+      }
+    },
+    "stages": [
       {
         "index": 0,
         "kind": "match",
         "status": "ok",
-        "executor": null,
-        "phase": null,
-        "owner": null,
+        "placement": null,
+        "reads": [],
         "creates": [],
-        "shapeAfter": {
+        "shape": {
           "paging": "cursor",
           "grouped": false,
           "unwound": [],
-          "projection": null
+          "projection": null,
+          "roots": {
+            "": "t:ledger.transaction"
+          },
+          "flags": {}
         }
       },
       {
         "index": 1,
         "kind": "resolve",
         "status": "ok",
-        "executor": "keyed-remote",
-        "phase": "afterPage",
-        "owner": {
-          "service": "directory",
-          "route": {
-            "apiName": "directory-api",
-            "apiVersion": null
-          },
-          "query": {
-            "entityType": "directory.contact",
-            "pipeline": [
-              {
-                "match": {
-                  "id": {
-                    "in": [
-                      "…"
-                    ]
-                  }
-                }
-              },
-              {
-                "project": {
-                  "primaryEmailAddress.email": 1,
-                  "primaryPhoneNumber.number": 1,
-                  "address.companyName": 1,
-                  "id": 1
-                }
-              },
-              {
-                "page": {
-                  "limit": "…"
-                }
-              }
-            ]
-          },
-          "targets": [
-            {
-              "target": "directory.contact",
-              "service": "directory",
-              "remote": true,
-              "grouped": false,
-              "route": {
-                "apiName": "directory-api",
-                "apiVersion": null
-              },
-              "query": {
-                "entityType": "directory.contact",
-                "pipeline": [
-                  {
-                    "match": {
-                      "id": {
-                        "in": [
-                          "…"
-                        ]
-                      }
-                    }
-                  },
-                  {
-                    "project": {
-                      "primaryEmailAddress.email": 1,
-                      "primaryPhoneNumber.number": 1,
-                      "address.companyName": 1,
-                      "id": 1
-                    }
-                  },
-                  {
-                    "page": {
-                      "limit": "…"
-                    }
-                  }
-                ]
-              },
-              "continued": [],
-              "notApplicable": []
-            }
-          ]
+        "placement": {
+          "executor": "keyed-remote",
+          "phase": "afterPage",
+          "host": "directory",
+          "owner": 0
         },
+        "reads": [],
+        "creates": ["recipientContact"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": null,
+          "roots": {
+            "": "t:ledger.transaction",
+            "recipientContact": "t:directory.contact"
+          },
+          "flags": {
+            "recipientContact": "o:1"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "project",
+        "status": "ok",
+        "placement": null,
+        "reads": [],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": ["id","invoiceRecipient","number","recipientContact"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "recipientContact": "t:directory.contact"
+          },
+          "flags": {
+            "": "o:2",
+            "recipientContact": "o:1"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "recipientContact": {
+        "stage": 1,
+        "node": "remote",
+        "entities": ["directory.contact"],
+        "heldBy": "directory",
+        "complete": true,
+        "lookupOn": true,
         "reference": {
+          "path": "invoiceRecipient.address.id",
           "cases": [
             {
               "when": null,
@@ -222,239 +159,489 @@
           "keyAs": null,
           "elements": null
         },
-        "creates": [
+        "outcome": {
+          "as": null,
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "targets": [
           {
-            "alias": "recipientContact",
-            "node": "remote",
-            "entities": [
-              "directory.contact"
-            ]
+            "target": "directory.contact",
+            "service": "directory",
+            "remote": true,
+            "grouped": false,
+            "owner": 0,
+            "continued": [],
+            "notApplicable": [],
+            "type": "t:directory.contact"
           }
         ],
-        "shapeAfter": {
-          "paging": "cursor",
-          "grouped": false,
-          "unwound": [],
-          "projection": null
+        "type": "t:directory.contact"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "onlyFor": [
+          ["ArticleTransactionItem"],
+          ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"],
+          ["BasicDiscountSurchargeOperationItem","CashDiscountOperationItem"],
+          ["BillingLineTransactionItem"],
+          ["GeneralLedgerAccountTransactionItem"],
+          ["GroupTransactionItem"]
+        ],
+        "members": [
+          ["id","guid",0,"588c3"],
+          ["organizationId","guid",0,"588c3"],
+          ["isDeleted","bool",0,"588c3"],
+          ["number","string",1,"d9fff"],
+          ["reference","string",1,"d9fff"],
+          ["type","object",1,"40800"],
+          ["date","dateTime",1,"588ff"],
+          ["deliveryDate","dateTime",1,"588ff"],
+          ["termsOfPayment","object",1,"40800"],
+          ["paymentMethod","string",1,"d9fff"],
+          ["currency","object",1,"40800"],
+          ["description","string",1,"d9fff"],
+          ["financialPartner","object",1,"40800"],
+          ["deliveryAddress","object",1,"40800"],
+          ["invoiceRecipient","object",1,"40800"],
+          ["payer","object",1,"40800"],
+          ["creator","object",1,"40800"],
+          ["responsible","object",1,"40800"],
+          ["representative","object",1,"40800"],
+          ["items","array",0,"66800",{"leafKind":"object","variants":["TransactionItem","ArticleTransactionItem","BasicDiscountSurchargeOperationItem","BillingLineTransactionItem","CashDiscountOperationItem","GeneralLedgerAccountTransactionItem","GroupTransactionItem","TextTransactionItem"],"flatten":"items","flattenMembers":["items","assignedTransactionItems"]}],
+          ["convertState","enum",0,"588ff",{"enum":[{"name":"NotConverted","value":0},{"name":"PartiallyConverted","value":1},{"name":"QuantitiesConverted","value":2},{"name":"Converted","value":3}]}],
+          ["alternativePaymentDeadline","dateTime",1,"588ff"],
+          ["balance","decimal",1,"588ff"],
+          ["barcode","string",1,"d9fff"],
+          ["billToText","string",1,"d9fff"],
+          ["cashDiscountPercentValue","decimal",1,"588ff"],
+          ["cashDiscountTotal","decimal",1,"588ff"],
+          ["document","string",1,"d9fff"],
+          ["attachedDocuments","array",0,"e1fff",{"leafKind":"string"}],
+          ["financialAccountingPeriod","string",1,"d9fff"],
+          ["period","string",1,"d9fff"],
+          ["states","array",0,"e1fff",{"leafKind":"string"}],
+          ["manualVat","decimal",1,"588ff"],
+          ["notes","string",1,"d9fff"],
+          ["dueDate","dateTime",1,"588ff"],
+          ["referenceNumber","string",1,"d9fff"],
+          ["taxGroup","string",1,"d9fff"],
+          ["totalPrice","decimal",0,"588ff"],
+          ["totalPriceGross","decimal",0,"588ff"],
+          ["totalPriceNet","decimal",0,"588ff"],
+          ["totalPriceTax","decimal",0,"588ff"],
+          ["transactionYear","int",0,"588ff"],
+          ["updateUser","object",1,"40800"],
+          ["signedTotalPriceNet","decimal",0,"588ff"],
+          ["signedTotalPriceGross","decimal",0,"588ff"],
+          ["signedTotalPrice","decimal",0,"588ff"],
+          ["signedTotalPriceTax","decimal",0,"588ff"],
+          ["taxKeyTotalPrices","array",0,"64800",{"leafKind":"object"}],
+          ["sign","int",0,"588ff"],
+          ["operationItemCombinationMode","enum",0,"588ff",{"enum":[{"name":"DeepestFirst","value":0}]}],
+          ["isGross","bool",0,"588c3"],
+          ["financialExportDisabled","bool",0,"588c3"],
+          ["validationResult","object",1,"40800"],
+          ["defaultCostCenters","array",0,"64800",{"leafKind":"object"}],
+          ["defaultCostObjects","array",0,"64800",{"leafKind":"object"}],
+          ["cashDiscountDate","dateTime",1,"588ff"],
+          ["createDateTime","dateTime",0,"588ff"],
+          ["updateDateTime","dateTime",0,"588ff"],
+          ["createUserId","guid",0,"1588c3",null,null,{"simple":true,"cases":[{"targets":[{"entity":"staff.employee","field":"userId","remote":true}]}]}],
+          ["updateUserId","guid",1,"588c3"],
+          ["createUserName","string",1,"d9fff"],
+          ["updateUserName","string",1,"d9fff"],
+          ["type.id","guid",0,"588c3"],
+          ["type.name","string",1,"d9fff"],
+          ["type.number","int",0,"588ff"],
+          ["type.reportName","string",1,"d9fff"],
+          ["type.shortName","string",1,"d9fff"],
+          ["type.functions","array",0,"e1fff",{"leafKind":"string"}],
+          ["type.subtype","string",1,"d9fff"],
+          ["termsOfPayment.id","guid",0,"588c3"],
+          ["termsOfPayment.number","int",0,"588ff"],
+          ["termsOfPayment.name","string",1,"d9fff"],
+          ["termsOfPayment.cashDiscount","decimal",0,"588ff"],
+          ["termsOfPayment.cashDiscountDays","int",0,"588ff"],
+          ["termsOfPayment.paymentDeadlineDays","int",0,"588ff"],
+          ["termsOfPayment.formattedText","string",1,"d9fff"],
+          ["currency.id","guid",0,"588c3"],
+          ["currency.organizationId","guid",0,"588c3"],
+          ["currency.isDeleted","bool",0,"588c3"],
+          ["currency.number","int",0,"588ff"],
+          ["currency.name","string",1,"d9fff"],
+          ["currency.shortName","string",1,"d9fff"],
+          ["currency.symbol","string",1,"d9fff"],
+          ["currency.createDateTime","dateTime",0,"588ff"],
+          ["currency.updateDateTime","dateTime",0,"588ff"],
+          ["currency.createUserId","guid",0,"588c3"],
+          ["currency.updateUserId","guid",1,"588c3"],
+          ["currency.createUserName","string",1,"d9fff"],
+          ["currency.updateUserName","string",1,"d9fff"],
+          ["financialPartner.id","guid",0,"588c3"],
+          ["financialPartner.accountNumber","string",1,"d9fff"],
+          ["financialPartner.companyName","string",1,"d9fff"],
+          ["financialPartner.firstName","string",1,"d9fff"],
+          ["financialPartner.lastName","string",1,"d9fff"],
+          ["financialPartner.taxGroupId","guid",1,"588c3"],
+          ["financialPartner.vatId","string",1,"d9fff"],
+          ["financialPartner.address","object",1,"40800",{"children":true}],
+          ["deliveryAddress.id","guid",0,"588c3"],
+          ["deliveryAddress.accountNumber","string",1,"d9fff"],
+          ["deliveryAddress.companyName","string",1,"d9fff"],
+          ["deliveryAddress.firstName","string",1,"d9fff"],
+          ["deliveryAddress.lastName","string",1,"d9fff"],
+          ["deliveryAddress.taxGroupId","guid",1,"588c3"],
+          ["deliveryAddress.vatId","string",1,"d9fff"],
+          ["deliveryAddress.address","object",1,"40800",{"children":true}],
+          ["invoiceRecipient.id","guid",0,"588c3"],
+          ["invoiceRecipient.accountNumber","string",1,"d9fff"],
+          ["invoiceRecipient.companyName","string",1,"d9fff"],
+          ["invoiceRecipient.firstName","string",1,"d9fff"],
+          ["invoiceRecipient.lastName","string",1,"d9fff"],
+          ["invoiceRecipient.taxGroupId","guid",1,"588c3"],
+          ["invoiceRecipient.vatId","string",1,"d9fff"],
+          ["invoiceRecipient.address","object",1,"40800",{"children":true}],
+          ["payer.id","guid",0,"588c3"],
+          ["payer.accountNumber","string",1,"d9fff"],
+          ["payer.companyName","string",1,"d9fff"],
+          ["payer.firstName","string",1,"d9fff"],
+          ["payer.lastName","string",1,"d9fff"],
+          ["payer.taxGroupId","guid",1,"588c3"],
+          ["payer.vatId","string",1,"d9fff"],
+          ["payer.address","object",1,"40800",{"children":true}],
+          ["creator.id","guid",0,"588c3"],
+          ["creator.accountNumber","string",1,"d9fff"],
+          ["creator.companyName","string",1,"d9fff"],
+          ["creator.firstName","string",1,"d9fff"],
+          ["creator.lastName","string",1,"d9fff"],
+          ["creator.taxGroupId","guid",1,"588c3"],
+          ["creator.vatId","string",1,"d9fff"],
+          ["creator.address","object",1,"40800",{"children":true}],
+          ["responsible.id","guid",0,"588c3"],
+          ["responsible.accountNumber","string",1,"d9fff"],
+          ["responsible.companyName","string",1,"d9fff"],
+          ["responsible.firstName","string",1,"d9fff"],
+          ["responsible.lastName","string",1,"d9fff"],
+          ["responsible.taxGroupId","guid",1,"588c3"],
+          ["responsible.vatId","string",1,"d9fff"],
+          ["responsible.address","object",1,"40800",{"children":true}],
+          ["representative.id","guid",0,"588c3"],
+          ["representative.accountNumber","string",1,"d9fff"],
+          ["representative.companyName","string",1,"d9fff"],
+          ["representative.firstName","string",1,"d9fff"],
+          ["representative.lastName","string",1,"d9fff"],
+          ["representative.taxGroupId","guid",1,"588c3"],
+          ["representative.vatId","string",1,"d9fff"],
+          ["representative.address","object",1,"40800",{"children":true}],
+          ["items.id","guid",0,"4408c3"],
+          ["items.type","object",1,"440800",{"children":true}],
+          ["items.bookedFromTransactionId","guid",1,"6408c3",null,null,{"simple":true,"cases":[{"targets":[{"entity":"ledger.transaction","field":"id"}]}]}],
+          ["items.transactionItemCollectionId","guid",1,"4408c3"],
+          ["items.sortNumber","int",0,"4408ff"],
+          ["items.deserializationType","string",1,"4c1fff"],
+          ["items.text","string",1,"4c1fff"],
+          ["items.articleId","guid",1,"4408c3",null,0],
+          ["items.inputPrice","decimal",1,"4408ff",null,1],
+          ["items.taxRate","object",1,"440800",{"children":true},1],
+          ["items.costCenters","array",1,"440800",{"leafKind":"object","children":true},1],
+          ["items.costObjects","array",1,"440800",{"leafKind":"object","children":true},1],
+          ["items.singlePrice","decimal",1,"4408ff",null,1],
+          ["items.totalPrice","decimal",1,"4408ff",null,1],
+          ["items.singlePriceNet","decimal",1,"4408ff",null,1],
+          ["items.totalPriceNet","decimal",1,"4408ff",null,1],
+          ["items.singlePriceGross","decimal",1,"4408ff",null,1],
+          ["items.totalPriceGross","decimal",1,"4408ff",null,1],
+          ["items.singlePriceVat","decimal",1,"4408ff",null,1],
+          ["items.totalPriceVat","decimal",1,"4408ff",null,1],
+          ["items.quantity","object",1,"440800",{"children":true},1],
+          ["items.deltaValue","decimal",1,"4408ff",null,2],
+          ["items.assignedTransactionItems","array",1,"440800",{"leafKind":"object","variants":["TransactionItem","ArticleTransactionItem","BasicDiscountSurchargeOperationItem","BillingLineTransactionItem","CashDiscountOperationItem","GeneralLedgerAccountTransactionItem","GroupTransactionItem","TextTransactionItem"],"flatten":"assignedTransactionItems","flattenMembers":["assignedTransactionItems","items"]},2],
+          ["items.valueOperator","enum",1,"4408ff",{"enum":[{"name":"Percentage","value":0},{"name":"Absolute","value":1}]},2],
+          ["items.amount","decimal",1,"4408ff",null,2],
+          ["items.billingLineId","guid",1,"6408c3",null,3,{"simple":true,"cases":[{"targets":[{"entity":"ledger.billing_line","field":"id"}]}]}],
+          ["items.priceUnit","object",1,"440800",{"children":true},3],
+          ["items.reference","string",1,"4c1fff",null,3],
+          ["items.references","array",1,"440800",{"leafKind":"object","children":true},3],
+          ["items.isManualBillingLine","bool",1,"4408c3",null,3],
+          ["items.generalLedgerAccount","object",1,"440800",{"children":true},4],
+          ["items.items","array",1,"440800",{"leafKind":"object","variants":["TransactionItem","ArticleTransactionItem","BasicDiscountSurchargeOperationItem","BillingLineTransactionItem","CashDiscountOperationItem","GeneralLedgerAccountTransactionItem","GroupTransactionItem","TextTransactionItem"],"flatten":"items","flattenMembers":["items","assignedTransactionItems"]},5],
+          ["updateUser.id","guid",0,"588c3"],
+          ["updateUser.name","string",1,"d9fff"],
+          ["taxKeyTotalPrices.taxKey","string",1,"4c1fff"],
+          ["taxKeyTotalPrices.totalPrice","decimal",0,"4408ff"],
+          ["validationResult.inputFieldValidationResults","dictionary",0,"40800"],
+          ["validationResult.errors","array",0,"e1fff",{"leafKind":"string"}],
+          ["validationResult.isValid","bool",0,"588c3"],
+          ["defaultCostCenters.id","guid",0,"4408c3"],
+          ["defaultCostCenters.percentage","decimal",0,"4408ff"],
+          ["defaultCostObjects.id","guid",0,"4408c3"],
+          ["defaultCostObjects.percentage","decimal",0,"4408ff"]
+        ]
+      },
+      "t:directory.contact": {
+        "entity": "directory.contact",
+        "members": [
+          ["id","guid",0,"588c3"],
+          ["organizationId","guid",0,"588c3"],
+          ["isDeleted","bool",0,"588c3"],
+          ["address","object",0,"40800"],
+          ["createDateTime","dateTime",0,"588ff"],
+          ["createUserId","guid",1,"588c3"],
+          ["createUserName","string",1,"d9fff"],
+          ["updateDateTime","dateTime",0,"588ff"],
+          ["updateUserId","guid",1,"588c3"],
+          ["updateUserName","string",1,"d9fff"],
+          ["functions","array",0,"e1fff",{"leafKind":"string"}],
+          ["matchCode","string",1,"d9fff"],
+          ["primaryEmailAddress","object",1,"40800"],
+          ["primaryPhoneNumber","object",1,"40800"],
+          ["emailAddresses","array",0,"64800",{"leafKind":"object"}],
+          ["phoneNumbers","array",0,"64800",{"leafKind":"object"}],
+          ["externalReference","string",1,"d9fff"],
+          ["addon","dictionary",1,"40800"],
+          ["address.firstName","string",1,"d9fff"],
+          ["address.lastName","string",1,"d9fff"],
+          ["address.companyName","string",1,"d9fff"],
+          ["address.street","string",1,"d9fff"],
+          ["address.houseNumber","string",1,"d9fff"],
+          ["address.zipcode","string",1,"d9fff"],
+          ["address.city","string",1,"d9fff"],
+          ["address.countryIso","string",1,"d9fff"],
+          ["address.country","string",1,"d9fff"],
+          ["address.latitude","double",0,"588ff"],
+          ["address.longitude","double",0,"588ff"],
+          ["address.matchCode","string",1,"d9fff"],
+          ["address.location","unknown",1,"40800"],
+          ["primaryEmailAddress.email","string",1,"d9fff"],
+          ["primaryEmailAddress.type","string",1,"d9fff"],
+          ["primaryPhoneNumber.number","string",1,"d9fff"],
+          ["primaryPhoneNumber.type","string",1,"d9fff"],
+          ["emailAddresses.email","string",1,"4c1fff"],
+          ["emailAddresses.type","string",1,"4c1fff"],
+          ["phoneNumbers.number","string",1,"4c1fff"],
+          ["phoneNumbers.type","string",1,"4c1fff"]
+        ]
+      }
+    },
+    "flagSets": {
+      "588c3": {
+        "operators": ["eq","neq","in","nin","exists"],
+        "sortable": true,
+        "groupable": true,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "d9fff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+        "sortable": true,
+        "groupable": true,
+        "unwindable": false,
+        "projectable": true,
+        "folds": true,
+        "underCollection": 0
+      },
+      "40800": {
+        "operators": ["exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "588ff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+        "sortable": true,
+        "groupable": true,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "66800": {
+        "operators": ["exists","is","any"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": true,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "e1fff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": true,
+        "projectable": true,
+        "folds": true,
+        "underCollection": 0
+      },
+      "64800": {
+        "operators": ["exists","any"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": true,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "1588c3": {
+        "operators": ["eq","neq","in","nin","exists"],
+        "sortable": true,
+        "groupable": true,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0,
+        "follow": "one"
+      },
+      "4408c3": {
+        "operators": ["eq","neq","in","nin","exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 1
+      },
+      "440800": {
+        "operators": ["exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 1
+      },
+      "6408c3": {
+        "operators": ["eq","neq","in","nin","exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 1,
+        "follow": "elements"
+      },
+      "4408ff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 1
+      },
+      "4c1fff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": true,
+        "underCollection": 1
+      },
+      "40000": {
+        "operators": [],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "408c3": {
+        "operators": ["eq","neq","in","nin","exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "408ff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": false,
+        "underCollection": 0
+      },
+      "c1fff": {
+        "operators": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+        "sortable": false,
+        "groupable": false,
+        "unwindable": false,
+        "projectable": true,
+        "folds": true,
+        "underCollection": 0
+      },
+      "o:1": {
+        "": "40000",
+        "~": {
+          "588c3": "408c3",
+          "588ff": "408ff",
+          "d9fff": "c1fff",
+          "e1fff": "c1fff",
+          "64800": "40800"
         }
       },
-      {
-        "index": 2,
-        "kind": "project",
-        "status": "ok",
-        "executor": null,
-        "phase": null,
-        "owner": null,
-        "creates": [],
-        "shapeAfter": {
-          "paging": "cursor",
-          "grouped": false,
-          "unwound": [],
-          "projection": [
-            "id",
-            "invoiceRecipient",
-            "number",
-            "recipientContact"
-          ]
-        }
+      "o:2": {
+        "*": null,
+        "id": "588c3",
+        "number": "d9fff",
+        "invoiceRecipient": "40800",
+        "invoiceRecipient.id": "588c3",
+        "invoiceRecipient.accountNumber": "d9fff",
+        "invoiceRecipient.companyName": "d9fff",
+        "invoiceRecipient.firstName": "d9fff",
+        "invoiceRecipient.lastName": "d9fff",
+        "invoiceRecipient.taxGroupId": "588c3",
+        "invoiceRecipient.vatId": "d9fff",
+        "invoiceRecipient.address": "40800"
       }
-    ],
+    },
     "result": {
       "paging": "cursor",
       "columns": [
-        {
-          "path": "id",
-          "kind": "guid",
-          "nullable": false,
-          "stage": null,
-          "root": ""
-        },
-        {
-          "path": "number",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": ""
-        },
-        {
-          "path": "invoiceRecipient.id",
-          "kind": "guid",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.accountNumber",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.companyName",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.firstName",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.lastName",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.taxGroupId",
-          "kind": "guid",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.vatId",
-          "kind": "string",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "invoiceRecipient.address",
-          "kind": "object",
-          "nullable": true,
-          "stage": null,
-          "root": "invoiceRecipient"
-        },
-        {
-          "path": "recipientContact.primaryEmailAddress.email",
-          "kind": "unknown",
-          "nullable": true,
-          "stage": 1,
-          "root": "recipientContact"
-        },
-        {
-          "path": "recipientContact.primaryPhoneNumber.number",
-          "kind": "unknown",
-          "nullable": true,
-          "stage": 1,
-          "root": "recipientContact"
-        },
-        {
-          "path": "recipientContact.address.companyName",
-          "kind": "unknown",
-          "nullable": true,
-          "stage": 1,
-          "root": "recipientContact"
-        }
+        {"path":"id","kind":"guid","nullable":false,"stage":null,"root":"","present":"always"},
+        {"path":"number","kind":"string","nullable":true,"stage":null,"root":"","present":"ifStored"},
+        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"stage":null,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"recipientContact.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
+        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
+        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"}
+      ],
+      "outcomes": [
+        {"alias":"recipientContact","as":null,"stage":1,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}
       ]
     },
-    "describe": [],
-    "bound": {
-      "entity": "ledger.transaction",
-      "scope": {
-        "path": "OrganizationId",
-        "organisation": "77777777-7777-7777-7777-777777777777"
-      },
-      "stages": [
-        {
-          "match": {
-            "path": "_id",
-            "op": "eq",
-            "operand": {
-              "$binary": {
-                "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
-                "subType": "04"
-              }
-            },
-            "caseSensitive": true,
-            "semiJoin": false,
-            "addonDecimal": false
-          }
+    "owners": [
+      {
+        "service": "directory",
+        "remote": true,
+        "via": null,
+        "route": {
+          "apiName": "directory-api",
+          "apiVersion": null
         },
-        {
-          "resolve": {
-            "path": "InvoiceRecipient.Address._id",
-            "as": "recipientContact",
-            "target": "directory.contact",
-            "targetField": "id",
-            "remote": true,
-            "select": [
-              "primaryEmailAddress.email",
-              "primaryPhoneNumber.number",
-              "address.companyName"
-            ],
-            "filter": null
-          }
-        },
-        {
-          "project": {
-            "mode": "include",
-            "paths": [
-              "Number",
-              "InvoiceRecipient",
-              "recipientContact"
-            ],
-            "id": true
-          }
-        },
-        {
-          "page": {
-            "limit": 100,
-            "offset": 0,
-            "includeTotalCount": false
-          }
+        "answered": true,
+        "engine": {
+          "contract": 2
         }
-      ],
-      "paging": "keyset",
-      "page": {
-        "limit": 100,
-        "offset": 0,
-        "cursor": null,
-        "includeTotalCount": false
       }
-    },
-    "stages": [
-      {
-        "$match": {
-          "OrganizationId": {
-            "$binary": {
-              "base64": "d3d3d3d3d3d3d3d3d3d3dw==",
-              "subType": "04"
-            }
-          }
-        }
-      },
-      {
-        "$match": {
-          "_id": {
-            "$binary": {
-              "base64": "fQ5MGjueTVWaVz8fGw8sEQ==",
-              "subType": "04"
-            }
-          }
-        }
-      },
-      {
-        "$project": {
-          "Number": 1,
-          "InvoiceRecipient": 1
-        }
-      },
-      {
-        "$sort": {
-          "_id": 1
-        }
-      },
-      {
-        "$limit": 101
-      }
-    ]
+    ],
+    "catalog": []
   }
 }

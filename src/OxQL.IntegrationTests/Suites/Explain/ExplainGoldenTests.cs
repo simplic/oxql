@@ -71,15 +71,12 @@ internal static class ExplainGolden
     /// <summary>Whether this run records the answers instead of comparing them.</summary>
     public static bool Recording => Environment.GetEnvironmentVariable(RecordVariable) is "1" or "true";
 
-    /// <summary>The members that change between runs of one engine or with nothing the answer is about: etags, times, revisions and the engine's version.</summary>
-    private static readonly HashSet<string> Volatile = new(StringComparer.Ordinal) { "etag", "ms", "revision", "schemaRevision" };
-
-    private static readonly JsonSerializerOptions Indented = new()
-    {
-        WriteIndented = true,
-        NewLine = "\n",
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    /// <summary>
+    /// The members that change between runs of one engine or with nothing the answer is about: etags,
+    /// times, revisions, and what an owner cost (<c>calls</c>, <c>cached</c>), which depends on whether
+    /// the forward cache already held its answer; the engine's version goes with them.
+    /// </summary>
+    private static readonly HashSet<string> Volatile = new(StringComparer.Ordinal) { "etag", "ms", "revision", "calls", "cached" };
 
     /// <summary>The reference set, by id; each builds its request (contract 2, organisation R).</summary>
     public static readonly IReadOnlyDictionary<string, Func<JsonObject>> Cases = new SortedDictionary<string, Func<JsonObject>>(StringComparer.Ordinal)
@@ -160,20 +157,78 @@ internal static class ExplainGolden
             ["answer"] = answer.Body is null ? null : Normalise(answer.Body.DeepClone()),
         };
 
-        return record.ToJsonString(Indented) + "\n";
+        return Pretty(record) + "\n";
+    }
+
+    private static readonly JsonSerializerOptions OneLine = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    /// <summary>The members whose entries are written one per line: a diff of two recordings then shows the rows that changed, not their brackets.</summary>
+    private static readonly HashSet<string> RowLists = new(StringComparer.Ordinal) { "members", "columns", "outcomes", "onlyFor", "errors", "diagnostics", "notes" };
+
+    /// <summary>
+    /// The file form: indented with two spaces, an array of plain values on one line, and each member
+    /// row of a type (and each column, outcome, error, diagnostic and note) on a line of its own.
+    /// </summary>
+    public static string Pretty(JsonNode node)
+    {
+        var text = new System.Text.StringBuilder();
+
+        Write(text, node, 0, null);
+
+        return text.ToString();
+    }
+
+    private static void Write(System.Text.StringBuilder text, JsonNode? node, int depth, string? name)
+    {
+        switch (node)
+        {
+            case JsonObject members when members.Count > 0:
+                text.Append("{\n");
+
+                var position = 0;
+
+                foreach (var (key, value) in members)
+                {
+                    text.Append(' ', (depth + 1) * 2).Append(JsonSerializer.Serialize(key, OneLine)).Append(": ");
+                    Write(text, value, depth + 1, key);
+                    text.Append(++position < members.Count ? ",\n" : "\n");
+                }
+
+                text.Append(' ', depth * 2).Append('}');
+                break;
+
+            case JsonArray items when items.Count > 0 && items.Any(item => item is JsonObject or JsonArray):
+                text.Append("[\n");
+
+                for (var index = 0; index < items.Count; index++)
+                {
+                    text.Append(' ', (depth + 1) * 2);
+
+                    if (name is not null && RowLists.Contains(name))
+                        text.Append(items[index]?.ToJsonString(OneLine) ?? "null");
+                    else
+                        Write(text, items[index], depth + 1, null);
+
+                    text.Append(index + 1 < items.Count ? ",\n" : "\n");
+                }
+
+                text.Append(' ', depth * 2).Append(']');
+                break;
+
+            default:
+                text.Append(node?.ToJsonString(OneLine) ?? "null");
+                break;
+        }
     }
 
     /// <summary>
     /// The answer without what changes between runs of one engine, or with nothing the answer is
-    /// about: every <c>etag</c>, <c>ms</c>, <c>revision</c> and <c>schemaRevision</c> member, any
+    /// about: every <c>etag</c>, <c>ms</c>, <c>revision</c>, <c>calls</c> and <c>cached</c> member, any
     /// member ending in <c>Ms</c> that holds a number (a time), and the engine's version.
     /// </summary>
     public static JsonNode Normalise(JsonNode answer)
     {
         Strip(answer);
-
-        if (answer["engine"] is JsonObject engine)
-            engine.Remove("version");
 
         return answer;
     }
@@ -189,6 +244,10 @@ internal static class ExplainGolden
                         members.Remove(name);
                     else
                         Strip(value);
+
+                    // The engine's version, this host's and every owner's: the answers do not change with it.
+                    if (name == "engine" && value is JsonObject engine)
+                        engine.Remove("version");
                 }
                 break;
 

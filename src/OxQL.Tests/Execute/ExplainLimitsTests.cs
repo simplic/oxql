@@ -86,7 +86,7 @@ public class ExplainLimitsTests
         var models = new CountingModels(ResolveModel.Model);
         var options = BindHost.Options(each => each.Limits.MaxPipelineStages = 30);
         var engine = new MongoQueryEngine(models, new FakeAggregateRunner(), BindHost.Cursors, options, new FakeRemoteClient());
-        var request = JsonSerializer.Deserialize<ExplainRequest>(Envelope(Catalog(10) + """, "shape": { "depth": 3 }, "include": ["indexes"], "remote": "skip" """, stages: 30), OxQLJson.Wire)!;
+        var request = JsonSerializer.Deserialize<ExplainRequest>(Envelope(Catalog(10) + """, "shape": { "depth": 3 }, "include": ["shape", "notes", "plan", "indexes"], "remote": "cached" """, stages: 30), OxQLJson.Wire)!;
 
         var outcome = await engine.ExplainAsync(request, BindHost.Context(options));
 
@@ -98,7 +98,7 @@ public class ExplainLimitsTests
     [Fact]
     public void Every_bound_crossed_is_one_error_and_the_bounds_are_options()
     {
-        var request = JsonSerializer.Deserialize<ExplainRequest>(Envelope(Catalog(3) + """, "shape": { "depth": 2 }, "include": ["plan", "indexes"], "remote": "cached" """, stages: 5), OxQLJson.Wire)!;
+        var request = JsonSerializer.Deserialize<ExplainRequest>(Envelope(Catalog(3) + """, "shape": { "depth": 2 }, "include": ["executionStats", "indexes"], "remote": "skip" """, stages: 5), OxQLJson.Wire)!;
         var tight = new ExplainOptions { MaxStages = 4, MaxCatalogEntries = 2, MaxShapeDepth = 1 };
 
         var refusal = ExplainLimits.Check(request, tight)!;
@@ -106,7 +106,8 @@ public class ExplainLimitsTests
         refusal.Errors!.Select(error => error.Path).Should().Equal("stages", "catalog", "shape.depth", "remote", "include");
         refusal.Errors!.Should().OnlyContain(error => error.Code == Codes.ExplainLimit);
         refusal.Errors![0].Params!["max"].Should().Be(4);
-        refusal.Errors![3].Params!["value"].Should().Be("cached");
+        refusal.Errors![3].Params!["value"].Should().Be("skip");
+        refusal.Errors![4].Params!["value"].Should().Be("executionStats");
         ExplainLimits.Check(request, new ExplainOptions { MaxStages = 5, MaxCatalogEntries = 3, MaxShapeDepth = 2 })!.Errors!.Select(error => error.Path)
             .Should().Equal(["remote", "include"], "only the unknown values are left");
     }

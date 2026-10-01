@@ -404,23 +404,31 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
                 { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines", "select": ["text"],
                               "sort": [ { "totalPrice": "desc" } ], "limit": 5, "parentAs": "shipments" } }
                 """, "\"number\": 1, \"lines\": 1, \"shipments\": 1")),
-            ["describe"] = new JsonArray(new JsonObject { ["id"] = "d", ["entity"] = "ledger.transaction", ["prefix"] = "", ["usage"] = "lookupOn", ["referencing"] = true }),
+            ["include"] = new JsonArray("shape", "notes", "plan"),
+            ["catalog"] = new JsonArray(new JsonObject { ["id"] = "d", ["entity"] = "ledger.transaction", ["referencing"] = true }),
         });
 
         answer.StatusCode.Should().Be(200, answer.ToString());
         answer.Body!["valid"]!.GetValue<bool>().Should().BeTrue(answer.ToString());
         answer.Body["engine"]!["capabilities"]!.AsArray().Select(value => value!.GetValue<string>()).Should().Contain("lookup.remote");
 
-        var step = answer.Body["steps"]!.AsArray().Single(each => each!["index"]!.GetValue<int>() == 1)!;
-        step["kind"]!.GetValue<string>().Should().Be("lookup");
-        step["executor"]!.GetValue<string>().Should().Be("keyed-remote");
-        step["phase"]!.GetValue<string>().Should().Be("afterPage");
-        step["reference"].Should().BeNull("a lookup follows no reference of this host");
-        step["owner"]!["service"]!.GetValue<string>().Should().Be("transport");
-        step["owner"]!["targets"]![0]!["target"]!.GetValue<string>().Should().Be("transport.shipment#billingLines");
-        step["owner"]!["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeTrue();
+        var step = answer.Body["stages"]!.AsArray().Single(each => each!["index"]!.GetValue<int>() == 1)!;
+        var owner = answer.Body["owners"]![step["placement"]!["owner"]!.GetValue<int>()]!;
+        var lines = answer.Body["aliases"]!["lines"]!;
 
-        var query = step["owner"]!["query"]!;
+        step["kind"]!.GetValue<string>().Should().Be("lookup");
+        step["placement"]!["executor"]!.GetValue<string>().Should().Be("keyed-remote");
+        step["placement"]!["phase"]!.GetValue<string>().Should().Be("afterPage");
+        lines.AsObject().ContainsKey("reference").Should().BeFalse("a lookup follows no reference of this host");
+        owner["service"]!.GetValue<string>().Should().Be("transport");
+        owner["answered"]!.GetValue<bool>().Should().BeTrue();
+        lines["targets"]![0]!["target"]!.GetValue<string>().Should().Be("transport.shipment#billingLines");
+        lines["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeTrue();
+        lines["many"]!.GetValue<bool>().Should().BeTrue("the alias holds every child the lookup found");
+        lines["type"]!.GetValue<string>().Should().Be("t:transport.shipment#billingLines", "the owner's answer to the check types the children");
+        answer.Body["aliases"]!["shipments"]!["type"]!.GetValue<string>().Should().Be("t:transport.shipment");
+
+        var query = owner["queries"]!.AsArray().Single(each => each!["stage"]!.GetValue<int>() == 1)!["query"]!;
         query["entityType"]!.GetValue<string>().Should().Be("transport.shipment");
         query["keyedBy"]!["path"]!.GetValue<string>().Should().Be("billingLines.assignedTransactionId");
         query["keyedBy"]!["perKey"]!.GetValue<int>().Should().Be(6, "one more than the limit tells a truncated parent");
@@ -440,14 +448,15 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         bounds["params"]!["keysPerQuery"]!.GetValue<int>().Should().Be(83, "the page of 500 holds 83 keys at 6 rows each");
         bounds["params"]!["sorted"]!.GetValue<bool>().Should().BeTrue();
 
-        var creates = step["creates"]!.AsArray().Select(created => created!["alias"]!.GetValue<string>()).ToList();
+        var creates = step["creates"]!.AsArray().Select(created => created!.GetValue<string>()).ToList();
         creates.Should().Equal(["lines", "shipments"]);
 
         var columns = answer.Body["result"]!["columns"]!.AsArray();
         columns.Single(column => column!["path"]!.GetValue<string>() == "lines")!["kind"]!.GetValue<string>().Should().Be("array");
 
-        var described = answer.Body["describe"]!.AsArray().Single()!;
+        var described = answer.Body["catalog"]!.AsArray().Single()!;
         described["remoteLookup"]!.GetValue<bool>().Should().BeTrue();
+        described["type"]!.GetValue<string>().Should().Be("t:ledger.transaction");
     }
 
     [Fact]

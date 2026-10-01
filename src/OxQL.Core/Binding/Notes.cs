@@ -76,12 +76,22 @@ public static class Notes
     /// </summary>
     public const string RemoteLookup = "REMOTE_LOOKUP";
 
+    /// <summary>
+    /// An explain limit was hit mid-way (more owner services, owner calls or time than an explain may
+    /// spend): the answer says what is known, <c>cache.complete</c> is false, nothing is retried
+    /// (params <c>limit</c>, <c>max</c>, and <c>service</c>/<c>target</c> of the part left out).
+    /// </summary>
+    public const string ExplainLimit = Codes.ExplainLimit;
+
+    /// <summary>The answer was larger than <c>Explain.MaxAnswerBytes</c> and was trimmed (params <c>dropped</c>, <c>bytes</c>, <c>max</c>).</summary>
+    public const string ExplainTrimmed = "EXPLAIN_TRIMMED";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
-        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup,
+        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>

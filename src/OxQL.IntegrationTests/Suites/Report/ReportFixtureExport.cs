@@ -13,8 +13,8 @@ namespace OxQL.IntegrationTests.Suites.Report;
 /// The fixture export the studio's acceptance specs replay (PLAN §2, the fixture contract): every
 /// report scenario's request sent to the fleet as the studio sends it, and the answers written as
 /// the wire JSON the hosts answered. Opt-in: it runs only when <c>OXQL_EXPORT_FIXTURES</c> names
-/// the fixtures directory (<c>.api/deep/oxql-studio/fixtures</c>), and reads the describe plan and
-/// the scenario requests from there, so a re-export follows the studio's current plan.
+/// the fixtures directory (<c>.api/deep/oxql-studio/fixtures</c>), and reads the scenario requests
+/// from there, so a re-export follows the studio's current requests.
 /// <code>
 /// OXQL_EXPORT_FIXTURES=&lt;abs&gt;/oxql-studio/fixtures dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report.ReportFixtureExportTests"
 /// </code>
@@ -49,27 +49,19 @@ internal sealed class ExportFactAttribute : FactAttribute
 
 /// <summary>
 /// Writes the fixture files. Per scenario (<see cref="ReportScenarios.Ids"/>):
-/// <c>scenarios/&lt;id&gt;.explain.json</c> (the request explained, and every describe-plan step's
-/// envelope explained) and <c>scenarios/&lt;id&gt;.query.json</c>; beside them
-/// <c>explain-invalid.json</c> (<c>valid: false</c>), <c>strict-missing.json</c>,
-/// <c>strict-ambiguous.json</c>, <c>contract1-hint.json</c>, <c>schemas/&lt;service&gt;.json</c> (each
-/// fleet service's schema document, <see cref="FleetSchemaDocument"/>), when the studio recorded
-/// them <c>describe-envelopes.answers.json</c> (<see cref="WriteEnvelopeAnswersAsync"/>), and
-/// <c>export.json</c> (the files and the flagged steps). The request files are the input and are
-/// not rewritten. Each answer is <c>{ status, answer }</c> with the host's body; the files are
-/// indented with two spaces (the envelope answers compact), LF, and hold nothing that changes
-/// between runs of the same engine.
+/// <c>scenarios/&lt;id&gt;.explain.json</c> (the request explained, and every prefix of its pipeline
+/// explained: what a studio asks while the query is built stage by stage, one answer per step) and
+/// <c>scenarios/&lt;id&gt;.query.json</c>; beside them <c>explain-invalid.json</c> (<c>valid: false</c>),
+/// <c>strict-missing.json</c>, <c>strict-ambiguous.json</c>, <c>contract1-hint.json</c>,
+/// <c>schemas/&lt;service&gt;.json</c> (each fleet service's schema document,
+/// <see cref="FleetSchemaDocument"/>), and <c>export.json</c> (the files and the flagged steps). The
+/// request files are the input and are not rewritten. Each answer is <c>{ status, answer }</c> with
+/// the host's body; the files are indented with two spaces (a member row of a type on one line), LF, and hold nothing that changes between
+/// runs of the same engine but what <see cref="Explain.ExplainGolden.Normalise"/> strips from a golden answer.
 /// </summary>
 internal static class ReportFixtureExport
 {
     public const string Variable = "OXQL_EXPORT_FIXTURES";
-
-    private static readonly JsonSerializerOptions Indented = new()
-    {
-        WriteIndented = true,
-        NewLine = "\n",
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
 
     public sealed record Result(IReadOnlyList<string> Files, IReadOnlyList<string> Flagged);
 
@@ -77,7 +69,7 @@ internal static class ReportFixtureExport
     /// A2b with a select path the delivery attempt lacks (<c>statuz</c>) in the lookup continued at
     /// transport: the origin checks the continued stage at the owner's internal explain, and the
     /// answer is <c>valid: false</c> with the owner's <c>UNKNOWN_PATH</c> mapped to the caller's stage
-    /// (<c>params.owner</c>), the shapes of the part that binds, and no <c>bound</c>/<c>stages</c>.
+    /// (<c>params.owner</c>), the shapes of the part that binds, and no plan.
     /// </summary>
     public static JsonObject InvalidRequest(JsonObject a2b)
     {
@@ -90,7 +82,6 @@ internal static class ReportFixtureExport
     {
         var files = new List<string>();
         var flagged = new List<string>();
-        var plan = ReportScenarios.Plan(File.Exists(Path.Combine(directory, "describe-plan.json")) ? directory : null);
         var requests = ReportScenarios.Ids.ToDictionary(id => id, id => ReportScenarios.Request(id, File.Exists(Path.Combine(directory, "scenarios", $"{id}.request.json")) ? directory : null));
 
         Directory.CreateDirectory(Path.Combine(directory, "scenarios"));
@@ -102,19 +93,24 @@ internal static class ReportFixtureExport
             var explained = await ReportExplain.ExplainAsync(client, request);
             var steps = new JsonArray();
 
-            foreach (var step in ReportScenarios.Steps(plan, id))
+            // One answer per step: the query as it stands after each stage the studio adds.
+            for (var stages = 0; stages < request["pipeline"]!.AsArray().Count; stages++)
             {
-                var envelope = step["envelope"]!.AsObject();
-                var answer = await ReportExplain.ExplainAsync(await ReportScenarios.ClientAsync(envelope["query"]!.AsObject()), envelope);
-                var stepId = step["id"]!.GetValue<string>();
+                var prefix = request.DeepClone().AsObject();
+                var pipeline = prefix["pipeline"]!.AsArray();
 
-                foreach (var entry in (answer.Body?["describe"] as JsonArray ?? []).OfType<JsonObject>().Where(entry => entry["error"] is JsonObject))
-                    flagged.Add($"{stepId} describe '{entry["id"]}' answered {entry["error"]!["code"]}");
+                while (pipeline.Count > stages)
+                    pipeline.RemoveAt(pipeline.Count - 1);
+
+                var answer = await ReportExplain.ExplainAsync(client, prefix);
 
                 if (answer.Body?["valid"]?.GetValue<bool>() != true)
-                    flagged.Add($"{stepId} answered valid:false ({string.Join(", ", answer.ErrorCodes)})");
+                    flagged.Add($"{id} with {stages} stages answered valid:false ({string.Join(", ", answer.ErrorCodes)})");
 
-                steps.Add(new JsonObject { ["id"] = stepId, ["status"] = answer.StatusCode, ["answer"] = answer.Body?.DeepClone() });
+                if (answer.Body?["cache"]?["complete"]?.GetValue<bool>() != true)
+                    flagged.Add($"{id} with {stages} stages is not complete");
+
+                steps.Add(new JsonObject { ["stages"] = stages, ["status"] = answer.StatusCode, ["answer"] = answer.Body is null ? null : Explain.ExplainGolden.Normalise(answer.Body.DeepClone()) });
             }
 
             files.Add(Write(directory, $"scenarios/{id}.explain.json", new JsonObject
@@ -157,9 +153,6 @@ internal static class ReportFixtureExport
         foreach (var service in OxQL.IntegrationTests.Fleet.LabService.All)
             files.Add(Write(directory, $"schemas/{service.Key}.json", FleetSchemaDocument.Of(service)));
 
-        if (File.Exists(Path.Combine(directory, EnvelopesFile)))
-            files.Add(await WriteEnvelopeAnswersAsync(directory, flagged));
-
         files.Add(Write(directory, "export.json", new JsonObject
         {
             ["generatedBy"] = "OxQL.IntegrationTests Suites.Report.ReportFixtureExportTests (OXQL_EXPORT_FIXTURES)",
@@ -170,157 +163,6 @@ internal static class ReportFixtureExport
 
         return new Result(files, flagged);
     }
-
-    /// <summary>The explain envelopes the studio recorded while the scenarios were built, an array.</summary>
-    public const string EnvelopesFile = "describe-envelopes.json";
-
-    /// <summary>
-    /// Answers the recorded envelopes compactly (<c>describe-envelopes.answers.json</c>): the distinct
-    /// queries (by canonical JSON) and the distinct describe entries, each explained once per distinct
-    /// (query, entry) pair (the entries of one query sent together, at most
-    /// <c>Explain.MaxDescribeRequests</c> per call), and each distinct describe answer kept once:
-    /// <code>
-    /// { source, counts, queries: [{ query, status, valid, errors }], entries: [entry],
-    ///   answers: [answer without its id], pairs: [[query, entry, answer]] }
-    /// </code>
-    /// A consumer finds an envelope's query and entries by their canonical JSON (object members
-    /// sorted by name, no whitespace) and reads each entry's answer through <c>pairs</c>, giving it the
-    /// entry's id.
-    /// </summary>
-    public static async Task<string> WriteEnvelopeAnswersAsync(string directory, List<string> flagged)
-    {
-        var envelopes = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(directory, EnvelopesFile)))!.AsArray();
-        var queries = new List<JsonObject>();
-        var queryIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var entries = new List<JsonObject>();
-        var entryIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var wanted = new SortedDictionary<int, SortedSet<int>>();
-
-        foreach (var envelope in envelopes.OfType<JsonObject>())
-        {
-            var query = envelope["query"]!.AsObject();
-            var queryKey = CanonicalOf(query);
-
-            if (!queryIndex.TryGetValue(queryKey, out var q))
-            {
-                queryIndex[queryKey] = q = queries.Count;
-                queries.Add(query);
-            }
-
-            if (!wanted.TryGetValue(q, out var set))
-                wanted[q] = set = [];
-
-            foreach (var entry in (envelope["describe"] as JsonArray ?? []).OfType<JsonObject>())
-            {
-                var entryKey = CanonicalOf(entry);
-
-                if (!entryIndex.TryGetValue(entryKey, out var e))
-                {
-                    entryIndex[entryKey] = e = entries.Count;
-                    entries.Add(entry);
-                }
-
-                set.Add(e);
-            }
-        }
-
-        var answers = new List<JsonNode?>();
-        var answerIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var pairs = new JsonArray();
-        var described = new JsonArray();
-        var perCall = Math.Max(1, new OxQL.Core.Models.OxQLOptions().Explain.MaxDescribeRequests);
-
-        foreach (var (q, wantedEntries) in wanted)
-        {
-            var query = queries[q];
-            var client = await ReportScenarios.ClientAsync(query);
-            int? status = null;
-            bool? valid = null;
-            JsonArray errors = [];
-            var chunks = wantedEntries.Count == 0 ? [new List<int>()] : wantedEntries.Chunk(perCall).Select(chunk => chunk.ToList()).ToList();
-
-            foreach (var chunk in chunks)
-            {
-                // Two distinct entries may share an id, so each call carries ids of its own.
-                var sent = chunk.Select((e, position) => (Entry: e, Id: "e" + position)).ToList();
-                var describe = new JsonArray();
-
-                foreach (var (e, id) in sent)
-                {
-                    var copy = entries[e].DeepClone().AsObject();
-
-                    copy["id"] = id;
-                    describe.Add(copy);
-                }
-
-                var answer = await ReportExplain.ExplainAsync(client, new JsonObject { ["query"] = query.DeepClone(), ["describe"] = describe });
-
-                status ??= answer.StatusCode;
-                valid ??= answer.Body?["valid"]?.GetValue<bool>();
-
-                if (errors.Count == 0 && answer.Body?["errors"] is JsonArray reported)
-                    errors = (JsonArray)reported.DeepClone();
-
-                var byId = (answer.Body?["describe"] as JsonArray ?? []).OfType<JsonObject>().ToDictionary(item => item["id"]!.GetValue<string>(), StringComparer.Ordinal);
-
-                foreach (var (e, id) in sent)
-                {
-                    if (!byId.TryGetValue(id, out var one))
-                    {
-                        flagged.Add($"envelope query {q} entry {e} got no describe answer (HTTP {answer.StatusCode})");
-                        continue;
-                    }
-
-                    var body = one.DeepClone().AsObject();
-
-                    body.Remove("id");
-
-                    if (body["error"] is JsonObject error)
-                        flagged.Add($"envelope query {q} entry {e} answered {error["code"]}");
-
-                    var bodyKey = CanonicalOf(body);
-
-                    if (!answerIndex.TryGetValue(bodyKey, out var a))
-                    {
-                        answerIndex[bodyKey] = a = answers.Count;
-                        answers.Add(body);
-                    }
-
-                    pairs.Add(new JsonArray(q, e, a));
-                }
-            }
-
-            described.Add(new JsonObject { ["query"] = query.DeepClone(), ["status"] = status, ["valid"] = valid, ["errors"] = errors });
-        }
-
-        return Write(directory, "describe-envelopes.answers.json", new JsonObject
-        {
-            ["source"] = EnvelopesFile,
-            ["counts"] = new JsonObject
-            {
-                ["envelopes"] = envelopes.Count,
-                ["queries"] = queries.Count,
-                ["entries"] = entries.Count,
-                ["pairs"] = pairs.Count,
-                ["answers"] = answers.Count,
-            },
-            ["queries"] = described,
-            ["entries"] = new JsonArray([.. entries.Select(entry => (JsonNode?)entry.DeepClone())]),
-            ["answers"] = new JsonArray([.. answers]),
-            ["pairs"] = pairs,
-        }, indented: false);
-    }
-
-    /// <summary>A node's canonical JSON: object members sorted by name at every depth, no whitespace.</summary>
-    public static string CanonicalOf(JsonNode? node) => Sorted(node)?.ToJsonString() ?? "null";
-
-    private static JsonNode? Sorted(JsonNode? node) => node switch
-    {
-        JsonObject obj => new JsonObject(obj.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => KeyValuePair.Create(pair.Key, Sorted(pair.Value)))),
-        JsonArray array => new JsonArray([.. array.Select(Sorted)]),
-        null => null,
-        _ => node.DeepClone(),
-    };
 
     private static JsonObject Case(string description, JsonObject request, int? contract, JsonObject answer) => new()
     {
@@ -342,11 +184,9 @@ internal static class ReportFixtureExport
         return new JsonObject { ["status"] = answer.StatusCode, ["answer"] = answer.Body?.DeepClone() };
     }
 
-    private static readonly JsonSerializerOptions Compact = new() { WriteIndented = false, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
-    private static string Write(string directory, string relative, JsonObject content, bool indented = true)
+    private static string Write(string directory, string relative, JsonObject content)
     {
-        File.WriteAllText(Path.Combine(directory, relative), content.ToJsonString(indented ? Indented : Compact) + "\n");
+        File.WriteAllText(Path.Combine(directory, relative), Explain.ExplainGolden.Pretty(content) + "\n");
         return relative;
     }
 }

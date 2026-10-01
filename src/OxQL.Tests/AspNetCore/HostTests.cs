@@ -198,7 +198,8 @@ public class HostTests
 
         var capabilities = body["capabilities"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
-        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath", "explain", "compat.v1"], "explain is on by default and 2.1 is announced");
+        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "unwind.keepPath", "explain", "compat.v1"], "explain is on by default");
+        capabilities.Should().NotContain("oxql.2.1", "engine.contract 2 is the marker of this package, not a capability");
 
         var limits = body["limits"]!.AsObject();
 
@@ -213,15 +214,25 @@ public class HostTests
         limits["maxReportPageSize"]!.GetValue<int>().Should().Be(5_000);
         limits["maxReportedRows"]!.GetValue<int>().Should().Be(50);
         limits["chainTimeoutMs"]!.GetValue<int>().Should().Be(6_000);
+        limits["explainTimeoutMs"]!.GetValue<int>().Should().Be(2_000);
+        limits["explainMaxOwnerServices"]!.GetValue<int>().Should().Be(4);
+        limits["explainMaxOwnerCalls"]!.GetValue<int>().Should().Be(8);
+        limits["explainMaxAnswerBytes"]!.GetValue<int>().Should().Be(262_144);
+        limits["explainMaxTypeMembers"]!.GetValue<int>().Should().Be(300);
+        limits["explainDefaultShapeDepth"]!.GetValue<int>().Should().Be(2);
+        limits["explainRatePerMinute"]!.GetValue<int>().Should().Be(20);
+        limits["explainRateBurst"]!.GetValue<int>().Should().Be(5);
+        limits["explainMaxConcurrentPerUser"]!.GetValue<int>().Should().Be(2);
+        limits["explainMaxConcurrentPerHost"]!.GetValue<int>().Should().Be(8);
+        limits["explainMaxConcurrentPerCaller"]!.GetValue<int>().Should().Be(4);
+        limits.ContainsKey("maxDescribeChildren").Should().BeFalse("describe is gone");
         limits["negativeResolveTtlSeconds"]!.GetValue<int>().Should().Be(10);
         limits["explainRemoteTimeoutMs"]!.GetValue<int>().Should().Be(1_500);
-        limits["maxDescribeChildren"]!.GetValue<int>().Should().Be(500);
-        limits["maxDescribeRequests"]!.GetValue<int>().Should().Be(10);
         limits["explainMaxRequestBytes"]!.GetValue<int>().Should().Be(65_536);
         limits["explainMaxStages"]!.GetValue<int>().Should().Be(30);
         limits["explainMaxCatalogEntries"]!.GetValue<int>().Should().Be(10);
         limits["explainMaxShapeDepth"]!.GetValue<int>().Should().Be(3);
-        limits.Count.Should().Be(32,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits.Count.Should().Be(41,"health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 
@@ -250,13 +261,16 @@ public class HostTests
         plain!.AsObject().ContainsKey("advisory").Should().BeFalse("the advisory is opt-in");
         host.Indexes.IndexCalls.Should().Be(0);
 
-        var enabled = await host.Client().PostAsync("/OxQL/explain", SampleHost.Json($$"""{ "query": {{request}}, "include": ["indexes"] }"""));
+        plain.AsObject().ContainsKey("plan").Should().BeFalse("the plan is opt-in");
+
+        var enabled = await host.Client().PostAsync("/OxQL/explain", SampleHost.Json($$"""{ "query": {{request}}, "include": ["plan", "indexes"] }"""));
         var body = await SampleHost.Body(enabled);
 
         enabled.StatusCode.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
-        body!["bound"]!["entity"]!.GetValue<string>().Should().Be("probe.order");
-        body["stages"]!.AsArray().Should().NotBeEmpty();
-        body["count"]!.AsArray().Last()!.AsObject().ContainsKey("$count").Should().BeTrue();
+        body!["plan"]!["bound"]!["entity"]!.GetValue<string>().Should().Be("probe.order");
+        body["plan"]!["stages"]!.AsArray().Should().NotBeEmpty();
+        body["plan"]!["count"]!.AsArray().Last()!.AsObject().ContainsKey("$count").Should().BeTrue();
+        body["advisory"]!.AsArray().Should().NotBeEmpty();
         host.Runner.Calls.Should().BeEmpty("explain never executes");
         host.Indexes.Asked.Should().Equal(["probe.order"], "the index list of the entity alone: no join");
 

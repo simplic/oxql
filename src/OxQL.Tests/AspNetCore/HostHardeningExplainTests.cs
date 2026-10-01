@@ -37,15 +37,24 @@ public class HostHardeningExplainTests
         status.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
         body!["valid"]!.GetValue<bool>().Should().BeTrue();
         body["contract"]!.GetValue<int>().Should().Be(2);
-        Strings(body["engine"]!["capabilities"]).Should().Contain(["explain", "oxql.2.1"]).And.NotContain("resolve.chain", "the Sample host has no remote query client");
+        Strings(body["engine"]!["capabilities"]).Should().Contain("explain").And.NotContain("resolve.chain", "the Sample host has no remote query client")
+            .And.NotContain("oxql.2.1", "the contract is the marker, not a capability per feature");
+        body["engine"]!["contract"]!.GetValue<int>().Should().Be(2, "contract 2 marks an engine with the whole language and this answer");
         body["engine"]!["version"]!.GetValue<string>().Should().NotBeNullOrEmpty();
+        body["etag"]!.GetValue<string>().Should().StartWith("W/\"x3:");
+        body["cache"]!.ToJsonString().Should().Be("""{"maxAge":30,"dependsOn":[],"complete":true}""");
         body["errors"]!.AsArray().Should().BeEmpty();
         body["notes"]!.AsArray().Select(note => note!["code"]!.GetValue<string>()).Should().Equal([Notes.LookupLimit, Notes.JoinAfterPage],
             "the lookup's limit, and the lookup joins after the page since nothing later reads it");
-        body["steps"]![0]!["executor"]!.GetValue<string>().Should().Be("inline");
-        body["result"]!["columns"]!.AsArray().Should().Contain(column => column!["path"]!.GetValue<string>() == "orders" && column["root"]!.GetValue<string>() == "orders");
-        body["describe"]!.AsArray().Should().BeEmpty();
-        body["stages"]!.AsArray().Should().Contain(stage => stage!.AsObject().ContainsKey("$lookup"));
+        body["stages"]![0]!["placement"]!["executor"]!.GetValue<string>().Should().Be("inline");
+        body["stages"]![0]!["creates"]!.ToJsonString().Should().Be("""["orders"]""");
+        body["stages"]![0]!["shape"]!["roots"]!.ToJsonString().Should().Be("""{"":"t:probe.customer","orders":"t:probe.order"}""");
+        body["aliases"]!["orders"]!["node"]!.GetValue<string>().Should().Be("array");
+        body["types"]!.AsObject().Select(pair => pair.Key).Should().Equal("t:probe.customer", "t:probe.order");
+        body["result"]!["columns"]!.AsArray().Should().Contain(column => column!["path"]!.GetValue<string>() == "orders" && column["root"]!.GetValue<string>() == "orders" && column["present"]!.GetValue<string>() == "always");
+        body["catalog"]!.AsArray().Should().BeEmpty();
+        body["owners"]!.AsArray().Should().BeEmpty();
+        body.ContainsKey("plan").Should().BeFalse("the plan is opt-in");
         body.ContainsKey("advisory").Should().BeFalse("the advisory is opt-in");
 
         host.Runner.Calls.Should().BeEmpty("explain never executes: no page, no count");
@@ -104,20 +113,21 @@ public class HostHardeningExplainTests
 
         status.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
         body!["valid"]!.GetValue<bool>().Should().BeFalse();
-        body.ContainsKey("bound").Should().BeFalse("a query that does not bind has no bound form");
-        body.ContainsKey("stages").Should().BeFalse();
+        body.ContainsKey("plan").Should().BeFalse("a query that does not bind has no plan");
 
         var errors = body["errors"]!.AsArray().Select(node => node!.AsObject()).ToList();
 
         errors.Select(error => error["stage"]!.GetValue<int>()).Should().Equal([0, 1], "one error per failed stage; the stage under the failed alias adds none");
         errors[0]["code"]!.GetValue<string>().Should().Be(Codes.UnknownPath);
 
-        var steps = body["steps"]!.AsArray().Select(node => node!.AsObject()).ToList();
+        errors[0]["params"]!["reason"]!.GetValue<string>().Should().Be("notAMember", "why a path did not resolve is said in a form a caller can act on");
 
-        steps.Select(step => step["kind"]!.GetValue<string>()).Should().Equal(["match", "unwind", "match", "sort", "page"]);
-        steps.Select(step => step["status"]!.GetValue<string>()).Should().Equal(["error", "error", "skipped", "ok", "ok"]);
-        steps.Should().OnlyContain(step => step.ContainsKey("executor") && step["executor"] == null && step["phase"] == null && step["owner"] == null);
-        steps[4]["shapeAfter"]!["paging"]!.GetValue<string>().Should().Be("cursor");
+        var stages = body["stages"]!.AsArray().Select(node => node!.AsObject()).ToList();
+
+        stages.Select(stage => stage["kind"]!.GetValue<string>()).Should().Equal(["match", "unwind", "match", "sort", "page"]);
+        stages.Select(stage => stage["status"]!.GetValue<string>()).Should().Equal(["error", "error", "skipped", "ok", "ok"]);
+        stages.Should().OnlyContain(stage => stage.ContainsKey("placement") && stage["placement"] == null);
+        stages[4]["shape"]!["paging"]!.GetValue<string>().Should().Be("cursor");
         body["result"]!["paging"]!.GetValue<string>().Should().Be("cursor");
         host.Runner.Calls.Should().BeEmpty();
     }
@@ -129,20 +139,26 @@ public class HostHardeningExplainTests
         var plain = """{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "a" } } }, { "page": { "limit": 5, "cursor": "not-a-cursor" } }] }""";
 
         var (plainStatus, plainBody) = await ExplainAsync(host, plain);
-        var (envelopeStatus, envelopeBody) = await ExplainAsync(host, $$"""{ "query": {{plain}}, "remote": "skip" }""");
+        var (envelopeStatus, envelopeBody) = await ExplainAsync(host, $$"""{ "query": {{plain}}, "remote": "check", "include": ["shape", "notes"], "shape": { "depth": 2 } }""");
 
         plainStatus.Should().Be(HttpStatusCode.OK, plainBody?.ToJsonString());
         plainBody!["valid"]!.GetValue<bool>().Should().BeTrue("explain ignores page.cursor, so a cursor for another query is no CURSOR_INVALID");
         envelopeStatus.Should().Be(HttpStatusCode.OK);
-        envelopeBody!.ToJsonString().Should().Be(plainBody.ToJsonString());
+        // The etag covers the request as written; everything else is the same answer.
+        envelopeBody!.Remove("etag");
+        plainBody.Remove("etag");
+        envelopeBody.ToJsonString().Should().Be(plainBody.ToJsonString(), "a plain query is the envelope with its defaults");
     }
 
     [Theory]
     [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "rows": true }""")]
     [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "include": ["executionStats"] }""")]
     [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "remote": "always" }""")]
-    [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "describe": {} }""")]
-    [InlineData("""{ "describe": [] }""")]
+    [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "describe": [] }""")]
+    [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "remote": "skip" }""")]
+    [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "catalog": {} }""")]
+    [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "budget": { "ms": 100, "calls": 1 } }""")]
+    [InlineData("""{ "catalog": [] }""")]
     [InlineData("""[ { "entityType": "probe.order", "pipeline": [] } ]""")]
     public async Task A_malformed_body_or_envelope_stays_a_400(string body)
     {

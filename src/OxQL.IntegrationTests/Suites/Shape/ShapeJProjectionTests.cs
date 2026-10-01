@@ -274,10 +274,14 @@ public class ShapeJProjectionTests
         // the projection is bound (an exclusion of the key), and because the key survives every
         // projection in storage for the cursor, a projection that excludes only the key leaves
         // nothing to project, so the page aggregate carries no $project; the row drops the key.
-        var explained = await (await Lab.ClientAsync(LabService.Transport)).ExplainAsync(Json.Request(Corpus.Shipment, $$"""[ { "match": { "id": { "eq": "{{ItemsThree}}" } } }, { "project": { "id": 0 } }, { "page": { "limit": 5 } } ]"""));
+        var explained = await (await Lab.ClientAsync(LabService.Transport)).ExplainAsync(new JsonObject
+        {
+            ["query"] = Json.Request(Corpus.Shipment, $$"""[ { "match": { "id": { "eq": "{{ItemsThree}}" } } }, { "project": { "id": 0 } }, { "page": { "limit": 5 } } ]"""),
+            ["include"] = new JsonArray("plan"),
+        });
         explained.StatusCode.Should().Be(200, explained.ToString());
-        explained.Body!["bound"]!["stages"]!.AsArray().Should().Contain(stage => stage!["project"] != null && stage["project"]!["mode"]!.GetValue<string>() == "exclude", explained.ToString());
-        explained.Body!["stages"]!.AsArray().Should().NotContain(stage => stage!.AsObject().ContainsKey("$project"), explained.ToString());
+        explained.Body!["plan"]!["bound"]!["stages"]!.AsArray().Should().Contain(stage => stage!["project"] != null && stage["project"]!["mode"]!.GetValue<string>() == "exclude", explained.ToString());
+        explained.Body!["plan"]!["stages"]!.AsArray().Should().NotContain(stage => stage!.AsObject().ContainsKey("$project"), explained.ToString());
     }
 
     [Fact]

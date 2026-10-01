@@ -163,21 +163,29 @@ public class JoinsRouteChainTests
               { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number"] } },
               { "resolve": { "path": "sourceParent.resource.id", "as": "tourResource", "forTarget": "{{ReportSeed.Tour}}" } }
             ]
-          },
-          "describe": [
-            { "id": "tour", "at": 7, "prefix": "deliveringTour", "usage": "project" },
-            { "id": "resource", "at": 7, "prefix": "tourResource", "usage": "project" }
-          ]
+          }
         }
         """;
 
-    private static IReadOnlyList<string> Created(JsonNode explained, int stage, string alias) =>
-        explained["steps"]!.AsArray().Single(step => step!["index"]!.GetValue<int>() == stage)!["creates"]!.AsArray()
-            .Single(created => created!["alias"]!.GetValue<string>() == alias)!["entities"]!.AsArray().Select(entity => entity!.GetValue<string>()).ToList();
+    /// <summary>The entities the alias a stage creates may hold.</summary>
+    private static IReadOnlyList<string> Created(JsonNode explained, int stage, string alias)
+    {
+        explained["stages"]!.AsArray().Single(each => each!["index"]!.GetValue<int>() == stage)!["creates"]!.AsArray().Select(created => created!.GetValue<string>()).Should().Contain(alias);
 
-    private static IReadOnlyList<string> Described(JsonNode explained, string id) =>
-        explained["describe"]!.AsArray().Single(answer => answer!["id"]!.GetValue<string>() == id)!["root"]!["entities"]!.AsArray()
-            .Select(entity => entity!.GetValue<string>()).ToList();
+        return explained["aliases"]![alias]!["entities"]!.AsArray().Select(entity => entity!.GetValue<string>()).ToList();
+    }
+
+    /// <summary>The types the alias points to: its own, or the targets of its union.</summary>
+    private static IReadOnlyList<string> Typed(JsonNode explained, string alias)
+    {
+        var type = explained["aliases"]![alias]!["type"]!.GetValue<string>();
+
+        explained["aliases"]![alias]!["complete"]!.GetValue<bool>().Should().BeTrue(alias);
+
+        return type.StartsWith("u:", StringComparison.Ordinal)
+            ? explained["types"]![type]!["of"]!.AsArray().Select(target => target!.GetValue<string>()[2..]).ToList()
+            : [type[2..]];
+    }
 
     [Fact]
     public async Task A_resolve_continued_under_a_union_owning_row_creates_the_target_of_the_reference_it_follows_for_its_forTarget()
@@ -188,8 +196,8 @@ public class JoinsRouteChainTests
         explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
         Created(explained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour], "the shipment's tours.tourId references a tour, not the union's first target");
         Created(explained.Body!, 6, "tourResource").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "the tour's resource.id references an employee or a vehicle by its variant");
-        Described(explained.Body!, "tour").Should().Equal([ReportSeed.Tour], "describe reports the alias as explain creates it");
-        Described(explained.Body!, "resource").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle]);
+        Typed(explained.Body!, "deliveringTour").Should().Equal([ReportSeed.Tour], "the alias is typed as its owner bound it");
+        Typed(explained.Body!, "tourResource").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle]);
     }
 
     [Fact]
@@ -228,10 +236,7 @@ public class JoinsRouteChainTests
               { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "onMissing": "report" } },
               { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "onMissing": "report" } }
             ]
-          },
-          "describe": [
-            { "id": "shipmentVehicle", "at": 8, "prefix": "shipmentVehicle", "usage": "project" }
-          ]
+          }
         }
         """;
 
@@ -245,7 +250,7 @@ public class JoinsRouteChainTests
         Created(explained.Body!, 5, "deliveringTour").Should().Equal([ReportSeed.Tour]);
         Created(explained.Body!, 6, "shipmentVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "the delivering tour's resource.id, bound at its owner, the owner answered");
         Created(explained.Body!, 7, "tourVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle]);
-        Described(explained.Body!, "shipmentVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "describe reports the alias as explain creates it");
+        Typed(explained.Body!, "shipmentVehicle").Should().Equal([ReportSeed.Employee, ReportSeed.Vehicle], "the alias is typed as its owner's owner answered: a union of both");
 
         var request = ReportScenarios.Request("A4");
         var pipeline = request["pipeline"]!.AsArray();

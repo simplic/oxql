@@ -1109,8 +1109,13 @@ public sealed class KeyedFetch
     /// </summary>
     public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Checks(bound, stage, strict, null);
 
-    /// <summary><see cref="Checks(BoundPipeline, BoundStage.Resolve, bool)"/>, planned by the remote client's owner facts as a run plans.</summary>
-    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
+    /// <summary>
+    /// <see cref="Checks(BoundPipeline, BoundStage.Resolve, bool)"/>, planned by the remote client's owner facts as a run plans.
+    /// With <paramref name="everyRemoteTarget"/> every remote target is checked, also one the caller
+    /// wrote nothing under: its owner's answer to the query the run sends is where explain reads the
+    /// target's type from (improvement plan §3.E), so there is nothing to check only when nothing is asked.
+    /// </summary>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, bool everyRemoteTarget = false)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
@@ -1127,7 +1132,7 @@ public sealed class KeyedFetch
         // with its own model and, for a join there that reaches another service, that owner's.
         return PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client)
             .Where(plan => plan.Target.IsRemote
-                ? !plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null
+                ? everyRemoteTarget || !plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null
                 : !plan.Continued.IsEmpty)
             .Select(plan =>
             {

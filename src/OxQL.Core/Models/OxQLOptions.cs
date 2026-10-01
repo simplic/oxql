@@ -99,12 +99,27 @@ public sealed class OxQLOptions
         Execution.ChainTimeoutMs = AtLeast(1, Execution.ChainTimeoutMs, nameof(ExecutionOptions.ChainTimeoutMs), adjustments, "Execution");
         Cache.NegativeResolveTtlSeconds = AtLeast(0, Cache.NegativeResolveTtlSeconds, nameof(CacheOptions.NegativeResolveTtlSeconds), adjustments, "Cache");
         Explain.RemoteTimeoutMs = AtLeast(1, Explain.RemoteTimeoutMs, nameof(ExplainOptions.RemoteTimeoutMs), adjustments, "Explain");
-        Explain.MaxDescribeChildren = AtLeast(1, Explain.MaxDescribeChildren, nameof(ExplainOptions.MaxDescribeChildren), adjustments, "Explain");
-        Explain.MaxDescribeRequests = AtLeast(1, Explain.MaxDescribeRequests, nameof(ExplainOptions.MaxDescribeRequests), adjustments, "Explain");
+        Explain.TimeoutMs = AtLeast(1, Explain.TimeoutMs, nameof(ExplainOptions.TimeoutMs), adjustments, "Explain");
         Explain.MaxRequestBytes = AtLeast(1, Explain.MaxRequestBytes, nameof(ExplainOptions.MaxRequestBytes), adjustments, "Explain");
         Explain.MaxStages = AtLeast(1, Explain.MaxStages, nameof(ExplainOptions.MaxStages), adjustments, "Explain");
         Explain.MaxCatalogEntries = AtLeast(0, Explain.MaxCatalogEntries, nameof(ExplainOptions.MaxCatalogEntries), adjustments, "Explain");
         Explain.MaxShapeDepth = AtLeast(1, Explain.MaxShapeDepth, nameof(ExplainOptions.MaxShapeDepth), adjustments, "Explain");
+        Explain.DefaultShapeDepth = AtLeast(1, Explain.DefaultShapeDepth, nameof(ExplainOptions.DefaultShapeDepth), adjustments, "Explain");
+        Explain.MaxTypeMembers = AtLeast(1, Explain.MaxTypeMembers, nameof(ExplainOptions.MaxTypeMembers), adjustments, "Explain");
+        Explain.MaxAnswerBytes = AtLeast(1_024, Explain.MaxAnswerBytes, nameof(ExplainOptions.MaxAnswerBytes), adjustments, "Explain");
+        Explain.MaxOwnerServices = AtLeast(0, Explain.MaxOwnerServices, nameof(ExplainOptions.MaxOwnerServices), adjustments, "Explain");
+        Explain.MaxOwnerCalls = AtLeast(0, Explain.MaxOwnerCalls, nameof(ExplainOptions.MaxOwnerCalls), adjustments, "Explain");
+        Explain.RatePerMinute = AtLeast(1, Explain.RatePerMinute, nameof(ExplainOptions.RatePerMinute), adjustments, "Explain");
+        Explain.RateBurst = AtLeast(1, Explain.RateBurst, nameof(ExplainOptions.RateBurst), adjustments, "Explain");
+        Explain.MaxConcurrentPerUser = AtLeast(1, Explain.MaxConcurrentPerUser, nameof(ExplainOptions.MaxConcurrentPerUser), adjustments, "Explain");
+        Explain.MaxConcurrentPerHost = AtLeast(1, Explain.MaxConcurrentPerHost, nameof(ExplainOptions.MaxConcurrentPerHost), adjustments, "Explain");
+        Explain.MaxConcurrentPerCaller = AtLeast(1, Explain.MaxConcurrentPerCaller, nameof(ExplainOptions.MaxConcurrentPerCaller), adjustments, "Explain");
+
+        if (Explain.DefaultShapeDepth > Explain.MaxShapeDepth)
+        {
+            adjustments.Add($"OxQL:Explain:DefaultShapeDepth was {Explain.DefaultShapeDepth}, above MaxShapeDepth {Explain.MaxShapeDepth}; it is clamped to it.");
+            Explain.DefaultShapeDepth = Explain.MaxShapeDepth;
+        }
 
         if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
         {
@@ -189,11 +204,50 @@ public sealed class ExplainOptions
     /// </summary>
     public int RemoteTimeoutMs { get; set; } = 1_500;
 
-    /// <summary>The most children one describe answer lists; past it the answer is <c>truncated</c> (DESIGN §4.2).</summary>
-    public int MaxDescribeChildren { get; set; } = 500;
+    /// <summary>
+    /// How long, in milliseconds, one explain may take in all, its owners included
+    /// (<c>Explain.Timeout</c>): once it is spent no further owner is asked, the answer says what is
+    /// known with <c>cache.complete: false</c> and an <c>EXPLAIN_LIMIT</c> note, and nothing is retried.
+    /// </summary>
+    public int TimeoutMs { get; set; } = 2_000;
 
-    /// <summary>The most describe requests one explain answers; the ones past it are answered with an error (DESIGN §4.2).</summary>
-    public int MaxDescribeRequests { get; set; } = 10;
+    /// <summary>The members one type of the answer's type table lists; a type with more is <c>truncated</c>, and a <c>catalog</c> entry reads the rest.</summary>
+    public int MaxTypeMembers { get; set; } = 300;
+
+    /// <summary>How many levels of members below each root the type table lists when the request names no <c>shape.depth</c>.</summary>
+    public int DefaultShapeDepth { get; set; } = 2;
+
+    /// <summary>
+    /// The largest answer, in bytes. A larger one is trimmed: first the types keep their first level
+    /// only, then the plan goes; the answer says so with <c>cache.complete: false</c> and an
+    /// <c>EXPLAIN_TRIMMED</c> note.
+    /// </summary>
+    public int MaxAnswerBytes { get; set; } = 262_144;
+
+    /// <summary>The most distinct owner services one explain asks; the parts of a further one are not checked (<c>EXPLAIN_LIMIT</c>).</summary>
+    public int MaxOwnerServices { get; set; } = 4;
+
+    /// <summary>
+    /// The most owner calls one explain causes in all, transitive ones included: one per owner
+    /// service and round (a first ask, and each ask-again of a union target). An internal explain
+    /// carries what is left, so an owner never spends more than its origin has.
+    /// </summary>
+    public int MaxOwnerCalls { get; set; } = 8;
+
+    /// <summary>The explains one user of one organisation may send per minute on the public route (a token bucket refilled evenly); more is 429 with <c>Retry-After</c> before any work.</summary>
+    public int RatePerMinute { get; set; } = 20;
+
+    /// <summary>The explains one user may send at once before the rate applies: the token bucket's size.</summary>
+    public int RateBurst { get; set; } = 5;
+
+    /// <summary>The explains of one user in flight at once on the public route; one more is 429.</summary>
+    public int MaxConcurrentPerUser { get; set; } = 2;
+
+    /// <summary>The explains in flight at once on the public route of one host, whoever sends them; one more is 429.</summary>
+    public int MaxConcurrentPerHost { get; set; } = 8;
+
+    /// <summary>The internal explains of one calling service in flight at once on the internal route (the base package enforces it); one more is 429.</summary>
+    public int MaxConcurrentPerCaller { get; set; } = 4;
 
     /// <summary>
     /// The largest explain body, in bytes; a larger one is 413 <c>REQUEST_TOO_LARGE</c> before it is

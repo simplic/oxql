@@ -30,11 +30,13 @@ public interface IRemoteQueryClient
     /// Explains <paramref name="request"/> at the service behind <paramref name="serviceKey"/>, over
     /// its internal explain route (<c>POST internal/oxql/explain</c>, DESIGN §4.1: internal key,
     /// forwarded identity, the same body as <c>POST /oxql/explain</c>) within <paramref name="budget"/>,
-    /// and answers the owner's explain answer as written (<c>{ valid, errors, describe, … }</c>). The
-    /// origin forwards the parts of a query continued at the owner (the remote check) and the
-    /// describes of the owner's entities with it. A client that cannot explain at owners answers
-    /// null, the default, and the origin notes the parts <c>REMOTE_UNCHECKED</c>; a failed call
-    /// (unreachable, timed out, refused) throws, and the origin notes them the same way.
+    /// and answers the owner's explain answer as written (<c>{ valid, errors, stages, aliases, types, … }</c>). The
+    /// origin forwards the owner queries a run would send (the remote check, which also answers the
+    /// types of the owner's targets) and the catalog entries of the owner's entities with it; the
+    /// request carries what is left of the origin's explain (<see cref="ExplainRequest.Budget"/>). A
+    /// client that cannot explain at owners answers null, the default, and the origin notes the parts
+    /// <c>REMOTE_UNCHECKED</c>; a failed call (unreachable, timed out, refused, 429 from the owner's
+    /// limiter) throws, and the origin notes them the same way.
     /// </summary>
     Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
         Task.FromResult<JsonObject?>(null);

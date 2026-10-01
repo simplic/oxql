@@ -105,10 +105,11 @@ public class OwnerFactsTests
         var explained = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context());
 
         var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-        var owner = result.Steps.Single(step => step.Index == 0).Owner!;
+        var owner = result.Owner(0)!;
 
+        owner["service"]!.GetValue<string>().Should().Be("crm");
         owner["route"]!.ToJsonString().Should().Be("""{"apiName":"crm-api","apiVersion":"v2"}""");
-        owner["targets"]![0]!["route"]!["apiVersion"]!.GetValue<string>().Should().Be("v2");
-        result.SchemaRevision.Should().Be("sha256:abc");
+        result.Target("r", "crm.contact")["owner"]!.GetValue<int>().Should().Be(result.Stage(0).Placement!.Owner);
+        result.Revision.Schema.Should().Be("sha256:abc");
     }
 }

@@ -176,6 +176,14 @@ public sealed class OxQLQueryService : IOxQLQueryService
         if (ExplainLimits.Check(request, options.Explain) is { } limited)
             return new ExplainOutcome.Refused(limited);
 
+        // What is left of an origin's explain rides only an internal call: the route is the signal.
+        if (request.Budget is not null && !internalCall)
+            return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
+            {
+                Code = Codes.UnknownRequestMember,
+                Message = "'budget' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.",
+            }]));
+
         var context = await ContextAsync(null, internalCall, cancellationToken);
 
         if (context.Contract == 1)
@@ -188,14 +196,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 if (rewrite.Refusal.Status != 400)
                     return new ExplainOutcome.Refused(rewrite.Refusal);
 
-                // Each describe entry says why nothing is described, rather than no answer at all.
-                var first = rewrite.Refusal.Errors is [var head, ..] ? head : null;
-                var invalid = ExplainResult.Invalid(context.Contract, EngineOf(), rewrite.Refusal.Errors ?? []);
-
-                return new ExplainOutcome.Success(invalid with
-                {
-                    Describe = Describe.Refused(request, first?.Code ?? Codes.LegacyStageUnsupported, first?.Message ?? "The contract 1 request does not rewrite."),
-                });
+                return new ExplainOutcome.Success(ExplainResult.Invalid(context.Contract, EngineOf(), rewrite.Refusal.Errors ?? []));
             }
 
             request = request with { Query = rewrite.Request! };

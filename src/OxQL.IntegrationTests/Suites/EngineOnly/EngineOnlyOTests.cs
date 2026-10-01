@@ -204,14 +204,18 @@ public class EngineOnlyOTests
     }
 
     [Fact]
-    public async Task O20_explain_answers_on_every_host_by_default_with_the_bound_pipeline()
+    public async Task O20_explain_answers_on_every_host_by_default_with_the_shape_and_the_bound_pipeline_when_asked()
     {
         var body = Json.Request(Corpus.Shipment, """[ { "page": { "limit": 1 } } ]""");
 
         var answer = await (await Transport()).ExplainHereAsync(body);
         answer.StatusCode.Should().Be(200, "Explain:Enabled is on by default: " + answer);
         answer.Body!["valid"]!.GetValue<bool>().Should().BeTrue(answer.ToString());
-        answer.Body!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
+        answer.Body!["entry"]!["shape"]!["roots"]![""]!.GetValue<string>().Should().Be("t:" + Corpus.Shipment);
+        answer.Body!.AsObject().ContainsKey("plan").Should().BeFalse("the plan is opt-in");
+
+        var planned = await (await Transport()).ExplainHereAsync(new JsonObject { ["query"] = Json.Request(Corpus.Shipment, """[ { "page": { "limit": 1 } } ]"""), ["include"] = new JsonArray("plan") });
+        planned.Body!["plan"]!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
     }
 
     [Fact]

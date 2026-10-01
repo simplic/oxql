@@ -162,11 +162,11 @@ public class CountCapTests
     public async Task Explain_shows_the_cap_in_the_bound_form_and_in_the_count_pipeline()
     {
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options());
-        var outcome = await engine.ExplainAsync(BindHost.Request(Order, Page("500")), BindHost.Context());
+        var outcome = await engine.ExplainAsync(OxQL.Tests.Execute.ExplainAnswer.Planned(BindHost.Request(Order, Page("500"))), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        explain.Bound!["page"]!["includeTotalCount"]!.GetValue<int>().Should().Be(500);
-        explain.Count![^2]!["$limit"]!.GetValue<int>().Should().Be(501);
+        explain.Plan!.Bound["page"]!["includeTotalCount"]!.GetValue<int>().Should().Be(500);
+        explain.Plan.Count![^2]!["$limit"]!.GetValue<int>().Should().Be(501);
     }
 
     private static async Task<QueryResult> Success(MongoQueryEngine engine, string pipeline)

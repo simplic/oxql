@@ -23,7 +23,7 @@ namespace OxQL.IntegrationTests.Suites.Paging;
 [Trait("Category", "Integration")]
 public class PagingLimitsTests
 {
-    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; thirty-two names (the explain limits last).</summary>
+    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; forty-one names (the explain limits last).</summary>
     private static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>
     {
         ["maxPageSize"] = 500,
@@ -52,12 +52,22 @@ public class PagingLimitsTests
         ["chainTimeoutMs"] = 6_000,
         ["negativeResolveTtlSeconds"] = 10,
         ["explainRemoteTimeoutMs"] = 1_500,
-        ["maxDescribeChildren"] = 500,
-        ["maxDescribeRequests"] = 10,
+        ["explainTimeoutMs"] = 2_000,
         ["explainMaxRequestBytes"] = 65_536,
         ["explainMaxStages"] = 30,
         ["explainMaxCatalogEntries"] = 10,
         ["explainMaxShapeDepth"] = 3,
+        ["explainDefaultShapeDepth"] = 2,
+        ["explainMaxTypeMembers"] = 300,
+        ["explainMaxAnswerBytes"] = 262_144,
+        ["explainMaxOwnerServices"] = 4,
+        ["explainMaxOwnerCalls"] = 8,
+        // The fleet's hosts raise the rate and concurrency of explain for the suites (FleetHost); the defaults are 20, 5, 2 and 8.
+        ["explainRatePerMinute"] = 600_000,
+        ["explainRateBurst"] = 100_000,
+        ["explainMaxConcurrentPerUser"] = 1_000,
+        ["explainMaxConcurrentPerHost"] = 1_000,
+        ["explainMaxConcurrentPerCaller"] = 4,
     };
 
     private static int Limit(string name) => Defaults[name];
@@ -80,7 +90,7 @@ public class PagingLimitsTests
     // ── U25 — where the numbers come from ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task U25_every_host_publishes_all_thirty_two_limits_on_health_at_their_defaults()
+    public async Task U25_every_host_publishes_every_limit_on_health_at_its_default()
     {
         // The legacy half that compared them with the generated TypeScript modules is the client's.
         foreach (var service in LabService.All)

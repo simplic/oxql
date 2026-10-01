@@ -168,6 +168,26 @@ public sealed record Refusal
         }],
     };
 
+    /// <summary>
+    /// More explains than a caller may send or have in flight: 429, refused before the body is read.
+    /// <paramref name="limit"/> is <c>rate</c>, <c>concurrentPerUser</c>, <c>concurrentPerHost</c> or
+    /// <c>concurrentPerCaller</c>; the host answers <paramref name="retryAfterSeconds"/> as <c>Retry-After</c>.
+    /// </summary>
+    public static Refusal TooManyExplains(string limit, int max, int retryAfterSeconds) => new()
+    {
+        Type = "rate_limited",
+        Title = "Too many explains.",
+        Status = 429,
+        Errors = [new QueryValidationError
+        {
+            Code = Binding.Codes.ExplainLimit,
+            Message = limit == "rate"
+                ? $"More explains than {max} a minute; retry in {retryAfterSeconds} s."
+                : $"More explains in flight than {max} ({limit}); retry in {retryAfterSeconds} s.",
+            Params = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["retryAfter"] = retryAfterSeconds },
+        }],
+    };
+
     /// <summary>The body too large: 413.</summary>
     public static Refusal RequestTooLarge(int bytes, int max) => new()
     {
@@ -194,10 +214,11 @@ public abstract record QueryOutcome
     public static QueryOutcome Of(Refusal refusal) => new Refused(refusal);
 }
 
+
 /// <summary>
 /// The outcome of an explain: the answer, or a refusal. A request that does not bind is an answer
 /// (<see cref="ExplainResult.Valid"/> false, DESIGN §4.1); a refusal is left only for what stops
-/// explain before binding: no organisation (403), an engine fault (500).
+/// explain before binding: no organisation (403), a body past the explain bounds (400), an engine fault (500).
 /// </summary>
 public abstract record ExplainOutcome
 {
@@ -209,51 +230,74 @@ public abstract record ExplainOutcome
 }
 
 /// <summary>
-/// The body of <c>POST /oxql/explain</c> (DESIGN §4.2): a plain query, or the envelope
-/// <c>{ query, describe?, remote?, include? }</c>. A body with <c>entityType</c> at the top is a
-/// plain query: no describe, remote <c>check</c>, no include. A plain <see cref="QueryRequest"/>
-/// converts to one, so a caller that explains a query as before still compiles.
+/// What an internal explain may still spend of the explain it belongs to (no amplification): the
+/// time left of the origin's wall time and the owner calls left of its total. An owner asks its own
+/// owners only within both and never starts rounds of its own beyond them. Only an internal call
+/// carries it; the public route refuses the member.
+/// </summary>
+/// <param name="Ms">The milliseconds left of the origin's explain.</param>
+/// <param name="Calls">The owner calls (one per service and round) left of the origin's explain.</param>
+public sealed record ExplainBudget(int Ms, int Calls);
+
+/// <summary>
+/// The body of <c>POST /oxql/explain</c>: a plain query, or the envelope
+/// <c>{ query, include?, shape?: { depth }, remote?, catalog? }</c>. A body with <c>entityType</c> at
+/// the top is a plain query, which is the envelope with its defaults: include <c>shape</c> and
+/// <c>notes</c>, shape depth <see cref="Models.ExplainOptions.DefaultShapeDepth"/>, remote <c>check</c>,
+/// no catalog. A plain <see cref="QueryRequest"/> converts to one.
 /// </summary>
 [JsonConverter(typeof(ExplainRequestConverter))]
 public sealed record ExplainRequest
 {
-    /// <summary>The value of <see cref="Include"/> that asks for the index advisory.</summary>
+    /// <summary>The <see cref="Include"/> value for the per-stage shapes, the type table and the flag sets (default).</summary>
+    public const string IncludeShape = "shape";
+
+    /// <summary>The <see cref="Include"/> value for the engine-behaviour notes (default).</summary>
+    public const string IncludeNotes = "notes";
+
+    /// <summary>The <see cref="Include"/> value for the descriptions of types, members and enum values, which the type table leaves out otherwise.</summary>
+    public const string IncludeDocs = "docs";
+
+    /// <summary>The <see cref="Include"/> value for the plan: the bound form, the emitted stages and every owner query.</summary>
+    public const string IncludePlan = "plan";
+
+    /// <summary>The <see cref="Include"/> value that asks for the index advisory.</summary>
     public const string IncludeIndexes = "indexes";
 
     /// <summary>The value of <see cref="Remote"/> that checks continued parts at their owners (the default).</summary>
     public const string RemoteCheck = "check";
 
-    /// <summary>The value of <see cref="Remote"/> that leaves continued parts unchecked.</summary>
-    public const string RemoteSkip = "skip";
+    /// <summary>
+    /// The value of <see cref="Remote"/> that answers from owner answers already kept and asks no owner.
+    /// Accepted; until the cached tier is built it is answered as <see cref="RemoteCheck"/>.
+    /// </summary>
+    public const string RemoteCached = "cached";
 
     /// <summary>The query explained; its <c>page.cursor</c> is ignored.</summary>
     public required QueryRequest Query { get; init; }
 
-    /// <summary>The describe requests as the caller wrote them, in order; empty for a plain query (answered by describe, DESIGN §4.2).</summary>
-    public IReadOnlyList<JsonObject> Describe { get; init; } = [];
-
-    /// <summary><see cref="RemoteCheck"/> (default) or <see cref="RemoteSkip"/>.</summary>
+    /// <summary><see cref="RemoteCheck"/> (default) or <see cref="RemoteCached"/>.</summary>
     public string Remote { get; init; } = RemoteCheck;
 
-    /// <summary>The opt-in extra reads; only <see cref="IncludeIndexes"/> exists.</summary>
-    public IReadOnlyList<string> Include { get; init; } = [];
+    /// <summary>The members asked for: <see cref="DefaultIncludes"/> unless the envelope names its own.</summary>
+    public IReadOnlyList<string> Include { get; init; } = DefaultIncludes;
+
+    /// <summary>What an explain answers when the body names no <c>include</c>.</summary>
+    public static readonly IReadOnlyList<string> DefaultIncludes = [IncludeShape, IncludeNotes];
 
     /// <summary>The <c>include</c> values the engine knows.</summary>
-    public static readonly IReadOnlyList<string> KnownIncludes = [IncludeIndexes];
+    public static readonly IReadOnlyList<string> KnownIncludes = [IncludeShape, IncludeNotes, IncludeDocs, IncludePlan, IncludeIndexes];
 
     /// <summary>The <c>remote</c> values the engine knows.</summary>
-    public static readonly IReadOnlyList<string> KnownRemotes = [RemoteCheck, RemoteSkip];
+    public static readonly IReadOnlyList<string> KnownRemotes = [RemoteCheck, RemoteCached];
 
     /// <summary>
-    /// The <c>catalog</c> entries as the caller wrote them. Only bounded today
-    /// (<c>Explain.MaxCatalogEntries</c>); the explain answer does not read them yet.
+    /// The <c>catalog</c> entries as the caller wrote them (<c>{ id, entity, prefix?, depth?, referencing? }</c>):
+    /// the one lookup of an entity outside the query, at most <c>Explain.MaxCatalogEntries</c>.
     /// </summary>
     public IReadOnlyList<JsonObject> Catalog { get; init; } = [];
 
-    /// <summary>
-    /// The <c>shape.depth</c> the caller asked for, or null. Only bounded today
-    /// (<c>Explain.MaxShapeDepth</c>); the explain answer does not read it yet.
-    /// </summary>
+    /// <summary>The <c>shape.depth</c> the caller asked for (at most <c>Explain.MaxShapeDepth</c>), or null for the default.</summary>
     public int? ShapeDepth { get; init; }
 
     /// <summary>
@@ -265,10 +309,25 @@ public sealed record ExplainRequest
     /// <summary>Whether the body was the envelope rather than a plain query.</summary>
     public bool IsEnvelope { get; init; }
 
+    /// <summary>What an internal explain may still spend of its origin's explain; null on a public one.</summary>
+    public ExplainBudget? Budget { get; init; }
+
+    /// <summary>Whether the per-stage shapes, the types and the flag sets were asked for.</summary>
+    public bool IncludesShape => Include.Contains(IncludeShape, StringComparer.Ordinal);
+
+    /// <summary>Whether the notes were asked for.</summary>
+    public bool IncludesNotes => Include.Contains(IncludeNotes, StringComparer.Ordinal);
+
+    /// <summary>Whether the descriptions were asked for.</summary>
+    public bool IncludesDocs => Include.Contains(IncludeDocs, StringComparer.Ordinal);
+
+    /// <summary>Whether the plan was asked for.</summary>
+    public bool IncludesPlan => Include.Contains(IncludePlan, StringComparer.Ordinal);
+
     /// <summary>Whether the index advisory was asked for.</summary>
     public bool IncludesIndexes => Include.Contains(IncludeIndexes, StringComparer.Ordinal);
 
-    /// <summary>A plain query: no describe, remote check, no include.</summary>
+    /// <summary>A plain query: the envelope's defaults.</summary>
     public static implicit operator ExplainRequest(QueryRequest query) => new() { Query = query ?? throw new ArgumentNullException(nameof(query)) };
 }
 
@@ -281,7 +340,7 @@ public sealed record ExplainRequest
 /// </summary>
 public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
 {
-    private static readonly string[] EnvelopeMembers = ["query", "describe", "remote", "include", "catalog", "shape"];
+    private static readonly string[] EnvelopeMembers = ["query", "remote", "include", "catalog", "shape", "budget"];
 
     /// <inheritdoc/>
     public override ExplainRequest Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -290,14 +349,14 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
         var body = document.RootElement;
 
         if (body.ValueKind != JsonValueKind.Object)
-            throw new JsonException("An explain body is a query or an envelope { query, describe?, remote?, include? }.");
+            throw new JsonException("An explain body is a query or an envelope { query, include?, shape?, remote?, catalog? }.");
 
         if (body.TryGetProperty("entityType", out _))
             return new ExplainRequest { Query = QueryOf(body, options) };
 
         foreach (var member in body.EnumerateObject())
             if (!EnvelopeMembers.Contains(member.Name, StringComparer.Ordinal))
-                throw new JsonException($"'{member.Name}' is not a member of an explain envelope; it carries query, describe, remote, include, catalog and shape.");
+                throw new JsonException($"'{member.Name}' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.");
 
         if (!body.TryGetProperty("query", out var query) || query.ValueKind != JsonValueKind.Object)
             throw new JsonException("An explain envelope carries the query under 'query'.");
@@ -307,11 +366,11 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
         return new ExplainRequest
         {
             Query = QueryOf(query, options),
-            Describe = ObjectsOf(body, "describe", "describe requests"),
             Remote = RemoteOf(body, unknown),
             Include = IncludeOf(body, unknown),
             Catalog = ObjectsOf(body, "catalog", "catalog entries"),
             ShapeDepth = ShapeDepthOf(body),
+            Budget = BudgetOf(body),
             UnknownValues = unknown,
             IsEnvelope = true,
         };
@@ -323,16 +382,9 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
         writer.WriteStartObject();
         writer.WritePropertyName("query");
         JsonSerializer.Serialize(writer, value.Query, options);
-
-        if (value.Describe.Count > 0)
-        {
-            writer.WritePropertyName("describe");
-            JsonSerializer.Serialize(writer, value.Describe, options);
-        }
-
         writer.WriteString("remote", value.Remote);
 
-        if (value.Include.Count > 0)
+        if (!value.Include.SequenceEqual(ExplainRequest.DefaultIncludes, StringComparer.Ordinal))
         {
             writer.WritePropertyName("include");
             JsonSerializer.Serialize(writer, value.Include, options);
@@ -348,6 +400,14 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
         {
             writer.WriteStartObject("shape");
             writer.WriteNumber("depth", depth);
+            writer.WriteEndObject();
+        }
+
+        if (value.Budget is { } budget)
+        {
+            writer.WriteStartObject("budget");
+            writer.WriteNumber("ms", budget.Ms);
+            writer.WriteNumber("calls", budget.Calls);
             writer.WriteEndObject();
         }
 
@@ -396,15 +456,15 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
         return ExplainRequest.RemoteCheck;
     }
 
-    private static List<string> IncludeOf(JsonElement body, List<ExplainUnknownValue> unknown)
+    private static IReadOnlyList<string> IncludeOf(JsonElement body, List<ExplainUnknownValue> unknown)
     {
-        var include = new List<string>();
-
         if (!body.TryGetProperty("include", out var entries) || entries.ValueKind == JsonValueKind.Null)
-            return include;
+            return ExplainRequest.DefaultIncludes;
 
         if (entries.ValueKind != JsonValueKind.Array)
             throw new JsonException("'include' is an array of strings.");
+
+        var include = new List<string>();
 
         foreach (var entry in entries.EnumerateArray())
         {
@@ -437,25 +497,39 @@ public sealed class ExplainRequestConverter : JsonConverter<ExplainRequest>
             if (member.Name != "depth")
                 throw new JsonException($"'{member.Name}' is not a member of 'shape'; it carries depth.");
 
-            if (member.Value.ValueKind != JsonValueKind.Number || !member.Value.TryGetInt32(out var value) || value < 0)
-                throw new JsonException("'shape.depth' is a whole number of at least 0.");
+            if (member.Value.ValueKind != JsonValueKind.Number || !member.Value.TryGetInt32(out var value) || value < 1)
+                throw new JsonException("'shape.depth' is a whole number of at least 1.");
 
             depth = value;
         }
 
         return depth;
     }
+
+    private static ExplainBudget? BudgetOf(JsonElement body)
+    {
+        if (!body.TryGetProperty("budget", out var budget) || budget.ValueKind == JsonValueKind.Null)
+            return null;
+
+        if (budget.ValueKind != JsonValueKind.Object
+            || !budget.TryGetProperty("ms", out var ms) || ms.ValueKind != JsonValueKind.Number || !ms.TryGetInt32(out var milliseconds)
+            || !budget.TryGetProperty("calls", out var calls) || calls.ValueKind != JsonValueKind.Number || !calls.TryGetInt32(out var left))
+            throw new JsonException("'budget' is an object { ms, calls } of whole numbers.");
+
+        return new ExplainBudget(Math.Max(0, milliseconds), Math.Max(0, left));
+    }
 }
 
 /// <summary>
-/// Everything about a query without running it (DESIGN §4.3): whether it binds, every error, the
-/// shape after each stage, the result shape, describe, notes, and, when it binds, the canonical
-/// bound form and the emitted Mongo stages. Explain never executes the query; the index advisory
-/// (<see cref="Advisory"/>) reads only the index list, and only when the request asks for it.
+/// Everything about a query without running it: whether it binds, every error, each stage with its
+/// placement and the shape after it, the aliases, one shared table of types, the result columns, the
+/// owners asked, and, on request, the plan. Explain is the bind trace, normalised: one answer says
+/// everything a builder shows. It never executes the query; the index advisory (<see cref="Advisory"/>)
+/// reads only the index list, and only when the request asks for it.
 /// </summary>
 public sealed record ExplainResult
 {
-    /// <summary>Whether the query binds and this host can run it. False: <see cref="Errors"/> says why, and <see cref="Bound"/> and <see cref="Stages"/> are absent.</summary>
+    /// <summary>Whether the query binds and this host can run it. False: <see cref="Errors"/> says why.</summary>
     [JsonPropertyName("valid")]
     public required bool Valid { get; init; }
 
@@ -463,59 +537,73 @@ public sealed record ExplainResult
     [JsonPropertyName("contract")]
     public required int Contract { get; init; }
 
-    /// <summary>The engine version and the capabilities of this host, as health publishes them.</summary>
+    /// <summary>The engine version, the contract it speaks and the capabilities of this host, as health publishes them.</summary>
     [JsonPropertyName("engine")]
     public required ExplainEngine Engine { get; init; }
 
-    /// <summary>The schema revision the answer was bound against, when the host knows it.</summary>
-    [JsonPropertyName("schemaRevision")]
+    /// <summary>A weak validator of the answer: it changes when the request, a revision or the capabilities change.</summary>
+    [JsonPropertyName("etag")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? SchemaRevision { get; init; }
+    public string? Etag { get; init; }
+
+    /// <summary>The revisions the answer was bound against.</summary>
+    [JsonPropertyName("revision")]
+    public ExplainRevision Revision { get; init; } = new();
+
+    /// <summary>How long the answer may be kept, the owners it depends on, and whether it is complete.</summary>
+    [JsonPropertyName("cache")]
+    public ExplainCache Cache { get; init; } = new();
 
     /// <summary>Every binding error; empty when <see cref="Valid"/>.</summary>
     [JsonPropertyName("errors")]
     public required IReadOnlyList<QueryValidationError> Errors { get; init; }
 
-    /// <summary>The diagnostics binding produced; always present.</summary>
+    /// <summary>The diagnostics binding produced, also for a request that does not bind; always present.</summary>
     [JsonPropertyName("diagnostics")]
     public required IReadOnlyList<Diagnostic> Diagnostics { get; init; }
 
-    /// <summary>Engine-behaviour notes (DESIGN §4.4); always present.</summary>
+    /// <summary>Engine-behaviour notes (DESIGN §4.4); always present, empty without <c>include: "notes"</c> except the notes about the answer itself.</summary>
     [JsonPropertyName("notes")]
     public required IReadOnlyList<Diagnostic> Notes { get; init; }
 
-    /// <summary>One entry per caller stage, in order, also for a request that does not bind.</summary>
-    [JsonPropertyName("steps")]
-    public required IReadOnlyList<ExplainStep> Steps { get; init; }
+    /// <summary>The shape before the first stage; absent when the entity itself did not bind or the shape was not asked for.</summary>
+    [JsonPropertyName("entry")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExplainEntry? Entry { get; init; }
 
-    /// <summary>The final shape: paging and the visible columns. Absent when the entity itself did not bind.</summary>
+    /// <summary>One entry per caller stage, in order, also for a request that does not bind.</summary>
+    [JsonPropertyName("stages")]
+    public required IReadOnlyList<ExplainStage> Stages { get; init; }
+
+    /// <summary>Every alias a stage creates, by name: the stage, the node, the targets, its type and who holds it.</summary>
+    [JsonPropertyName("aliases")]
+    public JsonObject Aliases { get; init; } = [];
+
+    /// <summary>The shared type table: each member described once, by <c>t:&lt;entity&gt;[#item]</c>, and the unions by <c>u:&lt;alias&gt;</c>.</summary>
+    [JsonPropertyName("types")]
+    public JsonObject Types { get; init; } = [];
+
+    /// <summary>The flag sets the type rows (by the id of the flags) and the stage shapes (<c>o:n</c>) point to.</summary>
+    [JsonPropertyName("flagSets")]
+    public JsonObject FlagSets { get; init; } = [];
+
+    /// <summary>The final shape: paging, the visible columns and the outcomes a join may have. Absent when the entity itself did not bind.</summary>
     [JsonPropertyName("result")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExplainShapeResult? Result { get; init; }
 
-    /// <summary>One answer per describe request, in request order; always present.</summary>
-    [JsonPropertyName("describe")]
-    public required IReadOnlyList<JsonNode> Describe { get; init; }
+    /// <summary>The owners the query reaches, each once; <c>stages[].placement.owner</c> and <c>aliases.*.targets[].owner</c> point here by index.</summary>
+    [JsonPropertyName("owners")]
+    public IReadOnlyList<JsonNode> Owners { get; init; } = [];
 
-    /// <summary>The bound pipeline in canonical form; absent when not <see cref="Valid"/>.</summary>
-    [JsonPropertyName("bound")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonNode? Bound { get; init; }
+    /// <summary>One answer per <c>catalog</c> entry of the request, in request order.</summary>
+    [JsonPropertyName("catalog")]
+    public IReadOnlyList<JsonNode> Catalog { get; init; } = [];
 
-    /// <summary>The page pipeline's stages; absent when not <see cref="Valid"/>.</summary>
-    [JsonPropertyName("stages")]
+    /// <summary>The bound form and the emitted stages; only with <c>include: ["plan"]</c> on a valid request.</summary>
+    [JsonPropertyName("plan")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<JsonNode>? Stages { get; init; }
-
-    /// <summary>The count pipeline's stages, when a count was requested.</summary>
-    [JsonPropertyName("count")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<JsonNode>? Count { get; init; }
-
-    /// <summary>The collation both pipelines run under, when a string comparison, sort or group key folds case.</summary>
-    [JsonPropertyName("collation")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonNode? Collation { get; init; }
+    public ExplainPlan? Plan { get; init; }
 
     /// <summary>The static index advisory: only with <c>include: ["indexes"]</c> on a host with an index source.</summary>
     [JsonPropertyName("advisory")]
@@ -531,8 +619,7 @@ public sealed record ExplainResult
         Errors = errors,
         Diagnostics = [],
         Notes = [],
-        Steps = [],
-        Describe = [],
+        Stages = [],
     };
 }
 
@@ -543,16 +630,62 @@ public sealed record ExplainEngine
     [JsonPropertyName("version")]
     public string? Version { get; init; }
 
+    /// <summary>The contract the engine speaks (<see cref="EngineCapabilities.Contract"/>): 2 marks this package.</summary>
+    [JsonPropertyName("contract")]
+    public int Contract { get; init; } = EngineCapabilities.Contract;
+
     /// <summary>The capabilities, as <see cref="EngineCapabilities.Of"/> names them.</summary>
     [JsonPropertyName("capabilities")]
     public required IReadOnlyList<string> Capabilities { get; init; }
 }
 
-/// <summary>
-/// One caller stage as explain bound it (DESIGN §4.3). <see cref="Executor"/>, <see cref="Phase"/>
-/// and <see cref="Owner"/> are written as <c>null</c> where they do not apply.
-/// </summary>
-public sealed record ExplainStep
+/// <summary>The revisions an explain answer was bound against.</summary>
+public sealed record ExplainRevision
+{
+    /// <summary>The revision of the schema document the host publishes; null when it publishes none.</summary>
+    [JsonPropertyName("schema")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Schema { get; init; }
+
+    /// <summary>A hash of the asking organisation's addon definitions the answer read; null when it read none.</summary>
+    [JsonPropertyName("addons")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Addons { get; init; }
+
+    /// <summary>The schema revision of each owner that answered, by service.</summary>
+    [JsonPropertyName("owners")]
+    public IReadOnlyDictionary<string, string?> Owners { get; init; } = new Dictionary<string, string?>(StringComparer.Ordinal);
+}
+
+/// <summary>How an explain answer may be kept.</summary>
+public sealed record ExplainCache
+{
+    /// <summary>The seconds the answer may be kept while its etag is not checked.</summary>
+    [JsonPropertyName("maxAge")]
+    public int MaxAge { get; init; } = 30;
+
+    /// <summary>The owner services the answer depends on, transitive ones included, ordinally.</summary>
+    [JsonPropertyName("dependsOn")]
+    public IReadOnlyList<string> DependsOn { get; init; } = [];
+
+    /// <summary>
+    /// False when something the answer would say is missing: an owner did not answer, a limit was hit
+    /// (<c>EXPLAIN_LIMIT</c>) or the answer was trimmed (<c>EXPLAIN_TRIMMED</c>). Such an answer is not kept as complete.
+    /// </summary>
+    [JsonPropertyName("complete")]
+    public bool Complete { get; init; } = true;
+}
+
+/// <summary>The shape before the first stage.</summary>
+public sealed record ExplainEntry
+{
+    /// <summary>The entry shape.</summary>
+    [JsonPropertyName("shape")]
+    public required ExplainShape Shape { get; init; }
+}
+
+/// <summary>One caller stage as explain bound it.</summary>
+public sealed record ExplainStage
 {
     /// <summary>The stage's index in the caller's pipeline.</summary>
     [JsonPropertyName("index")]
@@ -567,83 +700,49 @@ public sealed record ExplainStep
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
-    /// <summary>For a join stage: <c>inline</c>, <c>keyed-local</c>, <c>keyed-remote</c>, <c>continued</c>; null elsewhere.</summary>
+    /// <summary>Where a join stage runs; null for a stage that is no join, a join nothing reads or shows, and a request that does not bind.</summary>
+    [JsonPropertyName("placement")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public ExplainPlacement? Placement { get; init; }
+
+    /// <summary>The paths the stage reads, <c>{ path, use, alias? }</c> each. Filled with select inference; empty until then.</summary>
+    [JsonPropertyName("reads")]
+    public IReadOnlyList<JsonNode> Reads { get; init; } = [];
+
+    /// <summary>The aliases the stage adds to the shape, by name (<see cref="ExplainResult.Aliases"/>); empty for a stage that adds none.</summary>
+    [JsonPropertyName("creates")]
+    public required IReadOnlyList<string> Creates { get; init; }
+
+    /// <summary>The shape after the stage; null when the shape was not asked for.</summary>
+    [JsonPropertyName("shape")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExplainShape? Shape { get; init; }
+}
+
+/// <summary>Where a join stage runs.</summary>
+public sealed record ExplainPlacement
+{
+    /// <summary><c>inline</c>, <c>keyed-local</c>, <c>keyed-remote</c> or <c>continued</c>.</summary>
     [JsonPropertyName("executor")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-    public string? Executor { get; init; }
+    public required string Executor { get; init; }
 
-    /// <summary>For a join stage: <c>beforePage</c>, <c>afterPage</c>, <c>owner</c>; null elsewhere.</summary>
+    /// <summary><c>beforePage</c>, <c>afterPage</c> or <c>owner</c>.</summary>
     [JsonPropertyName("phase")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-    public string? Phase { get; init; }
+    public required string Phase { get; init; }
 
-    /// <summary>
-    /// For a keyed or continued stage: the owner and the query forwarded to it, keys elided —
-    /// <c>{ service, route: { apiName, apiVersion }, query, targets: [{ target, service, remote, grouped,
-    /// route, query, continued: [index], notApplicable: [index] }] }</c>, the head naming the first remote
-    /// target (else the first); null elsewhere.
-    /// </summary>
+    /// <summary>The service whose engine runs the stage: this host's, or the owner's of a keyed-remote or continued stage.</summary>
+    [JsonPropertyName("host")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? Host { get; init; }
+
+    /// <summary>For a keyed or continued stage: the index of its owner in <see cref="ExplainResult.Owners"/> (the first remote target's, else the first); null elsewhere.</summary>
     [JsonPropertyName("owner")]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-    public JsonNode? Owner { get; init; }
-
-    /// <summary>For a join stage: the reference as bound.</summary>
-    [JsonPropertyName("reference")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonNode? Reference { get; init; }
-
-    /// <summary>The aliases the stage adds to the shape; empty for a stage that adds none.</summary>
-    [JsonPropertyName("creates")]
-    public required IReadOnlyList<ExplainCreated> Creates { get; init; }
-
-    /// <summary>For a keyed stage: the stages continued at its owners, <c>{ index, forTarget }</c> each; absent when none.</summary>
-    [JsonPropertyName("continued")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<JsonNode>? Continued { get; init; }
-
-    /// <summary>The shape after the stage.</summary>
-    [JsonPropertyName("shapeAfter")]
-    public required ExplainShapeSummary ShapeAfter { get; init; }
+    public int? Owner { get; init; }
 }
 
-/// <summary>
-/// An alias a stage creates: <c>entity</c>, <c>element</c> (with its <see cref="Source"/>),
-/// <c>array</c> (a lookup), <c>remote</c> and <c>keyed</c> (with <see cref="Entities"/>),
-/// <c>scalar</c> and <c>group</c> (with <see cref="Kind"/>).
-/// </summary>
-public sealed record ExplainCreated
-{
-    /// <summary>The alias.</summary>
-    [JsonPropertyName("alias")]
-    public required string Alias { get; init; }
-
-    /// <summary>The node the alias is.</summary>
-    [JsonPropertyName("node")]
-    public required string Node { get; init; }
-
-    /// <summary>The entity an <c>entity</c>, <c>element</c> or <c>array</c> node holds.</summary>
-    [JsonPropertyName("entity")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Entity { get; init; }
-
-    /// <summary>The entities (or <c>entity#item</c> targets) a <c>remote</c> or <c>keyed</c> node may hold.</summary>
-    [JsonPropertyName("entities")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<string>? Entities { get; init; }
-
-    /// <summary>The collection an <c>element</c> node was unwound from, as a wire path.</summary>
-    [JsonPropertyName("source")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Source { get; init; }
-
-    /// <summary>The kind a <c>scalar</c> or <c>group</c> node holds.</summary>
-    [JsonPropertyName("kind")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Kind { get; init; }
-}
-
-/// <summary>What the rows look like after a stage.</summary>
-public sealed record ExplainShapeSummary
+/// <summary>What the rows look like at one point of the pipeline.</summary>
+public sealed record ExplainShape
 {
     /// <summary><c>cursor</c> while every row is one entity row with its key (keyset paging); <c>offset</c> after an unwind or a group.</summary>
     [JsonPropertyName("paging")]
@@ -661,23 +760,57 @@ public sealed record ExplainShapeSummary
     [JsonPropertyName("projection")]
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public IReadOnlyList<string>? Projection { get; init; }
+
+    /// <summary>
+    /// The roots the row carries, by name (<c>""</c> the entity itself), each pointing to its type:
+    /// <c>t:&lt;entity&gt;[#item]</c>, <c>u:&lt;alias&gt;</c>, <c>k:&lt;kind&gt;</c> for a scalar, or null for an
+    /// alias whose owner did not answer.
+    /// </summary>
+    [JsonPropertyName("roots")]
+    public required JsonObject Roots { get; init; }
+
+    /// <summary>
+    /// Per root whose members differ here from their type's own flags, the override set (<c>o:n</c>) in
+    /// <see cref="ExplainResult.FlagSets"/>; a root without an entry has its type's flags.
+    /// </summary>
+    [JsonPropertyName("flags")]
+    public required JsonObject Flags { get; init; }
 }
 
-/// <summary>The final shape of the query (DESIGN §4.3 <c>result</c>).</summary>
+/// <summary>The final shape of the query.</summary>
 public sealed record ExplainShapeResult
 {
-    /// <summary>As <see cref="ExplainShapeSummary.Paging"/>, for the final shape.</summary>
+    /// <summary>As <see cref="ExplainShape.Paging"/>, for the final shape.</summary>
     [JsonPropertyName("paging")]
     public required string Paging { get; init; }
 
     /// <summary>The final shape's visible members and roots.</summary>
     [JsonPropertyName("columns")]
     public required IReadOnlyList<ExplainColumn> Columns { get; init; }
+
+    /// <summary>
+    /// Per join that may lose data, <c>{ alias, as, stage, values }</c>: the data-loss outcomes its
+    /// rows may have. <c>as</c> is the row member that carries the outcome, null until a stage names one.
+    /// </summary>
+    [JsonPropertyName("outcomes")]
+    public IReadOnlyList<JsonNode> Outcomes { get; init; } = [];
 }
 
 /// <summary>One visible member or root of the final shape.</summary>
 public sealed record ExplainColumn
 {
+    /// <summary>The key is on every row; its value may be null.</summary>
+    public const string Always = "always";
+
+    /// <summary>The key is absent on a row whose join found nothing (the alias is null there).</summary>
+    public const string IfJoined = "ifJoined";
+
+    /// <summary>The key is on the rows of the variants that have the member only.</summary>
+    public const string IfVariant = "ifVariant";
+
+    /// <summary>The key is absent on a row whose stored record does not hold the member, or whose parent object is null.</summary>
+    public const string IfStored = "ifStored";
+
     /// <summary>The wire path.</summary>
     [JsonPropertyName("path")]
     public required string Path { get; init; }
@@ -698,4 +831,30 @@ public sealed record ExplainColumn
     /// <summary>The root the member lies under, <c>""</c> for the entity itself.</summary>
     [JsonPropertyName("root")]
     public required string Root { get; init; }
+
+    /// <summary>When a row carries the key: <see cref="Always"/>, <see cref="IfJoined"/>, <see cref="IfVariant"/> or <see cref="IfStored"/>.</summary>
+    [JsonPropertyName("present")]
+    public string Present { get; init; } = Always;
+}
+
+/// <summary>The plan of a valid request (<c>include: ["plan"]</c>).</summary>
+public sealed record ExplainPlan
+{
+    /// <summary>The bound pipeline in canonical form (storage names).</summary>
+    [JsonPropertyName("bound")]
+    public required JsonNode Bound { get; init; }
+
+    /// <summary>The page pipeline's stages.</summary>
+    [JsonPropertyName("stages")]
+    public required IReadOnlyList<JsonNode> Stages { get; init; }
+
+    /// <summary>The count pipeline's stages, when a count was requested.</summary>
+    [JsonPropertyName("count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<JsonNode>? Count { get; init; }
+
+    /// <summary>The collation both pipelines run under, when a string comparison, sort or group key folds case.</summary>
+    [JsonPropertyName("collation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonNode? Collation { get; init; }
 }

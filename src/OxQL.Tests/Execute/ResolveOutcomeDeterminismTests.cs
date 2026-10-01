@@ -263,11 +263,11 @@ public class ResolveOutcomeDeterminismTests
 
         client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
 
-        var explained = await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]"""), BindHost.Context());
+        var explained = await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]""").Planned(), BindHost.Context());
 
-        var owner = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result.Steps.Single(step => step.Index == 0).Owner!;
-        owner["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeFalse("the run asks a 2.0 owner the plain query, and explain shows what the run sends");
-        owner["query"]!.AsObject().ContainsKey("keyedBy").Should().BeFalse();
+        var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+        result.Alias("contact")["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeFalse("the run asks a 2.0 owner the plain query, and explain shows what the run sends");
+        result.Query(0).ContainsKey("keyedBy").Should().BeFalse();
     }
 
     [Fact]

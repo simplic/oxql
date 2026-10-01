@@ -74,13 +74,13 @@ public class CaseInsensitiveEngineTests
     public async Task Explain_shows_the_collation_and_the_advisory_names_it()
     {
         var (engine, _, _) = Host();
-        var folded = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }]"""), BindHost.Context());
+        var folded = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }]""").Planned(), BindHost.Context());
 
-        folded.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Collation!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
+        folded.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Plan!.Collation!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
 
-        var plain = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "count": { "eq": 1 } } }]"""), BindHost.Context());
+        var plain = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "count": { "eq": 1 } } }]""").Planned(), BindHost.Context());
 
-        plain.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Collation.Should().BeNull();
+        plain.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Plan!.Collation.Should().BeNull();
 
         var stages = new[] { new BsonDocument("$match", new BsonDocument("Number", "x")) };
         var advised = IndexAdvisor.Advise(stages, [], null, DefaultCollation);

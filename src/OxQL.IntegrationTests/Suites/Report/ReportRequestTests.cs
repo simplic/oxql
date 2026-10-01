@@ -59,20 +59,4 @@ public class ReportRequestTests
 
     [Fact]
     public void R06_A5_the_full_invoice_is_DESIGNs() => ShouldEqual(ReportScenarios.Request("A5"), Design(ReportScenarios.DesignA5));
-
-    [Fact]
-    public void R07_the_describe_plan_walks_every_scenario_and_each_scenarios_last_step_explains_its_request()
-    {
-        var plan = ReportScenarios.Plan();
-
-        plan["scenarios"]!.AsArray().Select(scenario => scenario!["id"]!.GetValue<string>()).Should().Equal(ReportScenarios.Ids);
-
-        foreach (var id in ReportScenarios.Ids)
-        {
-            var request = ReportScenarios.Request(id);
-            var queries = ReportScenarios.Steps(plan, id).Select(step => step["envelope"]!["query"]!).ToList();
-
-            queries.Should().Contain(query => JsonNode.DeepEquals(query, request), $"a step of {id} explains the finished request");
-        }
-    }
 }

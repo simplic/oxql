@@ -12,10 +12,11 @@ public interface IQueryEngine
 
     /// <summary>
     /// Everything about one request without executing it (DESIGN §4): binds, compiles when it binds,
-    /// and answers the errors, the shape after each stage and the compiled form. A request that
-    /// does not bind is an answer with <c>valid: false</c>. Reads Mongo only for the addon
-    /// definitions and, when <see cref="ExplainRequest.IncludesIndexes"/>, the index lists.
-    /// A plain <see cref="QueryRequest"/> converts to a request without describe or include.
+    /// and answers the errors, each stage with the shape of the row after it, the aliases, the types
+    /// and, on request, the compiled form. A request that does not bind is an answer with
+    /// <c>valid: false</c>. Reads Mongo only for the addon definitions and, when
+    /// <see cref="ExplainRequest.IncludesIndexes"/>, the index lists. A plain
+    /// <see cref="QueryRequest"/> converts to a request with the default includes.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default);
 }
@@ -28,7 +29,7 @@ public interface IEntityModelProvider
 
     /// <summary>
     /// The revision of the schema document the host publishes for the model, which explain answers
-    /// in <c>schemaRevision</c> (DESIGN §4.3); null when the host publishes none (the default).
+    /// in <c>revision.schema</c> (DESIGN §4.3); null when the host publishes none (the default).
     /// </summary>
     string? SchemaRevision => null;
 }

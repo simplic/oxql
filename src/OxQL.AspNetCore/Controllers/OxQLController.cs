@@ -145,12 +145,21 @@ public class OxQLController : ControllerBase
             chainTimeoutMs = options.Execution.EffectiveChainTimeoutMs,
             negativeResolveTtlSeconds = options.Cache.NegativeResolveTtlSeconds,
             explainRemoteTimeoutMs = options.Explain.RemoteTimeoutMs,
-            maxDescribeChildren = options.Explain.MaxDescribeChildren,
-            maxDescribeRequests = options.Explain.MaxDescribeRequests,
+            explainTimeoutMs = options.Explain.TimeoutMs,
             explainMaxRequestBytes = Math.Min(limits.MaxRequestBytes, options.Explain.MaxRequestBytes),
             explainMaxStages = options.Explain.MaxStages,
             explainMaxCatalogEntries = options.Explain.MaxCatalogEntries,
             explainMaxShapeDepth = options.Explain.MaxShapeDepth,
+            explainDefaultShapeDepth = options.Explain.DefaultShapeDepth,
+            explainMaxTypeMembers = options.Explain.MaxTypeMembers,
+            explainMaxAnswerBytes = options.Explain.MaxAnswerBytes,
+            explainMaxOwnerServices = options.Explain.MaxOwnerServices,
+            explainMaxOwnerCalls = options.Explain.MaxOwnerCalls,
+            explainRatePerMinute = options.Explain.RatePerMinute,
+            explainRateBurst = options.Explain.RateBurst,
+            explainMaxConcurrentPerUser = options.Explain.MaxConcurrentPerUser,
+            explainMaxConcurrentPerHost = options.Explain.MaxConcurrentPerHost,
+            explainMaxConcurrentPerCaller = options.Explain.MaxConcurrentPerCaller,
         };
     }
 
@@ -168,15 +177,20 @@ public class OxQLController : ControllerBase
 
     /// <summary>
     /// Everything about a query without running it (DESIGN §4): the body is a plain query or the
-    /// envelope <c>{ query, describe?, remote?, include? }</c>. A query that does not bind is 200
-    /// with <c>valid: false</c> and every error; the bound form and the emitted stages come with a
-    /// valid one. Explain never executes the query; the index advisory reads only the index lists,
-    /// and only with <c>include: ["indexes"]</c>. On by default; 404 while <c>Explain:Enabled</c>
-    /// is off. A malformed body is 400, no organisation 403, a body over <c>Explain:MaxRequestBytes</c>
-    /// 413, and a body past the other explain bounds 400 <c>EXPLAIN_LIMIT</c>, both before anything is bound.
+    /// envelope <c>{ query, include?, shape?, remote?, catalog? }</c>. A query that does not bind is 200
+    /// with <c>valid: false</c> and every error; the plan (the bound form and the emitted stages) comes
+    /// with a valid one that asks for it. Explain never executes the query; the index advisory reads only
+    /// the index lists, and only with <c>include: ["indexes"]</c>. On by default; 404 while
+    /// <c>Explain:Enabled</c> is off. A malformed body is 400, no organisation 403, a body over
+    /// <c>Explain:MaxRequestBytes</c> 413, and a body past the other explain bounds 400
+    /// <c>EXPLAIN_LIMIT</c>, both before anything is bound. More explains than one user may send
+    /// (<c>Explain:RatePerMinute</c>, <c>RateBurst</c>) or have in flight (<c>MaxConcurrentPerUser</c>,
+    /// <c>MaxConcurrentPerHost</c>) is 429 with <c>Retry-After</c>, before the body is read.
     /// </summary>
     [HttpPost("explain")]
     [ExplainBody]
+    [TypeFilter(typeof(ExplainRateFilter), Order = -1)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]

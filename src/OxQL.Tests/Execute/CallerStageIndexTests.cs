@@ -91,8 +91,8 @@ public class CallerStageIndexTests
         var explained = await engine.ExplainAsync(BindHost.Request(Invoice, pipeline), BindHost.Context());
 
         var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-        result.Steps.Single(step => step.Index == 1).Executor.Should().Be(executor);
-        result.Steps.Single(step => step.Index == 0).Executor.Should().BeNull();
+        result.Stage(1).Placement!.Executor.Should().Be(executor);
+        result.Stage(0).Placement.Should().BeNull();
         result.Notes!.Where(note => note.Code is Notes.JoinBeforePage or Notes.JoinAfterPage).Should().OnlyContain(note => note.Stage == 1);
     }
 }

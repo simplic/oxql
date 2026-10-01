@@ -8,35 +8,22 @@ namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
 /// The report scenarios of DESIGN §2 (A1, A2a, A2b, A3, A4, A5) as the studio builds them: the
-/// request files its describe-plan spec writes (<c>Fixtures/scenarios/&lt;id&gt;.request.json</c>, a
-/// copy of the studio's <c>testing/fixtures/scenarios</c>) and the describe plan beside them
-/// (<c>Suites/Explain/Fixtures/describe-plan.json</c>). The scenario ids are the plan's: <c>A2</c> is
-/// DESIGN's A2a. A run of the fixture export reads both from the export directory instead, so a
-/// re-export follows the studio's current plan. Every scenario reads organisation R's report seeds.
+/// request files its acceptance specs write (<c>Fixtures/scenarios/&lt;id&gt;.request.json</c>, a
+/// copy of the studio's <c>testing/fixtures/scenarios</c>). The scenario ids are the studio's:
+/// <c>A2</c> is DESIGN's A2a. A run of the fixture export reads them from the export directory
+/// instead, so a re-export follows the studio's current requests. Every scenario reads organisation R's report seeds.
 /// </summary>
 internal static class ReportScenarios
 {
-    /// <summary>The scenario ids, in the plan's order.</summary>
+    /// <summary>The scenario ids, in the studio's order.</summary>
     public static readonly IReadOnlyList<string> Ids = ["A1", "A2", "A2b", "A3", "A4", "A5"];
 
     /// <summary>The directory holding the committed request files.</summary>
     public static string FixturesDirectory([CallerFilePath] string source = "") => Path.Combine(Path.GetDirectoryName(source)!, "Fixtures");
 
-    /// <summary>The committed describe plan, shared with <c>Suites.Explain</c>.</summary>
-    public static string PlanPath([CallerFilePath] string source = "") =>
-        Path.Combine(Path.GetDirectoryName(source)!, "..", "Explain", "Fixtures", "describe-plan.json");
-
     /// <summary>A scenario's request, read from <paramref name="directory"/> (the committed fixtures when null).</summary>
     public static JsonObject Request(string id, string? directory = null) =>
         JsonNode.Parse(File.ReadAllText(Path.Combine(directory ?? FixturesDirectory(), "scenarios", $"{id}.request.json")))!.AsObject();
-
-    /// <summary>The describe plan, read from <paramref name="directory"/> (the committed plan when null).</summary>
-    public static JsonObject Plan(string? directory = null) =>
-        JsonNode.Parse(File.ReadAllText(directory is null ? PlanPath() : Path.Combine(directory, "describe-plan.json")))!.AsObject();
-
-    /// <summary>The steps of one scenario of a plan: id, click and envelope.</summary>
-    public static IReadOnlyList<JsonObject> Steps(JsonObject plan, string id) =>
-        plan["scenarios"]!.AsArray().Single(scenario => scenario!["id"]!.GetValue<string>() == id)!["steps"]!.AsArray().Select(step => step!.AsObject()).ToList();
 
     /// <summary>The service a scenario starts at: its root entity's namespace.</summary>
     public static LabService Service(JsonObject request) =>

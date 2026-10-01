@@ -9,27 +9,28 @@ namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
 /// The report scenarios through explain on the fleet (DESIGN §2, §4): each finished request binds
-/// (<c>valid: true</c>) with every step <c>ok</c>, the executor, phase and owner DESIGN names for
-/// each join, and every continued part checked at its owner's internal explain (the fleet's remote
-/// client answers it in process), so no <c>REMOTE_UNCHECKED</c> note is left; every envelope of the
-/// studio's describe plan is answered the same way through the fleet's hosts; and a continued stage
-/// the owner cannot bind is <c>valid: false</c> with the owner's error mapped to the caller's stage.
-/// Explain runs through <see cref="ReportExplain"/> (the route's service, see there why not the route).
+/// (<c>valid: true</c>) with every stage <c>ok</c>, the executor, phase and owner DESIGN names for
+/// each join, and every part at an owner checked at its internal explain (the fleet's remote client
+/// answers it in process), so the answer is complete and every alias has its type; every prefix of
+/// every scenario, which is what the studio explains while the query is built, is answered the same
+/// way through the fleet's hosts; and a continued stage the owner cannot bind is <c>valid: false</c>
+/// with the owner's error mapped to the caller's stage.
+/// Explain runs through <see cref="ReportExplain"/> (the route, as the studio calls it).
 /// </summary>
 [Trait("Category", "Integration")]
 public class ReportExplainTests
 {
     public static TheoryData<string> Scenarios() => [.. ReportScenarios.Ids];
 
-    public static TheoryData<string> PlanSteps()
+    public static TheoryData<string, int> Prefixes()
     {
-        var steps = new TheoryData<string>();
+        var prefixes = new TheoryData<string, int>();
 
         foreach (var id in ReportScenarios.Ids)
-            foreach (var step in ReportScenarios.Steps(ReportScenarios.Plan(), id))
-                steps.Add(step["id"]!.GetValue<string>());
+            for (var stages = 0; stages < ReportScenarios.Request(id)["pipeline"]!.AsArray().Count; stages++)
+                prefixes.Add(id, stages);
 
-        return steps;
+        return prefixes;
     }
 
     private static async Task<JsonObject> ExplainAsync(JsonObject body)
@@ -42,44 +43,62 @@ public class ReportExplainTests
         return answer.Body!.AsObject();
     }
 
+    /// <summary>The finished request explained with its plan, as the explain view of a studio asks it.</summary>
     private static async Task<JsonObject> ValidAsync(string id)
     {
-        var answer = await ExplainAsync(ReportScenarios.Request(id));
+        var answer = await ExplainAsync(new JsonObject { ["query"] = ReportScenarios.Request(id), ["include"] = new JsonArray("shape", "notes", "plan") });
 
         answer["valid"]!.GetValue<bool>().Should().BeTrue(answer["errors"]!.ToJsonString());
 
         return answer;
     }
 
-    private static JsonObject Step(JsonObject answer, int index) =>
-        answer["steps"]!.AsArray().Select(step => step!.AsObject()).Single(step => step["index"]!.GetValue<int>() == index);
+    private static JsonObject Stage(JsonObject answer, int index) =>
+        answer["stages"]!.AsArray().Select(stage => stage!.AsObject()).Single(stage => stage["index"]!.GetValue<int>() == index);
+
+    private static JsonObject Alias(JsonObject answer, string alias) => answer["aliases"]![alias]!.AsObject();
 
     private static string? Text(JsonNode? node, string path) => Json.At(node, path)?.GetValue<string>();
 
     private static IReadOnlyList<string> CodesOf(JsonObject answer, string member) =>
         answer[member]!.AsArray().Select(entry => entry!["code"]!.GetValue<string>()).ToList();
 
-    /// <summary>The (executor, phase, owner service) of a step.</summary>
+    /// <summary>The (executor, phase, owner service) of a stage.</summary>
     private static (string? Executor, string? Phase, string? Owner) Placement(JsonObject answer, int index)
     {
-        var step = Step(answer, index);
-        return (Text(step, "executor"), Text(step, "phase"), Text(step, "owner.service"));
+        var placement = Stage(answer, index)["placement"];
+
+        return (Text(placement, "executor"), Text(placement, "phase"),
+            placement?["owner"] is JsonValue owner ? Text(answer["owners"]![owner.GetValue<int>()], "service") : null);
     }
+
+    /// <summary>The owner queries a keyed stage sends, by target.</summary>
+    private static Dictionary<string, JsonObject> Queries(JsonObject answer, int stage) =>
+        answer["owners"]!.AsArray().SelectMany(owner => owner!["queries"]?.AsArray().Select(query => query!.AsObject()) ?? [])
+            .Where(query => query["stage"]!.GetValue<int>() == stage)
+            .ToDictionary(query => Text(query, "target")!, query => query["query"]!.AsObject());
 
     [Theory]
     [MemberData(nameof(Scenarios))]
-    public async Task E01_every_scenario_binds_with_every_step_ok_and_every_owner_part_checked(string id)
+    public async Task E01_every_scenario_binds_with_every_stage_ok_every_owner_part_checked_and_every_alias_typed(string id)
     {
         var request = ReportScenarios.Request(id);
         var answer = await ValidAsync(id);
 
         answer["errors"]!.AsArray().Should().BeEmpty();
-        answer["steps"]!.AsArray().Select(step => Text(step, "status")).Should().OnlyContain(status => status == "ok");
-        answer["steps"]!.AsArray().Should().HaveCount(request["pipeline"]!.AsArray().Count);
-        CodesOf(answer, "notes").Should().NotContain(Notes.RemoteUnchecked, "every owner explains in process");
+        answer["stages"]!.AsArray().Select(stage => Text(stage, "status")).Should().OnlyContain(status => status == "ok");
+        answer["stages"]!.AsArray().Should().HaveCount(request["pipeline"]!.AsArray().Count);
+        CodesOf(answer, "notes").Should().NotContain([Notes.RemoteUnchecked, Notes.ExplainLimit, Notes.ExplainTrimmed], "every owner explains in process, within the limits of one explain");
+        answer["cache"]!["complete"]!.GetValue<bool>().Should().BeTrue();
         answer["result"]!["columns"]!.AsArray().Should().NotBeEmpty();
-        answer.Select(member => member.Key).Should().Contain(["bound", "stages"]);
+        answer["plan"]!.AsObject().Select(member => member.Key).Should().Contain(["bound", "stages"]);
         answer.ContainsKey("advisory").Should().BeFalse("the index advisory is opt-in");
+
+        foreach (var (alias, described) in answer["aliases"]!.AsObject())
+        {
+            described!["complete"]!.GetValue<bool>().Should().BeTrue(alias);
+            described["type"].Should().NotBeNull($"'{alias}' has a type");
+        }
 
         if (request["strict"]?.GetValue<bool>() == true)
             CodesOf(answer, "notes").Should().Contain(Notes.ReportPage, "a strict request is a report");
@@ -93,22 +112,28 @@ public class ReportExplainTests
         Placement(answer, 3).Should().Be(("inline", "beforePage", null));
         Placement(answer, 4).Should().Be(("keyed-remote", "afterPage", "transport"));
 
-        var sourceLine = Step(answer, 4);
+        var sourceLine = Alias(answer, "sourceLine");
         var @case = sourceLine["reference"]!["cases"]!.AsArray().Single()!;
 
         Text(@case, "when.path").Should().Be("type");
         @case["when"]!["equals"]!.AsArray().Select(value => value!.GetValue<string>()).Should().Equal("logistics");
         @case["targets"]!.AsArray().Select(target => $"{Text(target, "entity")}#{Text(target, "item")}")
             .Should().Equal("transport.shipment#billingLines", "transport.tour#billingLines");
-        sourceLine["owner"]!["targets"]!.AsArray().Select(target => Text(target, "target"))
+        sourceLine["targets"]!.AsArray().Select(target => Text(target, "target"))
             .Should().Equal("transport.shipment#billingLines", "transport.tour#billingLines");
-        sourceLine["creates"]!.AsArray().Select(created => Text(created, "alias")).Should().Equal("sourceLine", "sourceParent");
+        sourceLine["type"]!.GetValue<string>().Should().Be("u:sourceLine");
+        answer["types"]!["u:sourceLine"]!["of"]!.AsArray().Select(type => type!.GetValue<string>())
+            .Should().Equal("t:transport.shipment#billingLines", "t:transport.tour#billingLines");
+        Stage(answer, 4)["creates"]!.AsArray().Select(created => created!.GetValue<string>()).Should().Equal("sourceLine", "sourceParent");
+        Alias(answer, "sourceParent")["parentOf"]!.GetValue<string>().Should().Be("sourceLine");
 
         answer["notes"]!.AsArray().Should().Contain(note => Text(note, "code") == Notes.MissingPolicy && note!["stage"]!.GetValue<int>() == 4
             && note["params"]!["onMissing"]!.GetValue<string>() == "refuse" && note["params"]!["strict"]!.GetValue<bool>(), "strict refuses a missing source line");
         answer["notes"]!.AsArray().Should().Contain(note => Text(note, "code") == Notes.ReportPage && note!["params"]!["limit"]!.GetValue<int>() == 5000);
         answer["result"]!["columns"]!.AsArray().Select(column => Text(column, "path"))
             .Should().Contain(["position", "sourceLine.id", "sourceParent.entity", "sourceParent.id", "sourceParent.shipmentNumber", "sourceParent.number"]);
+        answer["result"]!["columns"]!.AsArray().Single(column => Text(column, "path") == "sourceLine.id")!["present"]!.GetValue<string>().Should().Be(ExplainColumn.IfJoined);
+        answer["result"]!["outcomes"]!.AsArray().Select(outcome => Text(outcome, "alias")).Should().Equal("erpLine", "sourceLine");
     }
 
     [Fact]
@@ -117,7 +142,10 @@ public class ReportExplainTests
         var answer = await ValidAsync("A2");
 
         Placement(answer, 1).Should().Be(("inline", "afterPage", null));
-        Step(answer, 1)["creates"]!.AsArray().Single()!["entity"]!.GetValue<string>().Should().Be("transport.delivery_attempt");
+        Stage(answer, 1)["creates"]!.AsArray().Single()!.GetValue<string>().Should().Be("lastAttempt");
+        Alias(answer, "lastAttempt")["entities"]!.AsArray().Single()!.GetValue<string>().Should().Be("transport.delivery_attempt");
+        Alias(answer, "lastAttempt")["type"]!.GetValue<string>().Should().Be("t:transport.delivery_attempt");
+        answer["owners"]!.AsArray().Should().BeEmpty();
         answer["result"]!["columns"]!.AsArray().Select(column => Text(column, "path"))
             .Should().Equal("id", "shipmentNumber", "lastAttempt.id", "lastAttempt.dateTime", "lastAttempt.status", "lastAttempt.text");
     }
@@ -126,12 +154,12 @@ public class ReportExplainTests
     public async Task E04_A2b_continues_the_lookup_at_transport_for_shipment_targets_and_marks_it_not_applicable_for_tour_targets()
     {
         var answer = await ValidAsync("A2b");
-        var anchor = Step(answer, 4);
 
-        anchor["continued"]!.AsArray().Select(entry => (entry!["index"]!.GetValue<int>(), Text(entry, "forTarget"))).Should().Equal((5, "transport.shipment"));
         Placement(answer, 5).Should().Be(("continued", "owner", "transport"));
+        Alias(answer, "lastAttempt")["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"sourceParent","target":"transport.shipment"}""");
+        Alias(answer, "lastAttempt")["type"]!.GetValue<string>().Should().Be("t:transport.delivery_attempt", "the owner says what the continued alias holds");
 
-        var targets = anchor["owner"]!["targets"]!.AsArray().ToDictionary(target => Text(target, "target")!, target => target!.AsObject());
+        var targets = Alias(answer, "sourceLine")["targets"]!.AsArray().ToDictionary(target => Text(target, "target")!, target => target!.AsObject());
 
         targets["transport.shipment#billingLines"]["continued"]!.AsArray().Select(index => index!.GetValue<int>()).Should().Equal(5);
         targets["transport.shipment#billingLines"]["notApplicable"]!.AsArray().Should().BeEmpty();
@@ -145,7 +173,9 @@ public class ReportExplainTests
         var answer = await ValidAsync("A3");
 
         Placement(answer, 1).Should().Be(("keyed-remote", "afterPage", "directory"));
-        Step(answer, 1)["reference"]!["cases"]!.AsArray().Single()!["targets"]!.AsArray().Single()!["entity"]!.GetValue<string>().Should().Be("directory.contact");
+        Alias(answer, "recipientContact")["reference"]!["cases"]!.AsArray().Single()!["targets"]!.AsArray().Single()!["entity"]!.GetValue<string>().Should().Be("directory.contact");
+        Alias(answer, "recipientContact")["type"]!.GetValue<string>().Should().Be("t:directory.contact");
+        answer["cache"]!["dependsOn"]!.AsArray().Select(service => service!.GetValue<string>()).Should().Equal("directory");
         answer["result"]!["columns"]!.AsArray().Select(column => Text(column, "path"))
             .Should().Contain(["recipientContact.primaryEmailAddress.email", "recipientContact.primaryPhoneNumber.number", "recipientContact.address.companyName"]);
     }
@@ -167,44 +197,48 @@ public class ReportExplainTests
         foreach (var alias in new[] { "lastAttempt", "deliveringTour", "tourVehicle", "driver" })
             Placement(answer, At(alias)).Should().Be(("continued", "owner", "transport"), alias);
 
-        Step(answer, At("sourceLine"))["continued"]!.AsArray().Select(entry => (entry!["index"]!.GetValue<int>(), Text(entry, "forTarget")))
-            .Should().Equal((At("lastAttempt"), "transport.shipment"));
-        Step(answer, At("lineShipment"))["continued"]!.AsArray().Select(entry => entry!["index"]!.GetValue<int>())
+        Alias(answer, "sourceLine")["targets"]!.AsArray().Single(target => Text(target, "target") == "transport.shipment#billingLines")!["continued"]!
+            .AsArray().Select(index => index!.GetValue<int>()).Should().Equal(At("lastAttempt"));
+        Alias(answer, "lineShipment")["targets"]!.AsArray().Single()!["continued"]!.AsArray().Select(index => index!.GetValue<int>())
             .Should().Equal(At("deliveringTour"), At("tourVehicle"), At("driver"));
+        Alias(answer, "tourVehicle")["continuedFrom"]!["alias"]!.GetValue<string>().Should().Be("deliveringTour");
+        Alias(answer, "tourVehicle")["type"]!.GetValue<string>().Should().Be("t:fleet.vehicle", "transport's answer carries what its own owner said");
+        Alias(answer, "driver")["type"]!.GetValue<string>().Should().Be("t:staff.employee");
 
-        var owner = Step(answer, At("lineShipment"))["owner"]!["query"]!.AsObject();
+        var owner = Queries(answer, At("lineShipment")).Values.Single();
 
         owner["entityType"]!.GetValue<string>().Should().Be("transport.shipment");
         owner["pipeline"]!.ToJsonString().Should().Contain("deliveringTour").And.Contain("tourVehicle").And.Contain("driver");
         Json.At(owner["pipeline"]![0], "match.id.in")!.AsArray().Select(key => key!.GetValue<string>()).Should().Equal(["…"], "keys are elided");
         owner["pipeline"]!.ToJsonString().Should().NotContain("lineTour", "the forwarded query holds only the stages continued at the owner");
+
+        // The owners the query reaches: three asked by ledger, two reached through transport.
+        answer["owners"]!.AsArray().Where(each => each!["via"] is null).Select(each => Text(each, "service")).Should().BeEquivalentTo(["directory", "staff", "transport"]);
+        answer["owners"]!.AsArray().Where(each => each!["via"] is not null).Select(each => $"{Text(each, "via")}>{Text(each, "service")}").Should().BeEquivalentTo(["transport>fleet", "transport>staff"]);
+        answer["cache"]!["dependsOn"]!.AsArray().Select(service => service!.GetValue<string>()).Should().Equal("directory", "fleet", "staff", "transport");
     }
 
     [Theory]
-    [MemberData(nameof(PlanSteps))]
-    public async Task E07_every_envelope_of_the_describe_plan_is_answered_through_the_fleets_hosts_with_every_owner_part_checked(string id)
+    [MemberData(nameof(Prefixes))]
+    public async Task E07_every_prefix_of_every_scenario_is_answered_through_the_fleets_hosts_complete(string id, int stages)
     {
-        var step = ReportScenarios.Steps(ReportScenarios.Plan(), id.Split('.')[0]).Single(step => step["id"]!.GetValue<string>() == id);
-        var envelope = step["envelope"]!.AsObject();
-        var answer = await ExplainAsync(envelope);
+        var request = ReportScenarios.Request(id);
+        var pipeline = request["pipeline"]!.AsArray();
+
+        while (pipeline.Count > stages)
+            pipeline.RemoveAt(pipeline.Count - 1);
+
+        var answer = await ExplainAsync(request);
 
         answer["valid"]!.GetValue<bool>().Should().BeTrue(answer["errors"]!.ToJsonString());
-        answer["describe"]!.AsArray().Should().HaveCount(envelope["describe"]!.AsArray().Count);
-        CodesOf(answer, "notes").Should().NotContain(Notes.RemoteUnchecked, "every owner explains in process");
+        answer["cache"]!["complete"]!.GetValue<bool>().Should().BeTrue(answer["notes"]!.ToJsonString());
+        CodesOf(answer, "notes").Should().NotContain([Notes.RemoteUnchecked, Notes.ExplainLimit], "every owner explains in process");
+        answer["stages"]!.AsArray().Should().HaveCount(stages);
+        answer.ContainsKey("plan").Should().BeFalse("the plan is opt-in");
 
-        foreach (var described in answer["describe"]!.AsArray().Select(entry => entry!.AsObject()))
-        {
-            // The plan's one focus ahead of its stage (A5.14 describes lineTour before the stage
-            // creating it is in the envelope; the studio's plan fixes it in F18) answers so.
-            if (id == "A5.14" && Text(described, "id") == "focus" && described["error"] is JsonObject error)
-            {
-                Text(error, "code").Should().Be(Codes.UnknownPath);
-                continue;
-            }
-
-            described["error"].Should().BeNull(described.ToJsonString());
-            described["children"]!.AsArray().Should().NotBeEmpty(described.ToJsonString());
-        }
+        foreach (var stage in answer["stages"]!.AsArray())
+            foreach (var (root, type) in stage!["shape"]!["roots"]!.AsObject())
+                type.Should().NotBeNull($"stage {stage["index"]}: '{root}' has a type");
     }
 
     [Fact]
@@ -213,7 +247,7 @@ public class ReportExplainTests
         var request = ReportFixtureExport.InvalidRequest(ReportScenarios.Request("A2b"));
         var lookup = ReportScenarios.IndexOf(request, "lastAttempt");
 
-        var answer = await ExplainAsync(request);
+        var answer = await ExplainAsync(new JsonObject { ["query"] = request, ["include"] = new JsonArray("shape", "notes", "plan") });
 
         answer["valid"]!.GetValue<bool>().Should().BeFalse();
         var error = answer["errors"]!.AsArray().Single()!.AsObject();
@@ -221,7 +255,7 @@ public class ReportExplainTests
         Text(error, "code").Should().Be(Codes.UnknownPath);
         error["stage"]!.GetValue<int>().Should().Be(lookup);
         Text(error, "params.owner.service").Should().Be("transport");
-        Step(answer, lookup)["status"]!.GetValue<string>().Should().Be("error");
-        answer.Select(member => member.Key).Should().NotContain(["bound", "stages"]);
+        Stage(answer, lookup)["status"]!.GetValue<string>().Should().Be("error");
+        answer.ContainsKey("plan").Should().BeFalse();
     }
 }

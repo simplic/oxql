@@ -218,25 +218,31 @@ public class MongoQueryEngineTests
     public async Task Explain_returns_the_bound_form_and_the_stages_without_running()
     {
         var (engine, runner) = Host();
-        var outcome = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]"""), BindHost.Context());
+        var query = BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""");
+        var outcome = await engine.ExplainAsync(query.Planned(), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         explain.Valid.Should().BeTrue();
-        explain.Bound!["entity"]!.GetValue<string>().Should().Be(Order);
-        explain.Stages.Should().HaveCount(4);
-        explain.Count.Should().HaveCount(4);
-        explain.Steps.Select(step => (step.Index, step.Kind, step.Status)).Should().Equal([(0, "match", "ok"), (1, "page", "ok")]);
+        explain.Plan!.Bound["entity"]!.GetValue<string>().Should().Be(Order);
+        explain.Plan.Stages.Should().HaveCount(4);
+        explain.Plan.Count.Should().HaveCount(4);
+        explain.Stages.Select(stage => (stage.Index, stage.Kind, stage.Status)).Should().Equal([(0, "match", "ok"), (1, "page", "ok")]);
         runner.Calls.Should().BeEmpty();
 
-        // A binding failure is an answer, not a refusal: every error, the steps, no bound form.
-        var invalid = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]"""), BindHost.Context());
+        // The plan is opt-in: a plain query is answered without it.
+        var unasked = await engine.ExplainAsync(query, BindHost.Context());
+
+        unasked.Should().BeOfType<ExplainOutcome.Success>().Subject.Result.Plan.Should().BeNull();
+
+        // A binding failure is an answer, not a refusal: every error, the stages, no plan.
+        var invalid = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]""").Planned(), BindHost.Context());
         var answer = invalid.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         answer.Valid.Should().BeFalse();
         answer.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.UnknownPath);
-        answer.Steps.Should().ContainSingle().Which.Status.Should().Be("error");
-        answer.Bound.Should().BeNull();
-        answer.Stages.Should().BeNull();
+        answer.Errors[0].Params!["reason"].Should().Be(PathReasons.NotAMember);
+        answer.Stages.Should().ContainSingle().Which.Status.Should().Be("error");
+        answer.Plan.Should().BeNull();
         runner.Calls.Should().BeEmpty();
 
         // Only what stops binding before the stages stays a refusal.

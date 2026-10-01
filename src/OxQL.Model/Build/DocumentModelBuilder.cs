@@ -239,6 +239,12 @@ public sealed class DocumentModelBuilder
                     references.Add(new PendingReference(member, label, target, ReadString(reference, "field"), ReferenceSource.Document));
             }
 
+            // The relation name as its publisher derived it (it may know a navigation property this
+            // reader cannot see); a document without one gets the names this engine derives.
+            if (descriptor.TryGetProperty("relation", out var relation) && relation.ValueKind == JsonValueKind.Object
+                && ReadString(relation, "name") is { Length: > 0 } relationName)
+                member.Relation = new RelationDef(relationName, ReadString(relation, "member"));
+
             members.Add(member);
         }
 

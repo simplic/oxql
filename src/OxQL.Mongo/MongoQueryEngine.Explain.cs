@@ -1197,10 +1197,13 @@ public sealed partial class MongoQueryEngine
             : [(When: (ReferenceCondition?)null, KeyAs: KeyAs.None, Targets: new List<ReferenceTarget> { new(resolve.TargetEntity, resolve.TargetField, null, resolve.IsRemote, resolve.TargetField == "id") })];
 
         // A member that would be null is left out: no condition, no conversion, no item, no elements.
-        var reference = new JsonObject
-        {
-            ["path"] = resolve.Reference.Wire,
-            ["cases"] = new JsonArray(cases.Select(selected =>
+        var reference = new JsonObject { ["path"] = resolve.Reference.Wire };
+
+        // The name the engine derived for the relation (the schema document's `relation`), where this host's model holds the member.
+        if (resolve.Reference is { Entity: { } holder, Path: { } followed } && RelationNames.At(holder, followed) is { } name)
+            reference["name"] = name;
+
+        reference["cases"] = new JsonArray(cases.Select(selected =>
             {
                 var written = new JsonObject();
 
@@ -1232,8 +1235,7 @@ public sealed partial class MongoQueryEngine
                 }).ToArray());
 
                 return (JsonNode)written;
-            }).ToArray()),
-        };
+            }).ToArray());
 
         if (cases.Select(selected => selected.KeyAs).Distinct().Count() == 1 && KeyAsName(cases[0].KeyAs) is { } keyAs)
             reference["keyAs"] = keyAs;

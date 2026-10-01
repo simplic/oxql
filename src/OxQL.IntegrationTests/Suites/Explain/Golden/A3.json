@@ -144,6 +144,7 @@
         "lookupOn": true,
         "reference": {
           "path": "invoiceRecipient.address.id",
+          "name": "address",
           "cases": [
             {
               "targets": [

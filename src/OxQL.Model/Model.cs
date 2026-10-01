@@ -388,6 +388,15 @@ public sealed class MemberDef : ShapeDef
     public IReadOnlyList<ReferenceDef> References { get; internal set; } = [];
 
     /// <summary>
+    /// The name of the relation a reader finds at this member (the schema document's <c>relation</c>),
+    /// derived by the engine (<see cref="RelationNames"/>): of the reference the member carries, or,
+    /// on a member that holds an object or a collection of objects whose key member carries one, of
+    /// that reference (<see cref="RelationDef.Member"/> names the key member). Null on every other
+    /// member. A label for tooling; outside the fingerprint.
+    /// </summary>
+    public RelationDef? Relation { get; internal set; }
+
+    /// <summary>
     /// The variants that carry the member, when it is merged into a polymorphic type from its
     /// variants rather than declared by the type itself; null on a member every value has.
     /// </summary>

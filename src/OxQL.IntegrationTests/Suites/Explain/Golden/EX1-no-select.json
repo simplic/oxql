@@ -594,6 +594,7 @@
         "lookupOn": true,
         "reference": {
           "path": "item.billingLineId",
+          "name": "billingLine",
           "cases": [
             {
               "targets": [
@@ -631,6 +632,7 @@
         "lookupOn": true,
         "reference": {
           "path": "erpLine.sourceBillingLineReference.id",
+          "name": "sourceBillingLine",
           "cases": [
             {
               "when": {

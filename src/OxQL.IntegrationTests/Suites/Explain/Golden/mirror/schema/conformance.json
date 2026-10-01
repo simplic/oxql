@@ -5,7 +5,7 @@
     "name": "conformance-api",
     "version": "v1"
   },
-  "revision": "sha256:f227da5e8c23c1b62c0ec89d84e507a45b985a6b3f133a27c932aac9b1505d1a",
+  "revision": "sha256:e46b06f32884cc646aed73982a6d72bd1e3d7635c7935843965fa3998fcd3239",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
@@ -60,6 +60,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "parent"
           }
         },
         {
@@ -312,6 +315,9 @@
             "field": "code",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "refCode"
           }
         },
         {
@@ -323,6 +329,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "child"
           }
         },
         {
@@ -334,6 +343,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "employee"
           }
         },
         {
@@ -350,6 +362,9 @@
             "field": "code",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "widgetCodeExplicit"
           }
         },
         {

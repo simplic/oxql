@@ -5,7 +5,7 @@
     "name": "fleet-api",
     "version": "v1"
   },
-  "revision": "sha256:abe522dc9c1f182fb5571d22ea7bd18bd17273bc185ac58a93c319adb7076630",
+  "revision": "sha256:3ad81a3ac29363de68e855ae115d4f2e647f5898e396ce5de9d0f25fa80e4072",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
@@ -115,7 +115,11 @@
           "name": "vehicle",
           "kind": "object",
           "type": "#/types/t_vehicleSubset",
-          "nullable": true
+          "nullable": true,
+          "relation": {
+            "name": "vehicle",
+            "member": "id"
+          }
         },
         {
           "name": "assignedShipmentId",
@@ -126,6 +130,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "assignedShipment"
           }
         },
         {
@@ -381,7 +388,11 @@
           "name": "department",
           "kind": "object",
           "type": "#/types/t_vehicleDepartment",
-          "nullable": true
+          "nullable": true,
+          "relation": {
+            "name": "department",
+            "member": "id"
+          }
         },
         {
           "name": "registrationDocumentLocation",
@@ -709,6 +720,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "id"
           }
         },
         {
@@ -740,6 +754,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "id"
           }
         },
         {

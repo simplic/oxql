@@ -595,6 +595,7 @@
         "lookupOn": true,
         "reference": {
           "path": "createUserId",
+          "name": "createUser",
           "cases": [
             {
               "targets": [
@@ -655,6 +656,7 @@
         "lookupOn": true,
         "reference": {
           "path": "item.references.referenceId",
+          "name": "references",
           "cases": [
             {
               "when": {
@@ -757,6 +759,7 @@
         "lookupOn": true,
         "reference": {
           "path": "item.references.referenceId",
+          "name": "references",
           "cases": [
             {
               "when": {

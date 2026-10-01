@@ -53,6 +53,7 @@ public sealed class ClrModelBuilder
     private static readonly Lock LookupGate = new();
 
     private readonly List<BuildFinding> findings = [];
+    private readonly Dictionary<TypeDef, IReadOnlyDictionary<string, string>> navigations = new(ReferenceEqualityComparer.Instance);
     private readonly List<PendingReference> references = [];
     private readonly Dictionary<Type, TypeDef> pool = [];
     private readonly HashSet<string> reportedOpaque = new(StringComparer.Ordinal);
@@ -151,7 +152,7 @@ public sealed class ClrModelBuilder
         ReportUnappliedDeclarations();
         StructuralIds.Assign(pool);
 
-        return ModelAssembler.Finish(entities, pool.Values, retiredIds, references, findings);
+        return ModelAssembler.Finish(entities, pool.Values, retiredIds, references, findings, navigations);
     }
 
     /// <summary>
@@ -175,7 +176,7 @@ public sealed class ClrModelBuilder
     private void DescribeMembers(TypeDef type, Type owner, string label)
     {
         var documentSerializer = TryLookup(owner, label) as IBsonDocumentSerializer;
-        var declaredTargets = DeclaredTargets(owner, label);
+        var declaredTargets = DeclaredTargets(owner, label, type);
         var members = new List<MemberDef>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var variants = VariantsOf(owner, registered);
@@ -1115,9 +1116,10 @@ public sealed class ClrModelBuilder
     /// each mapped to the entity id of the navigation property's type. The attribute is read by
     /// name: it sits on the navigation property and names the paired id property.
     /// </summary>
-    private IReadOnlyDictionary<string, string> DeclaredTargets(Type owner, string label)
+    private IReadOnlyDictionary<string, string> DeclaredTargets(Type owner, string label, TypeDef type)
     {
         Dictionary<string, string>? targets = null;
+        Dictionary<string, string>? named = null;
 
         foreach (var navigation in PublishedProperties(owner))
         {
@@ -1156,7 +1158,14 @@ public sealed class ClrModelBuilder
 
             targets ??= new Dictionary<string, string>(StringComparer.Ordinal);
             targets[WireNames.Wire(idProperty.Name)] = entity.PoolId;
+
+            // The navigation property is the name a person gave the relation of its id member.
+            named ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            named[WireNames.Wire(idProperty.Name)] = WireNames.Wire(navigation.Name);
         }
+
+        if (named is not null)
+            navigations[type] = named;
 
         return targets ?? (IReadOnlyDictionary<string, string>)new Dictionary<string, string>();
     }

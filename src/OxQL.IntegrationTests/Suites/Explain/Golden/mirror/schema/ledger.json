@@ -5,7 +5,7 @@
     "name": "ledger-api",
     "version": "v1"
   },
-  "revision": "sha256:3b0461412a3fe07d793c141cac0562c2e805400b5458abcbc61b7035ee0c363e",
+  "revision": "sha256:b5c8682f99d860eea18fae119096f6812c04bbdcd49c0a6a770e23d5f74729ae",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
@@ -114,7 +114,11 @@
             "kind": "object",
             "type": "#/types/t_billingLineReference"
           },
-          "nullable": false
+          "nullable": false,
+          "relation": {
+            "name": "references",
+            "member": "referenceId"
+          }
         },
         {
           "name": "isManualBillingLine",
@@ -136,13 +140,20 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "assignedTransaction"
           }
         },
         {
           "name": "sourceBillingLineReference",
           "kind": "object",
           "type": "#/types/t_sourceBillingLineReference",
-          "nullable": true
+          "nullable": true,
+          "relation": {
+            "name": "sourceBillingLine",
+            "member": "id"
+          }
         },
         {
           "name": "createDateTime",
@@ -546,6 +557,9 @@
             "field": "userId",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "createUser"
           }
         },
         {
@@ -668,6 +682,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -740,6 +757,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -819,7 +839,10 @@
                 }
               ]
             }
-          ]
+          ],
+          "relation": {
+            "name": "reference"
+          }
         }
       ]
     },
@@ -856,6 +879,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "billingLine"
           }
         },
         {
@@ -876,7 +902,11 @@
             "kind": "object",
             "type": "#/types/t_billingLineReference"
           },
-          "nullable": false
+          "nullable": false,
+          "relation": {
+            "name": "references",
+            "member": "referenceId"
+          }
         },
         {
           "name": "isManualBillingLine",
@@ -978,6 +1008,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1050,6 +1083,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1309,6 +1345,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1365,6 +1404,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1466,7 +1508,10 @@
                 }
               ]
             }
-          ]
+          ],
+          "relation": {
+            "name": "id"
+          }
         }
       ]
     },
@@ -1547,6 +1592,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1583,6 +1631,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "id"
           }
         },
         {
@@ -1664,7 +1715,11 @@
           "name": "address",
           "kind": "object",
           "type": "#/types/t_transactionAddress",
-          "nullable": true
+          "nullable": true,
+          "relation": {
+            "name": "address",
+            "member": "id"
+          }
         }
       ]
     },
@@ -1691,6 +1746,9 @@
             "field": "id",
             "joinable": true,
             "inferred": false
+          },
+          "relation": {
+            "name": "bookedFromTransaction"
           }
         },
         {
@@ -1846,7 +1904,10 @@
             "joinable": true,
             "inferred": false
           },
-          "onlyFor": ["BillingLineTransactionItem"]
+          "onlyFor": ["BillingLineTransactionItem"],
+          "relation": {
+            "name": "billingLine"
+          }
         },
         {
           "name": "priceUnit",
@@ -1869,7 +1930,11 @@
             "type": "#/types/t_billingLineReference"
           },
           "nullable": true,
-          "onlyFor": ["BillingLineTransactionItem"]
+          "onlyFor": ["BillingLineTransactionItem"],
+          "relation": {
+            "name": "references",
+            "member": "referenceId"
+          }
         },
         {
           "name": "isManualBillingLine",

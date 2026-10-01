@@ -52,7 +52,8 @@ internal static class ModelAssembler
         IEnumerable<TypeDef> pooledTypes,
         IReadOnlyDictionary<string, IReadOnlyList<string>> retiredByCurrent,
         IReadOnlyList<PendingReference> references,
-        List<BuildFinding> findings)
+        List<BuildFinding> findings,
+        IReadOnlyDictionary<TypeDef, IReadOnlyDictionary<string, string>>? navigations = null)
     {
         var entityIndex = new SortedDictionary<string, EntityDef>(StringComparer.Ordinal);
 
@@ -88,6 +89,10 @@ internal static class ModelAssembler
                 .ToList();
 
         ResolveReferences(entityIndex, references, findings);
+
+        // The references stand: each is named, by the engine alone, for the tools that list them.
+        foreach (var type in pool.Values)
+            RelationNames.Assign(type, navigations?.GetValueOrDefault(type));
 
         return new EntityModel(
             entityIndex,

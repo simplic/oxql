@@ -539,7 +539,11 @@ public sealed class RemoteExplain : IExplainOwners
                 var check = each.Check;
 
                 // What an earlier request learned this target lacks was not asked at all: a miss all the same.
-                misses.AddRange(check.Learned.Select(learned => new Miss(check, learned.Path, learned.Parent, learned.Path)));
+                // The misses of one target are said in the order its query asks the paths, so the answer
+                // does not depend on which of them was learned before and which an owner refused now.
+                var own = check.Learned.Select(learned => new Miss(check, learned.Path, learned.Parent, learned.Path)).ToList();
+
+                void Said() => misses.AddRange(own.OrderBy(miss => check.Rank(miss.Path, miss.Parent)));
 
                 if (each.Answer is not { } answer)
                 {
@@ -549,11 +553,12 @@ public sealed class RemoteExplain : IExplainOwners
                     if (each.Reason != Limit)
                         notes.Add(Unchecked(check, each.Reason ?? Unsupported));
 
+                    Said();
                     continue;
                 }
 
                 answered.Add(check);
-                misses.AddRange(each.Misses);
+                own.AddRange(each.Misses);
 
                 Remember(check, answer);
 
@@ -570,9 +575,11 @@ public sealed class RemoteExplain : IExplainOwners
                         }
                         else if (MissOf(check, error) is { } miss && (!each.Local || miss.Continued))
                         {
-                            misses.Add(miss);
+                            own.Add(miss);
                         }
                     }
+
+                Said();
 
                 if (answer["notes"] is JsonArray ownerNotes)
                     foreach (var note in ownerNotes.OfType<JsonObject>().Where(note => note["code"]?.GetValue<string>() is Notes.RemoteUnchecked or Notes.ExplainLimit))

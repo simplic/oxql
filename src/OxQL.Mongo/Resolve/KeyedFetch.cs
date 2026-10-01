@@ -154,6 +154,13 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
     /// </summary>
     public IReadOnlyList<(string Path, bool Parent)> Learned { get; init; } = [];
 
+    /// <summary>
+    /// Where the query asks a path of the target: its place among the paths under the alias, then those
+    /// under the owning row (<c>Parent</c>), then everything else. What is said of the paths a target
+    /// lacks is said in this order, whether an owner refused them now or an earlier request learned them.
+    /// </summary>
+    public Func<string, bool, int> Rank { get; init; } = (_, _) => 0;
+
     /// <summary>Keeps what this check's answers said the target lacks, as a run keeps it: the next request asks without it.</summary>
     public Action<OwnerFetchCache> Keep { get; init; } = _ => { };
 }
@@ -1229,6 +1236,7 @@ public sealed class KeyedFetch
                     // target lacks leave the query, which is asked again.
                     Again = (answer, sent) => plan.DropUnknown(answer, sent) ? plan.Query([CheckKey]) : null,
                     Learned = learned,
+                    Rank = plan.Rank,
                     Keep = plan.Keep,
                 };
             })
@@ -1712,6 +1720,15 @@ public sealed class KeyedFetch
             }
 
             return dropped;
+        }
+
+        /// <summary>The place the owner query asks a path at: under the alias, then under the owning row, then under an alias a continued stage adds.</summary>
+        public int Rank(string path, bool parent)
+        {
+            var asked = parent ? Target.RemoteParentSelect : Target.RemoteSelect;
+            var at = asked is null ? -1 : asked.ToList().IndexOf(path);
+
+            return at < 0 ? 2_000_000 : (parent ? 1_000_000 : 0) + at;
         }
 
         /// <summary>Keeps what the owners said this target lacks in <paramref name="cache"/>, for the requests after this one.</summary>

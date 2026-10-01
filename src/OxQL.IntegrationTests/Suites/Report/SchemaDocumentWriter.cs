@@ -181,6 +181,7 @@ internal static class SchemaDocumentWriter
                 })]),
             ["stored"] = member.Stored ? null : false,
             ["storedAs"] = shape["storedAs"]?.DeepClone(),
+            ["relation"] = member.Relation is { } relation ? new JsonObject { ["name"] = relation.Name, ["member"] = relation.Member } : null,
         };
     }
 

@@ -137,7 +137,7 @@ internal static class ReportFixtureExport
 
         files.Add(Write(directory, "explain-invalid.json", Case(
             "A2b with a select path the delivery attempt lacks (statuz) in the lookup continued at transport: explain answers valid:false with the owner's UNKNOWN_PATH mapped to the caller's stage",
-            invalid, contract: 2, Answer(await ReportExplain.ExplainAsync(ledger, invalid), 200))));
+            invalid, contract: 2, Normalised(Answer(await ReportExplain.ExplainAsync(ledger, invalid), 200)))));
         files.Add(Write(directory, "strict-missing.json", Case(
             "A1 on the invoice whose ERP line points at a deleted source line: strict refuses with RESOLVE_MISSING (not_found)",
             missing, contract: 2, Answer(await ledger.QueryAsync(missing), 422))));
@@ -182,6 +182,15 @@ internal static class ReportFixtureExport
             answer.StatusCode.Should().BeGreaterThanOrEqualTo(400, answer.ToString());
 
         return new JsonObject { ["status"] = answer.StatusCode, ["answer"] = answer.Body?.DeepClone() };
+    }
+
+    /// <summary>An explain answer without what changes between runs, as a golden answer is kept.</summary>
+    private static JsonObject Normalised(JsonObject answer)
+    {
+        if (answer["answer"] is { } body)
+            answer["answer"] = Explain.ExplainGolden.Normalise(body.DeepClone());
+
+        return answer;
     }
 
     private static string Write(string directory, string relative, JsonObject content)

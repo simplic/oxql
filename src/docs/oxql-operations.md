@@ -196,8 +196,8 @@ a caller checks a request against before sending it are also published in the sc
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
 | `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
 | `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too |
-| `Explain:DefaultShapeDepth` / `MaxTypeMembers` | 2 (never above `MaxShapeDepth`) / 300 | the levels of members the type table lists below each root when the request names no `shape.depth` / the member rows of one type, then `truncated` | — | no | an owner answers its types at the depth the origin was asked for |
-| `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the types keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
+| `Explain:DefaultShapeDepth` / `MaxTypeMembers` | 2 (never above `MaxShapeDepth`) / 300 | only with `include: ["types"]`: the levels of member rows listed below each root when the request names no `shape.depth` / the member rows of one type, then `truncated` | — | no | by default an answer names its types and lists no member; an owner writes its rows out at the depth the origin was asked for |
+| `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the member rows (where asked for) keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
 | `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | the distinct owner services one explain asks / the owner calls it causes in all, one per service and round, transitive ones included | note `EXPLAIN_LIMIT` (`ownerServices`, `ownerCalls`) | no | an internal explain carries the calls left; an owner starts none beyond them |
 | `Explain:RatePerMinute` / `RateBurst` | 20 / 5 | the public explain route, per organisation and user: a token bucket, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic |
 | `Explain:MaxConcurrentPerUser` / `MaxConcurrentPerHost` | 2 / 8 | explains in flight on the public route, per user and per host | 429 `EXPLAIN_LIMIT` (`concurrentPerUser`, `concurrentPerHost`) | no | — |
@@ -276,8 +276,8 @@ Anonymous, always 200, and never waits for another service:
 ## `POST /oxql/explain`
 
 Everything about a query without running it, in one answer: whether it binds and every error, each
-stage with where it runs and the shape of the row after it, every alias, one shared table of types,
-the result columns, the owners asked, engine-behaviour notes, and, on request, the plan. On by
+stage with where it runs and the shape of the row after it, every alias, the types the row's roots
+have, the result columns, the owners asked, engine-behaviour notes, and, on request, the plan. On by
 default (`Explain:Enabled`); 404 while it is off. It is the rule source of the Angular OxQL Studio:
 the builder, completion, hover and markers read explain and nothing else, with one call per edit.
 There is no separate validate or describe endpoint. The request (a plain query or the envelope
@@ -288,33 +288,40 @@ Explain is the bind trace, normalised. Nothing in it is derived a second way: th
 binder's, the owner facts are the plan a run builds, and what lies at another service is what that
 service's engine answered.
 
+**It enriches the schema documents and never re-sends them.** A caller holds the schema document of
+each service (`GET /schema`), which describes every member of every entity. The answer therefore
+names its types by reference (entity, service, the revision of that service's document) and says
+only what the query adds: the aliases, and per root and stage a rule that says where the members
+stand. A member's flags are a function of its descriptor and that rule (below). A caller without
+schema documents asks for the member rows with `include: ["shape", "notes", "types"]`.
+
 ```jsonc
 {
   "valid": true, "contract": 2,
   "engine": { "version": "2.1.0.0", "contract": 2, "capabilities": ["batch", "…", "explain"] },
   "etag": "W/\"x3:4575645a135436d89b17f6ade5f1f30d\"",
-  "revision": { "schema": "sha256:…", "addons": null, "owners": { "transport": "sha256:…" } },
+  "revision": { "schema": { "fleet": "sha256:…", "ledger": "sha256:…", "transport": "sha256:…" }, "addons": null },
   "cache": { "maxAge": 30, "dependsOn": ["fleet", "transport"], "complete": true },
   "errors": [],                                     // every binding error when valid is false
   "diagnostics": [],                                // what binding diagnosed, also when it does not bind
   "notes": [ { "code": "JOIN_AFTER_PAGE", "stage": 4, "path": "sourceLine", "message": "…",
                "params": { "alias": "sourceLine", "kind": "resolve" } } ],
-  "entry": { "shape": { "paging": "cursor", "grouped": false, "unwound": [], "projection": null,
-                        "roots": { "": "t:ledger.transaction" }, "flags": {} } },
+  "entry": { "shape": { "paging": "cursor", "grouped": false, "unwound": [],
+                        "roots": { "": "t:ledger.transaction" }, "rules": {} } },
   "stages": [
-    { "index": 1, "kind": "unwind", "status": "ok", "placement": null,
+    { "index": 1, "kind": "unwind", "status": "ok",
       "reads": [ { "path": "items", "use": "unwind" } ],
       "creates": ["item", "position"],
-      "shape": { "paging": "offset", "grouped": false, "unwound": ["items"], "projection": null,
+      "shape": { "paging": "offset", "grouped": false, "unwound": ["items"],
                  "roots": { "": "t:ledger.transaction", "item": "t:ledger.transaction#items", "position": "k:int" },
-                 "flags": { "": "o:1", "item": "o:2", "position": "o:3" } } },
+                 "rules": { "": "r:1", "item": "r:2", "position": "r:3" } } },
     { "index": 4, "kind": "resolve", "status": "ok",
       "placement": { "executor": "keyed-remote", "phase": "afterPage", "host": "transport", "owner": 0 },
       "reads": [ { "path": "erpLine.sourceBillingLineReference.id", "use": "resolveKey", "alias": "erpLine" },
                  { "path": "erpLine.sourceBillingLineReference.type", "use": "caseCondition", "alias": "erpLine" } ],
       "creates": ["sourceLine", "sourceParent"],
       "shape": { "…": "…", "roots": { "…": "…", "sourceLine": "u:sourceLine", "sourceParent": "u:sourceParent" },
-                 "flags": { "…": "…", "sourceLine": "o:5", "sourceParent": "o:6" } } }
+                 "rules": { "…": "…", "sourceLine": "r:5", "sourceParent": "r:5" } } }
   ],
   "aliases": {
     "sourceLine": {
@@ -322,11 +329,10 @@ service's engine answered.
       "heldBy": "transport", "complete": true, "lookupOn": true, "type": "u:sourceLine",
       "loads": ["totalPrice"], "shows": ["totalPrice"], "hint": null,   // the projection names sourceLine.totalPrice
       "reference": { "path": "erpLine.sourceBillingLineReference.id",
-                     "cases": [ { "when": { "path": "type", "equals": ["logistics"] }, "keyAs": null,
+                     "cases": [ { "when": { "path": "type", "equals": ["logistics"] },
                                   "targets": [ { "entity": "transport.shipment", "item": "billingLines", "field": "id", "remote": true },
-                                               { "entity": "transport.tour", "item": "billingLines", "field": "id", "remote": true } ] } ],
-                     "keyAs": null, "elements": null },
-      "outcome": { "as": null, "values": ["ambiguous", "not_found", "invalid_key", "owner_unanswered"] },
+                                               { "entity": "transport.tour", "item": "billingLines", "field": "id", "remote": true } ] } ] },
+      "outcome": { "values": ["ambiguous", "not_found", "invalid_key", "owner_unanswered"] },
       "targets": [ { "target": "transport.shipment#billingLines", "service": "transport", "remote": true, "grouped": true,
                      "owner": 0, "continued": [5, 6, 8], "notApplicable": [7], "type": "t:transport.shipment#billingLines" },
                    { "target": "transport.tour#billingLines", "…": "…", "continued": [7], "notApplicable": [5, 6, 8] } ] },
@@ -334,27 +340,22 @@ service's engine answered.
                         "continuedFrom": { "alias": "sourceParent", "target": "transport.shipment" }, "type": "t:transport.tour" }
   },
   "types": {
-    "t:ledger.transaction#items": {
-      "entity": "ledger.transaction", "item": "items",
-      "variants": ["TransactionItem", "ArticleTransactionItem", "BillingLineTransactionItem", "…"],
-      "onlyFor": [ ["BillingLineTransactionItem"], ["ArticleTransactionItem", "BillingLineTransactionItem"] ],
-      "members": [ ["id", "guid", 0, "588c3"],
-                   ["billingLineId", "guid", 1, "1588c3", null, 0, { "simple": true, "cases": [ { "targets": [ { "entity": "ledger.billing_line", "field": "id" } ] } ] }],
-                   ["type", "object", 1, "40800", { "children": true }] ] },
-    "u:sourceParent": { "of": ["t:transport.shipment", "t:transport.tour"],
-                        "members": [ ["id"], ["shipmentNumber", [0]], ["number", [1]] ] }
+    "t:ledger.transaction":       { "entity": "ledger.transaction", "service": "ledger", "schemaRevision": "sha256:…" },
+    "t:ledger.transaction#items": { "entity": "ledger.transaction", "item": "items", "service": "ledger", "schemaRevision": "sha256:…" },
+    "t:transport.shipment":       { "entity": "transport.shipment", "service": "transport", "schemaRevision": "sha256:…" },
+    "t:fleet.vehicle":            { "entity": "fleet.vehicle", "service": "fleet", "schemaRevision": "sha256:…" },   // as transport's answer named it
+    "u:sourceParent":             { "of": ["t:transport.shipment", "t:transport.tour"] }
   },
-  "flagSets": {
-    "588c3": { "operators": ["eq", "neq", "in", "nin", "exists"], "sortable": true, "groupable": true,
-               "unwindable": false, "projectable": true, "folds": false, "underCollection": 0 },
-    "o:5": { "": "40000", "~": { "588c3": "40000", "1588c3": "140000" } },
-    "o:10": { "*": null, "id": "588c3" }
+  "rules": {
+    "r:1": { "unwound": ["items"] },                 // the entity row once items is unwound
+    "r:2": { "self": "42800" },                      // an element: its members have their own flags
+    "r:3": { "self": "588ff" },                      // a scalar
+    "r:5": { "self": "40000", "under": "owner" }     // an owner's rows, joined after the page
   },
   "result": { "paging": "offset",
-              "columns": [ { "path": "number", "kind": "string", "nullable": false, "stage": null, "root": "", "present": "always" } ],
-              "outcomes": [ { "alias": "sourceLine", "as": null, "stage": 4, "values": ["ambiguous", "not_found", "invalid_key", "owner_unanswered"] } ] },
-  "owners": [ { "service": "transport", "remote": true, "via": null, "route": { "apiName": "transport-api", "apiVersion": null },
-                "answered": true, "calls": 2, "cached": false, "ms": 18, "revision": "sha256:…",
+              "columns": [ { "path": "number", "kind": "string", "nullable": false, "root": "", "present": "always" } ] },
+  "owners": [ { "service": "transport", "remote": true, "route": { "apiName": "transport-api" },
+                "answered": true, "calls": 2, "cached": false, "ms": 18,
                 "engine": { "version": "2.1.0.0", "contract": 2 } },
               { "service": "fleet", "remote": true, "via": "transport", "…": "…" } ],
   "catalog": [],
@@ -374,15 +375,21 @@ service's engine answered.
   as; a contract 1 request is rewritten by the compatibility binder and answered the same way.
 - **`engine`.** `contract` is the contract the engine speaks. `2` is the marker of this package: an
   engine that reports it has the whole contract 2 language and this answer.
+- **Absent members.** A member that would be null is left out, except where null says something:
+  a root whose owner did not answer (`roots`), `loads`, `shows` and `hint`, an owner never asked
+  (`answered`), and the revisions.
 - **`etag`, `revision`, `cache`.** `etag` changes when the request, a revision, the capabilities or
-  the completeness of the answer changes. `revision` names what the answer was bound against: the
-  host's schema revision, a hash of the asking organisation's addon definitions it read, and each
-  answering owner's schema revision. `cache.dependsOn` lists the owner services the answer depends
+  the completeness of the answer changes. `revision` names what the answer was bound against:
+  `schema`, per service, the revision of the schema document of this host and of every owner that
+  answered, the owners those asked included (`null` for a host that publishes none), and `addons`, a
+  hash of the asking organisation's addon definitions it read. A caller whose document of a service
+  has another revision loads it again before it reads that service's types.
+  `cache.dependsOn` lists the owner services the answer depends
   on, transitive ones included; `cache.complete` is false when something the answer would say is
   missing (an owner did not answer, a limit was hit, the answer was trimmed), and such an answer is
   never kept as the complete one. The host sets no `ETag` header yet.
 - **`stages`**, one per caller stage: `status` `ok`, `error`, or `skipped` (it failed only because it
-  reads an alias an earlier stage failed to create); `placement` for a join that runs, else `null`:
+  reads an alias an earlier stage failed to create); `placement` for a join that runs, else absent:
   `executor` (`inline`, `keyed-local`, `keyed-remote`, `continued`), `phase` (`beforePage`,
   `afterPage`, `owner`), `host` (the service whose engine runs the stage) and `owner` (the index of
   its owner in `owners`); `creates`, the names of the aliases it adds; `shape`, the row after the
@@ -400,10 +407,12 @@ service's engine answered.
   carries the reads its owner answered, in this host's paths, since only the owner binds it.
   "Why is this member loaded" is every read whose `alias` is the join's.
 - **`shape`**: `paging` (`cursor` while every row is one entity row, `offset` after an unwind or
-  group), `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection), `roots`
-  (each root the row carries, `""` the entity itself, pointing to its type: `t:<entity>[#item]`,
-  `u:<alias>`, `k:<kind>` for a scalar or a group output, `null` for an alias whose owner did not
-  answer), and `flags` (per root, the override set that says where a member differs here from its
+  group), `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection; absent
+  while none ran), `removed` (the paths an exclusion projection removed and the collections an
+  unwind with `keepPath: false` took out; absent when there is none), `roots` (each root the row
+  carries, `""` the entity itself, pointing to its type: `t:<entity>[#item]`, `u:<alias>`,
+  `k:<kind>` for a scalar or a group output, `null` for an alias whose owner did not answer), and
+  `rules` (per root, the rule that says where its members stand here; a root without one has its
   type's own flags).
 - **`aliases`**, by name: `stage` (the creating stage), `node` (`entity`, `element`, `array`,
   `remote`, `keyed`, `scalar`, `group`), `entities` (the targets it may hold, `entity` or
@@ -414,8 +423,8 @@ service's engine answered.
   bound), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
   it is asked at, whether its owner query is `grouped`, and the stages `continued` there or
   `notApplicable` to its rows), `continuedFrom` (`{ alias, target }` of a stage continued at an
-  owner), `outcome` (`{ as, values }`: the data-loss outcomes the join may have; `as` is null until
-  a stage names the row member that carries the outcome), `droppedAt` (the stage whose projection
+  owner), `outcome` (`{ values }`: the data-loss outcomes the join may have; no row member carries
+  the outcome until a stage names one), `droppedAt` (the stage whose projection
   took it out of the row) and `becomes` (a later stage holds it differently: an unwound lookup
   alias). A join's alias (a resolve's or lookup's `as`, a `parentAs`, an alias a continued stage adds)
   also says what the join loads: `loads` (the paths fetched under the alias, in ordinal order: for a
@@ -425,9 +434,64 @@ service's engine answered.
   or `null`). `loads` and `shows` are `null` for an alias of an owner's rows kept whole without a
   hint: the owner's own key and display members. For an alias a continued stage adds, the three are
   its owner's answer, absent when the owner did not answer.
-- **`types`**, each member described once. `t:<entity>[#item]` is a concrete type: `entity`, `item`,
-  `variants` (the names `is` accepts), `onlyFor` (the distinct variant sets its rows point to),
-  `members` and `truncated`. A member row is
+- **`types`**, by reference. `t:<entity>[#item]` names a concrete type: `entity`, `item` (the item
+  collection whose element it is), `service` (the service that owns the entity) and
+  `schemaRevision` (the revision of that service's schema document; absent when it publishes none).
+  Its members are the entity's property list in that document, walked from the entity: a member
+  whose leaf (arrays unwrapped) is an object has that entry's properties as members, unless the
+  entry is already on the way from the entity; an item type's members are the paths below its
+  collection. The asking organisation's addon definitions (`GET /schema/addons`) are the members of
+  the entity's `addon` member. `u:<alias>` is the union type of an alias with several targets:
+  `of`, its targets' types. A path under it is the first target's in `of` that has it, as a path
+  under a keyed alias binds.
+- **Types of another service** are never built here. A remote alias's type is what its owner
+  named in its answer to the check of the owner query the run sends, and a continued alias's is
+  what its owner bound it to; an owner's answer carries its own owners' types in turn, so an entity
+  this host cannot describe is named with its service and revision all the same. For a request
+  that does not bind there is no owner query to check, and the owner names its entity itself. An
+  owner that does not answer leaves the alias `complete: false` without a type; nothing else stands
+  in for it.
+- **A member's flags** say what may be done with it at one point: the `operators` a condition
+  admits (a member is filterable exactly when it admits one), `sortable`, `groupable`,
+  `unwindable`, `projectable`, `folds` (a string comparison folds by default), `underCollection`
+  (collections above it that are not unwound) and, on a reference, `follow` (`one`, `elements`,
+  `none`). They are a function of the member's descriptor and of where it stands. Let `above` be
+  the collections above it (up to the entity) that are not unwound, and `crossed` the arrays its
+  path crosses below the root, itself included; a collection is an `array`, or a `dictionary` whose
+  `storedAs` is `arrayOfDocuments` or `arrayOfArrays`, and an unwound collection is its element.
+  A member that is not stored (`stored: false` on it or above it) is projectable and nothing else.
+  Otherwise, with `leaf` the descriptor with arrays unwrapped: it is filterable when the leaf is a
+  scalar or an enum not `storedAs: "document"`; then it admits `eq`, `neq`, `in`, `nin`, `exists`,
+  the ordered operators on `int`, `long`, `double`, `decimal`, `date`, `dateTime`, `timeSpan`,
+  `string` and `enum`, and `contains`, `startsWith`, `endsWith`, `regex` on a `string` not
+  `storedAs: "codePoint"`; a stored member that is not filterable admits `exists`. With `above` 0
+  an object whose pool entry has `variants` admits `is`, and an array of objects `any`. It is
+  sortable when filterable, `above` is 0 and it is no array or dictionary; groupable when `above`
+  is 0 and its kind is a scalar or an enum; unwindable when `above` is 0 and it is a collection; it
+  folds when filterable and the leaf is a `string`; a member that declares a reference is followed
+  as `one` when `crossed` is 0, `elements` when 1, `none` beyond. A flag id, where the answer
+  writes one, is these flags packed into a hexadecimal number, the same at every engine: bits 0 to
+  14 the operators (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `contains`, `startsWith`,
+  `endsWith`, `exists`, `regex`, `is`, `any`), then `sortable`, `groupable`, `unwindable`,
+  `projectable`, `folds`, two bits of `follow` (1 `one`, 2 `elements`, 3 `none`) and, from bit 22,
+  `underCollection`.
+- **`rules`**, the query's part of the flags: per root and stage (`shape.rules`), never per member.
+  `self` is the flag id of the root itself (every named root has it). `under` says the rows are not
+  the page's own: `collection`, a lookup's array (`above` and `crossed` are one more); `afterPage`,
+  rows joined after the page from local targets (a member is projected and followed, nothing else,
+  and counts no collection above it; with `many` the alias holds an array, and `crossed` is one
+  more); `owner`, rows another service holds (nothing sorts, groups or unwinds; with `filter` a
+  condition may compare a member's value, as a semi-join on the owner, never `is` or `any`; without
+  it no condition). `unwound` lists the collections below the root that are unwound here, relative
+  to it. `shows` lists the paths the row carries under a join's alias where that is not every
+  member (under contract 1, the join's select). A member is not in the row when `shape.removed`
+  holds its path or one above it, when `shape.projection` holds neither its path, one above it nor
+  one below it, or when `shows` does not. Every flag so derived is the binder's own answer for
+  that path at that point (`Shape.Resolve`): the tests rebuild the written-out answer from the
+  schema documents and the rules for every reference query.
+- **`include: ["types"]`** writes the members out, for a caller without schema documents. Each
+  `t:` entry then also carries `variants` (the names `is` accepts), `onlyFor` (the distinct variant
+  sets its rows point to), `members` and `truncated`. A member row is
   `[path, kind, nullable, flags, more, onlyFor, reference, addon, description]` and ends at its last
   fact: `path` is dotted below the type, `nullable` is 0 or 1, `flags` the id of the member's own
   flags, `more` the rarer facts (`leafKind`, `displayName`, `stored: false`, `collection` for a
@@ -437,46 +501,35 @@ service's engine answered.
   `keyAs`, `cases`), `addon` the organisation's addon definition, and `description` only with
   `include: ["docs"]`. Rows go level by level to `shape.depth` (default `Explain:DefaultShapeDepth`, 2) and
   stop at `Explain:MaxTypeMembers` (300, then `truncated`); a `catalog` entry with the member's path
-  as `prefix` reads what was cut. The addon members of the asking organisation are members of the
-  entity's type. `u:<alias>` is the union type of an alias with several targets: `of` (its targets'
-  types) and `members`, each `[path]`, `[path, have]` when not every target has it (`have`: indexes
-  into `of`) and `[path, have, "unknown"]` when the targets' kinds disagree; a member's facts are
-  those of the first target that has it.
-- **Types of another service** are never built here. A remote alias's type is its owner's answer to
-  the check of the owner query the run sends, and a continued alias's is what its owner bound it to;
-  an owner's answer carries its own owners' types in turn. For a request that does not bind there is
-  no owner query to check, and the owner describes its entity itself. An owner that does not answer
-  leaves the alias `complete: false` without a type; nothing else stands in for it.
-- **`flagSets`.** A flag set says what may be done with a member at one point: the `operators` a
-  condition admits (a member is filterable exactly when it admits one), `sortable`, `groupable`,
-  `unwindable`, `projectable`, `folds` (a string comparison folds by default), `underCollection`
-  (collections above it that are not unwound) and, on a reference, `follow` (`one`, `elements`,
-  `none`). Its id is the flags themselves (a hexadecimal number), the same at every engine. An
-  override set (`o:n`) is one root's differences at one shape: `""` is the root itself, a path is a
-  member that differs, `"~"` maps a member's own flags to what it has here, `"*"` is what every
-  member not named has, and `null` means the member is not in the row (a projection removed it; under
-  contract 1, the join's select did not fetch it). Under contract 2 every member of a join's target
-  is in the row to read. A reader takes the member's own entry, else the `"~"` entry of
-  its own flags, else `"*"`, else its own flags. Every flag is the binder's own answer for that path
-  at that point (`Shape.Resolve`).
+  as `prefix` reads what was cut. A `u:` entry then lists `members`, each `[path]`, `[path, have]`
+  when not every target has it (`have`: indexes into `of`) and `[path, have, "unknown"]` when the
+  targets' kinds disagree. `flagSets` holds each flag set under its id and, under `o:n`, the
+  override sets `shape.flags` points to per root: `""` is the root itself, a path is a member that
+  differs, `"~"` maps a member's own flags to what it has here, `"*"` is what every member not named
+  has, and `null` means the member is not in the row. A reader takes the member's own entry, else
+  the `"~"` entry of its own flags, else `"*"`, else its own flags. The rest of the answer is the
+  same, rules included.
 - **`result`**: `columns`, the final shape's visible members and roots, each with `path`, `kind`,
-  `nullable`, the `stage` that created it (`null`: the entry shape), its `root`, and `present`: when
+  `nullable`, the `stage` that created it (absent: the entry shape), its `root`, and `present`: when
   a row carries the key. `always`: on every row, the value may be null. `ifJoined`: absent on a row
   whose join found nothing. `ifVariant`: only on rows of the variants that have the member.
   `ifStored`: absent on a row whose stored record does not hold the member, or whose parent object
-  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. `outcomes`
-  lists per join that may lose data its `alias`, `stage` and `values`.
+  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. The
+  outcomes a join may have are its alias's (`aliases.<alias>.outcome`).
 - **`owners`**: each owner service once, in pipeline order, this host among them when it answers a
-  keyed stage of its own (`remote: false`): `via` (the owner it was reached through, `null` when this
+  keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this
   host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,
-  `IRemoteOwnerInfo.ApiVersionOf`, or `null`), `answered` (`null`: never asked), `reason` when it did
-  not (`unsupported`, `unreachable`, `timeout`, `limit`), `calls` (one per round it was asked in),
-  `cached`, `ms`, `revision` and its `engine`. With `include: ["plan"]` an owner also lists the
+  `IRemoteOwnerInfo.ApiVersionOf`, absent when it does not say), `answered` (`null`: never asked),
+  `reason` when it did not (`unsupported`, `unreachable`, `timeout`, `limit`), `calls` (one per round
+  it was asked in), `cached`, `ms` and its `engine`; its schema revision is
+  `revision.schema[service]`. With `include: ["plan"]` an owner also lists the
   `queries` it is sent, each once: `stage`, `alias`, `target`, `grouped`, the `query` with keys and
   the page limit elided as `"…"`, and the stages `continued` and `notApplicable`.
 - **`catalog`**: one answer per `catalog` entry of the request, in order: `id`, `entity`, the `type`
-  it points to in `types`, `forwarded` (an owner answered it), with `prefix` the `members` below it
-  and `truncated`, with `referencing: true` `referencedBy` (per path, the same-host entities whose
+  it points to in `types` (a reference, also for an entity of another service, which its owner
+  names), `forwarded` (an owner answered it), `prefix` when the entry named one (it is checked;
+  with `include: ["types"]` the `members` below it and `truncated` are listed), with
+  `referencing: true` `referencedBy` (per path, the same-host entities whose
   members reference it there) and `remoteLookup`, or an `error` (`{ code, message, params }`). It is
   the one lookup of an entity outside the query.
 - **`notes`** (`{ code, message, stage, path, params }`, in stage order, request-wide last) say what
@@ -526,9 +579,11 @@ service's engine answered.
   only), so an owner asks its own owners only within its origin's budget. A part a limit left out is
   an `EXPLAIN_LIMIT` note (`params.limit`: `ownerServices`, `ownerCalls`, `time`; `service`,
   `target`), the answer says what is known with `cache.complete: false`, and nothing is retried.
-- *Size*: an answer over `Explain:MaxAnswerBytes` (256 KB) keeps the first level of its types only,
-  then loses the plan, and says so with an `EXPLAIN_TRIMMED` note (`params.dropped`, `bytes`, `max`)
-  and `cache.complete: false`.
+- *Size*: the answer names its types and writes no member, so it is small: the reference queries
+  of the report scenarios are 22 to 44 KB (3.4 to 5.5 KB gzipped), of which the types are under
+  2 KB. An answer over `Explain:MaxAnswerBytes` (256 KB) keeps the first level of the member rows
+  only where it was asked to write them out (`include: ["types"]`), then loses the plan, and says so
+  with an `EXPLAIN_TRIMMED` note (`params.dropped`, `bytes`, `max`) and `cache.complete: false`.
 
 **It never executes the query.** Explain binds and compiles; it sends the database no `aggregate`
 and no `explain` command. Without `include: ["indexes"]` it reads nothing from the database but, on

@@ -613,8 +613,8 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 ```jsonc
 {
   "query": { "entityType": "…", "variables": { … }, "strict": true, "pipeline": [ … ] },   // page.cursor is ignored
-  "include": ["shape", "notes"],   // default; also "docs", "plan", "indexes"
-  "shape": { "depth": 2 },         // levels of members the type table lists below each root: 1 to 3
+  "include": ["shape", "notes"],   // default; also "types", "docs", "plan", "indexes"
+  "shape": { "depth": 2 },         // with "types": levels of member rows below each root, 1 to 3
   "remote": "check",               // "check" (default) or "cached"
   "catalog": [
     { "id": "c1", "entity": "transport.delivery_attempt", "referencing": true },
@@ -624,23 +624,28 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 ```
 
 - A body with `entityType` at the top is a plain query, which is the envelope with its defaults:
-  `include` `shape` and `notes`, the host's default depth, remote `check`, no catalog. An envelope
+  `include` `shape` and `notes`, remote `check`, no catalog. An envelope
   member other than these five, or a member of the wrong kind, is a 400 ProblemDetails. More than
   `Explain:MaxStages` stages or `MaxCatalogEntries` catalog entries, a `shape.depth` above
   `MaxShapeDepth`, and an `include` or `remote` value the engine does not know are 400
   `EXPLAIN_LIMIT`, before anything is bound.
 - `include` names what the answer carries beyond the verdict, the errors, the stages and the
-  aliases; a list replaces the default. `shape`: the row after each stage, the type table and the
-  flag sets. `notes`: the engine-behaviour notes. `docs`: the descriptions of types, members and enum
-  values in the type table. `plan`: the bound form, the emitted stages and every owner query.
-  `indexes`: the index advisory, the only extra read explain makes.
+  aliases; a list replaces the default. `shape`: the row after each stage, the types its roots have
+  (by reference: entity, service and the revision of the service's schema document, which describes
+  the members) and the rules that say where the members stand. `notes`: the engine-behaviour notes.
+  `types` (it implies `shape`): the member rows of every type written out, the flag sets and the
+  per-root overrides, for a caller that holds no schema document; `shape.depth` and the row cap
+  apply to it alone. `docs`: the descriptions of types, members and enum values in the member rows.
+  `plan`: the bound form, the emitted stages and every owner query. `indexes`: the index advisory,
+  the only extra read explain makes.
 - `remote`: `check` checks what an owner binds at that owner. `cached` is accepted and answered as
   `check` until owners' answers are served from the cache alone.
 - A catalog entry looks up an entity outside the query (a lookup's `from`, a palette, the entities
   referencing one). It carries `id`, `entity` (an entity id, or `entity#item` for the element of an
-  item collection; another service's entity is answered by its owner), an optional `prefix` (a path:
-  the answer then lists the members below it, which is how a member the type table cut is read), an
-  optional `depth` 1–3, and `referencing: true` for the same-host entities referencing the entity. A
+  item collection; another service's entity is answered by its owner), an optional `prefix` (a path,
+  which is checked; with `include: ["types"]` the answer lists the members below it, which is how a
+  member the rows cut is read), an optional `depth` 1–3, and `referencing: true` for the same-host
+  entities referencing the entity. A
   malformed entry is answered with an `error` under the usual codes (`UNKNOWN_STAGE_MEMBER`,
   `INVALID_OPERAND`, `INVALID_PATH`, `UNKNOWN_ENTITY`, `UNKNOWN_PATH`), never a refusal.
 

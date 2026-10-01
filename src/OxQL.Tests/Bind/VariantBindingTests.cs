@@ -11,7 +11,7 @@ namespace OxQL.Tests.Bind;
 /// <summary>
 /// The <c>is</c> operator and <c>unwind.flatten</c> as the binder reads them: what they bind to,
 /// every refusal with its code and message, contract 1, and the canonical render (an unwind
-/// without flatten renders as under 2.0).
+/// without flatten renders without it).
 /// </summary>
 public class VariantBindingTests
 {
@@ -210,7 +210,7 @@ public class VariantBindingTests
     }
 
     [Fact]
-    public async Task A_flattening_unwind_renders_flatten_and_its_depth_and_a_plain_one_renders_as_under_2_0()
+    public async Task A_flattening_unwind_renders_flatten_and_its_depth_and_a_plain_one_renders_without_them()
     {
         var flattened = JsonNode.Parse((await Bound("""[ { "unwind": { "path": "nodes", "flatten": "children", "as": "node" } } ]""")).Canonical)!["stages"]![0]!["unwind"]!;
         var plain = JsonNode.Parse((await Bound("""[ { "unwind": { "path": "nodes", "as": "node" } } ]""")).Canonical)!["stages"]![0]!["unwind"]!;

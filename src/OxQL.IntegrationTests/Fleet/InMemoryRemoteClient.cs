@@ -27,8 +27,8 @@ namespace OxQL.IntegrationTests.Fleet;
 /// unreachable.
 /// <para>
 /// What each owner's shallow health said when reachability was last measured is kept
-/// (<see cref="IRemoteOwnerInfo"/>): the keyed fetch splits batches at the owner's cap and refuses
-/// 2.1 vocabulary to an owner on an older engine.
+/// (<see cref="IRemoteOwnerInfo"/>): the keyed fetch splits batches at the owner's cap and sizes its
+/// key chunks by the owner's page.
 /// </para>
 /// </summary>
 public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor httpContextAccessor) : IRemoteQueryClient, IRemoteOwnerInfo

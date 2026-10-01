@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The keyed fetch <i>by keys</i> of OxQL 2.1 (DESIGN §3.5.2 steps 1, 3–5, §3.3.3, §3.3.4) against
+/// The keyed fetch <i>by keys</i> (DESIGN §3.5.2 steps 1, 3–5, §3.3.3, §3.3.4) against
 /// fakes: typed cases selected per row, <c>elements</c> first and all, the <c>KeyAs</c> conversion,
 /// item targets with their owning row, the grouped owner query (<c>keyedBy</c>) with ambiguity,
 /// and <see cref="SelfOwner"/>, this host answering its own targets through its own engine as an

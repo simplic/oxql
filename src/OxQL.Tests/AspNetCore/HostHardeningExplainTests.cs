@@ -38,7 +38,7 @@ public class HostHardeningExplainTests
         body!["valid"]!.GetValue<bool>().Should().BeTrue();
         body["contract"]!.GetValue<int>().Should().Be(2);
         Strings(body["engine"]!["capabilities"]).Should().Contain("explain").And.NotContain("resolve.chain", "the Sample host has no remote query client")
-            .And.NotContain("oxql.2.1", "the contract is the marker, not a capability per feature");
+            .And.NotContain(capability => capability.StartsWith("oxql.", StringComparison.Ordinal), "the contract is the marker of the language, not a capability");
         body["engine"]!["contract"]!.GetValue<int>().Should().Be(2, "contract 2 marks an engine with the whole language and this answer");
         body["engine"]!["version"]!.GetValue<string>().Should().NotBeNullOrEmpty();
         body["etag"]!.GetValue<string>().Should().StartWith("W/\"x3:");

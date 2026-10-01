@@ -144,7 +144,7 @@ public class NonQueryTests
             ["maxSemiJoinIds"] = defaults.MaxSemiJoinIds, ["resolveKeyChunk"] = defaults.ResolveKeyChunk, ["maxResolveKeys"] = defaults.MaxResolveKeys,
             ["maxRequestBytes"] = defaults.MaxRequestBytes, ["maxBatchQueries"] = defaults.MaxBatchQueries, ["regexMaxLength"] = defaults.RegexMaxLength,
             ["maxLookupLimit"] = defaults.MaxLookupLimit,
-            // 2.1 (DESIGN §3.7)
+            // the report limits (DESIGN §3.7)
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
             ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
@@ -155,12 +155,12 @@ public class NonQueryTests
             // the size of an answer and the cost of one explain
             ["explainDefaultShapeDepth"] = options.Explain.DefaultShapeDepth, ["explainMaxTypeMembers"] = options.Explain.MaxTypeMembers,
             ["explainMaxAnswerBytes"] = options.Explain.MaxAnswerBytes, ["explainMaxOwnerServices"] = options.Explain.MaxOwnerServices,
-            ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls,
+            ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls, ["explainMaxBatchChecks"] = options.Explain.MaxBatchChecks,
             // the rate and concurrency of explain, which the fleet's hosts raise for the suites
             ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
             ["explainMaxConcurrentPerHost"] = 1_000, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
         };
-        expected.Should().HaveCount(41);
+        expected.Should().HaveCount(42);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

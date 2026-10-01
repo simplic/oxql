@@ -18,9 +18,8 @@ namespace OxQL.IntegrationTests.Suites.Joins;
 /// sends over the internal batch route, and the owner runs them for the keys it was sent — the
 /// latest delivery attempt of each shipment line of the mixed invoice under <c>strict</c>, a chain
 /// ledger → transport → transport (in process) → fleet, an owner's refusal of a continued stage
-/// mapped back to the caller's stage, <c>MAX_CONTINUED_STAGES_EXCEEDED</c>, <c>NOT_CONTINUABLE</c>,
-/// and <c>OWNER_NOT_CAPABLE</c> for an owner whose health reports an older engine. The rows are the
-/// report seeds of organisation R.
+/// mapped back to the caller's stage, <c>MAX_CONTINUED_STAGES_EXCEEDED</c> and <c>NOT_CONTINUABLE</c>.
+/// The rows are the report seeds of organisation R.
 /// </summary>
 [Trait("Category", "Integration")]
 public class JoinsContinuationTests
@@ -222,54 +221,5 @@ public class JoinsContinuationTests
 
         refused.ShouldRefuse("NOT_CONTINUABLE", 400)["stage"]!.GetValue<int>().Should().Be(1);
         refused.ErrorCodes.Should().Equal(["NOT_CONTINUABLE"]);
-    }
-
-    /// <summary>An owner of <c>owner.widget</c> whose shallow health reports OxQL 2.0; it refuses every batch, which none must reach.</summary>
-    private sealed class OldOwner : HttpMessageHandler
-    {
-        public int Batches;
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.EndsWith("/OxQL/health", StringComparison.OrdinalIgnoreCase))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{ "status": "healthy", "engine": { "version": "2.0.126.924", "contract": 2 }, "limits": { "maxBatchQueries": 10 } }""", Encoding.UTF8, "application/json"),
-                });
-
-            Interlocked.Increment(ref Batches);
-
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
-        }
-    }
-
-    [Fact]
-    public async Task A_continued_stage_for_an_owner_whose_health_reports_OxQL_2_0_is_OWNER_NOT_CAPABLE_before_anything_is_sent()
-    {
-        await using var fleet = LabFleet.Create("e11_owner_capable");
-        var owner = new OldOwner();
-        fleet.Mount(LabFleet.ExternalOwner, owner);
-
-        var host = await fleet.HostAsync(LabService.Conformance);
-        using var client = host.Client();
-
-        // The host learns the owner's engine where it measures reachability, behind its health.
-        (await client.GetAsync("OxQL/health")).IsSuccessStatusCode.Should().BeTrue();
-        await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
-
-        using var content = new StringContent($$"""
-            { "entityType": "{{Corpus.Conformance}}", "pipeline": [
-                { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
-                { "resolve": { "path": "w.code", "as": "again" } } ] }
-            """, Encoding.UTF8, new MediaTypeHeaderValue("application/json"));
-        using var response = await client.PostAsync("OxQL/query", content);
-        var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
-
-        ((int)response.StatusCode).Should().Be(422, body.ToJsonString());
-        var error = body["errors"]!.AsArray().Should().ContainSingle().Subject!;
-        error["code"]!.GetValue<string>().Should().Be("OWNER_NOT_CAPABLE");
-        error["stage"]!.GetValue<int>().Should().Be(1);
-        error["message"]!.GetValue<string>().Should().Be("owner runs OxQL 2.0.126.924; this stage needs 2.1.");
-        owner.Batches.Should().Be(0);
     }
 }

@@ -131,8 +131,6 @@ public static class Codes
     public const string ResolveUnavailable = "RESOLVE_UNAVAILABLE";
     public const string ResolveRefused = "RESOLVE_REFUSED";
 
-    /// <summary>A stage needs OxQL 2.1 at a remote owner (continued stages, typed or item targets, <c>keyedBy</c>) whose health reports an older engine (422).</summary>
-    public const string OwnerNotCapable = "OWNER_NOT_CAPABLE";
     public const string SemiJoinTooLarge = "SEMI_JOIN_TOO_LARGE";
     public const string QueryTooExpensive = "QUERY_TOO_EXPENSIVE";
     public const string QueryTimeout = "QUERY_TIMEOUT";

@@ -43,7 +43,7 @@ public class OwnerFactsTests
     public async Task The_first_request_reads_the_owners_facts_before_it_sizes_the_batch()
     {
         var runner = new FakeAggregateRunner();
-        var client = new FakeRemoteClient { Probe = _ => new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 1) };
+        var client = new FakeRemoteClient { Probe = _ => new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 1) };
         var options = BindHost.Options(configure => configure.Limits.ResolveKeyChunk = 1);
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
 
@@ -63,7 +63,7 @@ public class OwnerFactsTests
         var client = new FakeRemoteClient
         {
             ProbeDelay = TimeSpan.FromSeconds(5),
-            Probe = _ => new RemoteOwnerInfo("2.0.126.924", 2, null),
+            Probe = _ => new RemoteOwnerInfo("9.9.9", 2, null),
             Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice"))),
         };
         var options = BindHost.Options(configure => configure.Execution.MaxTimeMs = 2_000);
@@ -77,23 +77,6 @@ public class OwnerFactsTests
             .Which.Result.Items[0]!["r"]!["name"]!.GetValue<string>().Should().Be("Alice");
         client.Calls.Should().ContainSingle();
         client.Calls[0].Budget.Should().BeGreaterThan(TimeSpan.FromMilliseconds(1_000), "the owner call keeps nearly all of the phase");
-    }
-
-    [Fact]
-    public async Task An_owner_first_known_to_run_2_0_refuses_a_chain_before_any_batch_is_sent()
-    {
-        var runner = new FakeAggregateRunner { PageRows = [ContactRow(Guid.NewGuid(), ContactId)] };
-        var client = new FakeRemoteClient { Probe = _ => new RemoteOwnerInfo("2.0.126.924", 2, null) };
-        var options = BindHost.Options();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
-
-        var outcome = await engine.ExecuteAsync(BindHost.Request(Invoice, """
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
-            """), BindHost.Context());
-
-        outcome.Should().BeOfType<QueryOutcome.Refused>().Which.Refusal.Errors!.Single().Code.Should().Be(Codes.OwnerNotCapable);
-        client.Calls.Should().BeEmpty();
     }
 
     [Fact]

@@ -158,7 +158,7 @@ public class OwnerFetchRobustnessTests
             options.Execution.ResolveTimeoutMs = 4_000;
         });
         runner.PageRows = [SourceRow(Invoice1, Line1), SourceRow(Invoice2, Line2), SourceRow(Guid.NewGuid(), Guid.NewGuid()), SourceRow(Guid.NewGuid(), Guid.NewGuid())];
-        client.Owners["transport"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 1);
+        client.Owners["transport"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 1);
         client.Delay = TimeSpan.FromMilliseconds(120);
         client.Script = (_, query, _) => TransportOwner(query);
 
@@ -264,7 +264,7 @@ public class OwnerFetchRobustnessTests
     {
         var (engine, runner, client, _) = Host();
         runner.PageRows = [ContactRow(ContactA), ContactRow(ContactB), ContactRow(ContactC)];
-        client.Owners["crm"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 10, MaxPageSize: 2);
+        client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 10, MaxPageSize: 2);
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
 
         Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context()));
@@ -316,7 +316,7 @@ public class OwnerFetchRobustnessTests
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client, cache: cache);
         var fetch = new KeyedFetch(client, engine, cache, options);
 
-        client.Owners["crm"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 1);
+        client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 1);
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Counted(0, false, false);
 
         var keyed = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), new CompileOptions(5_000, null, 10_000));

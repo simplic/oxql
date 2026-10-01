@@ -605,7 +605,7 @@ public class StageRulesTests
         await Error("""[{ "resolve": { "path": "customerId", "as": "customer" } }]""", Codes.AliasCollision);
         await Error("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "sort": [{ "contact.name": "asc" }] }]""", Codes.ResolveNotSortable);
         await Error("""[{ "resolve": { "source": "crm.customer", "localPath": "customerId", "as": "x" } }]""", Codes.UnknownStageMember);
-        // 2.1 raises MaxResolveStages from 2 to 8 per host.
+        // MaxResolveStages is 8 per host.
         static string Resolves(int count) => "[" + string.Join(", ", Enumerable.Range(1, count).Select(n => $$"""{ "resolve": { "path": "customerId", "as": "a{{n}}" } }""")) + "]";
 
         (await Bound(Resolves(8))).Stages.OfType<BoundStage.Resolve>().Should().HaveCount(8);

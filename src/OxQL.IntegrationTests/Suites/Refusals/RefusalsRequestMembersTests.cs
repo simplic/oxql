@@ -7,7 +7,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Refusals;
 
 /// <summary>
-/// OxQL 2.1 request members on a real server (DESIGN §3.0, §3.4.3, §3.12): an unknown top-level
+/// The request members of contract 2 on a real server (DESIGN §3.0, §3.4.3, §3.12): an unknown top-level
 /// member is refused under contract 2 and ignored under contract 1; <c>strict</c> is a contract 2
 /// member whose contract 1 refusal says the request was read as contract 1; a strict request
 /// without cursor or offset pages up to <c>maxReportPageSize</c>.

@@ -8,13 +8,13 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// <see cref="IOxQLQueryService"/> grew in 2.1 without breaking what was written against 2.0: the
-/// internal-call overloads default to the public form and refuse an internal call, and the 2.0
+/// <see cref="IOxQLQueryService"/> has members an implementation need not write: the
+/// internal-call overloads default to the public form and refuse an internal call, and the plain
 /// <c>ExplainAsync(QueryRequest)</c> is still there and explains the plain query.
 /// </summary>
 public class QueryServiceCompatibilityTests
 {
-    /// <summary>A service written against the members 2.0 had, with explain taking the 2.1 request.</summary>
+    /// <summary>A service that implements the public members only, with explain taking the envelope.</summary>
     private sealed class PublicOnlyService : IOxQLQueryService
     {
         public List<string> Calls { get; } = [];

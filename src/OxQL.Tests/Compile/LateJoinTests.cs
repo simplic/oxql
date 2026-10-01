@@ -245,7 +245,7 @@ public class LateJoinTests
     public async Task A_join_a_later_resolve_reads_stays_before_the_resolve()
     {
         // A resolve through the lookup's array needs 'elements' (RESOLVE_ON_COLLECTION); through
-        // its first child it reads one row, as the 2.0 form of this case meant.
+        // its first child it reads one row, as the plain form of this case means.
         var compiled = await Compile("""
             [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number", "customerId"], "first": true } },
              { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]

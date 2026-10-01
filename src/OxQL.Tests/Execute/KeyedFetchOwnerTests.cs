@@ -316,7 +316,7 @@ public class KeyedFetchOwnerTests
             options.Limits.MaxBatchQueries = 10;
         });
         runner.PageRows = [Row(Id1, "a", "c1"), Row(Id2, "b", "c2"), Row(Id3, "c", "c3")];
-        client.Owners["crm"] = new RemoteOwnerInfo("2.1.0.0", 2, MaxBatchQueries: 2);
+        client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 2);
         client.Script = (_, query, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", KeysOf(query)[0], ("name", KeysOf(query)[0])));
 
         var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]""");
@@ -328,9 +328,9 @@ public class KeyedFetchOwnerTests
     [Fact]
     public void The_owner_facts_are_read_off_its_shallow_health()
     {
-        var health = JsonNode.Parse("""{ "status": "healthy", "engine": { "version": "2.1.0.0", "contract": 2 }, "limits": { "maxBatchQueries": 5 } }""");
+        var health = JsonNode.Parse("""{ "status": "healthy", "engine": { "version": "9.9.9", "contract": 2 }, "limits": { "maxBatchQueries": 5 } }""");
 
-        RemoteOwnerInfo.FromShallowHealth(health).Should().Be(new RemoteOwnerInfo("2.1.0.0", 2, 5));
+        RemoteOwnerInfo.FromShallowHealth(health).Should().Be(new RemoteOwnerInfo("9.9.9", 2, 5));
         RemoteOwnerInfo.FromShallowHealth(JsonNode.Parse("""{ "status": "healthy" }""")).Should().Be(new RemoteOwnerInfo(null, null, null));
         RemoteOwnerInfo.FromShallowHealth(null).Should().BeNull();
     }

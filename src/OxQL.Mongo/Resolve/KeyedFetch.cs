@@ -709,10 +709,6 @@ public sealed class KeyedFetch
                 CacheHits = cacheHits,
             };
 
-        // An owner known to run an engine before 2.1 cannot bind what a chain sends it.
-        if (Incapable(compiled.Bound, targets) is { } incapable)
-            return new ResolveResult { Refusal = incapable, CacheHits = cacheHits };
-
         // Round one: the filtered owner queries of every chunk. A remote target of a union whose
         // owner refuses only paths it lacks is asked again without them (the paths of a union are flat).
         var pending = targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList();
@@ -853,7 +849,7 @@ public sealed class KeyedFetch
 
     /// <summary>
     /// Sends a round's queries, batched per owner, owners in parallel; a local target's to this host's
-    /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a 2.1 target
+    /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a target
     /// form) under the chain ceiling, any other under the per-resolve one (DESIGN §3.5.4).
     /// </summary>
     private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, DateTime deadline, CancellationToken cancellationToken)
@@ -1133,7 +1129,7 @@ public sealed class KeyedFetch
     /// </summary>
     public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Explain(bound, stage, strict, null);
 
-    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by (a known pre-2.1 owner is asked the plain query).</summary>
+    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by.</summary>
     public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client) => Explain(bound, stage, strict, client, null);
 
     /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?)"/>, without the paths <paramref name="drops"/> holds as lacked by a target, as a run sends the queries.</summary>
@@ -1252,8 +1248,7 @@ public sealed class KeyedFetch
         foreach (var target in cases.SelectMany(selected => selected.Targets))
             if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
             {
-                var plan = new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape,
-                    legacyOwner: target.IsRemote && IsBefore21(client, ServiceKeyOf(target.Declared.Entity)));
+                var plan = new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape);
 
                 if (drops is not null)
                     plan.Learn(drops);
@@ -1310,7 +1305,7 @@ public sealed class KeyedFetch
         /// owner is asked for and what its answer is cut to (improvement plan §3.S).
         /// </summary>
         public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict,
-            bool union = false, Shape? final = null, bool legacyOwner = false)
+            bool union = false, Shape? final = null)
         {
             Stage = stage;
             Target = target;
@@ -1326,19 +1321,15 @@ public sealed class KeyedFetch
             lifted = new HashSet<string>(Continued.Aliases, StringComparer.Ordinal);
 
             // An entity keyed by its own key has one row per key, which a plain key match serves;
-            // every other target is grouped per key. A plain 2.0 resolve keeps the plain query it
-            // always sent (DESIGN §3.5.7, §3.5.8): its owner may still be on 2.0, or reached over
-            // a route that does not take keyedBy. A request that reads the outcomes (strict, or an
-            // onMissing other than null) is 2.1, and a plain query onto a member that is not the key
-            // sees a second row only when the owner's page happens to hold it, so such a target is
-            // grouped too: its ambiguity then depends neither on the page nor on the cache.
-            // An owner known to run an engine before 2.1 takes no keyedBy; it is asked the plain query
-            // with two rows per key instead, so a second row arrives or the answer has a next page.
+            // every other target is grouped per key (DESIGN §3.5.7, §3.5.8). A target onto a member that
+            // is not the key is grouped also where the stage itself needs no keyed fetch but the request
+            // reads the outcomes (strict, an onMissing other than null, outcomeAs): a plain query sees a
+            // second row under a key only when the owner's page happens to hold it, so the ambiguity
+            // would depend on the page and on the cache.
             var nonKey = target.Declared.Item is not null || !target.Declared.FieldIsKey;
             var readsOutcomes = strict || stage.ReadsOutcomes;
 
-            Grouped = nonKey && (stage.NeedsKeyedFetch || (readsOutcomes && !legacyOwner));
-            PlainRowsPerKey = !Grouped && nonKey && readsOutcomes ? PerKey : 1;
+            Grouped = nonKey && (stage.NeedsKeyedFetch || readsOutcomes);
             Service = target.IsRemote ? ServiceKeyOf(target.Declared.Entity) : SelfService;
 
             // The probe tells a key the filter left out from a missing one, which only a stage
@@ -1357,21 +1348,16 @@ public sealed class KeyedFetch
         public OwnerContinuation Continued { get; }
 
         /// <summary>
-        /// Whether the owner query carries a chain: continued stages, or a target form of 2.1 (typed,
+        /// Whether the owner query carries a chain: continued stages, or a target form beyond the plain one (typed,
         /// item, converted, element-wise); it runs under the chain ceiling.
         /// </summary>
         public bool Chain => !Continued.IsEmpty || Stage.NeedsKeyedFetch;
-
-        /// <summary>Whether the owner must run 2.1 to take the query: continued stages and <c>keyedBy</c> are 2.1 vocabulary.</summary>
-        public bool NeedsOwner21 => !Continued.IsEmpty || Grouped;
 
         /// <summary>The owner's stage index of the first continued stage: where the query as built had its projection.</summary>
         public int ContinuedAt { get; private set; }
 
         public bool Grouped { get; }
 
-        /// <summary>The rows per key a plain query's page holds: two for a non-key target whose outcomes are read at an owner before 2.1, else one.</summary>
-        public int PlainRowsPerKey { get; }
 
         /// <summary>Whether the keys the filtered query does not return are probed without the filter.</summary>
         public bool Probed { get; }
@@ -1426,7 +1412,7 @@ public sealed class KeyedFetch
         /// </summary>
         public QueryRequest Query(IReadOnlyList<string> keys)
         {
-            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? RowsPerKey : null, plainRowsPerKey: PlainRowsPerKey);
+            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? RowsPerKey : null);
 
             if (Continued.IsEmpty)
                 return query;
@@ -1479,7 +1465,7 @@ public sealed class KeyedFetch
             row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
         /// <summary>The existence probe of some keys: the query without the filter, one row per key is enough.</summary>
-        public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true, plainRowsPerKey: PlainRowsPerKey);
+        public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true);
 
         /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
         public bool Union { get; }
@@ -1944,7 +1930,7 @@ public sealed class KeyedFetch
     /// configured smaller would refuse the page as too large.
     /// </summary>
     private int ChunkOf(TargetPlan target) =>
-        KeysPerQuery(options, client, target.Service, target.Grouped || target.PlainRowsPerKey > 1 ? Math.Max(target.RowsPerKey, target.PlainRowsPerKey) : 1);
+        KeysPerQuery(options, client, target.Service, target.Grouped ? target.RowsPerKey : 1);
 
     /// <summary>
     /// The keys one owner query of <paramref name="service"/> carries at <paramref name="rowsPerKey"/> rows per
@@ -1988,8 +1974,7 @@ public sealed class KeyedFetch
 
                 if (shared is null)
                 {
-                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, bound.FinalShape,
-                        legacyOwner: target.IsRemote && IsBefore21(ServiceKeyOf(target.Declared.Entity))));
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, bound.FinalShape));
 
                     // What an owner said this union target lacks, an earlier request learned: not
                     // asked again, and reported whether or not this page reaches the owner (RE-6).
@@ -2055,7 +2040,7 @@ public sealed class KeyedFetch
         return plan;
     }
 
-    /// <summary>The bound cases of a stage; a resolve bound without them (a 2.0 form) has its one simple case.</summary>
+    /// <summary>The bound cases of a stage; a resolve bound without them (the plain form) has its one simple case.</summary>
     private static IReadOnlyList<BoundResolveCase> CasesOf(BoundStage.Resolve stage)
     {
         if (stage.Cases is { Count: > 0 } cases)
@@ -2681,66 +2666,6 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// <c>OWNER_NOT_CAPABLE</c> (DESIGN §3.5.4): a remote target whose query needs 2.1 — continued
-    /// stages or <c>keyedBy</c> — at an owner whose shallow health reports an older engine, refused
-    /// before anything is sent. An owner whose facts are still unknown after the read before the plan,
-    /// or that reports a version this host cannot read, is sent the query: a 2.0 owner ignores
-    /// <c>keyedBy</c> and answers rows that are not grouped per key, which the fetch refuses
-    /// (<c>RESOLVE_REFUSED</c>, a row without its key) or reports as unanswered keys, never as values.
-    /// </summary>
-    private Refusal? Incapable(BoundPipeline bound, IReadOnlyList<TargetPlan> targets)
-    {
-        foreach (var target in targets)
-        {
-            if (target.Chunks.Count == 0 && target.Continued.IsEmpty)
-                continue;
-
-            if (IncapableError(bound, target, client) is { } error)
-                return Refusal.NotExecutable(Codes.OwnerNotCapable, error.Message, error.Stage, [error]);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// The <c>OWNER_NOT_CAPABLE</c> error explain reports for a keyed stage whose run would be refused
-    /// by <see cref="Incapable"/> (explain assumes the page holds keys), or null. Planned by the same
-    /// owner facts; <see cref="ReadOwnerFactsAsync"/> reads them first, as a run does.
-    /// </summary>
-    public static QueryValidationError? IncapableOwner(BoundPipeline bound, IEnumerable<BoundStage.Resolve> stages, bool strict, IRemoteQueryClient? client)
-    {
-        ArgumentNullException.ThrowIfNull(bound);
-        ArgumentNullException.ThrowIfNull(stages);
-
-        foreach (var stage in stages)
-            foreach (var target in PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client))
-                if (IncapableError(bound, target, client) is { } error)
-                    return error;
-
-        return null;
-    }
-
-    /// <summary>The <c>OWNER_NOT_CAPABLE</c> error of one target whose query needs 2.1 at an owner known to run an older engine, or null.</summary>
-    private static QueryValidationError? IncapableError(BoundPipeline bound, TargetPlan target, IRemoteQueryClient? client)
-    {
-        if (client is not IRemoteOwnerInfo owners || target.Service == SelfService || !target.Target.IsRemote || !target.NeedsOwner21)
-            return null;
-
-        if (owners.OwnerOf(target.Service)?.EngineVersion is not { } version || EngineVersionOf(version) is not { } parsed || parsed >= Owner21)
-            return null;
-
-        var stage = target.Continued.IsEmpty ? StageIndexOf(bound, target.Stage) : target.Continued.Origins[0].OriginIndex;
-
-        return new QueryValidationError
-        {
-            Code = Codes.OwnerNotCapable,
-            Message = $"{target.Service} runs OxQL {version}; this stage needs 2.1.",
-            Stage = stage,
-            Params = new Dictionary<string, object?> { ["service"] = target.Service, ["version"] = version, ["needs"] = "2.1" },
-        };
-    }
-
-    /// <summary>
     /// Reads the facts of the owners of <paramref name="stages"/>' remote targets within
     /// <paramref name="slice"/>, as a run reads them before it plans (explain plans by the same facts).
     /// </summary>
@@ -2786,27 +2711,6 @@ public sealed class KeyedFetch
     public static TimeSpan OwnerFactsSlice(TimeSpan remaining) =>
         TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 10, 1, 250));
 
-    /// <summary>Whether the owner of <paramref name="service"/> is known, by its shallow health, to run an engine before 2.1.</summary>
-    private bool IsBefore21(string service) => IsBefore21(client, service);
-
-    private static bool IsBefore21(IRemoteQueryClient? client, string service) =>
-        client is IRemoteOwnerInfo owners && owners.OwnerOf(service)?.EngineVersion is { } version && EngineVersionOf(version) is { } parsed && parsed < Owner21;
-
-    /// <summary>The engine version remote continuation, typed and item targets and <c>keyedBy</c> need at the owner.</summary>
-    private static readonly Version Owner21 = new(2, 1);
-
-    /// <summary>The numeric part of an engine version as health reports it (<c>2.1.0.0</c>, <c>2.0.126-beta</c>), or null.</summary>
-    private static Version? EngineVersionOf(string text)
-    {
-        var numeric = text.Split('-', '+')[0];
-
-        return Version.TryParse(numeric.Contains('.') ? numeric : numeric + ".0", out var version) ? version : null;
-    }
-
-    /// <summary>
-    /// An owner row without the member the host projected and keys by. The host asked for that member,
-    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
-    /// </summary>
     private static Refusal WithoutKey(string targetEntity, string field, int? stage)
     {
         var message = $"The owner of '{targetEntity}' answered a row without the projected member '{field}'.";

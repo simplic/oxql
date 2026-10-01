@@ -15,7 +15,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The outcome matrix of OxQL 2.1 (DESIGN §3.6, §3.4.3) against fakes: per-row join outcomes
+/// The outcome matrix (DESIGN §3.6, §3.4.3) against fakes: per-row join outcomes
 /// become <c>RESOLVE_MISSING</c> under <c>onMissing: "report"</c>, a 422 under <c>"refuse"</c> or
 /// <c>strict</c>; <c>RESOLVE_AMBIGUOUS</c> and <c>RESOLVE_TRUNCATED</c> always travel and refuse
 /// under strict, as do owner failures and <c>PAGE_INCOMPLETE</c>; <c>MaxReportedRows</c> caps the

@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The OxQL 2.1 resolve binding (DESIGN §3.4.1 steps 1–7 without continuation, §3.8, §3.10): the
+/// The resolve binding of contract 2 (DESIGN §3.4.1 steps 1–7 without continuation, §3.8, §3.10): the
 /// new members, the collection guard (<c>RESOLVE_ON_COLLECTION</c>), the declared cases with
 /// <c>target</c> and <c>parentAs</c>, the inline or keyed executor, the shape of a keyed alias,
 /// poisoned aliases and the canonical render. How a keyed resolve executes is
@@ -421,7 +421,7 @@ public class ResolveBindTests
 
         elements["elements"]!.GetValue<string>().Should().Be("all");
         elements["collection"]!.GetValue<string>().Should().Be("Lines");
-        elements.ContainsKey("cases").Should().BeFalse("one simple case renders as the 2.0 members do");
+        elements.ContainsKey("cases").Should().BeFalse("one simple case renders as the plain members alone");
 
         var narrowed = RenderedResolve(await BoundAsync("""[{ "resolve": { "path": "localSource.id", "as": "bl", "target": "rc.shipment", "parentAs": "ship" } }]"""));
 

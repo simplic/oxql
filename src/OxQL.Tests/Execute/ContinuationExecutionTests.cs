@@ -21,8 +21,8 @@ namespace OxQL.Tests.Execute;
 /// continued stages ride in the ordinary owner query between the filter and the projection, the
 /// aliases they add come back on the owner rows and are lifted to the origin row, <c>forTarget</c>
 /// leaves other targets' rows <c>not_applicable</c> without refusing a strict request, an owner's
-/// refusal maps back to the caller's stage and path, an owner on an older engine is
-/// <c>OWNER_NOT_CAPABLE</c>, a chain runs under the chain ceiling with <c>strict</c> in the body, and
+/// refusal maps back to the caller's stage and path, the version an owner's health reports gates
+/// nothing, a chain runs under the chain ceiling with <c>strict</c> in the body, and
 /// a chain through this host's own <see cref="SelfOwner"/> over cyclic data ends.
 /// </summary>
 public class ContinuationExecutionTests
@@ -558,60 +558,25 @@ public class ContinuationExecutionTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Explain_says_OWNER_NOT_CAPABLE_where_the_run_refuses_reading_the_owner_facts_first_as_the_run_does(bool known)
+    [InlineData("1.0.0")]
+    [InlineData("0.3-beta")]
+    [InlineData("99.1.0.0")]
+    [InlineData("chaos-owner")]
+    public async Task The_engine_version_an_owners_health_reports_gates_nothing_a_chain_is_sent_and_explained_whatever_it_says(string version)
     {
-        var (engine, runner, client) = Host();
-        runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
-
-        if (known)
-            client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
-        else
-            client.Probe = _ => new RemoteOwnerInfo("2.0.126.924", 2, null);
-
-        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, ContactChain), BindHost.Context());
-        var answer = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-
-        answer.Valid.Should().BeFalse();
-        var error = answer.Errors.Should().ContainSingle().Which;
-        error.Code.Should().Be(Codes.OwnerNotCapable);
-        client.Probed.Should().Contain("crm", "explain reads the owner facts before it plans, as a run does");
-
-        var run = RefusedWith(await RunAsync(engine, ContactChain));
-        run.Errors![0].Code.Should().Be(Codes.OwnerNotCapable);
-        run.Errors[0].Stage.Should().Be(error.Stage);
-    }
-
-    [Theory]
-    [InlineData("2.0.126.924", true)]
-    [InlineData("2.0.3-beta", true)]
-    [InlineData("2.1.0.0", false)]
-    [InlineData("chaos-owner", false)]
-    public async Task An_owner_whose_health_reports_an_engine_before_2_1_is_OWNER_NOT_CAPABLE_before_anything_is_sent(string version, bool refused)
-    {
+        // Every owner an origin reaches runs this package (an owner needs its internal routes), so no
+        // version is asked for: what the owner cannot bind, it refuses itself.
         var (engine, runner, client) = Host();
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
         client.Owners["crm"] = new RemoteOwnerInfo(version, 2, null);
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(ContactRow());
 
-        var outcome = await RunAsync(engine, ContactChain);
+        Succeeded(await RunAsync(engine, ContactChain));
+        client.Calls.Should().ContainSingle("the chain is sent");
 
-        if (!refused)
-        {
-            Succeeded(outcome);
-            client.Calls.Should().ContainSingle("an owner on 2.1, or one whose version cannot be read, is sent the chain");
-            return;
-        }
+        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, ContactChain), BindHost.Context());
 
-        var error = RefusedWith(outcome).Errors.Should().ContainSingle().Subject;
-        error.Code.Should().Be(Codes.OwnerNotCapable);
-        error.Stage.Should().Be(1, "the continued stage is what needs 2.1");
-        error.Message.Should().Be($"crm runs OxQL {version}; this stage needs 2.1.");
-        client.Calls.Should().BeEmpty();
-
-        // A plain resolve is still sent to that owner: it is 2.0 vocabulary.
-        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""));
+        explained.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Errors.Should().BeEmpty("explain names no owner as too old either");
     }
 
     // ---- owner diagnostics ---------------------------------------------------------------------------

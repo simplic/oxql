@@ -62,6 +62,7 @@ public class PagingLimitsTests
         ["explainMaxAnswerBytes"] = 262_144,
         ["explainMaxOwnerServices"] = 4,
         ["explainMaxOwnerCalls"] = 8,
+        ["explainMaxBatchChecks"] = 64,
         // The fleet's hosts raise the rate and concurrency of explain for the suites (FleetHost); the defaults are 20, 5, 2 and 8.
         ["explainRatePerMinute"] = 600_000,
         ["explainRateBurst"] = 100_000,

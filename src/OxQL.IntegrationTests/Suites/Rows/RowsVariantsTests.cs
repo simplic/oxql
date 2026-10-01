@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Rows;
 
 /// <summary>
-/// Rows of polymorphic and self-similar members on a real server (OxQL 2.1): <c>unwind.flatten</c>
+/// Rows of polymorphic and self-similar members on a real server: <c>unwind.flatten</c>
 /// over three levels of nesting in pre-order, each row without its nested collection, and the
 /// <c>UNWIND_DEPTH_TRUNCATED</c> diagnostic when the host descends fewer levels than are stored
 /// (also through a group); <c>is</c> over a hierarchical discriminator on an object, a collection

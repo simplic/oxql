@@ -13,7 +13,7 @@ namespace OxQL.Tests.Bind;
 
 /// <summary>
 /// <c>unwind.keepPath</c>: <c>false</c> takes the unwound collection out of the row once its
-/// element is under <c>as</c>. The default keeps it (2.0 wire semantics), the option needs
+/// element is under <c>as</c>. The default keeps it, the option needs
 /// <c>as</c> and a member collection, it is a contract 2 member, and a later path under the
 /// dropped collection is an unknown path that says where the element went.
 /// </summary>
@@ -95,7 +95,7 @@ public class UnwindKeepPathTests
     }
 
     [Fact]
-    public async Task KeepPath_false_renders_in_the_canonical_form_and_the_default_renders_as_under_2_0()
+    public async Task KeepPath_false_renders_in_the_canonical_form_and_the_default_renders_without_it()
     {
         var dropped = UnwindOf(await Bound("""[ { "unwind": { "path": "nodes", "as": "node", "keepPath": false } } ]"""));
         var kept = UnwindOf(await Bound("""[ { "unwind": { "path": "nodes", "as": "node" } } ]"""));

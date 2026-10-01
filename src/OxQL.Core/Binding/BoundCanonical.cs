@@ -131,7 +131,7 @@ public static class BoundCanonical
     /// applies to, the aliases it adds and the stage as the owner is sent it before the per-target
     /// rewrite, in wire form with every variable substituted. The owner binds it, so there is no
     /// storage form here; two requests continuing different stages never share a fingerprint. No
-    /// 2.0 request continues a stage, so no earlier render changes.
+    /// request without a continued stage renders one, so a cursor of such a request stays valid.
     /// </summary>
     private static JsonObject RenderContinued(ContinuedStage continued)
     {
@@ -154,8 +154,8 @@ public static class BoundCanonical
 
     /// <summary>
     /// A lookup. <c>sort</c>, <c>first</c> and <c>on</c> are written only when they differ from
-    /// what a 2.0 lookup did (children by key, an array, the entity itself as the parent), so a
-    /// lookup without them renders as it did under 2.0 and its cursors stay valid. The stage
+    /// what a lookup without them does (children by key, an array, the entity itself as the parent), so a
+    /// lookup without them renders without them and its cursors stay valid. The stage
     /// index is bound-only and never written.
     /// </summary>
     private static JsonObject RenderLookup(BoundStage.Lookup lookup)
@@ -192,7 +192,7 @@ public static class BoundCanonical
     /// A lookup of another service's entity (DESIGN §3.4.4): the child as written, the parent key's
     /// storage it joins on, and the members the owner binds — path, select, filter (every variable
     /// substituted), sort, owning-row select — as written, since the owner binds them and this host
-    /// has no storage form of them. No 2.0 request had one, so nothing earlier renders differently.
+    /// has no storage form of them. A request without one renders none, so its cursors stay valid.
     /// </summary>
     private static JsonObject RenderRemoteLookup(BoundStage.Resolve resolve, BoundRemoteLookup lookup)
     {
@@ -227,10 +227,10 @@ public static class BoundCanonical
     }
 
     /// <summary>
-    /// A resolve. The 2.0 members describe the first target of the first case. <c>elements</c>,
+    /// A resolve. The plain members describe the first target of the first case. <c>elements</c>,
     /// <c>collection</c>, <c>narrowedTo</c>, <c>parentAs</c> and <c>cases</c> are written only when
-    /// they differ from what a 2.0 resolve did (one simple case, one value per row, no owning row),
-    /// so a 2.0 resolve renders as it did and its cursors stay valid. The executor, the stage index
+    /// they differ from the plain resolve (one simple case, one value per row, no owning row),
+    /// so a plain resolve renders without them and its cursors stay valid. The executor, the stage index
     /// and <c>onMissing</c> never change rows and are never written.
     /// </summary>
     private static JsonObject RenderResolve(BoundStage.Resolve resolve)
@@ -303,7 +303,7 @@ public static class BoundCanonical
 
     /// <summary>
     /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an
-    /// unwind without it renders as it did under 2.0 and its cursors stay valid.
+    /// unwind without it renders without it and its cursors stay valid.
     /// </summary>
     private static JsonObject RenderUnwind(BoundStage.Unwind unwind)
     {

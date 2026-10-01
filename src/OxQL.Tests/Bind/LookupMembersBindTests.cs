@@ -5,10 +5,10 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The OxQL 2.1 lookup members (DESIGN §3.4.2): <c>sort</c> bound against the child, <c>first</c>
+/// The lookup members of contract 2 (DESIGN §3.4.2): <c>sort</c> bound against the child, <c>first</c>
 /// as one entity row or null, <c>on</c> naming an entity alias of the row as the parent, and
 /// <c>forTarget</c>, which applies only to a stage continued under a remote union alias. A
-/// lookup without them binds and renders as it did under 2.0.
+/// lookup without them binds and renders without them.
 /// </summary>
 public class LookupMembersBindTests
 {
@@ -221,7 +221,7 @@ public class LookupMembersBindTests
     }
 
     [Fact]
-    public async Task The_canonical_form_writes_the_new_members_only_when_they_differ_from_2_0()
+    public async Task The_canonical_form_writes_the_lookup_members_only_when_they_differ_from_the_plain_lookup()
     {
         const string Plain = """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }]""";
         const string Defaults = """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "first": false, "sort": [] } }]""";
@@ -230,7 +230,7 @@ public class LookupMembersBindTests
         var defaults = await BindHost.BoundAsync(BindHost.Probe, Customer, Defaults);
 
         plain.Canonical.Should().NotContain("\"sort\"").And.NotContain("\"first\"").And.NotContain("\"on\"");
-        defaults.Fingerprint.Should().Be(plain.Fingerprint, "first false and an empty sort are what a 2.0 lookup did");
+        defaults.Fingerprint.Should().Be(plain.Fingerprint, "first false and an empty sort are what a lookup without them does");
 
         var sorted = await BindHost.BoundAsync(BindHost.Probe, Customer,
             """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "sort": [{ "when": "desc" }] } }]""");

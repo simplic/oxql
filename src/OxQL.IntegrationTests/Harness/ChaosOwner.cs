@@ -482,7 +482,7 @@ public sealed class ChaosOwner : HttpMessageHandler
         }
 
         // A grouped query (the internal keyedBy): the rows holding a key, at most perKey per key
-        // by record key, as a 2.1 owner's window leaves them.
+        // by record key, as an owner's window leaves them.
         if (query["keyedBy"] is JsonObject keyedBy)
         {
             var path = keyedBy["path"]?.GetValue<string>() ?? "";

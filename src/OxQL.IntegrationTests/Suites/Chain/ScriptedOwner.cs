@@ -31,7 +31,7 @@ public sealed class ScriptedOwner : HttpMessageHandler
     public HttpStatusCode? Status { get; set; }
 
     /// <summary>The engine version the shallow health reports.</summary>
-    public string Version { get; set; } = "2.1.0";
+    public string Version { get; set; } = "9.9.9";
 
     /// <summary>The <c>limits.maxBatchQueries</c> the shallow health reports; none when null.</summary>
     public int? MaxBatchQueries { get; set; }
@@ -46,7 +46,7 @@ public sealed class ScriptedOwner : HttpMessageHandler
         Cut = null;
         Delay = TimeSpan.Zero;
         Status = null;
-        Version = "2.1.0";
+        Version = "9.9.9";
         MaxBatchQueries = null;
     }
 

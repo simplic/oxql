@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.Tests.Core;
 
 /// <summary>
-/// The OxQL 2.1 limits (DESIGN §3.7): their defaults, the lines <see cref="OxQLOptions.Normalise"/>
+/// The report limits (DESIGN §3.7): their defaults, the lines <see cref="OxQLOptions.Normalise"/>
 /// adds for them, and their binding from the host's section.
 /// </summary>
 public class ReportLimitsOptionsTests

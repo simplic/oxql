@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The OxQL 2.1 lookup members on a real server (DESIGN §3.4.2, scenario A2): "the latest
+/// The lookup members of contract 2 on a real server (DESIGN §3.4.2, scenario A2): "the latest
 /// delivery attempt" as <c>first</c> with a <c>sort</c>, the children in the caller's order, a lookup
 /// cut at its limit reported as <c>LOOKUP_TRUNCATED</c>, a lookup <c>on</c> a resolved alias, and the
 /// refusals of an <c>on</c> that names no local entity row. The rows are the report seeds of

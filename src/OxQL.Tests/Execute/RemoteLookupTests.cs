@@ -55,7 +55,7 @@ public class RemoteLookupTests
         stage.Kind.Should().Be("lookup");
         stage.IsRemote.Should().BeTrue();
         stage.Executor.Should().Be(ResolveExecutor.Keyed);
-        stage.NeedsKeyedFetch.Should().BeTrue("a lookup is never the plain 2.0 resolve");
+        stage.NeedsKeyedFetch.Should().BeTrue("a lookup is never the plain resolve");
         stage.Reference.Storage.Should().Be("_id", "the keys are the parent's keys");
         stage.RemoteLookup!.Rows.Should().BeTrue("an entity child is answered in whole rows");
         stage.RemoteLookup.PerKey.Should().Be(101, "the default limit, plus one that tells a truncated parent");
@@ -385,7 +385,7 @@ public class RemoteLookupTests
         result.Notes.Should().NotContain(note => note.Code == Notes.MissingPolicy);
         result.Notes.Should().Contain(note => note.Code == Notes.LookupLimit && note.Stage == 0);
 
-        client.Owners["tr"] = new RemoteOwnerInfo("2.1.0.0", 2, null, MaxPageSize: 202);
+        client.Owners["tr"] = new RemoteOwnerInfo("9.9.9", 2, null, MaxPageSize: 202);
         var sized = ((ExplainOutcome.Success)await engine.ExplainAsync(BindHost.Request(Invoice, $"[{Shipments}]"), BindHost.Context())).Result;
         sized.Notes.Single(note => note.Code == Notes.RemoteLookup).Params!["keysPerQuery"].Should().Be(2, "sized by the owner's own page");
     }

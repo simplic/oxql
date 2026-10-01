@@ -155,6 +155,7 @@ public class OxQLController : ControllerBase
             explainMaxAnswerBytes = options.Explain.MaxAnswerBytes,
             explainMaxOwnerServices = options.Explain.MaxOwnerServices,
             explainMaxOwnerCalls = options.Explain.MaxOwnerCalls,
+            explainMaxBatchChecks = options.Explain.MaxBatchChecks,
             explainRatePerMinute = options.Explain.RatePerMinute,
             explainRateBurst = options.Explain.RateBurst,
             explainMaxConcurrentPerUser = options.Explain.MaxConcurrentPerUser,

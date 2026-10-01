@@ -232,46 +232,31 @@ public class ResolveOutcomeDeterminismTests
         }
     }
 
-    [Fact]
-    public async Task An_owner_before_2_1_is_asked_the_plain_query_with_two_rows_per_key_instead_of_keyedBy()
+    [Theory]
+    [InlineData("1.0.0")]
+    [InlineData("99.1.0.0")]
+    public async Task A_request_that_reads_its_outcomes_asks_a_non_key_target_grouped_whatever_engine_version_its_owner_reports(string version)
     {
         var runner = new FakeAggregateRunner { PageRows = [OrderRow(Order1, "c1"), OrderRow(Order2, "c2")] };
         var client = new FakeRemoteClient();
         var options = BindHost.Options();
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
 
-        client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
-        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(
-            FakeRemoteClient.Row("number", "c1", ("name", "First")),
-            FakeRemoteClient.Row("number", "c1", ("name", "Second")),
-            FakeRemoteClient.Row("number", "c2", ("name", "Other")));
+        client.Owners["crm"] = new RemoteOwnerInfo(version, 2, null);
 
-        var outcome = await engine.ExecuteAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "onMissing": "report" } }]"""), BindHost.Context());
+        await engine.ExecuteAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "onMissing": "report" } }]"""), BindHost.Context());
 
-        var sent = client.Calls.Single().Request.Queries.Single();
-        sent.KeyedBy.Should().BeNull("an owner before 2.1 takes no keyedBy");
-        sent.Pipeline.Single(stage => stage.Page is not null).Page!.Limit.Should().Be(4, "two rows per key, so a second row arrives or the answer has a next page");
-        outcome.Should().BeOfType<QueryOutcome.Success>().Which.Result.Diagnostics!.Select(diagnostic => diagnostic.Code).Should().Equal(Codes.ResolveAmbiguous);
-    }
-
-    [Fact]
-    public async Task Explain_shows_the_plain_query_a_run_sends_an_owner_before_2_1()
-    {
-        var client = new FakeRemoteClient();
-        var options = BindHost.Options();
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
-
-        client.Owners["crm"] = new RemoteOwnerInfo("2.0.126.924", 2, null);
+        client.Calls.Single().Request.Queries.Single().KeyedBy.Should().NotBeNull("the ambiguity of a key must not depend on what the owner's page happens to hold");
 
         var explained = await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]""").Planned(), BindHost.Context());
-
         var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-        result.Alias("contact")["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeFalse("the run asks a 2.0 owner the plain query, and explain shows what the run sends");
-        result.Query(0).ContainsKey("keyedBy").Should().BeFalse();
+
+        result.Alias("contact")["targets"]![0]!["grouped"]!.GetValue<bool>().Should().BeTrue("explain shows what the run sends");
+        result.Query(0).ContainsKey("keyedBy").Should().BeTrue();
     }
 
     [Fact]
-    public async Task A_plain_2_0_resolve_onto_a_non_key_member_keeps_the_plain_query()
+    public async Task A_plain_resolve_onto_a_non_key_member_that_reads_no_outcome_keeps_the_plain_query()
     {
         var runner = new FakeAggregateRunner { PageRows = [OrderRow(Order1, "c1")] };
         var client = new FakeRemoteClient();
@@ -280,6 +265,6 @@ public class ResolveOutcomeDeterminismTests
 
         await engine.ExecuteAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact" } }]"""), BindHost.Context());
 
-        client.Calls.Single().Request.Queries.Single().KeyedBy.Should().BeNull("a 2.0 request reads no outcome, and its owner may be on 2.0");
+        client.Calls.Single().Request.Queries.Single().KeyedBy.Should().BeNull("a request that reads no outcome needs no second row per key");
     }
 }

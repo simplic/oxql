@@ -7,9 +7,9 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The OxQL 2.1 resolve refusals on a real server (DESIGN §3.4.1, §3.10), over the report fleet's
+/// The resolve refusals of contract 2 on a real server (DESIGN §3.4.1, §3.10), over the report fleet's
 /// ledger: a resolve through the transaction's items that are not unwound (the silent wrong
-/// answer of 2.0, now <c>RESOLVE_ON_COLLECTION</c>), a <c>target</c> that is not one of the
+/// answer; it is <c>RESOLVE_ON_COLLECTION</c>), a <c>target</c> that is not one of the
 /// reference's targets, and a <c>parentAs</c> on an entity target. A later stage that only reads
 /// the failed alias adds no error of its own.
 /// </summary>

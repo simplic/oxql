@@ -128,7 +128,7 @@ public class RefusalsServerTests
         Staff("V37", "MAX_PIPELINE_STAGES_EXCEEDED", "21 stages, one over maxPipelineStages", $$"""[{{Repeat(20, _ => """{ "match": { "id": { "neq": null } } }""")}}, {{Page1}}]"""),
         Staff("V38", "MAX_LOOKUP_STAGES_EXCEEDED", "6 lookups, one over maxLookupStages", $$"""[{{Repeat(6, i => $$"""{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "a{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
         Shipment("V39", "MAX_UNWIND_STAGES_EXCEEDED", "6 unwinds, one over maxUnwindStages", $$"""[{{Repeat(6, i => $$"""{ "unwind": { "path": "items", "as": "u{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
-        Template("V40", "MAX_RESOLVE_STAGES_EXCEEDED", "9 resolves, one over maxResolveStages (8 since 2.1)", $$"""[{{Repeat(9, i => $$"""{ "resolve": { "path": "createUserId", "as": "r{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
+        Template("V40", "MAX_RESOLVE_STAGES_EXCEEDED", "9 resolves, one over maxResolveStages (8)", $$"""[{{Repeat(9, i => $$"""{ "resolve": { "path": "createUserId", "as": "r{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
         Staff("V41", "MAX_GROUP_FIELDS_EXCEEDED", "21 group fields, one over maxGroupFields", $$"""[{ "group": { "by": [], "fields": { {{Repeat(21, i => $$"""
             "f{{i}}": { "count": true }
             """)}} } } }]"""),

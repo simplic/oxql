@@ -27,7 +27,7 @@ public interface IOxQLQueryService
     /// The base package's internal batch route calls it with <c>true</c>; the public route never
     /// does, so <c>keyedBy</c> stays <c>UNKNOWN_REQUEST_MEMBER</c> there. The route is the signal:
     /// no header carries it. The default serves the public form and refuses an internal call, so an
-    /// implementation written against 2.0 keeps compiling; the package's own service implements both.
+    /// implementation that knows only the public form keeps compiling; the package's own service implements both.
     /// </summary>
     Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default) =>
         internalCall
@@ -77,8 +77,8 @@ public interface IOxQLQueryService
     }
 
     /// <summary>
-    /// The 2.0 form of <see cref="ExplainAsync(ExplainRequest, CancellationToken)"/>: a plain query,
-    /// explained as the request without an envelope. Kept so code built against 2.0 runs unchanged.
+    /// The plain form of <see cref="ExplainAsync(ExplainRequest, CancellationToken)"/>: a query without an
+    /// envelope, explained with the envelope's defaults.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
         ExplainAsync((ExplainRequest)request, cancellationToken);

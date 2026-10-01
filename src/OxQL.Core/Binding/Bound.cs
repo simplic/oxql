@@ -345,7 +345,7 @@ public abstract record BoundStage
 
     /// <summary>
     /// A resolve. The members up to <paramref name="RemoteFilter"/> describe the first target of
-    /// the first case as 2.0 did, and are all an inline or a plain remote resolve needs;
+    /// the first case, and are all an inline or a plain remote resolve needs;
     /// <paramref name="Cases"/> holds every selected case with its bound targets.
     /// <paramref name="IsRemote"/> is true when some target lives on another host.
     /// <paramref name="Elements"/> is set on a path through one collection that is not unwound,
@@ -371,8 +371,8 @@ public abstract record BoundStage
         BoundRemoteLookup? RemoteLookup = null) : BoundStage
     {
         /// <summary>
-        /// The 2.0 form: one simple case, no <c>elements</c>, no narrowing, no owning row. Such a
-        /// resolve renders as 2.0 did. A remote lookup is never one.
+        /// The plain form: one simple case, no <c>elements</c>, no narrowing, no owning row. Such a
+        /// resolve renders with the members of its first target alone. A remote lookup is never one.
         /// </summary>
         public bool IsPlain => RemoteLookup is null && (Cases is null or [{ Declared.IsSimple: true }]) && Elements is null && NarrowedTo is null && ParentAs is null;
 
@@ -380,8 +380,8 @@ public abstract record BoundStage
         public string Kind => RemoteLookup is null ? "resolve" : "lookup";
 
         /// <summary>
-        /// Whether the resolve needs the keyed fetch of OxQL 2.1 (DESIGN §3.5): a keyed resolve other
-        /// than a plain remote one, which the remote resolver runs as it did under 2.0.
+        /// Whether the resolve needs the keyed fetch (DESIGN §3.5): a keyed resolve other
+        /// than a plain remote one, which is asked with a plain key match.
         /// </summary>
         public bool NeedsKeyedFetch => Executor == ResolveExecutor.Keyed && !(IsRemote && IsPlain);
 

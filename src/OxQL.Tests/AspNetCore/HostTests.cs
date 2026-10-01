@@ -199,7 +199,7 @@ public class HostTests
         var capabilities = body["capabilities"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
         capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "unwind.keepPath", "explain", "compat.v1"], "explain is on by default");
-        capabilities.Should().NotContain("oxql.2.1", "engine.contract 2 is the marker of this package, not a capability");
+        capabilities.Should().NotContain(capability => capability.StartsWith("oxql.", StringComparison.Ordinal), "engine.contract 2 is the marker of this package, not a capability");
 
         var limits = body["limits"]!.AsObject();
 
@@ -217,6 +217,7 @@ public class HostTests
         limits["explainTimeoutMs"]!.GetValue<int>().Should().Be(2_000);
         limits["explainMaxOwnerServices"]!.GetValue<int>().Should().Be(4);
         limits["explainMaxOwnerCalls"]!.GetValue<int>().Should().Be(8);
+        limits["explainMaxBatchChecks"]!.GetValue<int>().Should().Be(64);
         limits["explainMaxAnswerBytes"]!.GetValue<int>().Should().Be(262_144);
         limits["explainMaxTypeMembers"]!.GetValue<int>().Should().Be(300);
         limits["explainDefaultShapeDepth"]!.GetValue<int>().Should().Be(2);
@@ -232,7 +233,7 @@ public class HostTests
         limits["explainMaxStages"]!.GetValue<int>().Should().Be(30);
         limits["explainMaxCatalogEntries"]!.GetValue<int>().Should().Be(10);
         limits["explainMaxShapeDepth"]!.GetValue<int>().Should().Be(3);
-        limits.Count.Should().Be(41,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits.Count.Should().Be(42,"health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

@@ -42,7 +42,7 @@ public sealed record UnwindStage
     public string? Flatten { get; init; }
 
     /// <summary>
-    /// Whether the row keeps the unwound collection beside the alias (the default, as in 2.0).
+    /// Whether the row keeps the unwound collection beside the alias (the default).
     /// <c>false</c> takes it out of the row, so the element is only under <c>as</c>; it needs
     /// <c>as</c> and a member collection. Contract 2 only.
     /// </summary>

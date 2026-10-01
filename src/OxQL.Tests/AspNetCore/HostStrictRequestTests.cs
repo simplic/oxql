@@ -6,9 +6,9 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The host's side of OxQL 2.1 request members (DESIGN §3.0, §3.12) and the published limits
+/// The host's side of the request members of contract 2 (DESIGN §3.0, §3.12) and the published limits
 /// (§3.7): an unknown top-level member is refused, <c>strict</c> under contract 1 is refused
-/// with the hint that the request was read as contract 1, and health publishes the 2.1 limits
+/// with the hint that the request was read as contract 1, and health publishes the report limits
 /// with the values the host runs under.
 /// </summary>
 public class HostStrictRequestTests

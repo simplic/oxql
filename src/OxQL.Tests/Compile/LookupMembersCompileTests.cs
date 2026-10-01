@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// The lookup as it is emitted under OxQL 2.1 (DESIGN §3.4.2): the caller's sort completed by the
+/// The lookup as it is emitted (DESIGN §3.4.2): the caller's sort completed by the
 /// child's key, one child more than the limit and a <c>$set</c> that flags the cut and slices the
 /// array to the limit (<c>LOOKUP_TRUNCATED</c> instead of a silent cut), <c>first</c> as one child
 /// taken out of the array, and <c>on</c> joining under the parent alias without joining the

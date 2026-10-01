@@ -21,7 +21,7 @@ public sealed class Binder
     /// The deepest nesting of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> a condition may have
     /// (<c>MAX_CONDITIONS_EXCEEDED</c> beyond it). Every level is one or two more nested documents in
     /// the compiled pipeline, whose serializer stops at 100; the bound keeps a margin for the stages
-    /// a filter is nested in (a lookup or resolve sub-pipeline). No request the 2.0 host read
+    /// a filter is nested in (a lookup or resolve sub-pipeline). No request a host read before the cap
     /// (JSON depth 32) nests deeper.
     /// </summary>
     public const int MaxConditionDepth = 32;
@@ -1820,7 +1820,7 @@ public sealed class Binder
         /// </summary>
         private async Task BindResolveAsync(ResolveStage resolve, int index)
         {
-            // Step 1: the members. The 2.1 members are contract 2; under contract 1 they are
+            // Step 1: the members. All but path, as, select and filter are contract 2; under contract 1 they are
             // members the stage does not have, as is any of them written with the wrong kind.
             var contract2Members = new (string Name, bool Written)[]
             {
@@ -3609,7 +3609,7 @@ public sealed class Binder
             // A report page multiplies what its lookups fetch: each brings up to its limit of
             // child rows for every row of the page. Beyond the ordinary page the joined rows are
             // held to what an ordinary page can reach at most, so the larger page never carries
-            // more than the 2.0 host could.
+            // more than a host without the cap could.
             if (report && limit > options.Limits.MaxPageSize && limit <= maximum)
             {
                 var perRow = stages.Sum(bound => bound switch

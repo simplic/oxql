@@ -13,7 +13,7 @@ namespace OxQL.IntegrationTests.Suites.Report;
 /// outside strict and under strict, where the report suites and <c>Suites.Joins</c> do not already
 /// hold them: a key two records hold in one chunk of a grouped owner answer beside keys that resolve
 /// (no false <c>not_found</c>); the clerk two employees share, through the plain owner query of a
-/// 2.0 remote resolve onto a non-key member (its ambiguity is seen only when the owner page happens
+/// plain remote resolve onto a non-key member (its ambiguity is seen only when the owner page happens
 /// to hold both rows) and through the grouped query the same resolve sends once it reads its
 /// outcomes (PRE-2b: the same answer cold and warm); a target the filter excludes, told apart
 /// from a missing one by the existence probe; a flatten cut at its depth outside strict; the key
@@ -70,7 +70,7 @@ public class ReportFailureModesTests
     [Fact]
     public async Task R02_PRE2_the_clerk_two_employees_share_alone_on_a_page_is_RESOLVE_PARTIAL_on_the_plain_query_and_RESOLVE_AMBIGUOUS_under_strict()
     {
-        // A 2.0 request reads no outcome and keeps the plain owner query, which asks with a page of
+        // A request that reads no outcome keeps the plain owner query, which asks with a page of
         // one row per key: the owner's second employee is a next page. A strict request reads the
         // outcomes, so its query onto the non-key userId is grouped per key and sees both (PRE-2b).
         var client = await LedgerClient();

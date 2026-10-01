@@ -123,16 +123,6 @@ public sealed partial class MongoQueryEngine
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false,
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }], cancellationToken).ConfigureAwait(false));
 
-        // An owner known to run an engine before 2.1 is refused by a run before anything is sent; explain
-        // says so at the same stage (RL-2).
-        if (KeyedFetch.IncapableOwner(bound, compiled.KeyedResolves, strict, remote) is { } incapable)
-        {
-            if (incapable.Stage is { } at)
-                draft.Failed.Add(at);
-
-            return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false, [incapable], cancellationToken).ConfigureAwait(false));
-        }
-
         // The remote check (DESIGN §4.3): the owner queries of every keyed stage are bound by their
         // owners' internal explain; an owner error there is this request's, at the caller's stage.
         var (checkErrors, checkNotes) = await owners.CheckAsync(bound, strict, cancellationToken).ConfigureAwait(false);
@@ -205,7 +195,7 @@ public sealed partial class MongoQueryEngine
 
         public List<Diagnostic> Notes { get; } = [];
 
-        /// <summary>The caller stages an error of the remote check or of an owner's capability lies at.</summary>
+        /// <summary>The caller stages an error of the remote check lies at.</summary>
         public HashSet<int> Failed { get; } = [];
 
         /// <summary>Per caller stage that is a join that runs: its executor, phase, the service that runs it and the owner it is sent to.</summary>

@@ -70,7 +70,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -93,7 +95,9 @@
           "host": "directory",
           "owner": 0
         },
-        "reads": [],
+        "reads": [
+          {"path":"invoiceRecipient.address.id","use":"resolveKey"}
+        ],
         "creates": ["recipientContact"],
         "shape": {
           "paging": "cursor",
@@ -114,7 +118,11 @@
         "kind": "project",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"invoiceRecipient","use":"project"},
+          {"path":"recipientContact","use":"project","alias":"recipientContact"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -163,6 +171,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
+        "shows": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
+        "hint": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
         "targets": [
           {
             "target": "directory.contact",

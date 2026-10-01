@@ -30,8 +30,8 @@ public class JoinsContinuationTests
     private static string Id(Guid id) => id.ToString("D");
 
     /// <summary>
-    /// A1 with A2b appended after the second resolve (DESIGN §2), A1's flat <c>parentSelect</c> as
-    /// written: each of the two remote targets gets only the paths its row has.
+    /// A1 with A2b appended after the second resolve (DESIGN §2), the owning row's paths projected
+    /// flat: each of the two remote targets gets only the paths its row has.
     /// </summary>
     private static string A1WithLatestAttempt => $$"""
         {
@@ -46,12 +46,13 @@ public class JoinsContinuationTests
                            "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
                            "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
-                           "parentAs": "sourceParent", "parentSelect": ["id", "shipmentNumber", "referenceNumber", "number"] } },
+                           "parentAs": "sourceParent" } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent",
                           "forTarget": "transport.shipment", "as": "lastAttempt",
                           "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
             { "project": { "number": 1, "date": 1, "position": 1, "item.text": 1, "item.quantity": 1,
-                           "item.totalPriceNet": 1, "erpLine": 1, "sourceLine": 1, "sourceParent": 1, "lastAttempt": 1 } },
+                           "item.totalPriceNet": 1, "erpLine": 1, "sourceLine": 1,
+                           "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1, "lastAttempt": 1 } },
             { "sort": [ { "position": "asc" } ] },
             { "page": { "limit": 5000 } }
           ]
@@ -141,7 +142,7 @@ public class JoinsContinuationTests
                 { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
                 { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
                                "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
-                               "parentAs": "sourceParent", "parentSelect": ["id", "shipmentNumber", "referenceNumber", "number"] } },
+                               "parentAs": "sourceParent" } },
                 { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "transport.shipment",
                               "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
                 { "resolve": { "path": "item.references.referenceId", "as": "lineShipment", "elements": "first", "target": "transport.shipment",
@@ -157,7 +158,7 @@ public class JoinsContinuationTests
                 { "project": { "number": 1, "date": 1, "dueDate": 1, "invoiceRecipient": 1, "termsOfPayment.formattedText": 1,
                                "totalPriceNet": 1, "totalPriceGross": 1, "taxKeyTotalPrices": 1, "recipientContact": 1, "clerk": 1,
                                "position": 1, "item.text": 1, "item.quantity": 1, "item.totalPriceNet": 1, "erpLine": 1,
-                               "sourceLine": 1, "sourceParent": 1, "lastAttempt": 1, "lineShipment": 1, "deliveringTour": 1,
+                               "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1, "lastAttempt": 1, "lineShipment": 1, "deliveringTour": 1,
                                "tourVehicle": 1, "driver": 1, "lineTour": 1 } },
                 { "sort": [ { "position": "asc" } ] },
                 { "page": { "limit": 5000 } }

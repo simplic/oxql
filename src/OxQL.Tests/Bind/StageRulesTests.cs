@@ -549,7 +549,7 @@ public class StageRulesTests
         lookup.From.Id.Should().Be(Order);
         lookup.ParentKeyStorage.Should().Be("_id");
         lookup.ChildKeyStorage.Should().Be("CustomerId");
-        lookup.Select.Select(path => path.Storage).Should().Equal("_id", "Number", "Amount");
+        lookup.Select.Select(path => path.Storage).Should().Equal(["Amount", "_id", "Number"], "the load set: the key, the hint the whole alias shows, what the match reads, in ordinal order of the wire paths");
         lookup.Limit.Should().Be(5);
         lookup.ChildScope.Entity.Id.Should().Be(Order);
 

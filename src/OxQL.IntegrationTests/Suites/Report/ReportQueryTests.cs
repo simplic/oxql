@@ -86,9 +86,9 @@ public class ReportQueryTests
         var shipment = rows[0]["sourceParent"]!.AsObject();
         var tour = rows[1]["sourceParent"]!.AsObject();
 
-        shipment.Select(member => member.Key).Should().BeEquivalentTo(["entity", "id", "shipmentNumber", "referenceNumber"], "the flat parentSelect, less what a shipment lacks");
+        shipment.Select(member => member.Key).Should().BeEquivalentTo(["entity", "id", "shipmentNumber", "referenceNumber"], "the paths projected under the owning row, less what a shipment lacks");
         (Text(shipment, "shipmentNumber"), Text(shipment, "referenceNumber")).Should().Be(("SN-2026-0001", "KD-4711"));
-        tour.Select(member => member.Key).Should().BeEquivalentTo(["entity", "id", "number"], "the flat parentSelect, less what a tour lacks");
+        tour.Select(member => member.Key).Should().BeEquivalentTo(["entity", "id", "number"], "the paths projected under the owning row, less what a tour lacks");
         Text(tour, "number").Should().Be("TR-2026-0101");
 
         rows[0]["sourceLine"]!.AsObject().Select(member => member.Key).Should().BeEquivalentTo(["id", "type", "status", "singlePrice", "totalPrice", "quantity"]);

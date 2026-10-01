@@ -33,40 +33,96 @@
         "resolve": {
           "path": "item.billingLineId",
           "as": "erpLine",
-          "select": ["id","sourceBillingLineReference.type","sourceBillingLineReference.id"]
+          "onMissing": "report"
         }
       },
       {
         "resolve": {
           "path": "erpLine.sourceBillingLineReference.id",
           "as": "sourceLine",
-          "parentAs": "sourceParent",
-          "select": ["id"]
+          "onMissing": "report",
+          "parentAs": "sourceParent"
         }
       },
       {
         "resolve": {
           "path": "sourceParent.tours.tourId",
           "as": "deliveringTour",
-          "elements": "first",
-          "select": ["id","number"]
+          "forTarget": "transport.shipment",
+          "elements": "first"
+        }
+      },
+      {
+        "resolve": {
+          "path": "deliveringTour.resource.id",
+          "as": "shipmentVehicle",
+          "target": "fleet.vehicle",
+          "onMissing": "report"
+        }
+      },
+      {
+        "resolve": {
+          "path": "sourceParent.resource.id",
+          "as": "tourVehicle",
+          "forTarget": "transport.tour",
+          "target": "fleet.vehicle",
+          "onMissing": "report"
+        }
+      },
+      {
+        "lookup": {
+          "from": "transport.delivery_attempt",
+          "path": "shipmentId",
+          "on": "sourceParent",
+          "forTarget": "transport.shipment",
+          "as": "lastAttempt",
+          "first": true,
+          "sort": [
+            {
+              "dateTime": "desc"
+            }
+          ]
         }
       },
       {
         "project": {
           "position": 1,
-          "sourceLine": 1,
+          "item.text": 1,
+          "erpLine.id": 1,
+          "erpLine.text": 1,
+          "erpLine.sourceBillingLineReference.type": 1,
+          "erpLine.sourceBillingLineReference.id": 1,
+          "sourceLine.id": 1,
+          "sourceLine.totalPrice": 1,
           "sourceParent.id": 1,
           "sourceParent.shipmentNumber": 1,
           "sourceParent.number": 1,
-          "deliveringTour": 1
+          "deliveringTour.id": 1,
+          "deliveringTour.number": 1,
+          "deliveringTour.resource.id": 1,
+          "shipmentVehicle.id": 1,
+          "shipmentVehicle.matchCode": 1,
+          "shipmentVehicle.registrationPlate.registrationIdentifier": 1,
+          "tourVehicle.id": 1,
+          "tourVehicle.matchCode": 1,
+          "tourVehicle.registrationPlate.registrationIdentifier": 1,
+          "lastAttempt.id": 1,
+          "lastAttempt.dateTime": 1,
+          "lastAttempt.status": 1
         }
+      },
+      {
+        "sort": [
+          {
+            "position": "asc"
+          }
+        ]
       }
     ]
   },
   "status": 200,
   "answer": {
-    "valid": false,
+    "valid": true,
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -74,24 +130,27 @@
     },
     "cache": {
       "maxAge": 30,
-      "dependsOn": ["transport"],
+      "dependsOn": ["fleet","transport"],
       "complete": true
     },
-    "errors": [
-      {"code":"UNKNOWN_PATH","message":"'tours.tourId' is not a path of transport.tour.","stage":5,"path":"sourceParent.tours.tourId","params":{"reason":"notAMember","entity":"transport.tour","owner":{"service":"transport","entity":"transport.tour","target":"transport.tour#billingLines","stage":0,"path":"tours.tourId"}}}
-    ],
+    "errors": [],
     "diagnostics": [],
     "notes": [
       {"code":"OFFSET_PAGING","message":"After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.","stage":1,"params":{"maxOffset":5000}},
-      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"null","strict":false,"dataLoss":["not_found"]}},
+      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); not_found lose data.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"report","strict":false,"dataLoss":["not_found"]}},
       {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
       {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
+      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"report","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
       {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true}},
       {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
-      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"deliveringTour","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}}
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}},
+      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"deliveringTour","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}},
+      {"code":"MISSING_POLICY","message":"A reference of 'shipmentVehicle' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"shipmentVehicle","onMissing":"report","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.tour' only.","stage":7,"path":"sourceParent.resource.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.tour"}},
+      {"code":"MISSING_POLICY","message":"A reference of 'tourVehicle' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":7,"path":"sourceParent.resource.id","params":{"alias":"tourVehicle","onMissing":"report","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
+      {"code":"OWNER_BINDS","message":"This lookup continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":8,"path":"sourceParent","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}}
     ],
     "entry": {
       "shape": {
@@ -252,7 +311,7 @@
       {
         "index": 5,
         "kind": "resolve",
-        "status": "error",
+        "status": "ok",
         "placement": {
           "executor": "continued",
           "phase": "owner",
@@ -290,36 +349,234 @@
       },
       {
         "index": 6,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"deliveringTour.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
+        "creates": ["shipmentVehicle"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": null,
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle"
+          },
+          "flags": {
+            "": "o:1",
+            "item": "o:2",
+            "position": "o:3",
+            "erpLine": "o:4",
+            "sourceLine": "o:5",
+            "sourceParent": "o:6",
+            "deliveringTour": "o:7",
+            "shipmentVehicle": "o:8"
+          }
+        }
+      },
+      {
+        "index": 7,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"sourceParent.resource.id","use":"resolveKey","alias":"sourceParent"},
+          {"path":"sourceParent.resource","use":"caseCondition","alias":"sourceParent"}
+        ],
+        "creates": ["tourVehicle"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": null,
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle",
+            "tourVehicle": "t:fleet.vehicle"
+          },
+          "flags": {
+            "": "o:1",
+            "item": "o:2",
+            "position": "o:3",
+            "erpLine": "o:4",
+            "sourceLine": "o:5",
+            "sourceParent": "o:6",
+            "deliveringTour": "o:7",
+            "shipmentVehicle": "o:8",
+            "tourVehicle": "o:8"
+          }
+        }
+      },
+      {
+        "index": 8,
+        "kind": "lookup",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"sourceParent.id","use":"lookupOn","alias":"sourceParent"}
+        ],
+        "creates": ["lastAttempt"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": null,
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle",
+            "tourVehicle": "t:fleet.vehicle",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "flags": {
+            "": "o:1",
+            "item": "o:2",
+            "position": "o:3",
+            "erpLine": "o:4",
+            "sourceLine": "o:5",
+            "sourceParent": "o:6",
+            "deliveringTour": "o:7",
+            "shipmentVehicle": "o:8",
+            "tourVehicle": "o:8",
+            "lastAttempt": "o:9"
+          }
+        }
+      },
+      {
+        "index": 9,
         "kind": "project",
         "status": "ok",
         "placement": null,
         "reads": [
           {"path":"position","use":"project"},
-          {"path":"sourceLine","use":"project","alias":"sourceLine"},
+          {"path":"item.text","use":"project"},
+          {"path":"erpLine.id","use":"project","alias":"erpLine"},
+          {"path":"erpLine.text","use":"project","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"project","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.id","use":"project","alias":"erpLine"},
+          {"path":"sourceLine.id","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.totalPrice","use":"project","alias":"sourceLine"},
           {"path":"sourceParent.id","use":"project","alias":"sourceParent"},
           {"path":"sourceParent.shipmentNumber","use":"project","alias":"sourceParent"},
           {"path":"sourceParent.number","use":"project","alias":"sourceParent"},
-          {"path":"deliveringTour","use":"project","alias":"deliveringTour"}
+          {"path":"deliveringTour.id","use":"project","alias":"deliveringTour"},
+          {"path":"deliveringTour.number","use":"project","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource.id","use":"project","alias":"deliveringTour"},
+          {"path":"shipmentVehicle.id","use":"project","alias":"shipmentVehicle"},
+          {"path":"shipmentVehicle.matchCode","use":"project","alias":"shipmentVehicle"},
+          {"path":"shipmentVehicle.registrationPlate.registrationIdentifier","use":"project","alias":"shipmentVehicle"},
+          {"path":"tourVehicle.id","use":"project","alias":"tourVehicle"},
+          {"path":"tourVehicle.matchCode","use":"project","alias":"tourVehicle"},
+          {"path":"tourVehicle.registrationPlate.registrationIdentifier","use":"project","alias":"tourVehicle"},
+          {"path":"lastAttempt.id","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.dateTime","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.status","use":"project","alias":"lastAttempt"}
         ],
         "creates": [],
         "shape": {
           "paging": "offset",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["deliveringTour","id","position","sourceLine","sourceParent.id","sourceParent.number","sourceParent.shipmentNumber"],
+          "projection": ["deliveringTour.id","deliveringTour.number","deliveringTour.resource.id","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","item.text","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","position","shipmentVehicle.id","shipmentVehicle.matchCode","shipmentVehicle.registrationPlate.registrationIdentifier","sourceLine.id","sourceLine.totalPrice","sourceParent.id","sourceParent.number","sourceParent.shipmentNumber","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
           "roots": {
             "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
             "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
             "sourceLine": "u:sourceLine",
             "sourceParent": "u:sourceParent",
-            "deliveringTour": "t:transport.tour"
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle",
+            "tourVehicle": "t:fleet.vehicle",
+            "lastAttempt": "t:transport.delivery_attempt"
           },
           "flags": {
-            "": "o:8",
+            "": "o:10",
+            "item": "o:11",
             "position": "o:3",
-            "sourceLine": "o:5",
-            "sourceParent": "o:9",
-            "deliveringTour": "o:7"
+            "erpLine": "o:12",
+            "sourceLine": "o:13",
+            "sourceParent": "o:14",
+            "deliveringTour": "o:15",
+            "shipmentVehicle": "o:16",
+            "tourVehicle": "o:16",
+            "lastAttempt": "o:17"
+          }
+        }
+      },
+      {
+        "index": 10,
+        "kind": "sort",
+        "status": "ok",
+        "placement": null,
+        "reads": [
+          {"path":"position","use":"sort"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["deliveringTour.id","deliveringTour.number","deliveringTour.resource.id","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","item.text","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","position","shipmentVehicle.id","shipmentVehicle.matchCode","shipmentVehicle.registrationPlate.registrationIdentifier","sourceLine.id","sourceLine.totalPrice","sourceParent.id","sourceParent.number","sourceParent.shipmentNumber","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle",
+            "tourVehicle": "t:fleet.vehicle",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "flags": {
+            "": "o:10",
+            "item": "o:11",
+            "position": "o:3",
+            "erpLine": "o:12",
+            "sourceLine": "o:13",
+            "sourceParent": "o:14",
+            "deliveringTour": "o:15",
+            "shipmentVehicle": "o:16",
+            "tourVehicle": "o:16",
+            "lastAttempt": "o:17"
           }
         }
       }
@@ -333,7 +590,6 @@
         "heldBy": "ledger",
         "complete": true,
         "lookupOn": false,
-        "droppedAt": 6,
         "type": "t:ledger.transaction#items"
       },
       "position": {
@@ -352,7 +608,6 @@
         "heldBy": "ledger",
         "complete": true,
         "lookupOn": true,
-        "droppedAt": 6,
         "reference": {
           "path": "item.billingLineId",
           "cases": [
@@ -376,9 +631,9 @@
           "as": null,
           "values": ["not_found"]
         },
-        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type"],
-        "shows": [],
-        "hint": ["id","sourceBillingLineReference.type","sourceBillingLineReference.id"],
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "shows": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "hint": null,
         "targets": [
           {
             "target": "ledger.billing_line",
@@ -428,9 +683,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["id"],
-        "shows": ["id"],
-        "hint": ["id"],
+        "loads": ["id","totalPrice"],
+        "shows": ["id","totalPrice"],
+        "hint": null,
         "targets": [
           {
             "target": "transport.shipment#billingLines",
@@ -438,8 +693,8 @@
             "remote": true,
             "grouped": true,
             "owner": 0,
-            "continued": [5],
-            "notApplicable": [],
+            "continued": [5,6,8],
+            "notApplicable": [7],
             "type": "t:transport.shipment#billingLines"
           },
           {
@@ -448,8 +703,8 @@
             "remote": true,
             "grouped": true,
             "owner": 0,
-            "continued": [5],
-            "notApplicable": [],
+            "continued": [7],
+            "notApplicable": [5,6,8],
             "type": "t:transport.tour#billingLines"
           }
         ],
@@ -493,16 +748,72 @@
         "lookupOn": true,
         "continuedFrom": {
           "alias": "sourceParent",
-          "target": null
+          "target": "transport.shipment"
         },
-        "loads": ["id","number"],
-        "shows": ["id","number"],
-        "hint": ["id","number"],
+        "loads": ["id","number","resource.id"],
+        "shows": ["id","number","resource.id"],
+        "hint": null,
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
         "type": "t:transport.tour"
+      },
+      "shipmentVehicle": {
+        "stage": 6,
+        "node": "remote",
+        "entities": ["fleet.vehicle"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "deliveringTour",
+          "target": "transport.shipment"
+        },
+        "loads": ["id","matchCode","registrationPlate.registrationIdentifier"],
+        "shows": ["id","matchCode","registrationPlate.registrationIdentifier"],
+        "hint": null,
+        "outcome": {
+          "as": null,
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "t:fleet.vehicle"
+      },
+      "tourVehicle": {
+        "stage": 7,
+        "node": "remote",
+        "entities": ["fleet.vehicle"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "sourceParent",
+          "target": "transport.tour"
+        },
+        "loads": ["id","matchCode","registrationPlate.registrationIdentifier"],
+        "shows": ["id","matchCode","registrationPlate.registrationIdentifier"],
+        "hint": null,
+        "outcome": {
+          "as": null,
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "t:fleet.vehicle"
+      },
+      "lastAttempt": {
+        "stage": 8,
+        "node": "remote",
+        "entities": ["transport.delivery_attempt"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "sourceParent",
+          "target": "transport.shipment"
+        },
+        "loads": ["dateTime","id","status"],
+        "shows": ["dateTime","id","status"],
+        "hint": null,
+        "type": "t:transport.delivery_attempt"
       }
     },
     "types": {
@@ -1056,6 +1367,105 @@
           ["financialPartner.address","object",1,"40800",{"children":true}],
           ["financialPartner.accountNumber","string",1,"d9fff"],
           ["financialPartner.personalAccountId","guid",1,"588c3"]
+        ]
+      },
+      "t:fleet.vehicle": {
+        "entity": "fleet.vehicle",
+        "members": [
+          ["id","guid",0,"588c3"],
+          ["organizationId","guid",0,"588c3"],
+          ["isDeleted","bool",0,"588c3"],
+          ["location","string",1,"d9fff"],
+          ["matchCode","string",1,"d9fff"],
+          ["status","object",1,"40800",{"snapshotOf":"fleet.status"}],
+          ["mileage","decimal",1,"588ff"],
+          ["mileageDate","dateTime",1,"588ff"],
+          ["operatingHours","decimal",1,"588ff"],
+          ["fuelTankCapacity","int",1,"588ff"],
+          ["remark","string",1,"d9fff"],
+          ["dispositionSortingKey","string",1,"d9fff"],
+          ["yearOfManufacturing","dateTime",1,"588ff"],
+          ["registrationDocument","string",1,"d9fff"],
+          ["vehicleRegistration","string",1,"d9fff"],
+          ["additionalTechnicalData","object",1,"40800"],
+          ["registrationPlate","object",1,"40800"],
+          ["isSystemVehicle","bool",0,"588c3"],
+          ["phoneNumber","string",1,"d9fff"],
+          ["eMailAddress","string",1,"d9fff"],
+          ["addon","dictionary",1,"40800"],
+          ["department","object",1,"40800"],
+          ["registrationDocumentLocation","string",1,"d9fff"],
+          ["appointments","array",1,"64800",{"leafKind":"object"}],
+          ["loadingSlots","array",1,"64800",{"leafKind":"object"}],
+          ["createDateTime","dateTime",0,"588ff"],
+          ["updateDateTime","dateTime",0,"588ff"],
+          ["createUserId","guid",0,"588c3"],
+          ["updateUserId","guid",1,"588c3"],
+          ["createUserName","string",1,"d9fff"],
+          ["updateUserName","string",1,"d9fff"],
+          ["usableUntil","dateTime",1,"588ff"],
+          ["qrCode","string",1,"d9fff"],
+          ["externalReference","string",1,"d9fff"],
+          ["status.id","guid",0,"588c3"],
+          ["status.organizationId","guid",0,"588c3"],
+          ["status.isDeleted","bool",0,"588c3"],
+          ["status.name","string",1,"d9fff"],
+          ["status.displayName","string",1,"d9fff"],
+          ["status.displayKey","string",1,"d9fff"],
+          ["status.hexColor","string",1,"d9fff"],
+          ["status.isSelectable","bool",0,"588c3"],
+          ["status.createDateTime","dateTime",0,"588ff"],
+          ["status.updateDateTime","dateTime",0,"588ff"],
+          ["status.createUserId","guid",0,"588c3"],
+          ["status.updateUserId","guid",1,"588c3"],
+          ["status.createUserName","string",1,"d9fff"],
+          ["status.updateUserName","string",1,"d9fff"],
+          ["additionalTechnicalData.emptyWeight","decimal",1,"588ff"],
+          ["additionalTechnicalData.totalWeight","decimal",1,"588ff"],
+          ["additionalTechnicalData.tireAmount","int",1,"588ff"],
+          ["additionalTechnicalData.payload","decimal",1,"588ff"],
+          ["additionalTechnicalData.rimSizeAxle1","string",1,"d9fff"],
+          ["additionalTechnicalData.rimSizeAxle2","string",1,"d9fff"],
+          ["additionalTechnicalData.rimSizeAxle3","string",1,"d9fff"],
+          ["additionalTechnicalData.frameColor","string",1,"d9fff"],
+          ["additionalTechnicalData.vehicleExecution","string",1,"d9fff"],
+          ["additionalTechnicalData.hasFixedSuperstructure","bool",0,"588c3"],
+          ["additionalTechnicalData.superstructureParkingSpaces","int",0,"588ff"],
+          ["registrationPlate.countryIso","string",1,"d9fff"],
+          ["registrationPlate.isSeasonal","bool",0,"588c3"],
+          ["registrationPlate.registrationIdentifier","string",1,"d9fff"],
+          ["registrationPlate.remark","string",1,"d9fff"],
+          ["department.id","guid",0,"1588c3",null,null,{"simple":true,"cases":[{"targets":[{"entity":"fleet.department","field":"id"}]}]}],
+          ["department.name","string",1,"d9fff"],
+          ["department.isSelectable","bool",0,"588c3"],
+          ["department.color","string",1,"d9fff"],
+          ["appointments.id","guid",0,"4408c3"],
+          ["appointments.appointmentType","object",1,"440800",{"children":true}],
+          ["appointments.lastDate","dateTime",1,"4408ff"],
+          ["appointments.nextDate","dateTime",1,"4408ff"],
+          ["appointments.remark","string",1,"4c1fff"],
+          ["appointments.supplierGuid","guid",1,"4408c3"],
+          ["appointments.lastValue","int",1,"4408ff"],
+          ["appointments.nextValue","int",1,"4408ff"],
+          ["appointments.checkType","int",0,"4408ff"],
+          ["loadingSlots.id","guid",0,"4408c3"],
+          ["loadingSlots.name","string",1,"4c1fff"],
+          ["loadingSlots.description","string",1,"4c1fff"]
+        ]
+      },
+      "t:transport.delivery_attempt": {
+        "entity": "transport.delivery_attempt",
+        "members": [
+          ["id","guid",0,"588c3"],
+          ["organizationId","guid",0,"588c3"],
+          ["isDeleted","bool",0,"588c3"],
+          ["text","string",1,"d9fff"],
+          ["status","object",1,"40800"],
+          ["dateTime","dateTime",1,"588ff"],
+          ["shipmentId","guid",1,"1588c3",null,null,{"simple":true,"cases":[{"targets":[{"entity":"transport.shipment","field":"id"}]}]}],
+          ["status.id","guid",0,"588c3"],
+          ["status.displayName","string",1,"d9fff"],
+          ["status.displayKey","string",1,"d9fff"]
         ]
       },
       "t:transport.shipment#billingLines": {
@@ -1882,34 +2292,116 @@
         }
       },
       "o:8": {
+        "": "40000",
+        "~": {
+          "588c3": "40000",
+          "d9fff": "40000",
+          "40800": "40000",
+          "588ff": "40000",
+          "64800": "40000",
+          "1588c3": "140000",
+          "4408c3": "440000",
+          "440800": "440000",
+          "4408ff": "440000",
+          "4c1fff": "440000"
+        }
+      },
+      "o:9": {
+        "": "40000",
+        "*": "40000",
+        "shipmentId": "140000"
+      },
+      "o:10": {
         "*": null,
         "id": "588c3"
       },
-      "o:9": {
+      "o:11": {
+        "": "42800",
+        "*": null,
+        "text": "d9fff"
+      },
+      "o:12": {
+        "": "40800",
+        "*": null,
+        "id": "588c3",
+        "text": "d9fff",
+        "sourceBillingLineReference": "40800",
+        "sourceBillingLineReference.type": "d9fff",
+        "sourceBillingLineReference.id": "1588c3"
+      },
+      "o:13": {
+        "": "40000",
+        "*": null,
+        "id": "40000",
+        "totalPrice": "40000"
+      },
+      "o:14": {
         "": "40000",
         "*": null,
         "id": "40000",
         "shipmentNumber": "40000",
         "number": "40000"
+      },
+      "o:15": {
+        "": "40000",
+        "*": null,
+        "id": "40000",
+        "number": "40000",
+        "resource": "40000",
+        "resource.id": "140000"
+      },
+      "o:16": {
+        "": "40000",
+        "*": null,
+        "id": "40000",
+        "matchCode": "40000",
+        "registrationPlate": "40000",
+        "registrationPlate.registrationIdentifier": "40000"
+      },
+      "o:17": {
+        "": "40000",
+        "*": "40000",
+        "organizationId": null,
+        "isDeleted": null,
+        "text": null,
+        "shipmentId": null
       }
     },
     "result": {
       "paging": "offset",
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"stage":null,"root":"","present":"always"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored"},
         {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
+        {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
         {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
+        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
         {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
         {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
         {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
         {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
         {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"}
+        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
+        {"path":"deliveringTour.resource.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
+        {"path":"shipmentVehicle.id","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
+        {"path":"shipmentVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
+        {"path":"shipmentVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
+        {"path":"tourVehicle.id","kind":"unknown","nullable":true,"stage":7,"root":"tourVehicle","present":"ifJoined"},
+        {"path":"tourVehicle.matchCode","kind":"unknown","nullable":true,"stage":7,"root":"tourVehicle","present":"ifJoined"},
+        {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":7,"root":"tourVehicle","present":"ifJoined"},
+        {"path":"lastAttempt.dateTime","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"},
+        {"path":"lastAttempt.id","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"},
+        {"path":"lastAttempt.status","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"}
       ],
       "outcomes": [
         {"alias":"erpLine","as":null,"stage":3,"values":["not_found"]},
         {"alias":"sourceLine","as":null,"stage":4,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]},
-        {"alias":"deliveringTour","as":null,"stage":5,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}
+        {"alias":"deliveringTour","as":null,"stage":5,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]},
+        {"alias":"shipmentVehicle","as":null,"stage":6,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]},
+        {"alias":"tourVehicle","as":null,"stage":7,"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}
       ]
     },
     "owners": [
@@ -1919,6 +2411,19 @@
         "via": null,
         "route": {
           "apiName": "transport-api",
+          "apiVersion": null
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      },
+      {
+        "service": "fleet",
+        "remote": true,
+        "via": "transport",
+        "route": {
+          "apiName": "fleet-api",
           "apiVersion": null
         },
         "answered": true,

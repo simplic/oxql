@@ -69,7 +69,7 @@ public class OwnerFetchRobustnessTests
         }).ToArray());
     }
 
-    private const string OwningRow = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""";
+    private const string OwningRow = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1 } }]""";
 
     private static QueryResult Succeeded(QueryOutcome outcome)
     {
@@ -119,6 +119,31 @@ public class OwnerFetchRobustnessTests
 
         foreach (var answer in new[] { cold, other, warm })
             answer.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget).Select(diagnostic => diagnostic.Path).Should().Equal("name");
+    }
+
+    [Fact]
+    public async Task What_a_target_lacks_is_kept_per_target_so_another_plan_that_asks_the_path_does_not_send_it_either()
+    {
+        var (engine, runner, client, _) = Host();
+        runner.PageRows = [SourceRow(Invoice1, Line1)];
+        client.Script = (_, query, _) => TransportOwner(query);
+
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+        client.Calls.Should().HaveCount(2, "the first plan learns that the shipment has no name");
+
+        // Another plan (another projection) over the same target: a lacked path is a fact about the target.
+        const string Other = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "owner.name": 1, "owner.number": 1 } }]""";
+        var other = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, Other), BindHost.Context()));
+
+        client.Calls.Should().HaveCount(3, "the other plan is asked once, without the path");
+        client.Calls[2].Request.Queries.Single().Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys.Should().NotContain("name").And.Contain("number");
+        other.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget).Select(diagnostic => diagnostic.Path).Should().Equal("name");
+
+        // A plan that does not ask the path has nothing dropped and says nothing of it.
+        const string Without = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "owner.number": 1 } }]""";
+        var without = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, Without), BindHost.Context()));
+
+        (without.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
     }
 
     // ---- budgets (RE-7, RS-3, PRE-4) ---------------------------------------------------------------

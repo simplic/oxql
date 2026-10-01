@@ -72,7 +72,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -95,7 +97,9 @@
           "host": "transport",
           "owner": null
         },
-        "reads": [],
+        "reads": [
+          {"path":"id","use":"lookupOn"}
+        ],
         "creates": ["lastAttempt"],
         "shape": {
           "paging": "cursor",
@@ -116,7 +120,10 @@
         "kind": "project",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"shipmentNumber","use":"project"},
+          {"path":"lastAttempt","use":"project","alias":"lastAttempt"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -150,6 +157,9 @@
             "type": "t:transport.delivery_attempt"
           }
         ],
+        "loads": ["dateTime","id","status","text"],
+        "shows": ["id","dateTime","status","text"],
+        "hint": ["id","dateTime","status","text"],
         "type": "t:transport.delivery_attempt"
       }
     },
@@ -506,10 +516,7 @@
         "follow": "one"
       },
       "o:1": {
-        "": "40800",
-        "organizationId": null,
-        "isDeleted": null,
-        "shipmentId": null
+        "": "40800"
       },
       "o:2": {
         "*": null,

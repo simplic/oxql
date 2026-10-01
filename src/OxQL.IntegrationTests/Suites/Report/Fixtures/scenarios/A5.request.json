@@ -77,13 +77,7 @@
           "quantity.value",
           "quantity.quantityUnit"
         ],
-        "parentAs": "sourceParent",
-        "parentSelect": [
-          "id",
-          "shipmentNumber",
-          "referenceNumber",
-          "number"
-        ]
+        "parentAs": "sourceParent"
       }
     },
     {
@@ -191,7 +185,10 @@
         "item.totalPriceNet": 1,
         "erpLine": 1,
         "sourceLine": 1,
-        "sourceParent": 1,
+        "sourceParent.id": 1,
+        "sourceParent.shipmentNumber": 1,
+        "sourceParent.referenceNumber": 1,
+        "sourceParent.number": 1,
         "lastAttempt": 1,
         "lineShipment": 1,
         "deliveringTour": 1,

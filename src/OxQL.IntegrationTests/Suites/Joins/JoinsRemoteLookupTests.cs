@@ -151,8 +151,8 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines",
                           "select": ["text", "totalPrice"], "sort": [ { "totalPrice": "desc" } ],
-                          "parentAs": "shipments", "parentSelect": ["shipmentNumber"] } }
-            """, "\"number\": 1, \"lines\": 1, \"shipments\": 1"));
+                          "parentAs": "shipments" } }
+            """, "\"number\": 1, \"lines\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         var invoice = Row(answer, Invoice);
@@ -207,9 +207,9 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lastLine", "first": true,
-                          "sort": [ { "date": "desc" } ], "select": ["text", "date"], "parentAs": "ship", "parentSelect": ["shipmentNumber"] } },
+                          "sort": [ { "date": "desc" } ], "select": ["text", "date"], "parentAs": "ship" } },
             { "lookup": { "from": "fleet.equipment", "path": "assignedShipmentId", "on": "ship", "as": "gear", "first": true, "select": ["name"] } }
-            """, "\"number\": 1, \"lastLine\": 1, \"ship\": 1, \"gear\": 1"));
+            """, "\"number\": 1, \"lastLine\": 1, \"ship.shipmentNumber\": 1, \"gear\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         var invoice = Row(answer, Invoice);

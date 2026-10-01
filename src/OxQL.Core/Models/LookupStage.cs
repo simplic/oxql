@@ -21,7 +21,11 @@ public sealed record LookupStage
     /// <summary>The alias the array is placed under.</summary>
     public string? As { get; init; }
 
-    /// <summary>Wire paths on the child to keep; the child's key and display members by default.</summary>
+    /// <summary>
+    /// What the alias shows when the row keeps it whole: these wire paths of the child with its key; the
+    /// child's key and display members by default. A hint, never a bound: under contract 2 the join loads
+    /// whatever later stages read, and a projection that names paths under the alias decides alone.
+    /// </summary>
     public IReadOnlyList<string>? Select { get; init; }
 
     /// <summary>A condition on the child.</summary>
@@ -49,9 +53,6 @@ public sealed record LookupStage
     /// </summary>
     public string? ParentAs { get; init; }
 
-    /// <summary>Wire paths of the owning row to keep under <see cref="ParentAs"/>; its key and display members by default. Contract 2.</summary>
-    public IReadOnlyList<string>? ParentSelect { get; init; }
-
     /// <summary>The raw filter, for a remote owner that binds it itself.</summary>
     [JsonIgnore]
     public JsonElement? RawFilter { get; init; }
@@ -75,7 +76,10 @@ public sealed record ResolveStage
     /// <summary>The alias the object is placed under.</summary>
     public string? As { get; init; }
 
-    /// <summary>Wire paths on the target to keep.</summary>
+    /// <summary>
+    /// What the alias shows when the row keeps it whole: these wire paths of the target with its key; its
+    /// key and display members by default. A hint, never a bound (see <see cref="LookupStage.Select"/>).
+    /// </summary>
     public IReadOnlyList<string>? Select { get; init; }
 
     /// <summary>A condition on the target; a non-match yields null.</summary>
@@ -94,11 +98,11 @@ public sealed record ResolveStage
     /// <summary>The one target entity of a typed or union reference to resolve to; the others are excluded. Contract 2.</summary>
     public string? Target { get; init; }
 
-    /// <summary>The alias the owning row of an item target is placed under. Contract 2.</summary>
+    /// <summary>
+    /// The alias the owning row of an item target is placed under: its key and display members kept
+    /// whole, else the paths the projection names under it. Contract 2.
+    /// </summary>
     public string? ParentAs { get; init; }
-
-    /// <summary>Wire paths of the owning row to keep under <see cref="ParentAs"/>; its key and display members by default. Contract 2.</summary>
-    public IReadOnlyList<string>? ParentSelect { get; init; }
 
     /// <summary><c>"null"</c>, <c>"report"</c> or <c>"refuse"</c>: what a reference that names nothing does. Contract 2.</summary>
     public string? OnMissing { get; init; }
@@ -171,12 +175,6 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                     else
                         malformed.Add(property.Name);
                     break;
-                case "parentSelect":
-                    if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Array)
-                        stage = stage with { ParentSelect = StageJson.ReadStrings(property.Value) };
-                    else
-                        malformed.Add(property.Name);
-                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
@@ -198,7 +196,6 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         if (value.On is not null) writer.WriteString("on", value.On);
         if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
         if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
-        if (value.ParentSelect is not null) { writer.WritePropertyName("parentSelect"); JsonSerializer.Serialize(writer, value.ParentSelect, options); }
         writer.WriteEndObject();
     }
 }
@@ -251,12 +248,6 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
                     else
                         malformed.Add(property.Name);
                     break;
-                case "parentSelect":
-                    if (property.Value.ValueKind is JsonValueKind.String or JsonValueKind.Array)
-                        stage = stage with { ParentSelect = StageJson.ReadStrings(property.Value) };
-                    else
-                        malformed.Add(property.Name);
-                    break;
                 case "forTarget":
                     if (property.Value.ValueKind == JsonValueKind.String)
                         stage = stage with { ForTarget = property.Value.GetString() };
@@ -280,7 +271,6 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         if (value.Elements is not null) writer.WriteString("elements", value.Elements);
         if (value.Target is not null) writer.WriteString("target", value.Target);
         if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
-        if (value.ParentSelect is not null) { writer.WritePropertyName("parentSelect"); JsonSerializer.Serialize(writer, value.ParentSelect, options); }
         if (value.OnMissing is not null) writer.WriteString("onMissing", value.OnMissing);
         if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
         writer.WriteEndObject();

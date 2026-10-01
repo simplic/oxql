@@ -25,6 +25,7 @@ namespace OxQL.IntegrationTests.Suites.Explain;
 /// budgets (T4). Nothing is read from a database: explain never executes.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection(TimedCollection.Name)]
 public class ExplainShapeFleetTests(ITestOutputHelper output)
 {
     /// <summary>T4: the largest answer of the reference query at depth 2, raw and gzipped, and its warm server time.</summary>
@@ -164,30 +165,32 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData("""["id", "sourceBillingLineReference.id"]""", false)]
-    [InlineData("""["id", "sourceBillingLineReference.id", "sourceBillingLineReference.type"]""", true)]
-    [InlineData("""["id", "sourceBillingLineReference"]""", true)]
-    public async Task D03_a_reference_with_cases_under_a_join_needs_its_case_member_in_the_select_and_says_so(string select, bool valid)
+    [InlineData("")]
+    [InlineData(""", "select": ["id"]""")]
+    [InlineData(""", "select": ["id", "sourceBillingLineReference.id"]""")]
+    [InlineData(""", "select": ["id", "sourceBillingLineReference"]""")]
+    public async Task D03_a_reference_with_cases_under_a_join_loads_its_case_member_whatever_the_join_selects_and_says_so(string select)
     {
         var request = JsonSerializer.Deserialize<ExplainRequest>($$"""
             { "query": { "entityType": "ledger.transaction", "pipeline": [
                 { "unwind": { "path": "items", "as": "item" } },
-                { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": {{select}} } },
+                { "resolve": { "path": "item.billingLineId", "as": "erpLine"{{select}} } },
                 { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "shipment", "target": "transport.shipment" } } ] } }
             """, OxQLJson.Wire)!;
 
         var answer = await new InProcessFleet().ExplainAsync(request);
 
-        answer.Valid.Should().Be(valid, Errors(answer));
+        answer.Valid.Should().BeTrue(Errors(answer));
 
-        if (valid)
-            return;
+        // The read no caller sees in the query text: the member that picks the reference's case.
+        answer.Stages[2].Reads.Select(read => read.ToJsonString()).Should().Equal(
+            """{"path":"erpLine.sourceBillingLineReference.id","use":"resolveKey","alias":"erpLine"}""",
+            """{"path":"erpLine.sourceBillingLineReference.type","use":"caseCondition","alias":"erpLine"}""");
 
-        var error = answer.Errors.Should().ContainSingle().Subject;
-        error.Code.Should().Be("UNKNOWN_PATH", "the reference is declared; the join did not fetch the member its case tests");
-        error.Stage.Should().Be(2);
-        error.Path.Should().Be("erpLine.sourceBillingLineReference.type");
-        error.Message.Should().Contain("not in the select of 'erpLine'").And.Contain("add 'sourceBillingLineReference.type' to that select");
+        var loads = answer.Aliases["erpLine"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).ToList();
+
+        (loads.Contains("sourceBillingLineReference") || (loads.Contains("sourceBillingLineReference.id") && loads.Contains("sourceBillingLineReference.type")))
+            .Should().BeTrue("the join loads what the stage after it reads: " + string.Join(", ", loads));
     }
 
     [Fact]
@@ -227,9 +230,9 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
     // ---- T4: the budgets of the reference query ---------------------------------------------------------
 
     [Theory]
-    [InlineData("EX1-source-chain", MaxRawBytes, 80_000, 10_300)]
-    [InlineData("A4", MaxRawBytes, 72_000, 9_300)]
-    [InlineData("A5", 64_000, 105_000, 12_500)]
+    [InlineData("EX1-source-chain", MaxRawBytes, 82_000, 10_700)]
+    [InlineData("A4", MaxRawBytes, 75_000, 9_700)]
+    [InlineData("A5", 69_000, 110_500, 13_200)]
     public async Task T4_the_reference_answer_stays_within_its_time_budget_and_at_depth_1_within_its_size_budget(string id, int rawAtDepth1, int rawAtDepth2, int gzipAtDepth2)
     {
         var fleet = new InProcessFleet();
@@ -273,15 +276,16 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         median.Should().BeLessThanOrEqualTo(MaxWarmMs, "T4: warm, the server answers within 10 ms");
 
         // One level of members below each root is within the size budget (60 KB raw, 10 KB gzipped) for
-        // the reference chain (39 KB, 5.8 KB) and A4 (40 KB, 5.6 KB); A5, with 16 stages and 13 types, is
-        // 2 KB over it raw (62 KB, 7.5 KB).
+        // the reference chain (42 KB, 6.1 KB) and A4 (43 KB, 6.0 KB); A5, with 16 stages and 13 types, is
+        // 7 KB over it raw (67 KB, 8.1 KB). The read ledger and each join's loads, shows and hint are some
+        // 3 to 5 KB of that.
         shallow.Raw.Should().BeLessThanOrEqualTo(rawAtDepth1, "T4: at depth 1 the answer stays within its raw size");
         shallow.Gzip.Should().BeLessThanOrEqualTo(MaxGzipBytes, "T4: and at most 10 KB gzipped");
 
         // Two levels are not, on this fleet: the reference queries reach 6 to 13 types of 740 to 1240
         // member rows in all, three times what the budget was sized for (some 350). A row is some 55
-        // bytes; the size is the rows (77 KB raw and 10.0 KB gzipped for the reference chain, 70 KB and
-        // 9.0 KB for A4, 103 KB and 12.2 KB for A5). The ceilings here are what was measured, to hold it.
+        // bytes; the size is the rows (80 KB raw and 10.4 KB gzipped for the reference chain, 73 KB and
+        // 9.3 KB for A4, 108 KB and 12.8 KB for A5). The ceilings here are what was measured, to hold it.
         raw.Length.Should().BeLessThanOrEqualTo(rawAtDepth2, "the answer at depth 2 has not grown past what was measured");
         packed.Should().BeLessThanOrEqualTo(gzipAtDepth2, "nor has its gzipped size");
     }

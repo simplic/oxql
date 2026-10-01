@@ -36,10 +36,10 @@ public class JoinsRouteChainTests
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
             { "resolve": { "path": "items.billingLineId", "as": "billingLine", "elements": "first", "select": ["id"] } },
             { "resolve": { "path": "billingLine.sourceBillingLineReference.id", "as": "sourceLine"{{(target is null ? "" : $", \"target\": \"{target}\"")}},
-                           "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id"] } },
+                           "parentAs": "sourceParent", "select": ["id"] } },
             { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first"{{(forTarget is null ? "" : $", \"forTarget\": \"{forTarget}\"")}},
                            "select": ["id", "number"] } },
-            { "project": { "number": 1, "billingLine": 1, "sourceLine": 1, "sourceParent": 1, "deliveringTour": 1 } }
+            { "project": { "number": 1, "billingLine": 1, "sourceLine": 1, "sourceParent.id": 1, "deliveringTour": 1 } }
           ]
         }
         """;
@@ -106,7 +106,7 @@ public class JoinsRouteChainTests
     }
 
     [Fact]
-    public async Task A_select_member_inside_a_collection_that_a_continued_hop_resolves_is_merged_at_the_owner_not_an_internal_error()
+    public async Task A_projected_member_inside_a_collection_that_a_continued_hop_resolves_is_merged_at_the_owner_not_an_internal_error()
     {
         var ledger = await LedgerClient();
         var request = $$"""
@@ -119,9 +119,9 @@ public class JoinsRouteChainTests
                 { "match": { "item": { "is": "BillingLineTransactionItem" } } },
                 { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
                 { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "target": "{{ReportSeed.Shipment}}",
-                               "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id", "tours.tourId"] } },
+                               "parentAs": "sourceParent", "select": ["id"] } },
                 { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["id", "number"] } },
-                { "project": { "position": 1, "sourceLine": 1, "sourceParent": 1, "deliveringTour": 1 } },
+                { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.tours.tourId": 1, "deliveringTour": 1 } },
                 { "sort": [ { "position": "asc" } ] }
               ]
             }
@@ -139,9 +139,9 @@ public class JoinsRouteChainTests
 
         scenario.Should().NotBeEmpty("the scenario shipment's lines are on the invoice");
         scenario.Should().OnlyContain(row => row["sourceParent"]!["tours"] is JsonArray && row["sourceParent"]!["tours"]!.AsArray().Count > 0,
-            "the owning row keeps the selected member inside the collection");
+            "the owning row keeps the projected member inside the collection");
         scenario.Should().OnlyContain(row => row["sourceParent"]!["tours"]!.AsArray().OfType<JsonObject>().All(tour => tour.Select(pair => pair.Key).SequenceEqual(new[] { "tourId" })),
-            "each element carries the selected member, and only it");
+            "each element carries the projected member, and only it");
         scenario.Should().OnlyContain(row => row["deliveringTour"] is JsonObject, "and the continued hop resolves the first tour from it");
     }
     /// <summary>
@@ -159,7 +159,7 @@ public class JoinsRouteChainTests
               { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
               { "match": { "item": { "is": "BillingLineTransactionItem" } } },
               { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
-              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id"] } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"] } },
               { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number"] } },
               { "resolve": { "path": "sourceParent.resource.id", "as": "tourResource", "forTarget": "{{ReportSeed.Tour}}" } }
             ]
@@ -217,8 +217,8 @@ public class JoinsRouteChainTests
     /// <summary>
     /// The fleet analogue of the studio's reference query: the shipment's delivering tour continued under
     /// the union's owning row, and the vehicle continued under that continued alias without a target
-    /// (EXAMPLE-CASE's <c>shipmentVehicle</c>), next to the tour's own resource. The owning row selects a
-    /// member of each target (the shipment's number, the tour's), so the check query the owner is sent
+    /// (EXAMPLE-CASE's <c>shipmentVehicle</c>), next to the tour's own resource. The projection names a
+    /// member of each target under the owning row (the shipment's number, the tour's), so the check query the owner is sent
     /// does not bind at its projection for either target, as in the studio's reference query.
     /// </summary>
     private static string ContinuedUnderContinued() => $$"""
@@ -231,10 +231,11 @@ public class JoinsRouteChainTests
               { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
               { "match": { "item": { "is": "BillingLineTransactionItem" } } },
               { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
-              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id", "shipmentNumber", "number"] } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"] } },
               { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number", "resource.id"] } },
               { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "onMissing": "report" } },
-              { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "onMissing": "report" } }
+              { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "onMissing": "report" } },
+              { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1, "shipmentVehicle": 1, "tourVehicle": 1 } }
             ]
           }
         }

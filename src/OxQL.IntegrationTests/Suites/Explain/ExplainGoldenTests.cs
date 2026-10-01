@@ -41,6 +41,8 @@ public class ExplainGoldenTests
         var recorded = ExplainGolden.Record(request, answer);
         var path = ExplainGolden.PathOf(id);
 
+        answer.Body?["valid"]?.GetValue<bool>().Should().Be(id != "EX2-continued-refused", answer.Text);
+
         if (ExplainGolden.Recording)
         {
             await File.WriteAllTextAsync(path, recorded);
@@ -87,6 +89,10 @@ internal static class ExplainGolden
         ["A3"] = () => ReportScenarios.Request("A3"),
         ["A4"] = () => ReportScenarios.Request("A4"),
         ["A5"] = () => ReportScenarios.Request("A5"),
+        // The same three without any select: what a studio writes once the joins infer their loads (§3.S).
+        ["A4-no-select"] = () => ReportScenarios.WithoutSelects(ReportScenarios.Request("A4")),
+        ["A5-no-select"] = () => ReportScenarios.WithoutSelects(ReportScenarios.Request("A5")),
+        ["EX1-no-select"] = () => ReportScenarios.WithoutSelects(JsonNode.Parse(ExampleChain)!.AsObject()),
         ["EX1-source-chain"] = () => JsonNode.Parse(ExampleChain)!.AsObject(),
         ["EX2-continued-refused"] = () => JsonNode.Parse(ContinuedRefused)!.AsObject(),
     }.AsReadOnly();
@@ -108,7 +114,7 @@ internal static class ExplainGolden
             { "resolve": { "path": "item.billingLineId", "as": "erpLine", "onMissing": "report",
                            "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "onMissing": "report",
-                           "select": ["id", "totalPrice"], "parentAs": "sourceParent", "parentSelect": ["id", "shipmentNumber", "number"] } },
+                           "select": ["id", "totalPrice"], "parentAs": "sourceParent" } },
             { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first",
                            "select": ["id", "number", "resource.id"] } },
             { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "target": "fleet.vehicle", "onMissing": "report",
@@ -117,7 +123,8 @@ internal static class ExplainGolden
                            "select": ["matchCode", "registrationPlate.registrationIdentifier"] } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "{{ReportSeed.Shipment}}",
                           "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
-            { "project": { "position": 1, "item.text": 1, "erpLine": 1, "sourceLine": 1, "sourceParent": 1, "deliveringTour": 1,
+            { "project": { "position": 1, "item.text": 1, "erpLine": 1, "sourceLine": 1,
+                           "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1,
                            "shipmentVehicle": 1, "tourVehicle": 1, "lastAttempt": 1 } },
             { "sort": [ { "position": "asc" } ] }
           ]
@@ -135,9 +142,9 @@ internal static class ExplainGolden
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
             { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
-                           "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id", "shipmentNumber", "number"] } },
+                           "parentAs": "sourceParent", "select": ["id"] } },
             { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["id", "number"] } },
-            { "project": { "position": 1, "sourceLine": 1, "sourceParent": 1, "deliveringTour": 1 } }
+            { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1 } }
           ]
         }
         """;
@@ -163,11 +170,11 @@ internal static class ExplainGolden
     private static readonly JsonSerializerOptions OneLine = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>The members whose entries are written one per line: a diff of two recordings then shows the rows that changed, not their brackets.</summary>
-    private static readonly HashSet<string> RowLists = new(StringComparer.Ordinal) { "members", "columns", "outcomes", "onlyFor", "errors", "diagnostics", "notes" };
+    private static readonly HashSet<string> RowLists = new(StringComparer.Ordinal) { "members", "columns", "outcomes", "onlyFor", "errors", "diagnostics", "notes", "reads" };
 
     /// <summary>
     /// The file form: indented with two spaces, an array of plain values on one line, and each member
-    /// row of a type (and each column, outcome, error, diagnostic and note) on a line of its own.
+    /// row of a type (and each column, outcome, error, diagnostic, note and read) on a line of its own.
     /// </summary>
     public static string Pretty(JsonNode node)
     {

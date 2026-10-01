@@ -103,10 +103,11 @@ public static class OwnerQueryBuilder
                 Keys = ["sort"],
             });
 
-        // With a select it is the caller's (a local target's as bound, the paths it has); without
-        // one the reserved $default key, which the owner expands to its own entity's key and
-        // display members — the pair the local half of this stage keeps — or, for an item, the
-        // matched member. Without a projection the owner answers with whole documents,
+        // The paths the binder inferred for the alias (improvement plan §3.S): what the caller's
+        // projection names under it, or, kept whole, its select hint (a local target's as bound, the
+        // paths it has). Without any, the reserved $default key, which the owner expands to its own
+        // entity's key and display members — the pair the local half of this stage keeps — or, for an
+        // item, the matched member. Without a projection the owner answers with whole documents,
         // organizationId and every other member included, to a caller that wanted a label.
         // A probe projects the keyed member alone.
         IReadOnlyList<string>? select = target.IsRemote ? target.RemoteSelect : target.Select?.Select(path => path.Wire).ToList();

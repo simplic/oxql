@@ -293,6 +293,10 @@ public sealed partial class MongoQueryEngine
             if (shapes)
                 entry = new ExplainEntry { Shape = await draft.Types.ShapeAsync(trace.Stages.Count > 0 ? trace.Stages[0].Before : trace.Final, OwnerType).ConfigureAwait(false) };
 
+            // The ledger, by stage: what the binder recorded, and for a stage continued at an owner what
+            // that owner bound it with.
+            var reads = trace.Reads.GroupBy(read => read.Stage).ToDictionary(group => group.Key, group => group.ToList());
+
             foreach (var stage in trace.Stages)
                 stages.Add(new ExplainStage
                 {
@@ -302,6 +306,7 @@ public sealed partial class MongoQueryEngine
                     Placement = draft.Placements.TryGetValue(stage.Index, out var placed)
                         ? new ExplainPlacement { Executor = placed.Executor, Phase = placed.Phase, Host = placed.Host, Owner = placed.Owner is { } service ? owners.IndexOf(service, placed.Remote) : null }
                         : null,
+                    Reads = ReadsOf(draft, stage.Index, reads.GetValueOrDefault(stage.Index) ?? []),
                     Creates = creates.TryGetValue(stage.Index, out var created) ? created : [],
                     Shape = shapes ? await draft.Types.ShapeAsync(stage.After, OwnerType).ConfigureAwait(false) : null,
                 });
@@ -372,6 +377,42 @@ public sealed partial class MongoQueryEngine
             answer = Trimmed(answer, notes, context.Options.Explain.MaxAnswerBytes);
 
         return answer with { Etag = EtagOf(request, answer) };
+    }
+
+    /// <summary>
+    /// What one stage reads (<c>{ path, use, alias? }</c>, each once, in the order bound): the binder's
+    /// ledger; for a stage continued at an owner, the reads the owner answered, which include what only
+    /// its model knows (the member that picks a reference's case).
+    /// </summary>
+    private static IReadOnlyList<JsonNode> ReadsOf(Draft draft, int stage, IReadOnlyList<PathRead> recorded)
+    {
+        if (draft.Owners.ReadsOf(stage) is { Count: > 0 } answered)
+            return answered.Select(read => read.DeepClone()).ToList();
+
+        var reads = new List<JsonNode>();
+
+        foreach (var read in recorded.DistinctBy(read => (read.Path, read.Use)))
+        {
+            var entry = new JsonObject { ["path"] = read.Path, ["use"] = read.UseName };
+
+            if (read.Alias is not null)
+                entry["alias"] = read.Alias;
+
+            reads.Add(entry);
+        }
+
+        return reads;
+    }
+
+    /// <summary>What a join loads and shows under an alias, as the binder inferred it: <c>loads</c>, <c>shows</c> and <c>hint</c>, each a list of paths or null.</summary>
+    private static void Loads(JsonObject entry, JoinLoad? load)
+    {
+        if (load is null)
+            return;
+
+        entry["loads"] = load.Loads is null ? null : new JsonArray(load.Loads.Select(path => (JsonNode)path).ToArray());
+        entry["shows"] = load.Shows is null ? null : new JsonArray(load.Shows.Select(path => (JsonNode)path).ToArray());
+        entry["hint"] = load.Hint is null ? null : new JsonArray(load.Hint.Select(path => (JsonNode)path).ToArray());
     }
 
     /// <summary>The notes that say what the answer itself lacks; they are answered also without <c>include: "notes"</c>.</summary>
@@ -735,6 +776,7 @@ public sealed partial class MongoQueryEngine
             {
                 case BoundStage.Lookup lookup when aliases[lookup.As] is JsonObject entry:
                     entry["targets"] = new JsonArray(new JsonObject { ["target"] = lookup.From.Id, ["service"] = host, ["remote"] = false });
+                    Loads(entry, bound.Loads.GetValueOrDefault(lookup.As));
                     break;
 
                 case BoundStage.Resolve resolve when aliases[resolve.As] is JsonObject entry:
@@ -750,6 +792,11 @@ public sealed partial class MongoQueryEngine
 
                     if (outcomes.TryGetValue(resolve.As, out var policy))
                         entry["outcome"] = OutcomeOf(policy);
+
+                    Loads(entry, bound.Loads.GetValueOrDefault(resolve.As));
+
+                    if (resolve.ParentAs is { } owning && aliases[owning] is JsonObject owningEntry)
+                        Loads(owningEntry, bound.Loads.GetValueOrDefault(owning));
 
                     if (!draft.Explained.TryGetValue(resolve.As, out var explained))
                     {
@@ -817,6 +864,11 @@ public sealed partial class MongoQueryEngine
 
                         if (reached.TryGetValue(alias, out var entities))
                             entry["entities"] = new JsonArray(entities.Select(entity => (JsonNode)entity).ToArray());
+
+                        // What the owner's join loads for the run's query is the owner's to infer and to say.
+                        if (draft.Owners.LoadsOf(alias) is { } inferred)
+                            foreach (var (name, value) in inferred)
+                                entry[name] = value?.DeepClone();
 
                         if (outcomes.TryGetValue(alias, out var policy))
                             entry["outcome"] = OutcomeOf(policy);
@@ -1038,9 +1090,10 @@ public sealed partial class MongoQueryEngine
                     Members(entity.Def.Root, "", Shape.ImplicitRoot, nullable: false, null, shape, columns, expand: true, joined: false);
                     break;
 
+                // A join's alias shows its output set (the final shape carries it), an unwound copy of one alike.
                 case ShapeNode.Entity entity:
-                    if (SelectOf(bound, name) is { } entitySelect)
-                        Joined(name, entitySelect, stage, shape, columns);
+                    if (entity.Select is { } shown)
+                        Joined(name, shown.Select(path => (path, KindAt(shape, name, path))).ToList(), stage, shape, columns);
                     else
                         Members(entity.Def.Root, name + ".", name, nullable: true, stage, shape, columns, expand: false, joined: true);
                     break;
@@ -1067,12 +1120,15 @@ public sealed partial class MongoQueryEngine
                     columns.Add(Column(name, Kind.Array, nullable: true, stage, name, ExplainColumn.Always));
                     break;
 
+                // The owner's rows: the paths the projection names under the alias and nothing else (an
+                // owning row always with the entity it names); kept whole, what its owner is asked for.
                 case ShapeNode.Remote or ShapeNode.Keyed:
-                    var select = SelectOf(bound, name) ?? [];
-                    var projected = shape.Included?.Where(path => path.StartsWith(name + ".", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList() ?? [];
-
-                    if (select.Count == 0 && projected.Count > 0)
-                        select = projected.Select(path => (path[(name.Length + 1)..], Kind.Unknown)).ToList();
+                    var kept = RootOutput.Of(shape, name);
+                    var owning = bound.Stages.OfType<BoundStage.Resolve>().Any(resolve => resolve.ParentAs == name);
+                    var select = kept.Whole
+                        ? SelectOf(bound, name) ?? []
+                        : [.. owning && !kept.Projected.Contains("entity", StringComparer.Ordinal) ? [("entity", Kind.String)] : Array.Empty<(string, Kind)>(),
+                            .. kept.Projected.Select(path => (path, owning && path == "entity" ? Kind.String : KindAt(shape, name, path)))];
 
                     if (select.Count > 0)
                         Joined(name, select, stage, shape, columns);
@@ -1093,14 +1149,18 @@ public sealed partial class MongoQueryEngine
         return columns;
     }
 
+    /// <summary>The kind of a path under an alias at the final shape; unknown under an owner's rows, whose kinds are in the owner's type.</summary>
+    private static Kind KindAt(Shape shape, string alias, string path) =>
+        shape.Resolve(alias + "." + path, PathUsage.Project) is { Succeeded: true, Path: { IsRemote: false } resolved } ? resolved.Kind : Kind.Unknown;
+
     private static ExplainColumn Column(string path, Kind kind, bool nullable, int? stage, string root, string present) =>
         new() { Path = path, Kind = Kinds.NameOf(kind), Nullable = nullable, Stage = stage, Root = root, Present = present };
 
-    /// <summary>The columns of a join alias: its select paths, each nullable and absent where the join found nothing, as far as a projection keeps them.</summary>
+    /// <summary>The columns of a join alias: the paths it shows, each nullable and absent where the join found nothing, less what an exclusion removed.</summary>
     private static void Joined(string alias, IReadOnlyList<(string Path, Kind Kind)> select, int? stage, Shape shape, List<ExplainColumn> columns)
     {
         foreach (var (path, kind) in select)
-            if (shape.IsVisible(alias + "." + path) && !columns.Any(column => column.Path == alias + "." + path))
+            if (!shape.IsRemoved(alias + "." + path) && !columns.Any(column => column.Path == alias + "." + path))
                 columns.Add(Column(alias + "." + path, kind, nullable: true, stage, alias, ExplainColumn.IfJoined));
     }
 
@@ -1139,10 +1199,10 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>
-    /// The select of a join alias as the row carries it, relative to the alias: a lookup's, an inline or
-    /// keyed resolve's (the union of its targets', a flat select), the owning row's of a <c>parentAs</c>
-    /// (with the <c>entity</c> it names), a remote resolve's as written, or a continued stage's as
-    /// written; null when the alias has none this host knows (the owner's default).
+    /// What a join alias the row keeps whole carries, relative to the alias: a keyed resolve's paths (the
+    /// union of its targets': the select hint with the key, else key and display), the owning row's of a
+    /// <c>parentAs</c> (with the <c>entity</c> it names), a remote resolve's hint, or a continued
+    /// stage's hint; null when the alias has none this host knows (the owner's own key and display).
     /// </summary>
     private static List<(string Path, Kind Kind)>? SelectOf(BoundPipeline bound, string alias)
     {

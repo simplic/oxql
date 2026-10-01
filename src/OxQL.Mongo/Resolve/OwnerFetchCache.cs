@@ -54,8 +54,8 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 /// of the resolves beside it. An empty by-condition answer lives as long as a negative by-keys one.
 /// </para>
 /// <para>
-/// Beside the answers, in a store of their own that the answers' budget never evicts, the select
-/// paths an owner said one target of a union lacks are kept per organisation, service and plan
+/// Beside the answers, in a store of their own that the answers' budget never evicts, the paths an
+/// owner said one target of a union lacks are kept per organisation, service and target
 /// (<see cref="DropsKeyOf"/>), so a later request drops them before
 /// it asks and reports them from the cache too: the answer does not depend on what is cached.
 /// </para>
@@ -101,11 +101,21 @@ public sealed class OwnerFetchCache : IDisposable
     /// into <c>excluded</c> and <c>not_found</c>; without the probe every empty answer is
     /// <c>not_found</c>, which must not answer for a probed plan.
     /// </summary>
+    /// <remarks>
+    /// The paths of a projection are a set: they are hashed in ordinal order, so two requests that
+    /// name the same paths under an alias in another order share one plan and its cached answers.
+    /// </remarks>
     public static string PlanHashOf(QueryRequest template, bool probed)
     {
         ArgumentNullException.ThrowIfNull(template);
 
-        var sent = JsonSerializer.Serialize(template, OxQLJson.Wire) + (probed ? "|probe" : "");
+        var ordered = template with
+        {
+            Pipeline = template.Pipeline.Select(stage => stage.Project is { } project
+                ? stage with { Project = project with { Fields = new SortedDictionary<string, int>(project.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal) } }
+                : stage).ToList(),
+        };
+        var sent = JsonSerializer.Serialize(ordered, OxQLJson.Wire) + (probed ? "|probe" : "");
 
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sent)))[..32];
     }
@@ -181,11 +191,15 @@ public sealed class OwnerFetchCache : IDisposable
         keys.Set(key, values.ToArray(), new MemoryCacheEntryOptions { Size = Math.Max(1, values.Count), AbsoluteExpirationRelativeToNow = lifetime });
     }
 
-    /// <summary>The key of the select paths an owner said one union target lacks, per organisation, service and plan.</summary>
-    public static string DropsKeyOf(Guid organisation, string service, string planHash) =>
-        string.Join('|', "Drops", organisation.ToString("D"), service, planHash);
+    /// <summary>
+    /// The key of the paths an owner said one union target lacks, per organisation, service and target
+    /// (<c>entity</c> or <c>entity#item</c>): what a target lacks is a fact about the target, whatever
+    /// query asked it.
+    /// </summary>
+    public static string DropsKeyOf(Guid organisation, string service, string target) =>
+        string.Join('|', "Drops", organisation.ToString("D"), service, target);
 
-    /// <summary>The select paths (<c>Select</c>) and owning-row paths (<c>Parent</c>) an owner said the target lacks, or false.</summary>
+    /// <summary>The paths under the alias (<c>Select</c>) and under the owning row (<c>Parent</c>) an owner said the target lacks, or false.</summary>
     public bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
     {
         if (drops.TryGetValue(key, out Drops? cached) && cached is not null && time.GetUtcNow() < cached.Expires)
@@ -205,8 +219,15 @@ public sealed class OwnerFetchCache : IDisposable
     /// answers' size budget must never evict them while rows cached under the same plan live on,
     /// or a page served from the cache would lose its <c>SELECT_PATH_NOT_ON_TARGET</c> note.
     /// </summary>
-    public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent) =>
-        drops.Set(key, new Drops([.. select], [.. parent], time.GetUtcNow() + ttl), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
+    /// <remarks>What earlier requests learned of the target stays: the paths add up.</remarks>
+    public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent)
+    {
+        TryGetDrops(key, out var knownSelect, out var knownParent);
+
+        drops.Set(key,
+            new Drops([.. knownSelect.Union(select, StringComparer.Ordinal)], [.. knownParent.Union(parent, StringComparer.Ordinal)], time.GetUtcNow() + ttl),
+            new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
+    }
 
     /// <summary>How many entries the cache holds, both modes together.</summary>
     public int Count => rows.Count + keys.Count + drops.Count;

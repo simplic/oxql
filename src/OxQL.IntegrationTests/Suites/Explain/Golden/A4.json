@@ -173,7 +173,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -196,7 +198,9 @@
           "host": "staff",
           "owner": 0
         },
-        "reads": [],
+        "reads": [
+          {"path":"createUserId","use":"resolveKey"}
+        ],
         "creates": ["clerk"],
         "shape": {
           "paging": "cursor",
@@ -217,7 +221,9 @@
         "kind": "unwind",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
         "creates": ["item","position"],
         "shape": {
           "paging": "offset",
@@ -243,7 +249,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"item","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
@@ -274,7 +282,10 @@
           "host": "transport",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"item.references.referenceId","use":"resolveKey"},
+          {"path":"item.references.dataType","use":"caseCondition"}
+        ],
         "creates": ["lineShipment"],
         "shape": {
           "paging": "offset",
@@ -307,7 +318,9 @@
           "host": "transport",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"lineShipment.tours.tourId","use":"resolveKey","alias":"lineShipment"}
+        ],
         "creates": ["deliveringTour"],
         "shape": {
           "paging": "offset",
@@ -342,7 +355,10 @@
           "host": "transport",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"deliveringTour.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
         "creates": ["tourVehicle"],
         "shape": {
           "paging": "offset",
@@ -379,7 +395,10 @@
           "host": "transport",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"deliveringTour.attachedResources.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.attachedResources.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
         "creates": ["driver"],
         "shape": {
           "paging": "offset",
@@ -418,7 +437,10 @@
           "host": "transport",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"item.references.referenceId","use":"resolveKey"},
+          {"path":"item.references.dataType","use":"caseCondition"}
+        ],
         "creates": ["lineTour"],
         "shape": {
           "paging": "offset",
@@ -454,7 +476,26 @@
         "kind": "project",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"date","use":"project"},
+          {"path":"dueDate","use":"project"},
+          {"path":"invoiceRecipient","use":"project"},
+          {"path":"termsOfPayment.formattedText","use":"project"},
+          {"path":"totalPriceNet","use":"project"},
+          {"path":"totalPriceGross","use":"project"},
+          {"path":"taxKeyTotalPrices","use":"project"},
+          {"path":"clerk","use":"project","alias":"clerk"},
+          {"path":"position","use":"project"},
+          {"path":"item.text","use":"project"},
+          {"path":"item.quantity","use":"project"},
+          {"path":"item.totalPriceNet","use":"project"},
+          {"path":"lineShipment","use":"project","alias":"lineShipment"},
+          {"path":"deliveringTour","use":"project","alias":"deliveringTour"},
+          {"path":"tourVehicle","use":"project","alias":"tourVehicle"},
+          {"path":"driver","use":"project","alias":"driver"},
+          {"path":"lineTour","use":"project","alias":"lineTour"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
@@ -490,7 +531,9 @@
         "kind": "sort",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"position","use":"sort"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
@@ -589,6 +632,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
         "targets": [
           {
             "target": "staff.employee",
@@ -655,6 +701,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
+        "shows": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
+        "hint": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
         "targets": [
           {
             "target": "transport.shipment",
@@ -680,6 +729,9 @@
           "alias": "lineShipment",
           "target": null
         },
+        "loads": ["number"],
+        "shows": ["number"],
+        "hint": ["number"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -697,6 +749,9 @@
           "alias": "deliveringTour",
           "target": null
         },
+        "loads": ["registrationPlate.registrationIdentifier","matchCode"],
+        "shows": ["registrationPlate.registrationIdentifier","matchCode"],
+        "hint": ["registrationPlate.registrationIdentifier","matchCode"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -714,6 +769,9 @@
           "alias": "deliveringTour",
           "target": null
         },
+        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -753,6 +811,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["number","startDateTime","endDateTime","actions"],
+        "shows": ["number","startDateTime","endDateTime","actions"],
+        "hint": ["number","startDateTime","endDateTime","actions"],
         "targets": [
           {
             "target": "transport.tour",

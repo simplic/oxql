@@ -705,7 +705,12 @@ public sealed record ExplainStage
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public ExplainPlacement? Placement { get; init; }
 
-    /// <summary>The paths the stage reads, <c>{ path, use, alias? }</c> each. Filled with select inference; empty until then.</summary>
+    /// <summary>
+    /// The paths the stage reads off the row, <c>{ path, use, alias? }</c> each, from the binder's read
+    /// ledger (improvement plan §3.S): <c>use</c> one of <c>match, sort, project, unwind, groupKey,
+    /// aggregate, resolveKey, caseCondition, lookupOn</c>; <c>alias</c> the join whose rows hold the
+    /// path, which loads it. A stage continued at an owner carries the reads its owner answered.
+    /// </summary>
     [JsonPropertyName("reads")]
     public IReadOnlyList<JsonNode> Reads { get; init; } = [];
 

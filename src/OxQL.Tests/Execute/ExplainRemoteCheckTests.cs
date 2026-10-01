@@ -330,8 +330,9 @@ public class ExplainRemoteCheckTests
     {
         var client = TransportOwnerLacking("name");
         var explain = await ExplainAsync("""
-            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } },
-             { "resolve": { "path": "owner.carrierId", "as": "c", "forTarget": "transport.shipment" } }]
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+             { "resolve": { "path": "owner.carrierId", "as": "c", "forTarget": "transport.shipment" } },
+             { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1, "c": 1 } }]
             """, client);
 
         explain.Valid.Should().BeTrue(string.Join("; ", explain.Errors.Select(error => error.Message)));

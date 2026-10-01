@@ -18,8 +18,8 @@ namespace OxQL.Tests.Execute;
 /// T1, explain ≡ run parity at the unit level (improvement plan P12): the check query explain builds
 /// for an <see cref="OwnerCheck"/> is the owner query the run sends for the same target, modulo the
 /// keys (the check carries <see cref="KeyedFetch.CheckKey"/>, the run the page's keys, and the page
-/// limit follows their count) and the paths the check projects beside the select so the owner says
-/// which it lacks. One case per join kind: a remote resolve, a local keyed resolve with a stage
+/// limit follows their count). Since the run itself asks its owners for what the projection names
+/// under an alias (improvement plan §3.S), the check projects nothing beside it. One case per join kind: a remote resolve, a local keyed resolve with a stage
 /// continued under it, a stage continued under a remote alias, a remote lookup, and unions narrowed
 /// with <c>forTarget</c> at a local and at a remote target. The run's queries are recorded where
 /// they leave: the remote client for an owner, this host's own engine for a local target.
@@ -71,8 +71,8 @@ public class OwnerCheckParityTests
 
     private static RequestContext Reaching() => BindHost.Context() with { RemoteService = service => service is "tr" or "crm" or "transport" };
 
-    /// <summary>One join kind: the pipeline, the page rows it runs over, whether it is strict, and per checked target the paths its check projects beside the run's projection.</summary>
-    public sealed record Case(string Pipeline, BsonDocument[] Rows, bool Strict, IReadOnlyDictionary<string, string[]> Extras);
+    /// <summary>One join kind: the pipeline, the page rows it runs over, whether it is strict, and the targets explain checks.</summary>
+    public sealed record Case(string Pipeline, BsonDocument[] Rows, bool Strict, string[] Targets);
 
     public static TheoryData<string> Kinds => new(Cases.Keys);
 
@@ -81,12 +81,12 @@ public class OwnerCheckParityTests
         ["remote resolve"] = new(
             """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "project": { "number": 1, "r.name": 1, "r.phone": 1 } }]""",
             [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))], Strict: false,
-            new Dictionary<string, string[]> { ["crm.contact"] = ["phone"] }),
+            ["crm.contact"]),
 
         ["stage continued under a remote alias"] = new(
             """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }, { "page": { "limit": 10 } }]""",
             [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))], Strict: true,
-            new Dictionary<string, string[]> { ["crm.contact"] = [] }),
+            ["crm.contact"]),
 
         ["local keyed resolve with a continued stage"] = new(
             """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "path": "b.driverId", "as": "d" } }]""",
@@ -94,7 +94,7 @@ public class OwnerCheckParityTests
                 InvoiceRow(InvoiceId, row => row["Billing"] = new BsonDocument { ["DataType"] = "shipment", ["ReferenceId"] = ShipmentId.ToString() }),
                 InvoiceRow(SecondId, row => row["Billing"] = new BsonDocument { ["DataType"] = "tour", ["ReferenceId"] = TourId.ToString() }),
             ], Strict: false,
-            new Dictionary<string, string[]> { ["rc.shipment"] = [], ["rc.tour"] = [] }),
+            ["rc.shipment", "rc.tour"]),
 
         ["local union narrowed with forTarget"] = new(
             """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "path": "b.driverId", "as": "d", "forTarget": "rc.tour" } }, { "project": { "number": 1, "b.name": 1, "d": 1 } }]""",
@@ -102,21 +102,21 @@ public class OwnerCheckParityTests
                 InvoiceRow(InvoiceId, row => row["Billing"] = new BsonDocument { ["DataType"] = "shipment", ["ReferenceId"] = ShipmentId.ToString() }),
                 InvoiceRow(SecondId, row => row["Billing"] = new BsonDocument { ["DataType"] = "tour", ["ReferenceId"] = TourId.ToString() }),
             ], Strict: false,
-            new Dictionary<string, string[]> { ["rc.tour"] = [] }),
+            ["rc.tour"]),
 
         ["remote lookup"] = new(
             """[{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "select": ["number"] } }, { "project": { "number": 1, "shipments.number": 1, "shipments.date": 1 } }]""",
             [InvoiceRow(InvoiceId, _ => { })], Strict: false,
-            new Dictionary<string, string[]> { ["tr.shipment"] = ["date"] }),
+            ["tr.shipment"]),
 
         ["remote union target narrowed with forTarget"] = new(
             """
-            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "select": ["id", "code"], "parentSelect": ["id", "number"] } },
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "select": ["id", "code"] } },
              { "resolve": { "path": "owner.driverId", "as": "drv", "forTarget": "transport.shipment" } },
-             { "project": { "number": 1, "line.id": 1, "line.amount": 1, "owner": 1, "drv": 1 } }]
+             { "project": { "number": 1, "line.id": 1, "line.amount": 1, "owner.id": 1, "owner.number": 1, "drv.name": 1 } }]
             """,
             [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(ShipmentId) })], Strict: false,
-            new Dictionary<string, string[]> { ["transport.shipment"] = ["oxEl.amount"] }),
+            ["transport.shipment"]),
     };
 
     [Theory]
@@ -138,7 +138,7 @@ public class OwnerCheckParityTests
             .SelectMany(resolve => KeyedFetch.Checks(bound, resolve, @case.Strict, client))
             .ToList();
 
-        checks.Select(check => check.Bound!.Declared.Entity).Should().BeEquivalentTo(@case.Extras.Keys, $"{kind}: the targets explain checks");
+        checks.Select(check => check.Bound!.Declared.Entity).Should().BeEquivalentTo(@case.Targets, $"{kind}: the targets explain checks");
 
         // The run's side: the owner queries the keyed fetch sends over the same page.
         var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
@@ -157,19 +157,7 @@ public class OwnerCheckParityTests
 
             run.Should().NotBeNull($"{kind}: the run sends '{check.Target}' an owner query");
 
-            var checkQuery = Normalised(check.Query);
-            var runQuery = Normalised(run!);
-            var extras = @case.Extras[entity];
-            var checkFields = Projection(checkQuery);
-            var runFields = Projection(runQuery);
-
-            checkFields.Except(runFields).Should().BeEquivalentTo(extras, $"{kind}, {check.Target}: the check projects only the paths the owner is asked about beside the run's projection");
-            runFields.Except(checkFields).Should().BeEmpty($"{kind}, {check.Target}: the check projects everything the run does");
-
-            foreach (var extra in extras)
-                Projected(checkQuery).Remove(extra);
-
-            checkQuery.ToJsonString().Should().Be(runQuery.ToJsonString(), $"{kind}, {check.Target}: explain checks the query the run sends");
+            Normalised(check.Query).ToJsonString().Should().Be(Normalised(run!).ToJsonString(), $"{kind}, {check.Target}: explain checks the query the run sends");
         }
     }
 
@@ -208,9 +196,4 @@ public class OwnerCheckParityTests
     }
 
     private static bool IsKey(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) && Guid.TryParse(text, out _);
-
-    private static JsonObject Projected(JsonObject query) =>
-        query["pipeline"]!.AsArray().OfType<JsonObject>().Last(stage => stage["project"] is not null)["project"]!.AsObject();
-
-    private static List<string> Projection(JsonObject query) => Projected(query).Select(pair => pair.Key).ToList();
 }

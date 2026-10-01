@@ -206,7 +206,7 @@ public class ExplainStagesTests
 
         json.Select(pair => pair.Key).Should().Equal("index", "kind", "status", "placement", "reads", "creates", "shape");
         json["placement"].Should().BeNull();
-        json["reads"]!.AsArray().Should().BeEmpty("the read ledger comes with select inference");
+        json["reads"]!.ToJsonString().Should().Be("""[{"path":"number","use":"match"}]""", "the read ledger: what the stage reads off the row, and no alias for a path of the entity row");
         json["shape"]!.AsObject().Select(pair => pair.Key).Should().Equal("paging", "grouped", "unwound", "projection", "roots", "flags");
     }
 
@@ -305,7 +305,7 @@ public class ExplainStagesTests
     [Fact]
     public async Task On_a_union_a_path_some_target_has_is_dropped_for_the_others_and_one_no_target_has_is_an_error()
     {
-        var dropped = await ExplainAsync("""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""", client: Owner("name"));
+        var dropped = await ExplainAsync("""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1 } }]""", client: Owner("name"));
 
         dropped.Valid.Should().BeTrue(string.Join("; ", dropped.Errors.Select(error => error.Message)));
         dropped.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Path, (string)note.Params!["target"]!))
@@ -388,11 +388,11 @@ public class ExplainStagesTests
             [{ "resolve": { "path": "contactId", "as": "c", "select": ["name"] } },
              { "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
              { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice" } },
-             { "resolve": { "path": "invoice.contactId", "as": "ic", "select": ["name"] } }]
+             { "resolve": { "path": "invoice.number", "as": "ic" } }]
             """), BindHost.Context(options));
 
         var result = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-        result.Valid.Should().BeFalse("the lookup did not select 'contactId', which this host's own binding finds without any owner");
+        result.Valid.Should().BeFalse("an invoice's number declares no reference, which this host's own binding finds without any owner");
         result.Errors.Should().ContainSingle().Which.Stage.Should().Be(3);
     }
 
@@ -421,7 +421,7 @@ public class ExplainStagesTests
             """)).Result!.Columns;
 
         columns.Select(column => (column.Path, column.Root)).Should().Equal([("id", ""), ("number", ""), ("c.id", "c"), ("c.name", "c"), ("r.name", "r"), ("r.email", "r")],
-            "a local target's select carries its key; a remote one is what the caller wrote");
+            "kept whole, a local alias shows its hint with its key; a remote one what its owner is asked for, the hint");
         columns.Single(column => column.Path == "number").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == null && !column.Nullable);
         columns.Single(column => column.Path == "c.name").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == 0 && column.Nullable);
         columns.Single(column => column.Path == "r.email").Should().Match<ExplainColumn>(column => column.Kind == "unknown" && column.Stage == 1, "the owner knows a remote member's kind");
@@ -441,9 +441,9 @@ public class ExplainStagesTests
     }
 
     [Fact]
-    public async Task An_owning_row_carries_the_entity_it_is_and_its_select_under_its_own_alias()
+    public async Task An_owning_row_carries_the_entity_it_is_and_its_key_and_display_under_its_own_alias()
     {
-        var columns = (await ExplainAsync("""[{ "resolve": { "path": "localSource.id", "as": "line", "target": "rc.shipment", "parentAs": "owner", "parentSelect": ["number"] } }, { "project": { "line": 1, "owner": 1 } }]""")).Result!.Columns;
+        var columns = (await ExplainAsync("""[{ "resolve": { "path": "localSource.id", "as": "line", "target": "rc.shipment", "parentAs": "owner" } }, { "project": { "line": 1, "owner": 1 } }]""")).Result!.Columns;
 
         columns.Where(column => column.Root == "owner").Select(column => column.Path).Should().Equal("owner.entity", "owner.id", "owner.number");
         columns.Where(column => column.Root == "line").Select(column => column.Path).Should().Contain("line.id");

@@ -229,12 +229,15 @@ public class ContinuationBindTests
         await ErrorAsync($$"""[{{Source}}, { "lookup": { "from": "rc.invoice", "path": "customerId", "forTarget": "rc.shipment", "as": "l" } }]""", Codes.OptionNotApplicable);
     }
 
-    // ---- a flat owning-row select ------------------------------------------------------------------
+    // ---- the owning row's paths are flat ------------------------------------------------------------
 
     [Fact]
-    public async Task A_flat_parentSelect_drops_per_local_target_what_its_row_lacks_and_sends_each_only_what_it_has()
+    public async Task The_paths_projected_under_parentAs_drop_per_local_target_what_its_row_lacks_and_send_each_only_what_it_has()
     {
-        var bound = await BoundAsync($$"""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name", "nope"] } }]""");
+        var bound = await BoundAsync($$"""
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+             { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1, "owner.nope": 1 } }]
+            """);
 
         var targets = bound.Stages.OfType<BoundStage.Resolve>().Single().Cases!.SelectMany(bound => bound.Targets).ToList();
         var shipment = targets.Single(target => target.Declared.Entity == "rc.shipment");
@@ -242,16 +245,33 @@ public class ContinuationBindTests
 
         shipment.DroppedParentSelect.Should().Equal("name", "nope");
         shipment.RemoteParentSelect.Should().Equal("id", "number");
-        tour.DroppedParentSelect.Should().Equal("number", "nope");
+        tour.DroppedParentSelect.Should().Equal("nope", "number");
         tour.RemoteParentSelect.Should().Equal("id", "name");
-        targets.Single(target => target.IsRemote).RemoteParentSelect.Should().Equal(["id", "number", "name", "nope"], "a remote target's owner decides what its row has");
+        targets.Single(target => target.IsRemote).RemoteParentSelect.Should().Equal(["id", "name", "nope", "number"], "a remote target's owner decides what its row has");
+        bound.Loads["owner"].Loads.Should().Equal("id", "name", "nope", "number");
+        bound.Loads["owner"].Hint.Should().BeNull("an owning row has no hint: the projection alone says what it shows");
     }
 
     [Fact]
-    public async Task An_owning_row_select_path_no_local_target_has_is_UNKNOWN_PATH()
+    public async Task A_path_projected_under_parentAs_that_no_local_target_has_is_UNKNOWN_PATH_at_the_projection()
     {
-        (await ErrorAsync("""[{ "resolve": { "path": "billingLineId", "as": "line", "parentAs": "owner", "parentSelect": ["number", "nope"] } }]""", Codes.UnknownPath))
-            .Path.Should().Be("nope");
+        var error = await ErrorAsync("""
+            [{ "resolve": { "path": "billingLineId", "as": "line", "parentAs": "owner" } },
+             { "project": { "owner.number": 1, "owner.nope": 1 } }]
+            """, Codes.UnknownPath);
+
+        error.Path.Should().Be("owner.nope");
+        error.Stage.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("resolve", """{ "resolve": { "path": "billingLineId", "as": "line", "parentAs": "owner", "parentSelect": ["number"] } }""")]
+    [InlineData("lookup", """{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoices", "parentSelect": ["number"] } }""")]
+    public async Task ParentSelect_is_no_member_of_a_join(string kind, string stage)
+    {
+        var error = await BindHost.ErrorAsync(ResolveModel.Model, kind == "lookup" ? "rc.customer" : ResolveModel.Invoice, $"[{stage}]", Codes.UnknownStageMember);
+
+        error.Message.Should().StartWith($"'parentSelect' is not a member of {kind}");
     }
 
     // ---- limits and refusals -------------------------------------------------------------------------

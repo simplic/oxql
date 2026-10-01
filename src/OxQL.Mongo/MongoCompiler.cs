@@ -1007,7 +1007,7 @@ public static class MongoCompiler
 
         pipeline.Add(Sort(lookup.ChildSort ?? [], tieBreak: true));
         pipeline.Add(new BsonDocument("$limit", lookup.First ? 1 : lookup.Limit + 1));
-        pipeline.Add(new BsonDocument("$project", Select(lookup.Select, keepDiscriminators)));
+        pipeline.Add(new BsonDocument("$project", Select(lookup.Select, keepDiscriminators, lookup.From)));
 
         var join = Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As);
 
@@ -1253,7 +1253,7 @@ public static class MongoCompiler
             pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
 
         pipeline.Add(new BsonDocument("$limit", probe?.AmbiguityFlag is null ? 1 : 2));
-        pipeline.Add(new BsonDocument("$project", Select(resolve.Select!, keepDiscriminators)));
+        pipeline.Add(new BsonDocument("$project", Select(resolve.Select!, keepDiscriminators, resolve.Target)));
 
         // No caller alias ends in the suffix, so the temporary field shadows nothing.
         var temporary = resolve.As + Aliases.ReservedSuffix;
@@ -1345,13 +1345,22 @@ public static class MongoCompiler
         })));
     }
 
-    private static BsonDocument Select(IReadOnlyList<ResolvedPath> select, bool keepDiscriminators = false)
+    /// <summary>
+    /// The projection inside a join: what the join loads of its target (the select of a contract 1
+    /// join; under contract 2 its key, what later stages read under its alias and its output set).
+    /// </summary>
+    private static BsonDocument Select(IReadOnlyList<ResolvedPath> select, bool keepDiscriminators = false, EntityDef? target = null)
     {
         var projection = new BsonDocument();
 
         foreach (var path in select)
             if (path.Storage is not null)
                 projection[path.Storage] = 1;
+
+        // A target whose rows are of several variants keeps the row's own discriminator: a variant
+        // test on the alias and a reference that picks its target by the row's variant read it.
+        if (keepDiscriminators && target?.Root is { Variants.Count: > 0, DiscriminatorElement: { } rowDiscriminator })
+            projection[rowDiscriminator] = 1;
 
         // A select under a polymorphic object keeps its discriminator, unless a selected path covers it.
         foreach (var storage in keepDiscriminators ? DiscriminatorsOf(select) : [])

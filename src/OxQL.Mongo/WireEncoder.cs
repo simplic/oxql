@@ -173,6 +173,12 @@ public static class WireEncoder
         if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
             return;
 
+        // Under a join's alias the row shows the output set and nothing else: what the join loaded
+        // for a stage that only reads it, or the aggregate kept for a join after the page, is not in
+        // the row (improvement plan §3.S). The projection alone decides the row's shape.
+        if (root != Shape.ImplicitRoot && Shown(shape, root) is { } shown && (shape.IsRemoved(wire) || !RootOutput.Shows(shown, wire[(root.Length + 1)..])))
+            return;
+
         var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(root, WithoutRoot(wire, root)))
             ? ElementShapeOf(member)
             : member;
@@ -215,6 +221,14 @@ public static class WireEncoder
                 into[segments[^1]] = EncodeScalar(value, Kind.Date, null, bagWire + "." + definition.Path, unfit);
         }
     }
+
+    /// <summary>The output set of a join alias in the final shape; null for a root that shows whatever it holds.</summary>
+    private static IReadOnlyList<string>? Shown(Shape shape, string root) => shape.Roots.GetValueOrDefault(root) switch
+    {
+        ShapeNode.Entity { Join: not null } entity => entity.Select,
+        ShapeNode.Array { Join: not null } array => array.Select,
+        _ => null,
+    };
 
     private static string WithoutRoot(string wire, string root) =>
         root.Length > 0 && wire.StartsWith(root + ".", StringComparison.Ordinal) ? wire[(root.Length + 1)..] : wire;

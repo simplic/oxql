@@ -31,9 +31,9 @@ public sealed record ResolveResult
     public IReadOnlyList<KeyedTruncation> Truncations { get; init; } = [];
 
     /// <summary>
-    /// The select and owning-row select paths remote owners said one target of a union lacks, dropped
-    /// for that target (DESIGN §3.4.1 flat select); what explain's <c>SELECT_PATH_NOT_ON_TARGET</c>
-    /// note names for a remote target. A local target's are on its bound target.
+    /// The paths under the alias and under the owning row that remote owners said one target of a union
+    /// lacks, dropped for that target (DESIGN §3.4.1 flat paths); what explain's
+    /// <c>SELECT_PATH_NOT_ON_TARGET</c> note names for a remote target. A local target's are on its bound target.
     /// </summary>
     public IReadOnlyList<DroppedSelectPath> Dropped { get; init; } = [];
 
@@ -79,7 +79,7 @@ public enum KeyedOutcome
 /// </summary>
 public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
 
-/// <summary>A select path (<paramref name="Parent"/>: of the owning row) that one target of a union's keyed stage lacks, dropped for it.</summary>
+/// <summary>A path asked under the alias (<paramref name="Parent"/>: under the owning row) that one target of a union's keyed stage lacks, dropped for it.</summary>
 public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent);
 
 /// <summary>
@@ -96,12 +96,11 @@ public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Serv
 /// check key, the caller index of its first continued stage, and the mapping of an owner error back
 /// to the caller (null for an error at the owner query's own stages).
 /// <para>
-/// A target is checked for its continued stages and for the paths the caller wrote under its
-/// aliases: its <c>select</c>, its <c>parentSelect</c>, and every path the last projection after the
-/// stage names under them, which the check query projects at <see cref="ProjectAt"/> so the
-/// owner says which it lacks. <see cref="Stage"/> is the resolve's caller index,
-/// <see cref="ProjectStage"/> that projection's; <c>select</c> and
-/// <c>parentSelect</c> are what the caller wrote.
+/// A target is checked for its continued stages and for the paths asked under its aliases: the
+/// output set a run asks for (the paths the projection names under them; kept whole, the
+/// <c>select</c> hint), which the query projects at <see cref="ProjectAt"/> so the owner says which
+/// it lacks. The check query is the run's query with the check key, nothing beside it.
+/// <see cref="Stage"/> is the resolve's caller index, <see cref="ProjectStage"/> the projection's.
 /// </para>
 /// </summary>
 public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
@@ -118,6 +117,15 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
     /// <summary>The caller index of the last projection after the resolve, when it names paths under its aliases.</summary>
     public int? ProjectStage { get; init; }
 
+    /// <summary>The aliases the stages continued at this target's owner add; a path under one is that stage's, not the target's.</summary>
+    public IReadOnlyList<string> ContinuedAliases { get; init; } = [];
+
+    /// <summary>The stages continued at this target's owner, in the order the owner query carries them from <see cref="ContinuedAt"/>.</summary>
+    public IReadOnlyList<ContinuedStage> Continued { get; init; } = [];
+
+    /// <summary>The owner query's stage index of the first continued stage.</summary>
+    public int ContinuedAt { get; init; }
+
     /// <summary>The check query's projection stage, where an owner reports a path the target lacks.</summary>
     public int ProjectAt { get; init; } = -1;
 
@@ -129,7 +137,7 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
 
     /// <summary>
     /// The check query asked again after an owner's answer to the query it was sent, as a run asks a
-    /// remote union target again (DESIGN §3.4.1 flat select): when the answer refuses only paths the
+    /// remote union target again (DESIGN §3.4.1 flat paths): when the answer refuses only paths the
     /// target lacks at the projection, the query without them, which binds its continued stages as
     /// the run's does; null when a run would not ask again.
     /// </summary>
@@ -692,7 +700,7 @@ public sealed class KeyedFetch
             return new ResolveResult { Refusal = incapable, CacheHits = cacheHits };
 
         // Round one: the filtered owner queries of every chunk. A remote target of a union whose
-        // owner refuses only select paths it lacks is asked again without them (a flat select).
+        // owner refuses only paths it lacks is asked again without them (the paths of a union are flat).
         var pending = targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList();
         var fromOwners = new List<OwnerDiagnostic>();
 
@@ -751,7 +759,7 @@ public sealed class KeyedFetch
             pending = retry;
         }
 
-        // A flat select path is refused only when no target of the stage has it.
+        // A path asked under the alias is refused only when no target of the stage has it.
         foreach (var stage in stages)
             if (NoTargetHas(stage) is { } refusal)
                 return new ResolveResult { Refusal = refusal, Calls = calls, CacheHits = cacheHits };
@@ -902,14 +910,14 @@ public sealed class KeyedFetch
     /// <summary>The owner key of this host's own targets in a call plan; no service namespace is empty.</summary>
     private const string SelfService = "";
 
-    /// <summary>How many times a union target's query is asked again without select paths its owner lacks.</summary>
+    /// <summary>How many times a union target's query is asked again without the paths its owner lacks.</summary>
     internal const int MaxDropRounds = 2;
 
     /// <summary>A diagnostic an owner reported with its answer for a target that carried continued stages, and the answer's rows.</summary>
     private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, JsonArray Items);
 
     /// <summary>
-    /// A flat select path no target of a union has (DESIGN §3.4.1): refused. A local target lacks
+    /// A path asked under the alias that no target of a union has (DESIGN §3.4.1): refused. A local target lacks
     /// what it dropped at bind time, a remote one what its owner refused; a remote target not asked
     /// on this page is taken to have every path.
     /// </summary>
@@ -1122,23 +1130,27 @@ public sealed class KeyedFetch
 
         var index = StageIndexOf(bound, stage);
         var position = PositionOf(bound, stage);
-        var projected = ProjectedUnder(bound, position, stage.As) ?? [];
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) ?? [] : [];
-        var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
-        var projectStage = project is null || (projected.Count == 0 && parentProjected.Count == 0) ? null : StageIndexOf(bound, project);
+        var continued = Continuation.Of(bound, stage);
 
-        // A local target is checked only for the stages continued under it: this host binds its select
-        // and paths itself, but the continued stages are bound by its own SelfOwner when the query runs,
+        // Where the paths asked under the stage's aliases were written, when a projection names them:
+        // the last projection after the stage.
+        var projects = new[] { stage.As, stage.ParentAs }.Concat(continued.SelectMany(each => each.Aliases))
+            .Any(alias => alias is not null && RootOutput.Of(bound.FinalShape, alias) is { Carried: true, Whole: false });
+        var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
+        var projectStage = project is null || !projects ? null : StageIndexOf(bound, project);
+
+        // A local target is checked only for the stages continued under it: this host binds the paths
+        // asked of it itself, but the continued stages are bound by its own SelfOwner when the query runs,
         // with its own model and, for a join there that reaches another service, that owner's.
-        return PlansOf(bound, stage, strict, Continuation.Of(bound, stage), client)
+        return PlansOf(bound, stage, strict, continued, client)
             .Where(plan => plan.Target.IsRemote
-                ? everyRemoteTarget || !plan.Continued.IsEmpty || Writes(plan.Target) || projected.Count > 0 || parentProjected.Count > 0 || stage.RemoteLookup is not null
+                ? everyRemoteTarget || !plan.Continued.IsEmpty || Writes(plan.Target) || stage.RemoteLookup is not null
                 : !plan.Continued.IsEmpty)
             .Select(plan =>
             {
-                var item = plan.Target.Declared.Item is not null;
-                var lacking = new HashSet<string>(StringComparer.Ordinal);
-                var query = CheckQuery(plan, item, lacking);
+                // The query a run sends, with the check key: what explain says of an owner is what the
+                // owner answers to the run's own query (improvement plan P12).
+                var query = plan.Query([CheckKey]);
                 var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
 
                 return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.IsEmpty ? index ?? 0 : plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service))
@@ -1148,47 +1160,17 @@ public sealed class KeyedFetch
                     Stage = index,
                     ProjectStage = projectStage,
                     ProjectAt = projectAt,
-                    Item = item,
+                    Item = plan.Target.Declared.Item is not null,
                     OriginOf = plan.OriginOf,
+                    ContinuedAliases = plan.Continued.Aliases,
+                    Continued = plan.Continued.Origins,
+                    ContinuedAt = plan.ContinuedAt,
                     // What a run does with the refusal (DropUnknown) is done to the check: the paths the
-                    // target lacks leave the select, and the projected ones the check asks beside it.
-                    Again = (answer, sent) =>
-                    {
-                        if (!plan.DropUnknown(answer, sent, lacking))
-                            return null;
-
-                        return CheckQuery(plan, item, lacking);
-                    },
+                    // target lacks leave the query, which is asked again.
+                    Again = (answer, sent) => plan.DropUnknown(answer, sent) ? plan.Query([CheckKey]) : null,
                 };
             })
             .ToList();
-
-        // The query a run sends with the check key, and the paths the projection names under the
-        // aliases asked too, so the owner says which of them this target lacks (a run sends only those
-        // under the select); none the owner already said the target lacks.
-        QueryRequest CheckQuery(TargetPlan plan, bool item, HashSet<string> lacking)
-        {
-            var query = plan.Query([CheckKey]);
-            var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
-
-            if (projectAt < 0)
-                return query;
-
-            var fields = new Dictionary<string, int>(query.Pipeline[projectAt].Project!.Fields, StringComparer.Ordinal);
-
-            foreach (var field in projected.Select(path => item ? BoundKeyedBy.Element + "." + path : path))
-                if (!lacking.Contains(field))
-                    fields.TryAdd(field, 1);
-
-            foreach (var path in item ? parentProjected : [])
-                if (!lacking.Contains(path))
-                    fields.TryAdd(path, 1);
-
-            var pipeline = query.Pipeline.ToList();
-            pipeline[projectAt] = pipeline[projectAt] with { Project = pipeline[projectAt].Project! with { Fields = fields } };
-
-            return query with { Pipeline = pipeline };
-        }
 
         static bool Writes(BoundResolveTarget target) =>
             target.RemoteSelect is { Count: > 0 } || target.RemoteParentSelect is { Count: > 0 };
@@ -1197,16 +1179,13 @@ public sealed class KeyedFetch
     /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
     private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued, IRemoteQueryClient? client = null)
     {
-        var position = PositionOf(bound, stage);
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
-        var projected = ProjectedUnder(bound, position, stage.As);
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) : null;
         var plans = new List<TargetPlan>();
 
         foreach (var target in cases.SelectMany(selected => selected.Targets))
             if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
-                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, projected, parentProjected,
+                plans.Add(new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape,
                     legacyOwner: target.IsRemote && IsBefore21(client, ServiceKeyOf(target.Declared.Entity))));
 
         return plans;
@@ -1248,18 +1227,27 @@ public sealed class KeyedFetch
         private readonly string planHash;
         private readonly HashSet<string> seen = new(StringComparer.Ordinal);
         private readonly HashSet<string> lifted;
-        private readonly IReadOnlyList<string>? projected;
-        private readonly IReadOnlyList<string>? parentProjected;
+        private readonly Shape? final;
+        private readonly IReadOnlyList<string>? shown;
+        private readonly IReadOnlyList<string>? parentShown;
 
+        /// <summary>
+        /// The plan of one target. <paramref name="final"/> is the request's final shape: what the row
+        /// shows under the stage's aliases and under those its continued stages add, which is what the
+        /// owner is asked for and what its answer is cut to (improvement plan §3.S).
+        /// </summary>
         public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict,
-            bool union = false, IReadOnlyList<string>? projected = null, IReadOnlyList<string>? parentProjected = null, bool legacyOwner = false)
+            bool union = false, Shape? final = null, bool legacyOwner = false)
         {
             Stage = stage;
             Target = target;
             this.organisation = organisation;
             this.strict = strict;
-            this.projected = projected;
-            this.parentProjected = parentProjected;
+            this.final = final;
+            // An alias the projection names paths under shows those paths and nothing else; kept whole it
+            // shows what its owner answers.
+            shown = final is not null && RootOutput.Of(final, stage.As) is { Carried: true, Whole: false } own ? own.Projected : null;
+            parentShown = final is not null && stage.ParentAs is { } parentAs && RootOutput.Of(final, parentAs) is { Carried: true, Whole: false } parent ? parent.Projected : null;
             Union = union;
             Continued = Continuation.For(stage, target.Declared.Entity, target.Declared.Item is not null, continued);
             lifted = new HashSet<string>(Continued.Aliases, StringComparer.Ordinal);
@@ -1355,10 +1343,13 @@ public sealed class KeyedFetch
         public string CacheKey(string key) => OwnerFetchCache.KeyOf(Entity, Target.Declared.Item, Target.Declared.Field, organisation, key, planHash);
 
         /// <summary>
-        /// The owner query of some keys: the key match, the target's filter, the continued stages with
-        /// every alias they add projected, the projection and the page. A query with continued stages
-        /// carries <c>strict</c> when the request is strict, so the owner refuses the chain's data loss
-        /// as this host would (DESIGN §3.5.4); without them strict changes nothing the owner does.
+        /// The owner query of some keys: the key match, the target's filter, the continued stages, the
+        /// projection and the page. Of an alias a continued stage adds the projection asks what the
+        /// row shows: the paths the caller's projection names under it, as paths, or the alias itself
+        /// where the row keeps it whole; the owner binds the stage and infers what its join loads. A
+        /// query with continued stages carries <c>strict</c> when the request is strict, so the owner
+        /// refuses the chain's data loss as this host would (DESIGN §3.5.4); without them strict changes
+        /// nothing the owner does.
         /// </summary>
         public QueryRequest Query(IReadOnlyList<string> keys)
         {
@@ -1372,7 +1363,15 @@ public sealed class KeyedFetch
             var projection = new Dictionary<string, int>(pipeline[at].Project!.Fields, StringComparer.Ordinal);
 
             foreach (var alias in Continued.Aliases)
-                projection[alias] = 1;
+            {
+                var kept = final is null ? new RootOutput(true, true, []) : RootOutput.Of(final, alias);
+
+                if (kept.Whole && kept.Carried)
+                    projection[alias] = 1;
+
+                foreach (var path in kept is { Carried: true, Whole: false } ? kept.Projected : [])
+                    projection[alias + "." + path] = 1;
+            }
 
             pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
             pipeline.InsertRange(at, Continued.Stages);
@@ -1392,78 +1391,36 @@ public sealed class KeyedFetch
         /// <summary>The existence probe of some keys: the query without the filter, one row per key is enough.</summary>
         public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true, plainRowsPerKey: PlainRowsPerKey);
 
-        /// <summary>Whether the keyed stage has more than one target entity: a flat select path one of them lacks is dropped for it.</summary>
+        /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
         public bool Union { get; }
 
-        /// <summary>The select paths the owner said this remote target lacks, dropped from its query (DESIGN §3.4.1 flat select).</summary>
+        /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query (DESIGN §3.4.1 flat paths).</summary>
         public HashSet<string> DroppedSelect { get; } = new(StringComparer.Ordinal);
 
-        /// <summary>The owning-row select paths the owner said this remote target's entity lacks.</summary>
+        /// <summary>The paths under the owning row the owner said this remote target's entity lacks.</summary>
         public HashSet<string> DroppedParent { get; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// The target as its owner query carries it: the select and the owning row's select narrowed
-        /// to what a projection after the stage keeps of the alias (DESIGN §3.5.3), less what the owner
-        /// said this target lacks. A remote target sends them as written, a local one as bound.
+        /// The target as its owner query carries it: the paths the binder inferred for it (improvement
+        /// plan §3.S), less what the owner said this target lacks. A local target's are bound, and
+        /// already without what it lacks.
         /// </summary>
-        private BoundResolveTarget Sending()
-        {
-            var parent = Narrow(Target.RemoteParentSelect, parentProjected)?.Where(path => !DroppedParent.Contains(path)).ToList();
-
-            if (Target.IsRemote)
-                return Target with
-                {
-                    RemoteSelect = Narrow(Target.RemoteSelect, projected)?.Where(path => !DroppedSelect.Contains(path)).ToList(),
-                    RemoteParentSelect = parent,
-                };
-
-            if (Target.Select is not { Count: > 0 } bound || Narrow(bound.Select(path => path.Wire).ToList(), projected) is not { } narrowed)
-                return Target with { RemoteParentSelect = parent };
-
-            return Target with { Select = bound.Where(path => narrowed.Contains(path.Wire, StringComparer.Ordinal)).ToList(), RemoteParentSelect = parent };
-        }
-
-        /// <summary>
-        /// A select narrowed to the paths a projection keeps under the alias: a projected path at or
-        /// under a selected one is sent, a selected one under a projected one stays. Without a select, a
-        /// projection, or anything left, the select as it is.
-        /// </summary>
-        private static IReadOnlyList<string>? Narrow(IReadOnlyList<string>? select, IReadOnlyList<string>? kept)
-        {
-            if (select is not { Count: > 0 } || kept is not { Count: > 0 })
-                return select;
-
-            var narrowed = new List<string>();
-
-            foreach (var path in select)
+        private BoundResolveTarget Sending() => Target.IsRemote
+            ? Target with
             {
-                foreach (var wanted in kept.Where(wanted => wanted == path || wanted.StartsWith(path + ".", StringComparison.Ordinal)))
-                    if (!narrowed.Contains(wanted, StringComparer.Ordinal))
-                        narrowed.Add(wanted);
-
-                if (kept.Any(wanted => path.StartsWith(wanted + ".", StringComparison.Ordinal)) && !narrowed.Contains(path, StringComparer.Ordinal))
-                    narrowed.Add(path);
+                RemoteSelect = Target.RemoteSelect?.Where(path => !DroppedSelect.Contains(path)).ToList(),
+                RemoteParentSelect = Target.RemoteParentSelect?.Where(path => !DroppedParent.Contains(path)).ToList(),
             }
-
-            return narrowed.Count == 0 ? select : narrowed;
-        }
+            : Target;
 
         /// <summary>
-        /// A remote union target's owner refused its query only because select paths are not paths of
-        /// this target: they are dropped for it and the query is asked again. Anything else in the
-        /// refusal is the refusal. True when the query as sent projected every refused path, so the
-        /// query asked again does not: newly learned, or learned from another chunk of the same round
-        /// that was sent before the drop (RE-5).
+        /// A remote union target's owner refused its query only because paths asked under the alias or
+        /// its owning row are not paths of this target: they are dropped for it and the query is asked
+        /// again. Anything else in the refusal is the refusal. True when the query as sent projected
+        /// every refused path, so the query asked again does not: newly learned, or learned from another
+        /// chunk of the same round that was sent before the drop (RE-5).
         /// </summary>
-        public bool DropUnknown(JsonNode? result, QueryRequest sent) => DropUnknown(result, sent, null);
-
-        /// <summary>
-        /// <see cref="DropUnknown(JsonNode?, QueryRequest)"/> for a check query, which projects paths
-        /// beside the select (<paramref name="asked"/> is not null): a refused path the check asked
-        /// beside the select is dropped as well, and every refused projection field lands in
-        /// <paramref name="asked"/> so the check does not ask it again.
-        /// </summary>
-        public bool DropUnknown(JsonNode? result, QueryRequest sent, ISet<string>? asked)
+        public bool DropUnknown(JsonNode? result, QueryRequest sent)
         {
             if (!Target.IsRemote || !Union || result?["errors"] is not JsonArray { Count: > 0 } errors)
                 return false;
@@ -1493,26 +1450,25 @@ public sealed class KeyedFetch
                     parent.Add(path);
             }
 
-            var sentSelect = Narrow(Target.RemoteSelect, projected) ?? [];
-            var sentParent = Narrow(Target.RemoteParentSelect, parentProjected) ?? [];
+            var sentSelect = Target.RemoteSelect ?? [];
+            var sentParent = Target.RemoteParentSelect ?? [];
 
-            if (asked is null && (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal))))
+            if (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal)))
                 return false;
 
             // The query asked again leaves every refused path out, so asking again cannot loop.
             if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
                 return false;
 
-            DroppedSelect.UnionWith(select.Where(path => sentSelect.Contains(path, StringComparer.Ordinal)));
-            DroppedParent.UnionWith(parent.Where(path => sentParent.Contains(path, StringComparer.Ordinal)));
-            asked?.UnionWith(select.Select(path => Target.Declared.Item is null ? path : element + path).Concat(parent));
+            DroppedSelect.UnionWith(select);
+            DroppedParent.UnionWith(parent);
 
             return true;
         }
 
         /// <summary>
         /// Whether one owner error is a path this remote union target lacks at the projection of the
-        /// query <paramref name="sent"/>: what <see cref="DropUnknown(JsonNode?, QueryRequest)"/> drops for the target.
+        /// query <paramref name="sent"/>: what <see cref="DropUnknown"/> drops for the target.
         /// </summary>
         public bool Droppable(JsonObject error, QueryRequest sent)
         {
@@ -1529,14 +1485,20 @@ public sealed class KeyedFetch
             return projectAt >= 0 && stage == projectAt && sent.Pipeline[projectAt].Project!.Fields.ContainsKey(path);
         }
 
-        /// <summary>The cache key of the paths an owner said this target lacks, per organisation, service and plan.</summary>
-        public string DropsKey => OwnerFetchCache.DropsKeyOf(organisation, Service, planHash);
+        /// <summary>
+        /// The cache key of the paths an owner said this target lacks, per organisation, service and
+        /// target: a lacked path is a fact about the target, so every plan that asks the target learns it.
+        /// </summary>
+        public string DropsKey => OwnerFetchCache.DropsKeyOf(organisation, Service, TargetName);
 
-        /// <summary>Takes the paths an owner said this target lacks, learned by an earlier request: they are not sent again.</summary>
+        /// <summary>
+        /// Takes the paths an owner said this target lacks, learned by an earlier request: those this
+        /// plan asks are not sent again, and are reported as dropped as if this request had learned them.
+        /// </summary>
         public void Learned(IEnumerable<string> select, IEnumerable<string> parent)
         {
-            DroppedSelect.UnionWith(select);
-            DroppedParent.UnionWith(parent);
+            DroppedSelect.UnionWith(select.Where(path => Target.RemoteSelect?.Contains(path, StringComparer.Ordinal) == true));
+            DroppedParent.UnionWith(parent.Where(path => Target.RemoteParentSelect?.Contains(path, StringComparer.Ordinal) == true));
         }
 
         /// <summary>The keys the filtered query was sent and answered without a row, in chunks of <paramref name="size"/>.</summary>
@@ -1612,16 +1574,21 @@ public sealed class KeyedFetch
             return GuidKeys && Guid.TryParse(text, out var guid) ? guid.ToString("D") : text;
         }
 
-        /// <summary>An answer row as the alias holds it: the element of an item target, the row of an entity target without what continued stages added.</summary>
+        /// <summary>
+        /// An answer row as the alias holds it: the element of an item target, the row of an entity
+        /// target without what continued stages added. Where the projection names paths under the
+        /// alias, the row shows those and nothing else: the key the owner query carries beside them is
+        /// this host's to match by, not the caller's to see.
+        /// </summary>
         public JsonNode? AliasOf(JsonObject row)
         {
             if (Target.Declared.Item is not null)
-                return row[BoundKeyedBy.Element]?.DeepClone();
+                return Shown(row[BoundKeyedBy.Element]?.DeepClone(), shown);
 
             var keyed = Stage.RemoteLookup is { Rows: true };
 
             if (lifted.Count == 0 && !keyed)
-                return row.DeepClone();
+                return Shown(row.DeepClone(), shown);
 
             var alias = new JsonObject();
 
@@ -1630,19 +1597,82 @@ public sealed class KeyedFetch
                 if (!lifted.Contains(name) && !(keyed && name == BoundKeyedBy.Key))
                     alias[name] = value?.DeepClone();
 
-            return alias;
+            return Shown(alias, shown);
         }
 
-        /// <summary>The owning row of an item target's answer: its entity and the parent members the owner projected.</summary>
+        /// <summary>
+        /// The owning row of an item target's answer: its entity and the parent members the owner
+        /// projected; where the projection names paths under <c>parentAs</c>, those members only. The
+        /// entity is this host's to write and is always there: it says which target a union's row is.
+        /// </summary>
         public JsonObject ParentOf(JsonObject row)
         {
-            var parent = new JsonObject { ["entity"] = Entity };
+            var parent = new JsonObject();
 
             foreach (var (name, value) in row)
                 if (name != BoundKeyedBy.Element && name != "entity" && !lifted.Contains(name))
                     parent[name] = value?.DeepClone();
 
-            return parent;
+            var cut = (JsonObject)Shown(parent, parentShown)!;
+            var owning = new JsonObject { ["entity"] = Entity };
+
+            foreach (var (name, value) in cut.ToList())
+            {
+                cut.Remove(name);
+                owning[name] = value;
+            }
+
+            return owning;
+        }
+
+        /// <summary>
+        /// A value cut to the paths <paramref name="paths"/> names below it (null: as it is): a member is
+        /// kept when a path names it or lies below it, and a member a path lies below is cut in turn;
+        /// the elements of an array are cut alike.
+        /// </summary>
+        private static JsonNode? Shown(JsonNode? value, IReadOnlyList<string>? paths)
+        {
+            if (paths is null)
+                return value;
+
+            switch (value)
+            {
+                case JsonArray elements:
+                    for (var index = 0; index < elements.Count; index++)
+                    {
+                        var element = elements[index];
+
+                        elements[index] = null;
+                        elements[index] = Shown(element, paths);
+                    }
+
+                    return elements;
+
+                // The members keep the order their owner answered them in.
+                case JsonObject members:
+                    var kept = new JsonObject();
+
+                    foreach (var (name, member) in members.ToList())
+                    {
+                        members.Remove(name);
+
+                        if (paths.Contains(name, StringComparer.Ordinal))
+                        {
+                            kept[name] = member;
+                            continue;
+                        }
+
+                        var below = paths.Where(path => path.StartsWith(name + ".", StringComparison.Ordinal)).Select(path => path[(name.Length + 1)..]).ToList();
+
+                        if (below.Count > 0)
+                            kept[name] = Shown(member, below);
+                    }
+
+                    return kept;
+
+                default:
+                    return value;
+            }
         }
     }
 
@@ -1708,12 +1738,9 @@ public sealed class KeyedFetch
     /// </summary>
     private StagePlan Plan(BoundPipeline bound, BoundStage.Resolve stage, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
     {
-        var position = PositionOf(bound, stage);
         var plan = new StagePlan(stage, StageIndexOf(bound, stage), continued);
         var cases = CasesOf(stage);
         var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
-        var projected = ProjectedUnder(bound, position, stage.As);
-        var parentProjected = stage.ParentAs is { } parentAs ? ProjectedUnder(bound, position, parentAs) : null;
 
         foreach (var selected in cases)
             foreach (var target in selected.Targets)
@@ -1722,7 +1749,7 @@ public sealed class KeyedFetch
 
                 if (shared is null)
                 {
-                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, projected, parentProjected,
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, bound.FinalShape,
                         legacyOwner: target.IsRemote && IsBefore21(ServiceKeyOf(target.Declared.Entity))));
 
                     // What an owner said this union target lacks, an earlier request learned: not
@@ -1788,22 +1815,6 @@ public sealed class KeyedFetch
         }
 
         return plan;
-    }
-
-    /// <summary>
-    /// The paths below <paramref name="alias"/> the last projection after the stage keeps, relative to
-    /// the alias (DESIGN §3.5.3: a projected path under a keyed alias narrows its select); null when
-    /// no inclusion projection follows, or it keeps the alias whole or not at all.
-    /// </summary>
-    private static IReadOnlyList<string>? ProjectedUnder(BoundPipeline bound, int? position, string alias)
-    {
-        if (position is not { } at || bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() is not { Inclusion: true } project
-            || project.Paths.Any(path => path.Wire == alias))
-            return null;
-
-        var under = project.Paths.Where(path => path.Wire.StartsWith(alias + ".", StringComparison.Ordinal)).Select(path => path.Wire[(alias.Length + 1)..]).ToList();
-
-        return under.Count == 0 ? null : under;
     }
 
     /// <summary>The bound cases of a stage; a resolve bound without them (a 2.0 form) has its one simple case.</summary>

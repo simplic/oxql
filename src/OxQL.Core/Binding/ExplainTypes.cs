@@ -717,7 +717,7 @@ public sealed class ExplainTypes
     /// <summary>
     /// The override set of one root at one shape, or null when every member has its type's own flags:
     /// <see cref="Self"/> the root itself, a path a member that differs here, and <c>null</c> for one that is
-    /// not in the row (a projection removed it, or the join's select did not fetch it). Where most members
+    /// not in the row (a projection removed it, or the alias holds only part of its target). Where most members
     /// differ the same way the set says it once: under <see cref="Every"/> what every member not named has,
     /// or under <see cref="ByOwn"/> what a member has here by the flags it has of its own.
     /// </summary>
@@ -752,12 +752,20 @@ public sealed class ExplainTypes
         var rows = new List<(string Path, string? Own, string? Here)>();
         (bool, bool, bool)? below = null;
 
+        // What a join's alias holds only in part (a contract 1 select, the output set of the final row).
+        var shown = node switch
+        {
+            ShapeNode.Entity entity => entity.Select,
+            ShapeNode.Array array => array.Select,
+            _ => null,
+        };
+
         foreach (var (path, flags) in members.GetValueOrDefault(type ?? "") ?? [])
         {
             var wire = named ? root + "." + path : path;
             string? here = null;
 
-            if (shape.IsVisible(wire) && shape.NotSelected(wire) is null)
+            if (shape.IsVisible(wire) && (shown is null || RootOutput.Shows(shown, path)))
                 here = own || (touched is not null && !touched.Any(collection => path == collection || (path.Length > collection.Length && path[collection.Length] == '.' && path.StartsWith(collection, StringComparison.Ordinal)))) ? flags?.Id
                     : node is ShapeNode.Remote ? flags is { } theirs ? Set(Rebased(theirs, below ??= Below(plain, wire))) : null
                     : Set(FlagsAt(plain, wire));

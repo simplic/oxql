@@ -51,7 +51,7 @@ public class ReportRequestTests
 
         var project = pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!.AsObject();
 
-        foreach (var member in dropped.Append("sourceParent"))
+        foreach (var member in project.Select(pair => pair.Key).Where(member => dropped.Contains(member) || member.StartsWith("sourceParent.", StringComparison.Ordinal)).ToList())
             project.Remove(member);
 
         ShouldEqual(ReportScenarios.Request("A4"), expected);

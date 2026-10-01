@@ -187,6 +187,53 @@ public sealed class Binder
         /// <summary>The comparisons that opted out of the fold with a text too long for a pattern: refused once the aggregate turns out collated.</summary>
         private readonly List<(int Stage, string Path, string Op)> exactTexts = [];
 
+        /// <summary>
+        /// The read ledger (improvement plan §3.S): every path a stage reads off the row, with its use and
+        /// the join it loads from. It is written at the binder's read sites only (<see cref="Read"/>,
+        /// <see cref="Record"/>): a path bound against a join's own target (its hint, its filter, its sort),
+        /// a probe and what explain asks of a shape never reach it.
+        /// </summary>
+        private readonly List<PathRead> reads = [];
+
+        /// <summary>What each join loads and shows, by alias; filled once every stage is bound (<see cref="InferLoads"/>).</summary>
+        private readonly Dictionary<string, JoinLoad> loads = new(StringComparer.Ordinal);
+
+        /// <summary>The final shape with each join alias's output set, once the loads are inferred.</summary>
+        private Shape? output;
+
+        /// <summary>
+        /// Where a condition or sort entry reads: the row (recorded, an <c>any</c>'s inner paths under
+        /// <paramref name="Prefix"/>), or null at its call sites for a join's own target, whose filter and
+        /// sort run inside the join before anything is loaded.
+        /// </summary>
+        private readonly record struct Reading(string Prefix)
+        {
+            /// <summary>A read of the row itself.</summary>
+            public static readonly Reading Row = new("");
+        }
+
+        /// <summary>
+        /// Resolves a path a stage reads, and records the read when it reads the row
+        /// (<paramref name="reading"/> not null) and resolves.
+        /// </summary>
+        private PathResolution Read(Shape at, string wire, PathUsage usage, ReadUse use, int index, Reading? reading)
+        {
+            var resolution = at.Resolve(wire, usage);
+
+            if (reading is { } row && resolution.Succeeded)
+                Record(index, row.Prefix + wire, use, wire, resolution.Path!);
+
+            return resolution;
+        }
+
+        /// <summary>Records one read of the row: the path as the row has it, and the join the resolved path loads from.</summary>
+        private void Record(int index, string path, ReadUse use, string wire, ResolvedPath resolved, bool typeOnly = false)
+        {
+            var from = PathRead.Attribute(wire, resolved);
+
+            reads.Add(new PathRead(index, path, use, from?.Alias, from?.Relative) { TypeOnly = typeOnly });
+        }
+
         public async Task RunAsync()
         {
             await LoadAddonsAsync(entity);
@@ -302,6 +349,222 @@ public sealed class Binder
                 stages.Add(page);
                 callerIndexes.Add(null);
             }
+
+            // Contract 1 is frozen: a join fetches its select, as written or defaulted, and nothing else.
+            if (contract2 && errors.Count == 0)
+                InferLoads();
+        }
+
+        // ---- join loads (improvement plan §3.S) -------------------------------------------------
+
+        /// <summary>
+        /// What each join loads, once every stage is bound: its key, what later stages read under its
+        /// alias, and its output set. The output set is what the final row shows under the alias: the
+        /// paths the projection names under it, or, kept whole, the <c>select</c> hint with the key, else
+        /// key and display. A join in the aggregate loads all three and the row is cut to the output set
+        /// (the final shape carries it), so what is only read never shows. A join after the page (keyed
+        /// or remote) is read by nothing but the projection, so it asks its owner for the output set
+        /// alone: the paths, or nothing for the owner's own key and display.
+        /// </summary>
+        private void InferLoads()
+        {
+            var final = shape;
+            var whole = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            for (var position = 0; position < stages.Count; position++)
+            {
+                switch (stages[position])
+                {
+                    case BoundStage.Lookup lookup:
+                    {
+                        whole[lookup.As] = lookup.Select.Select(path => path.Wire).ToList();
+
+                        var loaded = LoadedBy(final, lookup.As, lookup.From.Key?.Wire, whole[lookup.As]);
+
+                        stages[position] = lookup with { Select = BindLoads(loaded, Shape.ForEntity(lookup.From, addons)) };
+                        loads[lookup.As] = new JoinLoad(loaded, ShownUnder(final, lookup.As, whole[lookup.As]), lookup.Hint);
+                        break;
+                    }
+
+                    case BoundStage.Resolve { IsRemote: false, Executor: ResolveExecutor.Inline, Cases: [{ Targets: [var target] } only] } resolve:
+                    {
+                        whole[resolve.As] = (target.Select ?? []).Select(path => path.Wire).ToList();
+
+                        var loaded = LoadedBy(final, resolve.As, target.Entity!.Key?.Wire, whole[resolve.As]);
+                        var select = BindLoads(loaded, Shape.ForEntity(target.Entity, addons));
+
+                        stages[position] = resolve with { Select = select, Cases = [only with { Targets = [target with { Select = select }] }] };
+                        loads[resolve.As] = new JoinLoad(loaded, ShownUnder(final, resolve.As, whole[resolve.As]), resolve.Hint);
+                        break;
+                    }
+
+                    case BoundStage.Resolve resolve:
+                        stages[position] = InferKeyed(final, resolve);
+                        break;
+                }
+            }
+
+            // The row shows the output set under each alias a join in the aggregate fills, and under its
+            // unwound copies; what was loaded for a stage that only reads it is cut on the way out.
+            output = final;
+
+            foreach (var (name, node) in final.Roots)
+            {
+                if (Shape.JoinOf(node) is not { } join || !whole.TryGetValue(join, out var kept))
+                    continue;
+
+                output = node switch
+                {
+                    ShapeNode.Entity entity => output.WithRoot(name, entity with { Select = ShownUnder(final, name, kept) }),
+                    ShapeNode.Array array => output.WithRoot(name, array with { Select = ShownUnder(final, name, kept) }),
+                    _ => output,
+                };
+            }
+        }
+
+        /// <summary>
+        /// What a join in the aggregate loads under <paramref name="join"/>: its key, every path a stage
+        /// reads under it or under an unwound copy or element of it, and the <paramref name="whole"/> set
+        /// where the final row keeps the alias or a copy of it whole, or a stage reads the alias itself
+        /// (an existence test on it, the first of it in a group): a whole alias is its output set, never
+        /// the target's full row. Paths another one covers are left out.
+        /// </summary>
+        private List<string> LoadedBy(Shape final, string join, string? key, IReadOnlyList<string> whole)
+        {
+            var paths = new List<string>();
+
+            if (key is not null)
+                paths.Add(key);
+
+            paths.AddRange(reads.Where(read => read.Alias == join && !read.TypeOnly && read.Relative is { Length: > 0 }).Select(read => read.Relative!));
+
+            if (final.Roots.Any(root => root.Value is ShapeNode.Entity or ShapeNode.Array && Shape.JoinOf(root.Value) == join && RootOutput.Of(final, root.Key) is { Carried: true, Whole: true })
+                || reads.Any(read => read.Alias == join && !read.TypeOnly && read.Relative is { Length: 0 }))
+                paths.AddRange(whole);
+
+            return RootOutput.Cover(paths);
+        }
+
+        /// <summary>What the final row shows under the root <paramref name="name"/>: nothing when it does not carry it, the <paramref name="whole"/> set when it keeps it whole, else the paths the projection names under it.</summary>
+        private static List<string> ShownUnder(Shape final, string name, IReadOnlyList<string> whole) =>
+            RootOutput.Of(final, name) switch
+            {
+                { Carried: false } => [],
+                { Whole: true } => RootOutput.Written(whole),
+                var projected => RootOutput.Cover(projected.Projected),
+            };
+
+        /// <summary>The loads as paths of the target: each read resolved there once before, under its alias.</summary>
+        private static List<ResolvedPath> BindLoads(IReadOnlyList<string> loaded, Shape target)
+        {
+            var bound = new List<ResolvedPath>(loaded.Count);
+
+            foreach (var wire in loaded)
+                // not a read: the load set is bound against the join's own target
+                if (target.Resolve(wire, PathUsage.Project) is { Succeeded: true } resolution)
+                    bound.Add(resolution.Path!);
+
+            return bound;
+        }
+
+        /// <summary>
+        /// A keyed or remote resolve with what its owners are asked for (see <see cref="InferLoads"/>): per
+        /// alias the paths the projection names under it; kept whole, the hint; else nothing, which the
+        /// owner query spells as the owner's own key and display. A local target binds the paths it has
+        /// and drops the others for itself; a remote one is sent them, and its owner says what it lacks.
+        /// </summary>
+        private BoundStage.Resolve InferKeyed(Shape final, BoundStage.Resolve resolve)
+        {
+            var own = RootOutput.Of(final, resolve.As);
+            var parent = resolve.ParentAs is { } parentAs ? RootOutput.Of(final, parentAs) : null;
+            IReadOnlyList<string>? sent = !own.Carried ? null
+                : own.Whole ? resolve.Hint is { } hint ? RootOutput.Written(hint) : null
+                : RootOutput.Cover(own.Projected);
+            // The owning row's 'entity' is this host's to write, not a member of the owner's row.
+            IReadOnlyList<string>? parentSent = parent is { Carried: true, Whole: false }
+                ? RootOutput.Cover(parent.Projected.Where(path => path != ParentEntity && !path.StartsWith(ParentEntity + ".", StringComparison.Ordinal)))
+                : null;
+
+            loads[resolve.As] = new JoinLoad(sent, own.Carried ? sent : [], resolve.Hint);
+
+            if (resolve.ParentAs is not null)
+                loads[resolve.ParentAs] = new JoinLoad(parentSent, parent!.Carried ? parent.Whole ? null : RootOutput.Cover(parent.Projected) : [], null);
+
+            var cases = (resolve.Cases ?? []).Select(bound => bound with
+            {
+                Targets = bound.Targets.Select(target => InferTarget(target, sent, parentSent, resolve.ParentAs is not null)).ToList(),
+            }).ToList();
+            var first = cases.Count > 0 && cases[0].Targets.Count > 0 ? cases[0].Targets[0] : null;
+
+            return resolve with
+            {
+                Cases = resolve.Cases is null ? null : cases,
+                Select = first is null ? resolve.Select : first.Select,
+                RemoteSelect = first is { IsRemote: true } ? sent : null,
+                RemoteLookup = resolve.RemoteLookup is { } lookup ? lookup with { Select = sent, ParentSelect = parentSent } : null,
+            };
+        }
+
+        /// <summary>The member of an owning row (<c>parentAs</c>) that names its entity; the keyed fetch writes it.</summary>
+        private const string ParentEntity = "entity";
+
+        /// <summary>One target of a keyed stage with the paths it is asked for; a local target keeps its default where none are asked.</summary>
+        private BoundResolveTarget InferTarget(BoundResolveTarget target, IReadOnlyList<string>? sent, IReadOnlyList<string>? parentSent, bool withParent)
+        {
+            if (target.IsRemote || target.Entity is not { } entity)
+                return target with { RemoteSelect = sent, RemoteParentSelect = withParent ? parentSent : null };
+
+            var entityShape = Shape.ForEntity(entity, addons);
+            var at = entityShape;
+
+            // not a read: the item collection of the join's own target
+            if (target.Declared.Item is { } item && entityShape.Resolve(item, PathUsage.Unwind) is { Succeeded: true } collection)
+                at = entityShape.ForElement(collection.Path!);
+
+            var bound = target;
+
+            if (sent is not null)
+            {
+                var (select, dropped) = BindKeyedLoads(sent, at, target.Declared.Item is null ? entity.Key?.Wire : target.Declared.Field);
+
+                bound = bound with { Select = select, DroppedSelect = dropped };
+            }
+
+            if (withParent && parentSent is not null && target.Declared.Item is not null)
+            {
+                var (select, dropped) = BindKeyedLoads(parentSent, entityShape, entity.Key?.Wire);
+
+                bound = bound with
+                {
+                    ParentSelect = select,
+                    RemoteParentSelect = parentSent.Where(path => !dropped.Contains(path, StringComparer.Ordinal)).ToList(),
+                    DroppedParentSelect = dropped,
+                };
+            }
+
+            return bound;
+        }
+
+        /// <summary>The paths a local target of a keyed stage has, bound, its key first, and those it lacks.</summary>
+        private static (List<ResolvedPath> Select, List<string> Dropped) BindKeyedLoads(IReadOnlyList<string> sent, Shape at, string? keyWire)
+        {
+            var select = new List<ResolvedPath>();
+            var dropped = new List<string>();
+
+            foreach (var wire in sent)
+            {
+                // not a read: the paths asked of the join's own target
+                if (at.Resolve(wire, PathUsage.Project) is { Succeeded: true } kept)
+                    select.Add(kept.Path!);
+                else
+                    dropped.Add(wire);
+            }
+
+            // not a read: the key of the join's own target
+            if (keyWire is not null && select.All(kept => kept.Wire != keyWire) && at.Resolve(keyWire, PathUsage.Select) is { Succeeded: true } key)
+                select.Insert(0, key.Path!);
+
+            return (select, dropped);
         }
 
         /// <summary>
@@ -366,6 +629,7 @@ public sealed class Binder
             }
 
             var wire = keyedBy.Path ?? "";
+            // not a read: the member an internal owner query is keyed by, on the entity row
             var resolution = shape.Resolve(wire, PathUsage.Match);
 
             if (!resolution.Succeeded)
@@ -509,6 +773,7 @@ public sealed class Binder
                 // The keys only: an aggregate is not unique per group and adds nothing to the order.
                 fields.AddRange(GroupKeyOrder());
             }
+            // not a read: the key completing the order of an unwound shape
             else if (shape.Resolve(WireNames.IdWire, PathUsage.Sort) is { Succeeded: true } key)
             {
                 fields.Add(new BoundSortField(key.Path!, true));
@@ -546,6 +811,7 @@ public sealed class Binder
             var fields = new List<BoundSortField>();
 
             foreach (var key in stages.OfType<BoundStage.Group>().LastOrDefault()?.Keys ?? [])
+                // not a read: a probe of which group keys the shape still carries
                 if (shape.Resolve(key.As, PathUsage.Sort) is { Succeeded: true } resolved)
                     fields.Add(new BoundSortField(resolved.Path!, true, contract2 && key.OutputKind == Kind.String));
 
@@ -569,7 +835,7 @@ public sealed class Binder
                     step.After))
                 .ToList();
 
-            return new BindTrace(entry ?? shape, steps, shape);
+            return new BindTrace(entry ?? shape, steps, shape) { Reads = reads.ToList() };
         }
 
         public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
@@ -596,7 +862,9 @@ public sealed class Binder
                 Scope = scope,
                 Stages = stages,
                 CallerIndexes = callerIndexes,
-                FinalShape = shape,
+                FinalShape = output ?? shape,
+                Reads = reads,
+                Loads = loads,
                 Sort = sort,
                 Page = page!,
                 PagingMode = mode,
@@ -625,7 +893,7 @@ public sealed class Binder
             if (match.Condition is null)
                 return;
 
-            var bound = BindCondition(match.Condition, shape, index);
+            var bound = BindCondition(match.Condition, shape, index, Reading.Row);
 
             if (bound is not null)
                 stages.Add(new BoundStage.Match(bound));
@@ -636,7 +904,7 @@ public sealed class Binder
         /// levels of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> once per request: the
         /// compiled filter would pass the driver's nesting limit and fail as a fault.
         /// </summary>
-        private BoundCondition? BindCondition(FilterCondition condition, Shape at, int index)
+        private BoundCondition? BindCondition(FilterCondition condition, Shape at, int index, Reading? reading)
         {
             if (conditionDepth >= MaxConditionDepth)
             {
@@ -651,7 +919,7 @@ public sealed class Binder
 
             try
             {
-                return BindConditionAt(condition, at, index);
+                return BindConditionAt(condition, at, index, reading);
             }
             finally
             {
@@ -659,13 +927,13 @@ public sealed class Binder
             }
         }
 
-        private BoundCondition? BindConditionAt(FilterCondition condition, Shape at, int index)
+        private BoundCondition? BindConditionAt(FilterCondition condition, Shape at, int index, Reading? reading)
         {
             if (condition.And is not null)
-                return BindGroup(condition.And, at, index, "and", list => new BoundCondition.And(list));
+                return BindGroup(condition.And, at, index, "and", list => new BoundCondition.And(list), reading);
 
             if (condition.Or is not null)
-                return BindGroup(condition.Or, at, index, "or", list => new BoundCondition.Or(list));
+                return BindGroup(condition.Or, at, index, "or", list => new BoundCondition.Or(list), reading);
 
             if (condition.Not is not null)
             {
@@ -675,7 +943,7 @@ public sealed class Binder
                     return null;
                 }
 
-                var inner = BindCondition(condition.Not, at, index);
+                var inner = BindCondition(condition.Not, at, index, reading);
 
                 return inner is null ? null : new BoundCondition.Not(inner);
             }
@@ -687,11 +955,11 @@ public sealed class Binder
             }
 
             if (condition.IsAny)
-                return BindAny(condition, at, index);
+                return BindAny(condition, at, index, reading);
 
             conditions++;
 
-            var resolution = at.Resolve(condition.Path, PathUsage.Match);
+            var resolution = Read(at, condition.Path, PathUsage.Match, ReadUse.Match, index, reading);
 
             if (!resolution.Succeeded)
             {
@@ -961,7 +1229,7 @@ public sealed class Binder
             _ => [],
         };
 
-        private BoundCondition? BindGroup(IReadOnlyList<FilterCondition> group, Shape at, int index, string name, Func<IReadOnlyList<BoundCondition>, BoundCondition> make)
+        private BoundCondition? BindGroup(IReadOnlyList<FilterCondition> group, Shape at, int index, string name, Func<IReadOnlyList<BoundCondition>, BoundCondition> make, Reading? reading)
         {
             if (group.Count == 0)
             {
@@ -973,7 +1241,7 @@ public sealed class Binder
 
             foreach (var member in group)
             {
-                var inner = BindCondition(member, at, index);
+                var inner = BindCondition(member, at, index, reading);
 
                 if (inner is not null)
                     bound.Add(inner);
@@ -982,9 +1250,9 @@ public sealed class Binder
             return bound.Count == group.Count ? make(bound) : null;
         }
 
-        private BoundCondition? BindAny(FilterCondition condition, Shape at, int index)
+        private BoundCondition? BindAny(FilterCondition condition, Shape at, int index, Reading? reading)
         {
-            var resolution = at.Resolve(condition.Path!, PathUsage.Match);
+            var resolution = Read(at, condition.Path!, PathUsage.Match, ReadUse.Match, index, reading);
 
             if (!resolution.Succeeded)
             {
@@ -1004,7 +1272,8 @@ public sealed class Binder
                 return null;
             }
 
-            var inner = BindCondition(condition.Any!, at.ForElement(path), index);
+            // The inner paths are relative to one element; the ledger has them under the collection.
+            var inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
 
             return inner is null ? null : new BoundCondition.Any(path, inner);
         }
@@ -1018,7 +1287,7 @@ public sealed class Binder
             var contract2Members = new (string Name, bool Written)[]
             {
                 ("sort", lookup.Sort is not null), ("first", lookup.First is not null), ("on", lookup.On is not null), ("forTarget", lookup.ForTarget is not null),
-                ("parentAs", lookup.ParentAs is not null), ("parentSelect", lookup.ParentSelect is not null),
+                ("parentAs", lookup.ParentAs is not null),
             };
             IReadOnlyList<string> unknown = contract2
                 ? lookup.Unknown
@@ -1027,7 +1296,7 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget, parentAs, parentSelect" : "from, path, as, select, filter, limit")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget, parentAs" : "from, path, as, select, filter, limit")}."
                     + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
                 return;
             }
@@ -1039,7 +1308,6 @@ public sealed class Binder
                     {
                         "first" => "A lookup's 'first' is true or false.",
                         "sort" => "A lookup's 'sort' is an array of sort entries: [{\"path\": \"asc\"}, …].",
-                        "parentSelect" => "A lookup's 'parentSelect' is an array of paths.",
                         _ => $"A lookup's '{name}' is a string.",
                     }, index, null));
                 return;
@@ -1113,10 +1381,10 @@ public sealed class Binder
             }
 
             // The owning row of an element: only a lookup of another service's item collection has one.
-            if (lookup.ParentAs is not null || lookup.ParentSelect is not null)
+            if (lookup.ParentAs is not null)
             {
                 errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'{(lookup.ParentAs is not null ? "parentAs" : "parentSelect")}' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null));
+                    $"'parentAs' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null));
                 return;
             }
 
@@ -1136,6 +1404,7 @@ public sealed class Binder
             await LoadAddonsAsync(child);
 
             var childShape = Shape.ForEntity(child, addons);
+            // not a read: the child's own reference member, matched inside the join
             var reference = childShape.Resolve(lookup.Path ?? "", PathUsage.Match);
 
             if (!reference.Succeeded)
@@ -1168,13 +1437,8 @@ public sealed class Binder
                 return;
             }
 
-            // Nor did a join that fetched the parent without the member the lookup joins on.
-            if (lookup.On is not null && shape.NotSelected(lookup.On + "." + parentKey.Wire) is not null)
-            {
-                errors.Add(Error(Codes.UnknownPath,
-                    $"'{lookup.On}.{parentKey.Wire}' is not in the select of '{lookup.On}'; the lookup joins on it, so add '{parentKey.Wire}' to that select.", index, lookup.On));
-                return;
-            }
+            // The lookup reads the parent's key off the row: the join that holds the parent loads it.
+            Read(shape, lookup.On is null ? parentKey.Wire : lookup.On + "." + parentKey.Wire, PathUsage.Match, ReadUse.LookupOn, index, Reading.Row);
 
             var childScope = ScopeOf(child, context.Organisation!.Value);
 
@@ -1185,8 +1449,8 @@ public sealed class Binder
             }
 
             var select = BindSelect(lookup.Select, child, childShape, index);
-            var filter = lookup.Filter?.Condition is null ? null : BindCondition(lookup.Filter.Condition, childShape, index);
-            var sortFields = lookup.Sort is { Count: > 0 } entries ? BindSortEntries(entries, childShape, index) : [];
+            var filter = lookup.Filter?.Condition is null ? null : BindCondition(lookup.Filter.Condition, childShape, index, reading: null);
+            var sortFields = lookup.Sort is { Count: > 0 } entries ? BindSortEntries(entries, childShape, index, reading: null) : [];
             var first = lookup.First is true;
             int limit;
 
@@ -1209,10 +1473,15 @@ public sealed class Binder
             var parentKeyStorage = parentPrefix.Length == 0 ? parentKey.Storage! : parentPrefix + "." + parentKey.Storage;
 
             stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKeyStorage, childPath.Storage!,
-                sortFields, first, lookup.On, index));
-            var fetched = select.Select(path => path.Wire).ToList();
+                sortFields, first, lookup.On, index) { Hint = lookup.Select is { Count: > 0 } hint ? hint : null });
 
-            shape = shape.WithRoot(alias, first ? new ShapeNode.Entity(child, alias) { Select = fetched } : new ShapeNode.Array(child, alias) { Select = fetched });
+            // Under contract 2 every member of the child can be read under the alias, and the join loads
+            // what is read (InferLoads); under contract 1 the alias holds the select and nothing else.
+            var fetched = contract2 ? null : select.Select(path => path.Wire).ToList();
+
+            shape = shape.WithRoot(alias, first
+                ? new ShapeNode.Entity(child, alias) { Select = fetched, Join = alias }
+                : new ShapeNode.Array(child, alias) { Select = fetched, Join = alias });
         }
 
         /// <summary>
@@ -1296,7 +1565,7 @@ public sealed class Binder
         /// fetch runs a remote resolve, and is bound as one: the key of every page row is the parent's
         /// key, the target member is the child's <c>path</c>, and the owner answers grouped per key
         /// (<c>keyedBy</c>, at most one row more than the limit per key, ranked by the lookup's
-        /// <c>sort</c>). What lies on the child — its path, select, filter, sort, owning-row select — is
+        /// <c>sort</c>). What lies on the child — its path, select, filter, sort — is
         /// bound by the owner, as under a remote resolve's alias; the owner also checks that the path
         /// declares a reference to the parent entity (<c>keyedBy.references</c>). Checked here: the
         /// alias, <c>parentAs</c> only for an item child, the parent's key visible in the row, the
@@ -1342,11 +1611,6 @@ public sealed class Binder
 
                 parentAs = checkedParent;
             }
-            else if (lookup.ParentSelect is not null)
-            {
-                errors.Add(Error(Codes.OptionNotApplicable, "'parentSelect' applies with 'parentAs', which names the owning row it selects from.", index, null));
-                return;
-            }
 
             var childPath = lookup.Path?.Trim() ?? "";
 
@@ -1372,14 +1636,7 @@ public sealed class Binder
                 return;
             }
 
-            if (lookup.On is not null && shape.NotSelected(keyWire) is not null)
-            {
-                errors.Add(Error(Codes.UnknownPath,
-                    $"'{keyWire}' is not in the select of '{lookup.On}'; the lookup joins on it, so add '{key.Wire}' to that select.", index, lookup.On));
-                return;
-            }
-
-            if (shape.Resolve(keyWire, PathUsage.Match) is not { Succeeded: true, Path: { Storage: not null } parentKey })
+            if (Read(shape, keyWire, PathUsage.Match, ReadUse.LookupOn, index, Reading.Row) is not { Succeeded: true, Path: { Storage: not null } parentKey })
             {
                 errors.Add(Error(Codes.UnknownPath, $"'{keyWire}' is not in the row here; the lookup joins on it.", index, lookup.On));
                 return;
@@ -1423,14 +1680,15 @@ public sealed class Binder
             if (errors.Count > 0 && errors.Any(error => error.Stage == index))
                 return;
 
+            var written = lookup.Select is { Count: > 0 } hint ? hint : null;
             var spec = new BoundRemoteLookup(from, entityId, item, childPath, parent.Id, lookup.On, lookup.Sort ?? [], first, limit, Rows: item is null,
-                lookup.Select, lookup.ParentSelect, filter);
+                written, null, filter);
             var declared = new ReferenceTarget(entityId, childPath, item, IsRemote: true, FieldIsKey: false);
-            var target = new BoundResolveTarget(declared, null, null, null, null, lookup.Select, null, filter, null, null, lookup.ParentSelect, []);
+            var target = new BoundResolveTarget(declared, null, null, null, null, written, null, filter, null, null, null, []);
             var reference = new ReferenceDef { Targets = [declared], DeclaredBy = ReferenceSource.Declaration };
             var stage = new BoundStage.Resolve(parentKey, alias, entityId, childPath, IsRemote: true,
-                null, null, null, null, null, lookup.Select, filter,
-                ResolveExecutor.Keyed, [new BoundResolveCase(reference, null, [target])], null, null, null, parentAs, null, ResolveOnMissing.Null, index, spec);
+                null, null, null, null, null, written, filter,
+                ResolveExecutor.Keyed, [new BoundResolveCase(reference, null, [target])], null, null, null, parentAs, null, ResolveOnMissing.Null, index, spec) { Hint = written };
 
             stages.Add(stage);
 
@@ -1456,6 +1714,7 @@ public sealed class Binder
 
             foreach (var wire in wanted)
             {
+                // not a read: the select hint (or the default) of the join's own target
                 var resolution = targetShape.Resolve(wire, PathUsage.Select);
 
                 if (!resolution.Succeeded)
@@ -1468,6 +1727,7 @@ public sealed class Binder
             }
 
             if (target.Key is not null && paths.All(path => path.Wire != target.Key.Wire))
+                // not a read: the key of the join's own target
                 paths.Insert(0, targetShape.Resolve(target.Key.Wire, PathUsage.Select).Path!);
 
             return paths;
@@ -1489,7 +1749,7 @@ public sealed class Binder
             var contract2Members = new (string Name, bool Written)[]
             {
                 ("elements", resolve.Elements is not null), ("target", resolve.Target is not null), ("parentAs", resolve.ParentAs is not null),
-                ("parentSelect", resolve.ParentSelect is not null), ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null),
+                ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null),
             };
             IReadOnlyList<string> unknown = contract2
                 ? resolve.Unknown
@@ -1498,7 +1758,7 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, parentSelect, onMissing, forTarget" : "path, as, select, filter")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget" : "path, as, select, filter")}."
                     + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
                 return;
             }
@@ -1510,7 +1770,6 @@ public sealed class Binder
                     {
                         "elements" => "A resolve's 'elements' is \"first\" or \"all\".",
                         "onMissing" => "A resolve's 'onMissing' is \"null\", \"report\" or \"refuse\".",
-                        "parentSelect" => "A resolve's 'parentSelect' is an array of paths.",
                         _ => $"A resolve's '{name}' is a string.",
                     }, index, null));
                 return;
@@ -1558,13 +1817,8 @@ public sealed class Binder
 
                 parentAs = checkedParent;
             }
-            else if (resolve.ParentSelect is not null)
-            {
-                errors.Add(Error(Codes.OptionNotApplicable, "'parentSelect' applies with 'parentAs', which names the owning row it selects from.", index, null));
-                return;
-            }
 
-            var resolution = shape.Resolve(path, PathUsage.Match);
+            var resolution = Read(shape, path, PathUsage.Match, ReadUse.ResolveKey, index, Reading.Row);
 
             if (!resolution.Succeeded)
             {
@@ -1706,14 +1960,17 @@ public sealed class Binder
             var stage = new BoundStage.Resolve(reference, alias, first.Declared.Entity, first.Declared.Field, anyRemote,
                 first.Entity, first.FieldStorage, first.Select, first.Filter, first.Scope,
                 first.IsRemote ? resolve.Select : null, first.IsRemote ? sentFilter : null,
-                inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index);
+                inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index)
+            {
+                Hint = resolve.Select is { Count: > 0 } hint ? hint : null,
+            };
 
             stages.Add(stage);
 
             // Step 6: the shape. An inline alias is a row of the aggregate; a keyed local one is
             // joined after the page and checked here; a remote one is the owner's.
             if (inline)
-                shape = shape.WithRoot(alias, new ShapeNode.Entity(first.Entity!, alias) { Select = first.Select?.Select(path => path.Wire).ToList() });
+                shape = shape.WithRoot(alias, new ShapeNode.Entity(first.Entity!, alias) { Select = contract2 ? null : first.Select?.Select(path => path.Wire).ToList(), Join = alias });
             else if (anyRemote)
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(first.Declared.Entity, reference, alias, SemiJoinable: stage.IsPlain));
             else
@@ -1849,6 +2106,10 @@ public sealed class Binder
             continuedPerAnchor[anchor.Stage.As] = count;
             stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective, added));
 
+            // What this host can see of the stage's reads: the path it roots at. Its owner binds it and
+            // answers the rest (a case member, the parent's key), which explain takes from the owner.
+            reads.Add(new PathRead(index, root, kind == "resolve" ? ReadUse.ResolveKey : ReadUse.LookupOn, head, root.Length > head.Length ? root[(head.Length + 1)..] : ""));
+
             // The added aliases are the owner's rows under the origin row: projected, never
             // filtered or sorted here, and further stages under them continue at the same owner.
             // Their entity is the lookup's child or the resolve's target; a resolve without a target
@@ -1964,6 +2225,7 @@ public sealed class Binder
             {
                 var prefix = string.Join('.', segments.Take(length));
 
+                // not a read: a probe of which prefixes of a path are collections
                 if (shape.Resolve(prefix, PathUsage.Project) is { Succeeded: true, Path: { Kind: Kind.Array } collection })
                     crossed.Add(collection);
             }
@@ -1989,19 +2251,10 @@ public sealed class Binder
                 case ReferenceCondition.PathEquals equals:
                 {
                     var siblingWire = holder.Length == 0 ? equals.Path : holder + "." + equals.Path;
-                    var sibling = shape.Resolve(siblingWire, PathUsage.Project);
 
-                    // The member is declared but the join above it did not fetch it: the fix is the
-                    // join's select, as for any other path under the alias, not the declaration.
-                    if (!sibling.Succeeded && shape.NotSelected(siblingWire) is { } join)
-                    {
-                        var relative = siblingWire[(join.Alias.Length + 1)..];
-
-                        errors.Add(Error(Codes.UnknownPath,
-                            $"The reference on '{reference.Wire}' picks its target by '{siblingWire}', which is not in the select of '{join.Alias}', which fetched {string.Join(", ", join.Select.Select(path => $"'{path}'"))}; add '{relative}' to that select.",
-                            index, siblingWire));
-                        return null;
-                    }
+                    // The one read a caller cannot see in the query text: the join that holds the
+                    // reference loads the member that picks its target with it.
+                    var sibling = Read(shape, siblingWire, PathUsage.Project, ReadUse.CaseCondition, index, Reading.Row);
 
                     if (!sibling.Succeeded && !shape.IsVisible(siblingWire))
                     {
@@ -2023,8 +2276,14 @@ public sealed class Binder
                 case ReferenceCondition.Variant variant:
                 {
                     // The object holding the member: a member path, or the entity row itself.
+                    // not a read: resolved here, recorded below as a read of the object's variant only
                     var holding = holder.Length == 0 ? null : shape.Resolve(holder, PathUsage.Project);
                     var type = holding is { Succeeded: true } ? OperandCoercer.VariantHolder(holding.Path!) : holder.Length == 0 ? reference.Entity?.Root : null;
+
+                    // The discriminator travels with any member a join loads below the object, and the
+                    // reference is one, so this read loads nothing by itself.
+                    if (holding is { Succeeded: true })
+                        Record(index, holder, ReadUse.CaseCondition, holder, holding.Path!, typeOnly: true);
 
                     if (type?.DiscriminatorElement is not { } element)
                     {
@@ -2075,8 +2334,7 @@ public sealed class Binder
             {
                 var remote = declared.IsRemote ? declared : declared with { IsRemote = true };
 
-                return new BoundResolveTarget(remote, null, null, null, null, resolve.Select, null, sentFilter, null, null,
-                    withParent ? resolve.ParentSelect : null, []);
+                return new BoundResolveTarget(remote, null, null, null, null, resolve.Select, null, sentFilter, null, null, null, []);
             }
 
             await LoadAddonsAsync(target);
@@ -2087,6 +2345,7 @@ public sealed class Binder
 
             if (declared.Item is not null)
             {
+                // not a read: the item collection of the join's own target
                 var collection = entityShape.Resolve(declared.Item, PathUsage.Unwind);
 
                 if (!collection.Succeeded || collection.Path!.Storage is null)
@@ -2099,6 +2358,7 @@ public sealed class Binder
                 at = entityShape.ForElement(collection.Path!);
             }
 
+            // not a read: the matched member of the join's own target
             var field = at.Resolve(declared.Field, PathUsage.Match);
 
             if (!field.Succeeded || field.Path!.Storage is null)
@@ -2126,6 +2386,7 @@ public sealed class Binder
 
             foreach (var wire in wanted)
             {
+                // not a read: the select hint (or the default) of the join's own target
                 if (at.Resolve(wire, PathUsage.Select) is { Succeeded: true } kept)
                     select.Add(kept.Path!);
                 else
@@ -2134,53 +2395,20 @@ public sealed class Binder
 
             var keyWire = declared.Item is null ? target.Key?.Wire : declared.Field;
 
+            // not a read: the key of the join's own target
             if (keyWire is not null && select.All(kept => kept.Wire != keyWire) && at.Resolve(keyWire, PathUsage.Select) is { Succeeded: true } key)
                 select.Insert(0, key.Path!);
 
             var filter = resolve.Filter?.Condition is null ? null : BindTargetFilter(resolve.Filter.Condition, at, index);
-            // The owning row's select is flat as well: a path this target's entity lacks is dropped
-            // for it (refused below only when no target has it).
-            IReadOnlyList<ResolvedPath>? parentSelect = null;
-            List<string>? parentSent = null;
-            var parentDropped = new List<string>();
 
-            if (withParent && declared.Item is not null)
-            {
-                if (resolve.ParentSelect is { Count: > 0 } parentWanted)
-                {
-                    var parentPaths = new List<ResolvedPath>();
+            // The owning row shows its key and display until the loads are inferred: the paths the
+            // projection names under 'parentAs' then replace them (InferLoads).
+            var parentSelect = withParent && declared.Item is not null ? BindSelect(null, target, entityShape, index) : null;
 
-                    parentSent = [];
-
-                    foreach (var wire in parentWanted)
-                    {
-                        if (entityShape.Resolve(wire, PathUsage.Select) is { Succeeded: true } kept)
-                        {
-                            parentPaths.Add(kept.Path!);
-                            parentSent.Add(wire);
-                        }
-                        else
-                        {
-                            parentDropped.Add(wire);
-                        }
-                    }
-
-                    if (target.Key is not null && parentPaths.All(kept => kept.Wire != target.Key.Wire))
-                        parentPaths.Insert(0, entityShape.Resolve(target.Key.Wire, PathUsage.Select).Path!);
-
-                    parentSelect = parentPaths;
-                }
-                else
-                {
-                    parentSelect = BindSelect(null, target, entityShape, index);
-                }
-            }
-
-            // The filter and the owning row's select also travel: the keyed fetch asks this host's
-            // own SelfOwner with an ordinary owner query, which binds them again — the owning row's
-            // select without the paths this target lacks.
+            // The filter also travels: the keyed fetch asks this host's own SelfOwner with an ordinary
+            // owner query, which binds it again.
             return new BoundResolveTarget(declared, target, field.Path.Storage, itemStorage, select, null, filter, sentFilter, scope, parentSelect,
-                parentSent, dropped, parentDropped);
+                null, dropped, []);
         }
 
         /// <summary>
@@ -2193,7 +2421,7 @@ public sealed class Binder
             if (!filterBoundOnce)
             {
                 var before = errors.Count;
-                var once = BindCondition(condition, at, index);
+                var once = BindCondition(condition, at, index, reading: null);
 
                 filterBoundOnce = true;
                 reportedFilterError = errors.Count > before;
@@ -2203,7 +2431,7 @@ public sealed class Binder
 
             var (conditionsBefore, diagnosticsBefore, exactBefore) = (conditions, diagnostics.Count, exactTexts.Count);
             var errorsBefore = errors.Count;
-            var bound = BindCondition(condition, at, index);
+            var bound = BindCondition(condition, at, index, reading: null);
 
             conditions = conditionsBefore;
             diagnostics.RemoveRange(diagnosticsBefore, diagnostics.Count - diagnosticsBefore);
@@ -2238,10 +2466,6 @@ public sealed class Binder
             if (targets.Count == 0 || targets.Any(target => target.IsRemote))
                 return;
 
-            foreach (var wire in targets[0].DroppedParentSelect ?? [])
-                if (targets.All(target => target.DroppedParentSelect?.Contains(wire, StringComparer.Ordinal) == true))
-                    errors.Add(Error(Codes.UnknownPath, $"'{wire}' is not a path of any row that owns a target of '{resolve.Path}' ({string.Join(", ", targets.Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal))}).", index, wire));
-
             foreach (var wire in targets[0].DroppedSelect)
             {
                 if (!targets.All(target => target.DroppedSelect.Contains(wire, StringComparer.Ordinal)))
@@ -2250,9 +2474,11 @@ public sealed class Binder
                 var first = targets[0];
                 var at = Shape.ForEntity(first.Entity!, addons);
 
+                // not a read: the item collection of the join's own target
                 if (first.Declared.Item is not null && at.Resolve(first.Declared.Item, PathUsage.Unwind) is { Succeeded: true } collection)
                     at = at.ForElement(collection.Path!);
 
+                // not a read: why no target has a hint path
                 var failure = at.Resolve(wire, PathUsage.Select);
 
                 errors.Add(Error(failure.Code ?? Codes.UnknownPath, failure.Message ?? $"'{wire}' is not a path of '{first.Declared}'.", index, wire));
@@ -2295,7 +2521,7 @@ public sealed class Binder
             if (RefusedUnderAnchor(unwind.Path, "unwind", index))
                 return;
 
-            var resolution = shape.Resolve(unwind.Path, PathUsage.Unwind);
+            var resolution = Read(shape, unwind.Path, PathUsage.Unwind, ReadUse.Unwind, index, Reading.Row);
 
             if (!resolution.Succeeded)
             {
@@ -2482,7 +2708,7 @@ public sealed class Binder
                 if (RefusedUnderAnchor(by.Path, "group", index))
                     continue;
 
-                var resolution = shape.Resolve(by.Path, PathUsage.GroupKey);
+                var resolution = Read(shape, by.Path, PathUsage.GroupKey, ReadUse.GroupKey, index, Reading.Row);
 
                 if (!resolution.Succeeded)
                 {
@@ -2592,7 +2818,7 @@ public sealed class Binder
             if (RefusedUnderAnchor(trunc.Path, "group", index))
                 return null;
 
-            var resolution = shape.Resolve(trunc.Path, PathUsage.GroupKey);
+            var resolution = Read(shape, trunc.Path, PathUsage.GroupKey, ReadUse.GroupKey, index, Reading.Row);
 
             if (!resolution.Succeeded)
             {
@@ -2689,7 +2915,7 @@ public sealed class Binder
                 if (RefusedUnderAnchor(expression.Path, "group", index))
                     return null;
 
-                var resolution = shape.Resolve(expression.Path!, PathUsage.Aggregate);
+                var resolution = Read(shape, expression.Path!, PathUsage.Aggregate, ReadUse.Aggregate, index, Reading.Row);
 
                 if (!resolution.Succeeded)
                 {
@@ -2809,7 +3035,8 @@ public sealed class Binder
 
             foreach (var wire in (inclusion ? included : excluded).Concat(idExcluded && !inclusion ? [WireNames.IdWire] : Array.Empty<string>()))
             {
-                var resolution = shape.Resolve(wire, PathUsage.Project);
+                // A path an exclusion names is removed, not read.
+                var resolution = Read(shape, wire, PathUsage.Project, ReadUse.Project, index, inclusion ? Reading.Row : null);
 
                 if (!resolution.Succeeded)
                 {
@@ -2822,7 +3049,7 @@ public sealed class Binder
 
             if (inclusion && idIncluded && !shape.Grouped)
             {
-                var id = shape.Resolve(WireNames.IdWire, PathUsage.Project);
+                var id = Read(shape, WireNames.IdWire, PathUsage.Project, ReadUse.Project, index, Reading.Row);
 
                 if (id.Succeeded)
                     paths.Add(id.Path!);
@@ -2869,7 +3096,7 @@ public sealed class Binder
 
         private void BindSort(IReadOnlyList<Models.SortField> fields, int index)
         {
-            var bound = BindSortEntries(fields, shape, index);
+            var bound = BindSortEntries(fields, shape, index, Reading.Row);
 
             // A grouped shape pages by offset, and $skip over rows that tie on every sort field
             // repeats and drops groups between pages: $group emits no stable order and a top-k
@@ -2892,7 +3119,7 @@ public sealed class Binder
         /// rules of the whole request, since a lookup's sub-pipeline runs under the aggregate's
         /// collation too.
         /// </summary>
-        private List<BoundSortField> BindSortEntries(IReadOnlyList<Models.SortField> fields, Shape at, int index)
+        private List<BoundSortField> BindSortEntries(IReadOnlyList<Models.SortField> fields, Shape at, int index, Reading? reading)
         {
             var bound = new List<BoundSortField>();
 
@@ -2949,7 +3176,7 @@ public sealed class Binder
                     continue;
                 }
 
-                var resolution = at.Resolve(field.Path, PathUsage.Sort);
+                var resolution = Read(at, field.Path, PathUsage.Sort, ReadUse.Sort, index, reading);
 
                 if (!resolution.Succeeded)
                 {

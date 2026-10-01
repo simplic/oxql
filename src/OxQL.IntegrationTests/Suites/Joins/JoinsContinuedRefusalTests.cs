@@ -19,7 +19,7 @@ public class JoinsContinuedRefusalTests
 {
     private static string Id(Guid id) => id.ToString("D");
 
-    /// <summary>A1's transport line with a parent select only one target has in part, and the shipment's tour continued under it for every target.</summary>
+    /// <summary>A1's transport line with owning-row paths only one target has in part, and the shipment's tour continued under it for every target.</summary>
     private static string Request => $$"""
         {
           "entityType": "ledger.transaction",
@@ -30,9 +30,9 @@ public class JoinsContinuedRefusalTests
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
             { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
-                           "parentAs": "sourceParent", "select": ["id"], "parentSelect": ["id", "shipmentNumber", "number"] } },
+                           "parentAs": "sourceParent", "select": ["id"] } },
             { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["id", "number"] } },
-            { "project": { "position": 1, "sourceLine": 1, "sourceParent": 1, "deliveringTour": 1 } }
+            { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1 } }
           ]
         }
         """;

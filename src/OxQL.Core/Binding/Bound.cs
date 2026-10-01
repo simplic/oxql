@@ -58,18 +58,33 @@ public abstract record ShapeNode(string StoragePrefix)
     /// <summary>An entity: the implicit root, or a resolved local target under its alias.</summary>
     public sealed record Entity(EntityDef Def, string StoragePrefix) : ShapeNode(StoragePrefix)
     {
-        /// <summary>The paths a join fetched under its alias (its select, key included); null for a whole row.</summary>
+        /// <summary>
+        /// The paths the row shows under a join's alias, relative to it; null for every member. While
+        /// the stages bind it is null under contract 2, where every member of the target can be read
+        /// and the join loads what is read (improvement plan §3.S); the final shape carries the output
+        /// set. Under contract 1 it is the join's select, key included, which is all the join fetches.
+        /// </summary>
         public IReadOnlyList<string>? Select { get; init; }
+
+        /// <summary>The alias of the join whose rows the node holds; null for the entity row itself.</summary>
+        public string? Join { get; init; }
     }
 
     /// <summary>An unwound element under its alias.</summary>
-    public sealed record Element(EntityDef Def, PathDef Source, string StoragePrefix) : ShapeNode(StoragePrefix);
+    public sealed record Element(EntityDef Def, PathDef Source, string StoragePrefix) : ShapeNode(StoragePrefix)
+    {
+        /// <summary>The alias of the join whose rows hold the collection; null for a collection of the entity row.</summary>
+        public string? Join { get; init; }
+    }
 
     /// <summary>A lookup alias: an array of the target entity.</summary>
     public sealed record Array(EntityDef Target, string StoragePrefix) : ShapeNode(StoragePrefix)
     {
-        /// <summary>The paths the lookup fetched of each child (its select, key included).</summary>
+        /// <summary>The paths the row shows of each child, as <see cref="Entity.Select"/>.</summary>
         public IReadOnlyList<string>? Select { get; init; }
+
+        /// <summary>The alias of the lookup whose children the node holds.</summary>
+        public string? Join { get; init; }
     }
 
     /// <summary>
@@ -170,15 +185,22 @@ public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IRead
 
 /// <summary>
 /// One target of a case as bound. A local target carries its entity, the storage of the matched
-/// field (relative to the element for an item target) and of the item collection, its select,
-/// filter, scope and owning-row select; a remote target carries what the owner binds, as written.
-/// A local target also carries the filter and the owning-row select as written
+/// field (relative to the element for an item target) and of the item collection, what it loads
+/// (<paramref name="Select"/>), its filter, its scope and what its owning row loads
+/// (<paramref name="ParentSelect"/>); a remote target carries what the owner binds, as paths.
+/// A local target also carries the filter as written and the owning row's paths
 /// (<paramref name="RemoteFilter"/>, <paramref name="RemoteParentSelect"/>): the keyed fetch sends
 /// them to this host's own <c>SelfOwner</c> as an ordinary owner query.
-/// <paramref name="DroppedSelect"/> lists the select paths this target does not have, which the
-/// target leaves out (a union's select is flat); <paramref name="DroppedParentSelect"/> the same
-/// for the owning row's select. A remote target's paths are only known to its owner: the keyed
-/// fetch drops them per target at run time (<c>ResolveResult.Dropped</c>).
+/// <para>
+/// Under contract 2 the loads are inferred once every stage is bound (improvement plan §3.S): the
+/// key and the output set of the alias, which is the paths the projection names under it, or kept
+/// whole the <c>select</c> hint, else the target's key and display (a null
+/// <paramref name="RemoteSelect"/>: the owner's own). Under contract 1 they are the select as written.
+/// </para>
+/// <paramref name="DroppedSelect"/> lists the paths this target does not have, which the target
+/// leaves out (the paths of a union are flat); <paramref name="DroppedParentSelect"/> the same for
+/// the owning row. A remote target's paths are only known to its owner: the keyed fetch drops them
+/// per target at run time (<c>ResolveResult.Dropped</c>).
 /// </summary>
 public sealed record BoundResolveTarget(
     ReferenceTarget Declared,
@@ -305,7 +327,11 @@ public abstract record BoundStage
     /// it is bound-only and never rendered.
     /// </summary>
     public sealed record Lookup(EntityDef From, ResolvedPath ChildReference, string As, IReadOnlyList<ResolvedPath> Select, BoundCondition? Filter, int Limit, Scope ChildScope, string ParentKeyStorage, string ChildKeyStorage,
-        IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage;
+        IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage
+    {
+        /// <summary>The <c>select</c> as the caller wrote it: the hint of what the alias shows kept whole; null when none was written. Bound-only, never rendered.</summary>
+        public IReadOnlyList<string>? Hint { get; init; }
+    }
 
     /// <summary>
     /// A resolve. The members up to <paramref name="RemoteFilter"/> describe the first target of
@@ -348,6 +374,9 @@ public abstract record BoundStage
         /// than a plain remote one, which the remote resolver runs as it did under 2.0.
         /// </summary>
         public bool NeedsKeyedFetch => Executor == ResolveExecutor.Keyed && !(IsRemote && IsPlain);
+
+        /// <summary>The <c>select</c> as the caller wrote it: the hint of what the alias shows kept whole; null when none was written. Bound-only, never rendered.</summary>
+        public IReadOnlyList<string>? Hint { get; init; }
     }
 
     /// <summary>An unwind; <paramref name="Flatten"/> when it also descends a nested collection of the same items.</summary>
@@ -435,8 +464,18 @@ public sealed record BoundPipeline
         return null;
     }
 
-    /// <summary>The shape the rows have after the last stage.</summary>
+    /// <summary>
+    /// The shape the rows have after the last stage. Under contract 2 each join alias in it carries its
+    /// output set (<see cref="ShapeNode.Entity.Select"/>): what the row shows under the alias, whatever
+    /// the join loaded for the stages that read it.
+    /// </summary>
     public required Shape FinalShape { get; init; }
+
+    /// <summary>The read ledger: every path a stage reads, in the order the stages bound them (improvement plan §3.S).</summary>
+    public IReadOnlyList<PathRead> Reads { get; init; } = [];
+
+    /// <summary>What each join loads and shows, by alias (a resolve's or lookup's <c>as</c> and <c>parentAs</c>); empty under contract 1.</summary>
+    public IReadOnlyDictionary<string, JoinLoad> Loads { get; init; } = new Dictionary<string, JoinLoad>(StringComparer.Ordinal);
 
     /// <summary>The sort, when the caller gave one.</summary>
     public BoundStage.Sort? Sort { get; init; }
@@ -555,6 +594,9 @@ public sealed record StageTrace(int Index, string? Kind, StageStatus Status, Sha
 /// </summary>
 public sealed record BindTrace(Shape Entry, IReadOnlyList<StageTrace> Stages, Shape Final)
 {
+    /// <summary>The read ledger as far as the stages bound: every path a stage reads, with its use and the join it loads from.</summary>
+    public IReadOnlyList<PathRead> Reads { get; init; } = [];
+
     /// <summary>The shape before pipeline index <paramref name="at"/>; past the last stage, the final shape.</summary>
     public Shape ShapeAt(int at) =>
         at <= 0 ? Entry

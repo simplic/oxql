@@ -80,10 +80,11 @@ public class LookupMembersBindTests
         await BindHost.ErrorAsync(BindHost.Probe, Customer,
             """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "unwind": { "path": "latest" } }]""", Codes.NotACollection);
 
-        // A member the lookup did not fetch has no value: sorting or matching on it is refused (PRE-1).
-        (await BindHost.ErrorAsync(BindHost.Probe, Customer,
-            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "sort": [{ "latest.when": "desc" }] }]""", Codes.UnknownPath))
-            .Message.Should().Contain("not in the select of 'latest'");
+        // Every member of the child can be read under the alias: the lookup loads what a later stage reads.
+        var sorted = await BindHost.BoundAsync(BindHost.Probe, Customer,
+            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "sort": [{ "latest.when": "desc" }] }]""");
+
+        sorted.Stages.OfType<BoundStage.Lookup>().Single().Select.Select(path => path.Wire).Should().Contain("when");
     }
 
     [Fact]

@@ -57,8 +57,7 @@
           "path": "erpLine.sourceBillingLineReference.id",
           "as": "sourceLine",
           "select": ["id","type","status","singlePrice","totalPrice","quantity.value","quantity.quantityUnit"],
-          "parentAs": "sourceParent",
-          "parentSelect": ["id","shipmentNumber","referenceNumber","number"]
+          "parentAs": "sourceParent"
         }
       },
       {
@@ -140,7 +139,10 @@
           "item.totalPriceNet": 1,
           "erpLine": 1,
           "sourceLine": 1,
-          "sourceParent": 1,
+          "sourceParent.id": 1,
+          "sourceParent.shipmentNumber": 1,
+          "sourceParent.referenceNumber": 1,
+          "sourceParent.number": 1,
           "lastAttempt": 1,
           "lineShipment": 1,
           "deliveringTour": 1,
@@ -192,8 +194,8 @@
       {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":6,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":6,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
       {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":6,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":6,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
       {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'referenceNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":6,"path":"referenceNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":6,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
       {"code":"OWNER_BINDS","message":"This lookup continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":7,"path":"sourceParent","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}},
       {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":8,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'lineShipment' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":8,"path":"item.references.referenceId","params":{"alias":"lineShipment","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
@@ -229,7 +231,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "cursor",
@@ -252,7 +256,9 @@
           "host": "directory",
           "owner": 0
         },
-        "reads": [],
+        "reads": [
+          {"path":"invoiceRecipient.address.id","use":"resolveKey"}
+        ],
         "creates": ["recipientContact"],
         "shape": {
           "paging": "cursor",
@@ -278,7 +284,9 @@
           "host": "staff",
           "owner": 1
         },
-        "reads": [],
+        "reads": [
+          {"path":"createUserId","use":"resolveKey"}
+        ],
         "creates": ["clerk"],
         "shape": {
           "paging": "cursor",
@@ -301,7 +309,9 @@
         "kind": "unwind",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
         "creates": ["item","position"],
         "shape": {
           "paging": "offset",
@@ -329,7 +339,9 @@
         "kind": "match",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"item","use":"match"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
@@ -362,7 +374,9 @@
           "host": "ledger",
           "owner": null
         },
-        "reads": [],
+        "reads": [
+          {"path":"item.billingLineId","use":"resolveKey"}
+        ],
         "creates": ["erpLine"],
         "shape": {
           "paging": "offset",
@@ -397,7 +411,10 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"erpLine.sourceBillingLineReference.id","use":"resolveKey","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"caseCondition","alias":"erpLine"}
+        ],
         "creates": ["sourceLine","sourceParent"],
         "shape": {
           "paging": "offset",
@@ -436,7 +453,9 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"sourceParent.id","use":"lookupOn","alias":"sourceParent"}
+        ],
         "creates": ["lastAttempt"],
         "shape": {
           "paging": "offset",
@@ -477,7 +496,10 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"item.references.referenceId","use":"resolveKey"},
+          {"path":"item.references.dataType","use":"caseCondition"}
+        ],
         "creates": ["lineShipment"],
         "shape": {
           "paging": "offset",
@@ -520,7 +542,9 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"lineShipment.tours.tourId","use":"resolveKey","alias":"lineShipment"}
+        ],
         "creates": ["deliveringTour"],
         "shape": {
           "paging": "offset",
@@ -565,7 +589,10 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"deliveringTour.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
         "creates": ["tourVehicle"],
         "shape": {
           "paging": "offset",
@@ -612,7 +639,10 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"deliveringTour.attachedResources.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.attachedResources.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
         "creates": ["driver"],
         "shape": {
           "paging": "offset",
@@ -661,7 +691,10 @@
           "host": "transport",
           "owner": 2
         },
-        "reads": [],
+        "reads": [
+          {"path":"item.references.referenceId","use":"resolveKey"},
+          {"path":"item.references.dataType","use":"caseCondition"}
+        ],
         "creates": ["lineTour"],
         "shape": {
           "paging": "offset",
@@ -707,13 +740,40 @@
         "kind": "project",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"date","use":"project"},
+          {"path":"dueDate","use":"project"},
+          {"path":"invoiceRecipient","use":"project"},
+          {"path":"termsOfPayment.formattedText","use":"project"},
+          {"path":"totalPriceNet","use":"project"},
+          {"path":"totalPriceGross","use":"project"},
+          {"path":"taxKeyTotalPrices","use":"project"},
+          {"path":"recipientContact","use":"project","alias":"recipientContact"},
+          {"path":"clerk","use":"project","alias":"clerk"},
+          {"path":"position","use":"project"},
+          {"path":"item.text","use":"project"},
+          {"path":"item.quantity","use":"project"},
+          {"path":"item.totalPriceNet","use":"project"},
+          {"path":"erpLine","use":"project","alias":"erpLine"},
+          {"path":"sourceLine","use":"project","alias":"sourceLine"},
+          {"path":"sourceParent.id","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.shipmentNumber","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.referenceNumber","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.number","use":"project","alias":"sourceParent"},
+          {"path":"lastAttempt","use":"project","alias":"lastAttempt"},
+          {"path":"lineShipment","use":"project","alias":"lineShipment"},
+          {"path":"deliveringTour","use":"project","alias":"deliveringTour"},
+          {"path":"tourVehicle","use":"project","alias":"tourVehicle"},
+          {"path":"driver","use":"project","alias":"driver"},
+          {"path":"lineTour","use":"project","alias":"lineTour"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
           "roots": {
             "": "t:ledger.transaction",
             "recipientContact": "t:directory.contact",
@@ -738,7 +798,7 @@
             "position": "o:4",
             "erpLine": "o:5",
             "sourceLine": "o:6",
-            "sourceParent": "o:7",
+            "sourceParent": "o:15",
             "lastAttempt": "o:8",
             "lineShipment": "o:9",
             "deliveringTour": "o:10",
@@ -753,13 +813,15 @@
         "kind": "sort",
         "status": "ok",
         "placement": null,
-        "reads": [],
+        "reads": [
+          {"path":"position","use":"sort"}
+        ],
         "creates": [],
         "shape": {
           "paging": "offset",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
           "roots": {
             "": "t:ledger.transaction",
             "recipientContact": "t:directory.contact",
@@ -784,7 +846,7 @@
             "position": "o:4",
             "erpLine": "o:5",
             "sourceLine": "o:6",
-            "sourceParent": "o:7",
+            "sourceParent": "o:15",
             "lastAttempt": "o:8",
             "lineShipment": "o:9",
             "deliveringTour": "o:10",
@@ -805,7 +867,7 @@
           "paging": "offset",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk","date","deliveringTour","driver","dueDate","erpLine","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt","lineShipment","lineTour","number","position","recipientContact","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
           "roots": {
             "": "t:ledger.transaction",
             "recipientContact": "t:directory.contact",
@@ -830,7 +892,7 @@
             "position": "o:4",
             "erpLine": "o:5",
             "sourceLine": "o:6",
-            "sourceParent": "o:7",
+            "sourceParent": "o:15",
             "lastAttempt": "o:8",
             "lineShipment": "o:9",
             "deliveringTour": "o:10",
@@ -872,6 +934,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
+        "shows": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
+        "hint": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
         "targets": [
           {
             "target": "directory.contact",
@@ -916,6 +981,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
         "targets": [
           {
             "target": "staff.employee",
@@ -979,6 +1047,9 @@
           "as": null,
           "values": ["not_found"]
         },
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "shows": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
+        "hint": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
         "targets": [
           {
             "target": "ledger.billing_line",
@@ -1028,6 +1099,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["id","type","status","singlePrice","totalPrice","quantity.value","quantity.quantityUnit"],
+        "shows": ["id","type","status","singlePrice","totalPrice","quantity.value","quantity.quantityUnit"],
+        "hint": ["id","type","status","singlePrice","totalPrice","quantity.value","quantity.quantityUnit"],
         "targets": [
           {
             "target": "transport.shipment#billingLines",
@@ -1059,6 +1133,9 @@
         "heldBy": "transport",
         "complete": true,
         "lookupOn": true,
+        "loads": ["id","number","referenceNumber","shipmentNumber"],
+        "shows": ["id","number","referenceNumber","shipmentNumber"],
+        "hint": null,
         "parentOf": "sourceLine",
         "targets": [
           {
@@ -1089,6 +1166,9 @@
           "alias": "sourceParent",
           "target": "transport.shipment"
         },
+        "loads": ["dateTime","id","status"],
+        "shows": ["id","dateTime","status"],
+        "hint": ["dateTime","status"],
         "type": "t:transport.delivery_attempt"
       },
       "lineShipment": {
@@ -1124,6 +1204,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
+        "shows": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
+        "hint": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
         "targets": [
           {
             "target": "transport.shipment",
@@ -1149,6 +1232,9 @@
           "alias": "lineShipment",
           "target": null
         },
+        "loads": ["number"],
+        "shows": ["number"],
+        "hint": ["number"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -1166,6 +1252,9 @@
           "alias": "deliveringTour",
           "target": null
         },
+        "loads": ["registrationPlate.registrationIdentifier","matchCode"],
+        "shows": ["registrationPlate.registrationIdentifier","matchCode"],
+        "hint": ["registrationPlate.registrationIdentifier","matchCode"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -1183,6 +1272,9 @@
           "alias": "deliveringTour",
           "target": null
         },
+        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
         "outcome": {
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -1222,6 +1314,9 @@
           "as": null,
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
+        "loads": ["number","startDateTime","endDateTime","actions"],
+        "shows": ["number","startDateTime","endDateTime","actions"],
+        "hint": ["number","startDateTime","endDateTime","actions"],
         "targets": [
           {
             "target": "transport.tour",
@@ -2785,13 +2880,7 @@
         "": "588ff"
       },
       "o:5": {
-        "": "40800",
-        "*": null,
-        "id": "588c3",
-        "text": "d9fff",
-        "sourceBillingLineReference": "40800",
-        "sourceBillingLineReference.type": "d9fff",
-        "sourceBillingLineReference.id": "1588c3"
+        "": "40800"
       },
       "140000": {
         "operators": [],
@@ -2950,6 +3039,14 @@
         "quantity": "40800",
         "quantity.value": "588ff",
         "quantity.unit": "40800"
+      },
+      "o:15": {
+        "": "40000",
+        "*": null,
+        "id": "40000",
+        "shipmentNumber": "40000",
+        "referenceNumber": "40000",
+        "number": "40000"
       }
     },
     "result": {
@@ -2994,9 +3091,9 @@
         {"path":"sourceLine.quantity.quantityUnit","kind":"unknown","nullable":true,"stage":6,"root":"sourceLine","present":"ifJoined"},
         {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
         {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.referenceNumber","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
         {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
+        {"path":"sourceParent.referenceNumber","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
+        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":6,"root":"sourceParent","present":"ifJoined"},
         {"path":"lastAttempt","kind":"object","nullable":true,"stage":7,"root":"lastAttempt","present":"always"},
         {"path":"lineShipment.shipmentNumber","kind":"unknown","nullable":true,"stage":8,"root":"lineShipment","present":"ifJoined"},
         {"path":"lineShipment.referenceNumber","kind":"unknown","nullable":true,"stage":8,"root":"lineShipment","present":"ifJoined"},

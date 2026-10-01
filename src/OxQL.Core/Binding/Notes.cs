@@ -10,7 +10,7 @@ namespace OxQL.Core.Binding;
 /// form of a diagnostic (<c>{ code, message, stage, path, params }</c>); the studio renders
 /// <c>oxqlStudio.note.&lt;CODE&gt;</c> when it has the key, else the message. The codes are not in
 /// <see cref="Codes"/>: a note is no refusal and no diagnostic of a run, with one exception, a
-/// select path an owner said its target lacks (<see cref="SelectPathNotOnTarget"/>), which only a
+/// path under a union's alias that an owner said its target lacks (<see cref="SelectPathNotOnTarget"/>), which only a
 /// run can learn and which the run's diagnostics carry.
 /// </summary>
 public static class Notes
@@ -48,7 +48,7 @@ public static class Notes
     /// <summary>A continued part could not be checked at its owner (E13).</summary>
     public const string RemoteUnchecked = "REMOTE_UNCHECKED";
 
-    /// <summary>A flat select path one target of a union lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>, <c>target</c>, <c>parent</c>: a <c>parentSelect</c> path).</summary>
+    /// <summary>A path asked under a union's alias (its select hint, or what the projection names under it) that one target lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>, <c>target</c>, <c>parent</c>: a path of the owning row, <c>parentAs</c>).</summary>
     public const string SelectPathNotOnTarget = "SELECT_PATH_NOT_ON_TARGET";
 
     /// <summary>The total count stops at a cap (params <c>cap</c>).</summary>
@@ -293,7 +293,7 @@ public static class Notes
     };
 
     /// <summary>
-    /// A flat select path one target of a union lacks, dropped for that target: at binding for a local
+    /// A path asked under a union's alias that one target lacks, dropped for that target: at binding for a local
     /// target; for a remote one by its owner's internal explain (the remote check), and by a run,
     /// which keeps what it learned in the cache and reports it from there too.
     /// </summary>

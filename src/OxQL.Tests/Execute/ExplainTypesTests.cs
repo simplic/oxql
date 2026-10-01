@@ -220,7 +220,7 @@ public class ExplainTypesTests
     }
 
     [Fact]
-    public async Task A_projection_and_a_joins_select_take_members_out_of_the_row()
+    public async Task A_projection_takes_members_out_of_the_row_and_a_joins_hint_takes_none()
     {
         var result = await ExplainAsync("""
             [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },
@@ -228,8 +228,10 @@ public class ExplainTypesTests
              { "sort": [{ "number": "asc" }] }]
             """);
 
-        result.FlagsAt(0, "c", "code").Should().BeNull("the join's select did not fetch it");
+        result.FlagsAt(0, "c", "code").Should().NotBeNull("every member of the target can be read under the alias: the join loads what is read, whatever its hint names");
         result.FlagsAt(0, "c", "name").Should().NotBeNull();
+        result.FlagsAt(1, "c", "code").Should().BeNull("the projection kept only the name under the alias");
+        result.FlagsAt(1, "c", "name").Should().NotBeNull();
         result.FlagsAt(1, "", "customerId").Should().BeNull("the projection removed it");
         result.FlagsAt(1, "", "number").Should().BeEquivalentTo(result.OwnFlags("t:rc.invoice", "number"));
         result.FlagsAt(1, "", "lines").Should().NotBeNull("the parent of a kept path stays in the row");

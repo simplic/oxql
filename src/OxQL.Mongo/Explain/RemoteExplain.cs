@@ -239,6 +239,23 @@ public sealed class RemoteExplain : IExplainOwners
     /// <summary>After <see cref="CheckAsync"/>: per alias a continued stage adds, the types its owners' answers point it to, in the order of the checks.</summary>
     public IReadOnlyList<string> TypesOf(string alias) => aliasTypes.TryGetValue(alias, out var list) ? list : [];
 
+    private readonly Dictionary<int, List<JsonObject>> continuedReads = [];
+    private readonly Dictionary<string, JsonObject> aliasLoads = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: what the stage at the caller's index <paramref name="stage"/>
+    /// reads at the owners it is continued at, as they answered it, in the origin row's paths
+    /// (<c>{ path, use, alias }</c>); null when no owner answered for the stage. The owner binds the
+    /// stage, so only it knows every read: the member that picks a reference's case among them.
+    /// </summary>
+    public IReadOnlyList<JsonObject>? ReadsOf(int stage) => continuedReads.GetValueOrDefault(stage);
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: what the join of a continued stage loads and shows under
+    /// <paramref name="alias"/>, as its owner inferred it for the run's query (<c>{ loads, shows, hint }</c>); null when no owner answered.
+    /// </summary>
+    public JsonObject? LoadsOf(string alias) => aliasLoads.GetValueOrDefault(alias);
+
     /// <summary>After <see cref="CheckAsync"/>: whether the owner of <paramref name="target"/> of the keyed stage creating <paramref name="alias"/> did not answer its check.</summary>
     public bool Unanswered(string alias, string target) => unanswered.Contains(alias + "\n" + target);
 
@@ -331,7 +348,7 @@ public sealed class RemoteExplain : IExplainOwners
                 OwnerFaults.Scrubbed(answer);
 
                 // A remote union target whose owner refused only paths the target lacks is asked again
-                // without them, as a run asks it (DESIGN §3.4.1 flat select): the owner then binds the
+                // without them, as a run asks it (DESIGN §3.4.1 flat paths): the owner then binds the
                 // stages continued at it, and checks theirs, exactly as the run's query has them bound.
                 // What it lacked stays a miss; an answer that does not come leaves the first.
                 var sent = check.Query;
@@ -409,10 +426,31 @@ public sealed class RemoteExplain : IExplainOwners
             if (stage["index"] is not JsonValue at || !at.TryGetValue<int>(out var index) || check.OriginOf(index) is not { } origin)
                 continue;
 
+            // The reads the owner bound the stage with, in the origin row's paths.
+            if (check.Resolve is { } anchor && stage["reads"] is JsonArray ownerReads)
+            {
+                if (!continuedReads.TryGetValue(origin.OriginIndex, out var known))
+                    continuedReads[origin.OriginIndex] = known = [];
+
+                foreach (var read in ownerReads.OfType<JsonObject>())
+                {
+                    if (read["path"]?.GetValue<string>() is not { Length: > 0 } ownerPath || read["use"]?.GetValue<string>() is not { } use)
+                        continue;
+
+                    var path = Continuation.FromOwner(ownerPath, anchor, check.Item, check.ContinuedAliases);
+
+                    if (!known.Any(other => other["path"]!.GetValue<string>() == path && other["use"]!.GetValue<string>() == use))
+                        known.Add(new JsonObject { ["path"] = path, ["use"] = use, ["alias"] = path.Split('.')[0] });
+                }
+            }
+
             foreach (var created in stage["creates"]?.AsArray().OfType<JsonValue>() ?? [])
             {
                 if (!created.TryGetValue<string>(out var alias) || !origin.Aliases.Contains(alias, StringComparer.Ordinal) || aliases?[alias] is not JsonObject described)
                     continue;
+
+                if (!aliasLoads.ContainsKey(alias) && described.ContainsKey("loads"))
+                    aliasLoads[alias] = new JsonObject { ["loads"] = described["loads"]?.DeepClone(), ["shows"] = described["shows"]?.DeepClone(), ["hint"] = described["hint"]?.DeepClone() };
 
                 if (!reached.TryGetValue(alias, out var list))
                     reached[alias] = list = [];
@@ -454,11 +492,13 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>
-    /// What the owners' misses mean for one resolve (DESIGN §3.4.1 flat select, §4.3): a path some
+    /// What the owners' misses mean for one resolve (DESIGN §3.4.1 flat paths, §4.3): a path some
     /// target has is dropped for those that lack it (<c>SELECT_PATH_NOT_ON_TARGET</c>, as a run drops
     /// it); a path no target has is this request's <c>UNKNOWN_PATH</c> where the caller wrote it (the
-    /// resolve's select, or the projection after it), with <c>params.owner</c> where the owner saw it.
+    /// resolve's select hint, or the projection after it), with <c>params.owner</c> where the owner saw it.
     /// A local target has what its entity (or item) has; a remote target nobody asked has every path.
+    /// A path under an alias a continued stage added is that stage's join's to have: its owner binds
+    /// it, and one it lacks is <c>UNKNOWN_PATH</c> at the projection, as a run is refused for it.
     /// </summary>
     private static void Judge(BoundStage.Resolve resolve, IReadOnlyList<OwnerCheck> checks, HashSet<OwnerCheck> answered, List<Miss> misses, List<QueryValidationError> errors, List<Diagnostic> notes)
     {
@@ -471,9 +511,41 @@ public sealed class RemoteExplain : IExplainOwners
             var (path, parent) = group.Key;
             var lacking = group.Select(miss => miss.Check).ToList();
             var first = group.First();
-            var written = parent ? first.Check.Bound?.RemoteParentSelect : first.Check.Bound?.RemoteSelect;
+            // The hint is written at the resolve; every other path asked of the owner is the projection's.
+            var written = parent ? null : resolve.Hint;
             var stage = written?.Contains(path, StringComparer.Ordinal) == true ? first.Check.Stage : first.Check.ProjectStage ?? first.Check.Stage;
             var alias = parent ? resolve.ParentAs ?? resolve.As : resolve.As;
+
+            if (!parent && first.Check.ContinuedAliases.Contains(path.Split('.')[0], StringComparer.Ordinal))
+            {
+                var continued = path.Split('.')[0];
+                var at = first.Check.ProjectStage ?? first.Check.Stage;
+
+                if (!errors.Any(other => other.Code == Codes.UnknownPath && other.Stage == at && other.Path == path))
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.UnknownPath,
+                        Message = $"'{path}' is not a path of what '{continued}' joins ({string.Join(", ", lacking.Select(check => check.Target).Distinct(StringComparer.Ordinal))}).",
+                        Stage = at,
+                        Path = path,
+                        Params = new Dictionary<string, object?>
+                        {
+                            ["reason"] = PathReasons.NoTarget,
+                            ["alias"] = continued,
+                            ["targets"] = lacking.Select(check => check.Target).Distinct(StringComparer.Ordinal).ToList(),
+                            ["owner"] = new Dictionary<string, object?>
+                            {
+                                ["service"] = first.Check.Service,
+                                ["entity"] = first.Check.Bound?.Declared.Entity,
+                                ["target"] = first.Check.Target,
+                                ["stage"] = first.Check.ProjectAt,
+                                ["path"] = first.OwnerPath,
+                            },
+                        },
+                    });
+
+                continue;
+            }
 
             bool Has(BoundResolveTarget target)
             {
@@ -496,10 +568,11 @@ public sealed class RemoteExplain : IExplainOwners
                 return at.Resolve(path, PathUsage.Project).Succeeded;
             }
 
+            // What a target lacks is said at the resolve, as a run says it and as a local target's is.
             if (targets.Count > 1 && targets.Any(Has))
             {
                 foreach (var check in lacking.DistinctBy(check => check.Target))
-                    notes.Add(Notes.SelectPathDropped(stage, resolve.As, check.Target, path, parent));
+                    notes.Add(Notes.SelectPathDropped(first.Check.Stage, resolve.As, check.Target, path, parent));
 
                 continue;
             }

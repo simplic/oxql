@@ -44,7 +44,7 @@ public class ResolveBindTests
     {
         var unknown = await ErrorAsync("""[{ "resolve": { "path": "customerId", "as": "c", "source": "x" } }]""", Codes.UnknownStageMember);
 
-        unknown.Message.Should().Contain("path, as, select, filter, elements, target, parentAs, parentSelect, onMissing, forTarget");
+        unknown.Message.Should().Contain("path, as, select, filter, elements, target, parentAs, onMissing, forTarget");
 
         var legacy = await ErrorAsync("""[{ "resolve": { "path": "customerId", "as": "c", "elements": "first" } }]""", Codes.LegacyStageUnsupported, BindHost.Context(contract: 1));
 
@@ -56,7 +56,6 @@ public class ResolveBindTests
     [InlineData("""{ "elements": 1 }""", "\"first\" or \"all\"")]
     [InlineData("""{ "onMissing": "ignore" }""", "\"null\", \"report\" or \"refuse\"")]
     [InlineData("""{ "target": 5 }""", "'target' is a string")]
-    [InlineData("""{ "parentSelect": 5 }""", "an array of paths")]
     public async Task A_member_of_the_wrong_kind_or_value_is_refused_by_name(string member, string message)
     {
         var node = JsonNode.Parse("""{ "path": "customerId", "as": "c" }""")!.AsObject();
@@ -195,12 +194,13 @@ public class ResolveBindTests
         resolve.Executor.Should().Be(ResolveExecutor.Keyed);
         target.ItemStorage.Should().Be("BillingLines");
         target.FieldStorage.Should().Be("_id", "the field is read on the element");
-        target.Select!.Select(path => path.Storage).Should().Equal("_id");
+        target.Select!.Select(path => path.Storage).Should().Equal("_id", "Code");
         target.ParentSelect!.Select(path => path.Storage).Should().Equal("_id", "Number");
         bound.FinalShape.Roots["bl"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item!.Wire.Should().Be("billingLines");
         bound.FinalShape.Roots["ship"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item.Should().BeNull();
 
-        var selected = await ResolveAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "select": ["code", "amount"], "parentAs": "ship", "parentSelect": ["number"] } }]""");
+        // Kept whole, the element shows its select hint with the matched member, the owning row its key and display.
+        var selected = await ResolveAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "select": ["code", "amount"], "parentAs": "ship" } }]""");
 
         selected.Cases![0].Targets[0].Select!.Select(path => path.Storage).Should().Equal("_id", "Code", "Amount");
         selected.Cases[0].Targets[0].ParentSelect!.Select(path => path.Storage).Should().Equal("_id", "Number");
@@ -219,9 +219,8 @@ public class ResolveBindTests
     }
 
     [Fact]
-    public async Task ParentSelect_needs_parentAs_and_parentAs_needs_a_name_of_its_own()
+    public async Task ParentAs_needs_a_name_of_its_own()
     {
-        await ErrorAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentSelect": ["number"] } }]""", Codes.OptionNotApplicable);
         await ErrorAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "bl" } }]""", Codes.AliasCollision);
         await ErrorAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "number" } }]""", Codes.AliasCollision);
     }

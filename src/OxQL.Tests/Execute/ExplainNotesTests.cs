@@ -155,7 +155,7 @@ public class ExplainNotesTests
     [Fact]
     public async Task A_flat_select_path_a_local_target_lacks_is_said_per_target()
     {
-        var notes = await NotesAsync("""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""");
+        var notes = await NotesAsync("""[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1 } }]""");
 
         var dropped = notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).ToList();
         dropped.Select(note => (note.Path, (string)note.Params!["target"]!)).Should().BeEquivalentTo([("name", "rc.shipment#billingLines"), ("number", "rc.tour#billingLines")],

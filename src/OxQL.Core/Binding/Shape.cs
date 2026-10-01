@@ -193,7 +193,7 @@ public sealed class Shape
 
         return new Shape(
             entity,
-            new Dictionary<string, ShapeNode>(StringComparer.Ordinal) { [ImplicitRoot] = new ShapeNode.Element(entity, collection.Path!, "") },
+            new Dictionary<string, ShapeNode>(StringComparer.Ordinal) { [ImplicitRoot] = new ShapeNode.Element(entity, collection.Path!, "") { Join = JoinOf(root) } },
             new HashSet<string>(StringComparer.Ordinal),
             grouped: false,
             included: null,
@@ -233,10 +233,10 @@ public sealed class Shape
         {
             // Unwinding a lookup alias: the alias becomes one target row, and so does the name
             // the unwind writes it under.
-            roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix) { Select = array.Select };
+            roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix) { Select = array.Select, Join = array.Join };
 
             if (alias is not null)
-                roots[alias] = new ShapeNode.Entity(array.Target, alias) { Select = array.Select };
+                roots[alias] = new ShapeNode.Entity(array.Target, alias) { Select = array.Select, Join = array.Join };
         }
         else
         {
@@ -244,7 +244,7 @@ public sealed class Shape
         }
 
         if (alias is not null && path.Path is not null)
-            roots[alias] = new ShapeNode.Element(path.Entity!, path.Path, alias);
+            roots[alias] = new ShapeNode.Element(path.Entity!, path.Path, alias) { Join = JoinOf(path.Root) };
 
         if (indexAlias is not null)
             roots[indexAlias] = new ShapeNode.Scalar(Kind.Int, indexAlias);
@@ -297,6 +297,15 @@ public sealed class Shape
         Included is null && Excluded is null && Dropped.Count == 0 ? this : new Shape(Entity, Roots, Unwound, Grouped, null, null, Addons, null, Unset);
 
     public static string UnwoundKey(string root, string wire) => root + "|" + wire;
+
+    /// <summary>The alias of the join whose rows a node holds: a join's own alias, an unwound copy of it, an element of one of its collections; null for the entity row.</summary>
+    public static string? JoinOf(ShapeNode node) => node switch
+    {
+        ShapeNode.Entity entity => entity.Join,
+        ShapeNode.Array array => array.Join,
+        ShapeNode.Element element => element.Join,
+        _ => null,
+    };
 
     // ---- resolution ---------------------------------------------------------------------------
 
@@ -356,11 +365,6 @@ public sealed class Shape
 
         if (!IsVisible(wire))
             return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.", PathReasons.Projected);
-
-        // A join fetches only its select: a path beyond it has no value to filter, sort or show.
-        if (NotSelected(wire) is { } join)
-            return PathResolution.Fail(Codes.UnknownPath,
-                $"'{wire}' is not in the select of '{join.Alias}', which fetched {string.Join(", ", join.Select.Select(path => $"'{path}'"))}; add it to the select.");
 
         var resolution = node switch
         {
@@ -706,36 +710,6 @@ public sealed class Shape
         return prefix.Length == 0 ? remainder : prefix + "." + remainder;
     }
 
-    /// <summary>
-    /// The join alias whose select does not cover a path under it, with that select; null when the
-    /// path is not under a join alias, or the select fetched it, a member of it, or a parent of it.
-    /// </summary>
-    public (string Alias, IReadOnlyList<string> Select)? NotSelected(string wire)
-    {
-        var dot = wire.IndexOf('.', StringComparison.Ordinal);
-
-        if (dot <= 0 || !Roots.TryGetValue(wire[..dot], out var node))
-            return null;
-
-        var select = node switch
-        {
-            ShapeNode.Entity entity => entity.Select,
-            ShapeNode.Array array => array.Select,
-            _ => null,
-        };
-
-        if (select is null)
-            return null;
-
-        var relative = wire[(dot + 1)..];
-
-        foreach (var path in select)
-            if (relative == path || Under(relative, path) || Under(path, relative))
-                return null;
-
-        return (wire[..dot], select);
-    }
-
     /// <summary>The unwound collection (and its alias) that took a wire path out of the row, or null.</summary>
     public (string Collection, string Alias)? UnsetBy(string wire)
     {
@@ -749,6 +723,23 @@ public sealed class Shape
     /// <summary>Whether <paramref name="wire"/> lies below <paramref name="ancestor"/>: it starts with it and a dot.</summary>
     private static bool Under(string wire, string ancestor) =>
         wire.Length > ancestor.Length && wire[ancestor.Length] == '.' && wire.StartsWith(ancestor, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether an exclusion projection or an unwind with <c>keepPath: false</c> took a wire path out of
+    /// the row. Unlike <see cref="IsVisible"/> it says nothing of an inclusion projection, which cannot
+    /// name a root a later stage adds: what such a root shows is its output set.
+    /// </summary>
+    public bool IsRemoved(string wire)
+    {
+        if (UnsetBy(wire) is not null)
+            return true;
+
+        foreach (var removed in Excluded ?? NoRoots)
+            if (wire == removed || Under(wire, removed))
+                return true;
+
+        return false;
+    }
 
     /// <summary>Whether a wire path survives the projection (and every unwind that dropped its collection) at this shape.</summary>
     public bool IsVisible(string wire)

@@ -68,9 +68,13 @@ public class RemoteLookupTests
     {
         var bound = await BoundAsync("""
             [{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "found", "first": true, "sort": [ { "date": "desc" } ],
-                           "filter": { "text": { "eq": "toll" } }, "parentAs": "shipment", "parentSelect": ["number"] } }]
+                           "filter": { "text": { "eq": "toll" } }, "parentAs": "shipment" } },
+             { "project": { "found.text": 1, "shipment.number": 1 } }]
             """);
         var rendered = JsonNode.Parse(bound.Canonical)!["stages"]![0]!["lookup"]!;
+
+        rendered["select"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal(["text"], "what the projection names under the alias is what its owner is asked for");
+        rendered["parentSelect"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("number");
 
         rendered["from"]!.GetValue<string>().Should().Be("tr.shipment#lines");
         rendered["localField"]!.GetValue<string>().Should().Be("_id");
@@ -97,7 +101,7 @@ public class RemoteLookupTests
 
     [Theory]
     [InlineData("""{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "s", "parentAs": "p" } }""", "OPTION_NOT_APPLICABLE")]
-    [InlineData("""{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "s", "parentSelect": ["number"] } }""", "OPTION_NOT_APPLICABLE")]
+    [InlineData("""{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "s", "parentSelect": ["number"] } }""", "UNKNOWN_STAGE_MEMBER")]
     [InlineData("""{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "s", "parentAs": "s" } }""", "ALIAS_COLLISION")]
     [InlineData("""{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "s", "parentAs": "p" } }""", "OPTION_NOT_APPLICABLE")]
     [InlineData("""{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "s", "limit": 101 } }""", "LOOKUP_LIMIT_EXCEEDED")]
@@ -304,12 +308,14 @@ public class RemoteLookupTests
         };
 
         var outcome = await RunAsync(client, """
-            [{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "line", "first": true, "parentAs": "shipment", "parentSelect": ["number"] } }]
+            [{ "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "line", "first": true, "parentAs": "shipment" } },
+             { "project": { "line": 1, "shipment.number": 1 } }]
             """);
         var result = outcome.Should().BeOfType<QueryOutcome.Success>().Subject.Result;
 
         result.Items[0]!["line"]!.ToJsonString().Should().Be("""{"invoiceId":"10000000-0000-0000-0000-000000000001","text":"toll"}""");
-        result.Items[0]!["shipment"]!.ToJsonString().Should().Be("""{"entity":"tr.shipment","id":"s1","number":"S-1"}""");
+        result.Items[0]!["shipment"]!.ToJsonString().Should().Be("""{"entity":"tr.shipment","number":"S-1"}""",
+            "the owning row shows the entity it is and the paths the projection names under it; the key its owner answers beside them is not asked for");
         result.Items[1]!["line"].Should().BeNull();
 
         var query = client.Calls.Single().Request.Queries.Single();
@@ -317,7 +323,7 @@ public class RemoteLookupTests
         query.KeyedBy.PerKey.Should().Be(1);
         query.KeyedBy.Rows.Should().BeNull("an element child is answered per element");
         query.Pipeline.Select(stage => stage.Kind).Should().Equal("project", "page");
-        query.Pipeline[0].Project!.Fields.Keys.Should().BeEquivalentTo(["oxEl", "number"], "the whole element without a select (the key within it), and the owning row's select");
+        query.Pipeline[0].Project!.Fields.Keys.Should().BeEquivalentTo(["oxEl", "number"], "the whole element without a select (the key within it), and the paths projected under the owning row");
     }
 
     [Fact]

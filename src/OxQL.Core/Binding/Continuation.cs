@@ -167,6 +167,30 @@ public static class Continuation
         return ownerPath;
     }
 
+    /// <summary>
+    /// A path of the owner's row as the origin row has it, the inverse of <see cref="ToOwner"/>: under
+    /// an alias a continued stage added it keeps its name; a member of the matched element lies under
+    /// the anchor's alias, a member of an item target's row under its <c>parentAs</c>, a member of an
+    /// entity target's row under the anchor's alias. Explain reads an owner's reads back with it.
+    /// </summary>
+    public static string FromOwner(string ownerPath, BoundStage.Resolve anchor, bool itemTarget, IReadOnlyCollection<string> continuedAliases)
+    {
+        ArgumentNullException.ThrowIfNull(ownerPath);
+        ArgumentNullException.ThrowIfNull(anchor);
+        ArgumentNullException.ThrowIfNull(continuedAliases);
+
+        if (continuedAliases.Contains(ownerPath.Split('.')[0]))
+            return ownerPath;
+
+        if (!itemTarget)
+            return Join(anchor.As, ownerPath);
+
+        if (Strip(ownerPath, BoundKeyedBy.Element) is { } underElement)
+            return Join(anchor.As, underElement);
+
+        return anchor.ParentAs is { } parentAs ? Join(parentAs, ownerPath) : ownerPath;
+    }
+
     /// <summary>The rest of <paramref name="path"/> below <paramref name="root"/> (empty for the root itself), or null when it is not under it.</summary>
     private static string? Strip(string path, string root) =>
         path == root ? "" : path.StartsWith(root + ".", StringComparison.Ordinal) ? path[(root.Length + 1)..] : null;

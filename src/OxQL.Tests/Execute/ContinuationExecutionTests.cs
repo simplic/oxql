@@ -146,7 +146,7 @@ public class ContinuationExecutionTests
 
     private const string ForAlpha = """
         [{ "resolve": { "path": "source.id", "as": "src" } },
-         { "lookup": { "from": "ct.note", "path": "alphaId", "on": "src", "forTarget": "ct.alpha", "as": "note", "first": true } },
+         { "lookup": { "from": "ct.note", "path": "alphaId", "on": "src", "forTarget": "ct.alpha", "as": "note", "first": true, "select": ["text"] } },
          { "sort": [{ "number": "asc" }] }]
         """;
 
@@ -353,7 +353,7 @@ public class ContinuationExecutionTests
         client.Calls.Should().ContainSingle();
     }
 
-    // ---- a flat select over remote targets -------------------------------------------------------------
+    // ---- the flat paths of a union over remote targets --------------------------------------------------
 
     private static readonly Guid RemoteShipment = Guid.Parse("5a000000-0000-0000-0000-000000000001");
 
@@ -378,7 +378,7 @@ public class ContinuationExecutionTests
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(InvoiceId) })];
         client.Script = (_, query, _) => TransportOwner(query, "name");
 
-        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]"""));
+        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1 } }]"""));
 
         result.Items[0]!["owner"]!["number"]!.GetValue<string>().Should().Be("S-9");
         client.Calls.Should().HaveCount(2, "the first answer named the path the target lacks");
@@ -398,7 +398,7 @@ public class ContinuationExecutionTests
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(InvoiceId) })];
         client.Script = (_, query, _) => TransportOwner(query, "nope");
 
-        var refusal = RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "nope"] } }]"""));
+        var refusal = RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.nope": 1 } }]"""));
 
         refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
         refusal.Errors![1].Path.Should().Be("nope");
@@ -409,7 +409,7 @@ public class ContinuationExecutionTests
     {
         var (engine, _, client) = Host();
         client.Script = (_, query, _) => TransportOwner(query, "name");
-        const string Pipeline = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "parentSelect": ["id", "number", "name"] } }]""";
+        const string Pipeline = """[{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } }, { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1 } }]""";
         var bound = ((BindOutcome.Bound)await new Binder(ResolveModel.Model, BindHost.Cursors).BindAsync(BindHost.Request(Invoice, Pipeline), BindHost.Context(), CancellationToken.None)).Pipeline;
         var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
         var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(BindHost.Options()), BindHost.Options());

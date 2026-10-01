@@ -99,15 +99,15 @@ public sealed class Binder
         var trace = session.Trace();
 
         if (errors.Count > 0)
-            return new BindOutcome.Failed(Refusal.Validation(errors)) { Trace = trace };
+            return new BindOutcome.Failed(Refusal.Validation(errors)) { Trace = trace, Diagnostics = diagnostics.ToList() };
 
         try
         {
-            return new BindOutcome.Bound(session.Result(scope, decodeCursor: !explain)) { Trace = trace };
+            return new BindOutcome.Bound(session.Result(scope, decodeCursor: !explain)) { Trace = trace, Diagnostics = diagnostics.ToList() };
         }
         catch (CursorException)
         {
-            return new BindOutcome.Failed(Refusal.Validation([Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null)])) { Trace = trace };
+            return new BindOutcome.Failed(Refusal.Validation([Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null)])) { Trace = trace, Diagnostics = diagnostics.ToList() };
         }
     }
 
@@ -370,7 +370,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, null, keyedBy.Path));
+                errors.Add(Unresolved(resolution, null, keyedBy.Path));
                 return;
             }
 
@@ -461,6 +461,13 @@ public sealed class Binder
         }
 
         private BoundKeyedBy? keyedByBound;
+
+        /// <summary>
+        /// The error of a path that did not resolve, with why in <c>params</c> where the shape says it
+        /// (<see cref="PathReasons"/>). A contract 1 answer is frozen: it carries the code and the message as before.
+        /// </summary>
+        private QueryValidationError Unresolved(PathResolution resolution, int? stage, string? path) =>
+            new() { Code = resolution.Code!, Message = resolution.Message!, Stage = stage, Path = path, Params = contract2 ? resolution.Params : null };
 
         /// <summary>The contract 1 hint when <paramref name="contract2Construct"/> is what a contract 1 request was refused for; empty otherwise.</summary>
         private string Hint(bool contract2Construct) => !contract2 && contract2Construct ? Contract1Hint : "";
@@ -688,7 +695,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, index, condition.Path));
+                errors.Add(Unresolved(resolution, index, condition.Path));
                 return null;
             }
 
@@ -981,7 +988,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, index, condition.Path));
+                errors.Add(Unresolved(resolution, index, condition.Path));
                 return null;
             }
 
@@ -1133,7 +1140,7 @@ public sealed class Binder
 
             if (!reference.Succeeded)
             {
-                errors.Add(Error(reference.Code!, reference.Message!, index, lookup.Path));
+                errors.Add(Unresolved(reference, index, lookup.Path));
                 return;
             }
 
@@ -1453,7 +1460,7 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
-                    errors.Add(Error(resolution.Code!, resolution.Message!, index, wire));
+                    errors.Add(Unresolved(resolution, index, wire));
                     continue;
                 }
 
@@ -1561,7 +1568,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, index, resolve.Path));
+                errors.Add(Unresolved(resolution, index, resolve.Path));
                 return;
             }
 
@@ -2292,7 +2299,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, index, unwind.Path));
+                errors.Add(Unresolved(resolution, index, unwind.Path));
                 return;
             }
 
@@ -2479,7 +2486,7 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
-                    errors.Add(Error(resolution.Code!, resolution.Message!, index, by.Path));
+                    errors.Add(Unresolved(resolution, index, by.Path));
                     continue;
                 }
 
@@ -2589,7 +2596,7 @@ public sealed class Binder
 
             if (!resolution.Succeeded)
             {
-                errors.Add(Error(resolution.Code!, resolution.Message!, index, trunc.Path));
+                errors.Add(Unresolved(resolution, index, trunc.Path));
                 return null;
             }
 
@@ -2686,7 +2693,7 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
-                    errors.Add(Error(resolution.Code!, resolution.Message!, index, expression.Path));
+                    errors.Add(Unresolved(resolution, index, expression.Path));
                     return null;
                 }
 
@@ -2806,7 +2813,7 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
-                    errors.Add(Error(resolution.Code!, resolution.Message!, index, wire));
+                    errors.Add(Unresolved(resolution, index, wire));
                     continue;
                 }
 
@@ -2946,7 +2953,7 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
-                    errors.Add(Error(resolution.Code!, resolution.Message!, index, field.Path));
+                    errors.Add(Unresolved(resolution, index, field.Path));
                     continue;
                 }
 

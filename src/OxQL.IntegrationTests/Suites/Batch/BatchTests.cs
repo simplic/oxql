@@ -70,7 +70,7 @@ public class BatchTests
         {
             ["type"] = "validation_error",
             ["title"] = "The request could not be bound.",
-            ["errors"] = new JsonArray(new JsonObject { ["code"] = "UNKNOWN_PATH", ["message"] = $"'nosuchpath' is not a path of {Corpus.Employee}.", ["stage"] = 0, ["path"] = "nosuchpath" }),
+            ["errors"] = new JsonArray(new JsonObject { ["code"] = "UNKNOWN_PATH", ["message"] = $"'nosuchpath' is not a path of {Corpus.Employee}.", ["stage"] = 0, ["path"] = "nosuchpath", ["params"] = new JsonObject { ["reason"] = "notAMember", ["entity"] = Corpus.Employee } }),
         }.ToJsonString(), "R3: a refusal entry carries no status member");
     }
 

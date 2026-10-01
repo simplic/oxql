@@ -207,7 +207,8 @@ public class ContractATests
         validation.StatusCode.Should().Be(400, validation.ToString());
         validation.Body!.AsObject().Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("errors", "title", "type");
         validation.Type.Should().Be("validation_error");
-        validation.Errors[0].Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("code", "message", "path", "stage");
+        validation.Errors[0].Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("code", "message", "params", "path", "stage");
+        validation.Errors[0]["params"]!.ToJsonString().Should().Be($$"""{"reason":"notAMember","entity":"{{Corpus.Shipment}}"}""", "why a path does not resolve is said in a form a caller can act on");
 
         // access_denied is 403: a request whose context carries no organisation. The legacy rig
         // could not send one (its interceptor always attached a token); the lab can.

@@ -515,6 +515,12 @@ public abstract record BindOutcome
     /// <summary>The shape after each stage, when the stage loop ran.</summary>
     public BindTrace? Trace { get; init; }
 
+    /// <summary>
+    /// The diagnostics binding produced up to where it stopped, also for a request that did not bind:
+    /// explain answers them beside the errors. A bound pipeline carries the same list.
+    /// </summary>
+    public IReadOnlyList<Diagnostic> Diagnostics { get; init; } = [];
+
     /// <summary>The request bound: <paramref name="Pipeline"/> is what the compiler reads.</summary>
     public sealed record Bound(BoundPipeline Pipeline) : BindOutcome;
 
@@ -545,7 +551,7 @@ public sealed record StageTrace(int Index, string? Kind, StageStatus Status, Sha
 /// <summary>
 /// The stage loop as it ran: the entry shape, every caller stage in order, and the final shape.
 /// The shape before pipeline index <c>at</c> is <see cref="ShapeAt"/> (0 the entry, the pipeline
-/// length the final shape), which describe reads (DESIGN §4.2).
+/// length the final shape), which explain reads for the row at each stage.
 /// </summary>
 public sealed record BindTrace(Shape Entry, IReadOnlyList<StageTrace> Stages, Shape Final)
 {

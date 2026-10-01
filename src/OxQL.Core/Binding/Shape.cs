@@ -24,7 +24,50 @@ public sealed record PathResolution(ResolvedPath? Path, string? Code, string? Me
 
     public static PathResolution Fail(string code, string message) => new(null, code, message);
 
+    /// <summary>A failure with its reason in machine-readable form (<see cref="Params"/>).</summary>
+    public static PathResolution Fail(string code, string message, string reason, params (string Name, object? Value)[] facts)
+    {
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["reason"] = reason };
+
+        foreach (var (name, value) in facts)
+            parameters[name] = value;
+
+        return new(null, code, message) { Params = parameters };
+    }
+
+    /// <summary>
+    /// Why the path did not resolve, for a caller that acts on it rather than showing the message:
+    /// <c>reason</c> (<see cref="PathReasons"/>) and the facts of it (<c>alias</c>, <c>entity</c>,
+    /// <c>targets</c>, <c>collection</c>). Null where the code says it all.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?>? Params { get; init; }
+
     public bool Succeeded => Path is not null;
+}
+
+/// <summary>The <c>params.reason</c> of a path that does not resolve.</summary>
+public static class PathReasons
+{
+    /// <summary>The path is no member of the entity, element or group output it is read on (<c>entity</c>).</summary>
+    public const string NotAMember = "notAMember";
+
+    /// <summary>A projection before the stage removed the path.</summary>
+    public const string Projected = "projected";
+
+    /// <summary>An unwind with <c>keepPath: false</c> took the collection out of the row (<c>collection</c>, <c>alias</c>).</summary>
+    public const string Unwound = "unwound";
+
+    /// <summary>The path lies under an alias joined after the page, which cannot be used this way (<c>alias</c>).</summary>
+    public const string AfterPage = "afterPage";
+
+    /// <summary>No target of the keyed alias has the path (<c>alias</c>, <c>targets</c>).</summary>
+    public const string NoTarget = "noTarget";
+
+    /// <summary>The root is a scalar or a group output and has no members (<c>alias</c>).</summary>
+    public const string NoMembers = "noMembers";
+
+    /// <summary>The member is in the wire view only.</summary>
+    public const string NotStored = "notStored";
 }
 
 /// <summary>
@@ -246,6 +289,13 @@ public sealed class Shape
         return new Shape(Entity, Roots, Unwound, Grouped, projected.Included, projected.Excluded, Addons, dropped, Unset);
     }
 
+    /// <summary>
+    /// This shape without what its projections removed: every member and root visible again. Explain
+    /// reads a member's flags on it, and the visibility on the shape itself.
+    /// </summary>
+    public Shape Unprojected() =>
+        Included is null && Excluded is null && Dropped.Count == 0 ? this : new Shape(Entity, Roots, Unwound, Grouped, null, null, Addons, null, Unset);
+
     public static string UnwoundKey(string root, string wire) => root + "|" + wire;
 
     // ---- resolution ---------------------------------------------------------------------------
@@ -296,15 +346,16 @@ public sealed class Shape
         {
             return PathResolution.Fail(Codes.UnknownPath, Grouped
                 ? $"'{wire}' is not an output of the group stage."
-                : $"'{wire}' is not a path of {Entity.Id}.");
+                : $"'{wire}' is not a path of {Entity.Id}.", PathReasons.NotAMember, ("entity", Entity.Id));
         }
 
         if (UnsetBy(wire) is { } unwound)
             return PathResolution.Fail(Codes.UnknownPath,
-                $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}', or set 'keepPath' to true on that unwind to keep '{unwound.Collection}'.");
+                $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}', or set 'keepPath' to true on that unwind to keep '{unwound.Collection}'.",
+                PathReasons.Unwound, ("collection", unwound.Collection), ("alias", unwound.Alias));
 
         if (!IsVisible(wire))
-            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.");
+            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.", PathReasons.Projected);
 
         // A join fetches only its select: a path beyond it has no value to filter, sort or show.
         if (NotSelected(wire) is { } join)
@@ -325,7 +376,7 @@ public sealed class Shape
                     Wire = wire, Storage = scalar.StoragePrefix, Kind = scalar.Kind, CollectionAncestors = 0,
                     Filterable = true, Sortable = true, Root = node,
                 })
-                : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a scalar; '{wire}' has no members."),
+                : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a scalar; '{wire}' has no members.", PathReasons.NoMembers, ("alias", rootName)),
             ShapeNode.GroupOutput output => rest.Count == 0
                 ? PathResolution.Ok(new ResolvedPath
                 {
@@ -333,7 +384,7 @@ public sealed class Shape
                     Filterable = Kinds.IsScalar(output.Shape?.LeafKind ?? output.Kind),
                     Sortable = Kinds.IsScalar(output.Kind) && output.Kind != Kind.Array, Root = node,
                 })
-                : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a group output; '{wire}' has no members."),
+                : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a group output; '{wire}' has no members.", PathReasons.NoMembers, ("alias", rootName)),
             _ => PathResolution.Fail(Codes.UnknownPath, $"'{wire}' cannot be resolved."),
         };
 
@@ -376,16 +427,16 @@ public sealed class Shape
     private static PathResolution ResolveRemote(ShapeNode.Remote remote, ArraySegment<string> rest, string wire, PathUsage usage)
     {
         if (usage == PathUsage.Sort)
-            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is under a remote resolve; the owner's rows cannot order this host's page.");
+            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is under a remote resolve; the owner's rows cannot order this host's page.", PathReasons.AfterPage, ("alias", remote.StoragePrefix));
 
         if (usage is PathUsage.Unwind or PathUsage.GroupKey or PathUsage.Aggregate)
-            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is under a remote resolve and cannot be used here.");
+            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is under a remote resolve and cannot be used here.", PathReasons.AfterPage, ("alias", remote.StoragePrefix));
 
         // Only a plain remote resolve's keys are one $in on one local member; the alias of a
         // typed, item, converted or element-wise one cannot be narrowed by the owner beforehand.
         if (usage == PathUsage.Match && !remote.SemiJoinable)
             return PathResolution.Fail(Codes.ResolveNotFilterable,
-                $"'{wire}' is joined after the page is taken, from typed, item, converted or element-wise targets; it cannot filter the rows.");
+                $"'{wire}' is joined after the page is taken, from typed, item, converted or element-wise targets; it cannot filter the rows.", PathReasons.AfterPage, ("alias", remote.StoragePrefix));
 
         return PathResolution.Ok(new ResolvedPath
         {
@@ -408,13 +459,13 @@ public sealed class Shape
     private static PathResolution ResolveKeyed(ShapeNode.Keyed keyed, string rootName, ArraySegment<string> rest, string wire, PathUsage usage)
     {
         if (usage == PathUsage.Sort)
-            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is joined after the page is taken; it cannot order the page.");
+            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is joined after the page is taken; it cannot order the page.", PathReasons.AfterPage, ("alias", rootName));
 
         if (usage == PathUsage.Match)
-            return PathResolution.Fail(Codes.ResolveNotFilterable, $"'{wire}' is joined after the page is taken; it cannot filter the rows.");
+            return PathResolution.Fail(Codes.ResolveNotFilterable, $"'{wire}' is joined after the page is taken; it cannot filter the rows.", PathReasons.AfterPage, ("alias", rootName));
 
         if (usage is PathUsage.Unwind or PathUsage.GroupKey or PathUsage.Aggregate)
-            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is joined after the page is taken and cannot be used here.");
+            return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is joined after the page is taken and cannot be used here.", PathReasons.AfterPage, ("alias", rootName));
 
         if (rest.Count == 0)
             return PathResolution.Ok(new ResolvedPath
@@ -442,7 +493,8 @@ public sealed class Shape
         }
 
         return PathResolution.Fail(Codes.UnknownPath,
-            $"'{wire}' is not a path of any target of '{rootName}' ({string.Join(", ", keyed.Targets.Select(target => target.Item is null ? target.Entity.Id : $"{target.Entity.Id}#{target.Item.Wire}"))}).");
+            $"'{wire}' is not a path of any target of '{rootName}' ({string.Join(", ", keyed.Targets.Select(target => target.Item is null ? target.Entity.Id : $"{target.Entity.Id}#{target.Item.Wire}"))}).",
+            PathReasons.NoTarget, ("alias", rootName), ("targets", keyed.Targets.Select(target => target.Item is null ? target.Entity.Id : $"{target.Entity.Id}#{target.Item.Wire}").ToList()));
     }
 
     private PathResolution ResolveInEntity(
@@ -505,7 +557,7 @@ public sealed class Shape
             }
             else
             {
-                return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is not a path of {entity.Id}.");
+                return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is not a path of {entity.Id}.", PathReasons.NotAMember, ("entity", entity.Id));
             }
 
             var isLast = position == segments.Count - 1;
@@ -531,7 +583,7 @@ public sealed class Shape
         if (!path.Stored)
             return usage == PathUsage.Project
                 ? PathResolution.Ok(Unstored(wire, path, entity, node, ancestors))
-                : PathResolution.Fail(Codes.NotStored, $"'{wire}' is not stored; it is in the wire view only.");
+                : PathResolution.Fail(Codes.NotStored, $"'{wire}' is not stored; it is in the wire view only.", PathReasons.NotStored);
 
         var storage = RenderStorage(path.Storage!, literals);
 
@@ -677,20 +729,26 @@ public sealed class Shape
 
         var relative = wire[(dot + 1)..];
 
-        return select.Any(path => relative == path || relative.StartsWith(path + ".", StringComparison.Ordinal) || path.StartsWith(relative + ".", StringComparison.Ordinal))
-            ? null
-            : (wire[..dot], select);
+        foreach (var path in select)
+            if (relative == path || Under(relative, path) || Under(path, relative))
+                return null;
+
+        return (wire[..dot], select);
     }
 
     /// <summary>The unwound collection (and its alias) that took a wire path out of the row, or null.</summary>
     public (string Collection, string Alias)? UnsetBy(string wire)
     {
         foreach (var (collection, alias) in Unset)
-            if (wire == collection || wire.StartsWith(collection + ".", StringComparison.Ordinal))
+            if (wire == collection || Under(wire, collection))
                 return (collection, alias);
 
         return null;
     }
+
+    /// <summary>Whether <paramref name="wire"/> lies below <paramref name="ancestor"/>: it starts with it and a dot.</summary>
+    private static bool Under(string wire, string ancestor) =>
+        wire.Length > ancestor.Length && wire[ancestor.Length] == '.' && wire.StartsWith(ancestor, StringComparison.Ordinal);
 
     /// <summary>Whether a wire path survives the projection (and every unwind that dropped its collection) at this shape.</summary>
     public bool IsVisible(string wire)
@@ -701,7 +759,7 @@ public sealed class Shape
         if (Included is not null)
         {
             foreach (var kept in Included)
-                if (wire == kept || wire.StartsWith(kept + ".", StringComparison.Ordinal) || kept.StartsWith(wire + ".", StringComparison.Ordinal))
+                if (wire == kept || Under(wire, kept) || Under(kept, wire))
                     return true;
 
             return false;
@@ -709,7 +767,7 @@ public sealed class Shape
 
         if (Excluded is not null)
             foreach (var removed in Excluded)
-                if (wire == removed || wire.StartsWith(removed + ".", StringComparison.Ordinal))
+                if (wire == removed || Under(wire, removed))
                     return false;
 
         return true;

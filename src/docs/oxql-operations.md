@@ -369,7 +369,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   the shapes of the part that binds; the joins then carry no `placement`, `result.columns` is empty,
   and there is no `plan`. A query that binds but that this host cannot run (a remote resolve without
   a remote query client: `RESOLVE_UNAVAILABLE`) or whose continued stages an owner refuses is
-  `valid: false` too. Refusals remain only for what stops explain before binding: 400 for a
+  `valid: false` too. It bound here, so its joins keep their `placement` and `result.columns` is
+  filled; only the stage an owner refused (`status: "error"`) has no `placement`. Refusals remain only for what stops explain before binding: 400 for a
   malformed body or one past an explain bound, 403 without an organisation, 413 for a body over the
   limit, 429 over the rate, 500 for an engine fault. `contract` is the contract the request was read
   as; a contract 1 request is rewritten by the compatibility binder and answered the same way.
@@ -389,7 +390,9 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   missing (an owner did not answer, a limit was hit, the answer was trimmed), and such an answer is
   never kept as the complete one. The host sets no `ETag` header yet.
 - **`stages`**, one per caller stage: `status` `ok`, `error`, or `skipped` (it failed only because it
-  reads an alias an earlier stage failed to create); `placement` for a join that runs, else absent:
+  reads an alias an earlier stage failed to create); `placement` for a join that runs, else absent
+  (a stage that is no join, a join nothing reads, every join of a request that does not bind here,
+  and a stage with another `status` than `ok`):
   `executor` (`inline`, `keyed-local`, `keyed-remote`, `continued`), `phase` (`beforePage`,
   `afterPage`, `owner`), `host` (the service whose engine runs the stage) and `owner` (the index of
   its owner in `owners`); `creates`, the names of the aliases it adds; `shape`, the row after the
@@ -515,7 +518,13 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   a row carries the key. `always`: on every row, the value may be null. `ifJoined`: absent on a row
   whose join found nothing. `ifVariant`: only on rows of the variants that have the member.
   `ifStored`: absent on a row whose stored record does not hold the member, or whose parent object
-  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. The
+  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. Under a
+  join's alias the columns are its output set (`aliases.<alias>.shows`), each `ifJoined`, whoever
+  runs the join: an alias a continued stage adds lists what its owner answered it shows. Only an
+  alias whose output set this host does not know is one column of the alias itself (`kind: "object"`,
+  `present: "always"`): an owner's alias kept whole without a hint (`shows: null`), or one whose
+  owner did not answer; a keyed alias or a remote lookup's that holds an array of rows is one
+  `array` column. The
   outcomes a join may have are its alias's (`aliases.<alias>.outcome`).
 - **`owners`**: each owner service once, in pipeline order, this host among them when it answers a
   keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this

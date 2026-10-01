@@ -161,8 +161,13 @@ public class ExplainStagesTests
         explain.Owner(0)!["service"]!.GetValue<string>().Should().Be("transport", "the placement leads with a remote target's owner");
         explain.Owners.Select(owner => owner["service"]!.GetValue<string>()).Should().Equal("rc", "transport");
 
-        explain.Stage(1).Placement!.Executor.Should().Be("continued");
-        explain.Owner(1)!["service"]!.GetValue<string>().Should().Be("rc", "the stage continues at the one target it is for");
+        // The owner refuses the lookup (rc.invoice declares no reference to the shipment): the stage is
+        // listed under the one target it is for, and a stage its owner refused has no placement.
+        explain.Valid.Should().BeFalse();
+        explain.Stage(1).Status.Should().Be("error");
+        explain.Stage(1).Placement.Should().BeNull("a stage its owner refused runs nowhere");
+        explain.Stage(0).Status.Should().Be("ok", "the join that binds keeps its placement on a request that is not valid");
+        explain.Owners[targets["rc.shipment#billingLines"]!["owner"]!.GetValue<int>()]["service"]!.GetValue<string>().Should().Be("rc", "the stage continues at the one target it is for");
         explain.Alias("invoices")["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"owner","target":"rc.shipment"}""");
     }
 

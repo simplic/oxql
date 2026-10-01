@@ -243,12 +243,6 @@
         "index": 5,
         "kind": "resolve",
         "status": "error",
-        "placement": {
-          "executor": "continued",
-          "phase": "owner",
-          "host": "transport",
-          "owner": 0
-        },
         "reads": [
           {"path":"sourceParent.tours.tourId","use":"resolveKey","alias":"sourceParent"}
         ],

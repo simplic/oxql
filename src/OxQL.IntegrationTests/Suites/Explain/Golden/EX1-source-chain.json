@@ -857,7 +857,9 @@
         {"path":"shipmentVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
         {"path":"tourVehicle.matchCode","kind":"unknown","nullable":true,"stage":7,"root":"tourVehicle","present":"ifJoined"},
         {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":7,"root":"tourVehicle","present":"ifJoined"},
-        {"path":"lastAttempt","kind":"object","nullable":true,"stage":8,"root":"lastAttempt","present":"always"}
+        {"path":"lastAttempt.id","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"},
+        {"path":"lastAttempt.dateTime","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"},
+        {"path":"lastAttempt.status","kind":"unknown","nullable":true,"stage":8,"root":"lastAttempt","present":"ifJoined"}
       ]
     },
     "owners": [

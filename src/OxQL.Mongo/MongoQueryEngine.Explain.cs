@@ -299,18 +299,24 @@ public sealed partial class MongoQueryEngine
             var reads = trace.Reads.GroupBy(read => read.Stage).ToDictionary(group => group.Key, group => group.ToList());
 
             foreach (var stage in trace.Stages)
+            {
+                var status = stage.Status == StageStatus.Error || draft.Failed.Contains(stage.Index) ? "error" : stage.Status == StageStatus.Skipped ? "skipped" : "ok";
+
                 stages.Add(new ExplainStage
                 {
                     Index = stage.Index,
                     Kind = stage.Kind,
-                    Status = stage.Status == StageStatus.Error || draft.Failed.Contains(stage.Index) ? "error" : stage.Status == StageStatus.Skipped ? "skipped" : "ok",
-                    Placement = draft.Placements.TryGetValue(stage.Index, out var placed)
+                    Status = status,
+                    // Where a join runs is said of a join that binds: here, and for a stage continued at an
+                    // owner there too. A stage an owner refused runs nowhere.
+                    Placement = status == "ok" && draft.Placements.TryGetValue(stage.Index, out var placed)
                         ? new ExplainPlacement { Executor = placed.Executor, Phase = placed.Phase, Host = placed.Host, Owner = placed.Owner is { } service ? owners.IndexOf(service, placed.Remote) : null }
                         : null,
                     Reads = ReadsOf(draft, stage.Index, reads.GetValueOrDefault(stage.Index) ?? []),
                     Creates = creates.TryGetValue(stage.Index, out var created) ? created : [],
                     Shape = shapes ? await draft.Types.ShapeAsync(stage.After, OwnerType).ConfigureAwait(false) : null,
                 });
+            }
         }
 
         var catalog = await draft.Types.CatalogAsync(request, draft.Owners).ConfigureAwait(false);
@@ -344,7 +350,7 @@ public sealed partial class MongoQueryEngine
             result = new ExplainShapeResult
             {
                 Paging = trace.Final.IsRootShape ? "cursor" : "offset",
-                Columns = draft.Bound is { } bound ? Columns(bound, trace) : [],
+                Columns = draft.Bound is { } bound ? Columns(bound, trace, alias => OwnerShows(draft, alias)) : [],
             };
 
         var answer = new ExplainResult
@@ -1098,7 +1104,7 @@ public sealed partial class MongoQueryEngine
     /// when a row carries its key (<c>present</c>), as the row encoder writes it: a stored member the
     /// record does not hold has no key, a join that found nothing leaves its alias null.
     /// </summary>
-    private static IReadOnlyList<ExplainColumn> Columns(BoundPipeline bound, BindTrace trace)
+    private static IReadOnlyList<ExplainColumn> Columns(BoundPipeline bound, BindTrace trace, Func<string, IReadOnlyList<string>?> ownerShows)
     {
         var shape = bound.FinalShape;
         var created = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -1158,7 +1164,7 @@ public sealed partial class MongoQueryEngine
                     var kept = RootOutput.Of(shape, name);
                     var owning = bound.Stages.OfType<BoundStage.Resolve>().Any(resolve => resolve.ParentAs == name);
                     var select = kept.Whole
-                        ? SelectOf(bound, name) ?? []
+                        ? ownerShows(name)?.Select(path => (path, Kind.Unknown)).ToList() ?? SelectOf(bound, name) ?? []
                         : [.. owning && !kept.Projected.Contains("entity", StringComparer.Ordinal) ? [("entity", Kind.String)] : Array.Empty<(string, Kind)>(),
                             .. kept.Projected.Select(path => (path, owning && path == "entity" ? Kind.String : KindAt(shape, name, path)))];
 
@@ -1179,6 +1185,24 @@ public sealed partial class MongoQueryEngine
         }
 
         return columns;
+    }
+
+    /// <summary>
+    /// What the row carries under an alias a continued stage adds and the row keeps whole, as the stage's
+    /// owner answered it (its <c>shows</c>: the hint with the key, or key and display): the owner infers
+    /// its own join, so only its answer names the key that rides with a hint. Null when the alias is not
+    /// one row of a continued stage, or its owner did not answer or named no paths.
+    /// </summary>
+    private static IReadOnlyList<string>? OwnerShows(Draft draft, string alias)
+    {
+        if (draft.Bound?.Stages.OfType<ContinuedStage>().FirstOrDefault(stage => stage.Aliases.Contains(alias, StringComparer.Ordinal)) is not { } continued)
+            return null;
+
+        // An alias that holds an array of rows is one column.
+        if (continued.Stage.Resolve is { Elements: "all" } || continued.Stage.Lookup is { First: not true })
+            return null;
+
+        return draft.Owners.LoadsOf(alias)?["shows"] is JsonArray { Count: > 0 } shows ? shows.Select(path => path!.GetValue<string>()).ToList() : null;
     }
 
     /// <summary>The kind of a path under an alias at the final shape; unknown under an owner's rows, whose kinds are in the owner's type.</summary>

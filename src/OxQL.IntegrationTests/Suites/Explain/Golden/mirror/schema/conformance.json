@@ -1,0 +1,493 @@
+{
+  "schemaVersion": "1.1",
+  "service": "conformance",
+  "api": {
+    "name": "conformance-api",
+    "version": "v1"
+  },
+  "revision": "sha256:f227da5e8c23c1b62c0ec89d84e507a45b985a6b3f133a27c932aac9b1505d1a",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200,
+    "maxOffset": 5000,
+    "maxResolveStages": 8,
+    "maxBatchQueries": 10,
+    "maxLookupLimit": 100,
+    "maxContinuedStages": 8,
+    "maxFlattenDepth": 5,
+    "maxReportPageSize": 5000
+  },
+  "types": {
+    "conformance.child": {
+      "displayName": "Conformance Child",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "parentId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "conformance.entity",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "sequence",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "conformance.entity": {
+      "displayName": "Conformance Entity",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "name",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": ["computed","scratch"],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "items",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "note",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "count",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "optionalCount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "magnitude",
+          "kind": "long",
+          "nullable": false
+        },
+        {
+          "name": "optionalMagnitude",
+          "kind": "long",
+          "nullable": true
+        },
+        {
+          "name": "amount",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "optionalAmount",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "ratio",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "optionalRatio",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "active",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "optionalActive",
+          "kind": "bool",
+          "nullable": true
+        },
+        {
+          "name": "marker",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "optionalMarker",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "moment",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "optionalMoment",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "day",
+          "kind": "date",
+          "nullable": false
+        },
+        {
+          "name": "optionalDay",
+          "kind": "date",
+          "nullable": true
+        },
+        {
+          "name": "duration",
+          "kind": "timeSpan",
+          "nullable": false
+        },
+        {
+          "name": "optionalDuration",
+          "kind": "timeSpan",
+          "nullable": true
+        },
+        {
+          "name": "grade",
+          "kind": "string",
+          "nullable": false,
+          "storedAs": "codePoint"
+        },
+        {
+          "name": "optionalGrade",
+          "kind": "string",
+          "nullable": true,
+          "storedAs": "codePoint"
+        },
+        {
+          "name": "payload",
+          "kind": "binary",
+          "nullable": false
+        },
+        {
+          "name": "optionalPayload",
+          "kind": "binary",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "kind": "enum",
+          "type": "#/types/t_conformanceState",
+          "nullable": false
+        },
+        {
+          "name": "optionalState",
+          "kind": "enum",
+          "type": "#/types/t_conformanceState",
+          "nullable": true
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_conformanceAddress",
+          "nullable": false
+        },
+        {
+          "name": "optionalAddress",
+          "kind": "object",
+          "type": "#/types/t_conformanceAddress",
+          "nullable": true
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_conformanceItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "labels",
+          "kind": "dictionary",
+          "value": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "quantities",
+          "kind": "dictionary",
+          "value": {
+            "kind": "int"
+          },
+          "nullable": false,
+          "storedAs": "arrayOfDocuments"
+        },
+        {
+          "name": "opaque",
+          "kind": "unknown",
+          "nullable": true
+        },
+        {
+          "name": "scratch",
+          "kind": "string",
+          "nullable": true,
+          "stored": false
+        },
+        {
+          "name": "computed",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
+          "name": "refCode",
+          "kind": "string",
+          "nullable": true,
+          "references": {
+            "entity": "conformance.ref",
+            "field": "code",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "childId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "conformance.child",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "employeeId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "staff.employee",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "widgetCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "widgetCodeExplicit",
+          "kind": "string",
+          "nullable": true,
+          "references": {
+            "entity": "owner.widget",
+            "field": "code",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        }
+      ]
+    },
+    "conformance.ref": {
+      "displayName": "Conformance Ref",
+      "entity": true,
+      "aliases": [],
+      "key": ["code"],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "code",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "rank",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_conformanceAddress": {
+      "properties": [
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "zip",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "floor",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_conformanceItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "parts",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_conformancePart"
+          },
+          "nullable": false
+        }
+      ]
+    },
+    "t_conformancePart": {
+      "properties": [
+        {
+          "name": "sku",
+          "kind": "string",
+          "nullable": false
+        },
+        {
+          "name": "weight",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_conformanceState": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Draft",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Active",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Legacy",
+          "value": 2,
+          "active": false
+        },
+        {
+          "name": "Huge",
+          "value": 9007199254740993,
+          "active": true
+        }
+      ]
+    }
+  }
+}

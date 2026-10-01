@@ -1,0 +1,3089 @@
+{
+  "schemaVersion": "1.1",
+  "service": "transport",
+  "api": {
+    "name": "transport-api",
+    "version": "v1"
+  },
+  "revision": "sha256:607ae6ef45df28f63bf1d50e48e0fb8f6e8448f3afc57fe03fca1b9d1bc27ac3",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200,
+    "maxOffset": 5000,
+    "maxResolveStages": 8,
+    "maxBatchQueries": 10,
+    "maxLookupLimit": 100,
+    "maxContinuedStages": 8,
+    "maxFlattenDepth": 5,
+    "maxReportPageSize": 5000
+  },
+  "types": {
+    "t_article": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_attachResourceAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource"
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_attachShipmentAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "shipmentId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_attachedResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource"
+        },
+        {
+          "name": "attachAction",
+          "kind": "object",
+          "type": "#/types/t_iTourAction",
+          "nullable": true
+        },
+        {
+          "name": "detachAction",
+          "kind": "object",
+          "type": "#/types/t_iTourAction",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billableContact": {
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "accountNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "personalAccountId",
+          "kind": "guid",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLine": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "financialPartner",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "date",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "enum",
+          "type": "#/types/t_billingLineType",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "singlePrice",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "totalPrice",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "isGross",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costCenterAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costCenterAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "generalLedgerAccountGroup",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "taxRate",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "object",
+          "type": "#/types/t_billingLineReference",
+          "nullable": true
+        },
+        {
+          "name": "references",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineReference"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isManualBillingLine",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "assignedTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        }
+      ]
+    },
+    "t_billingLineReference": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "dataType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceId",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_billingLineType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Customer",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Carrier",
+          "value": 1,
+          "active": true
+        }
+      ]
+    },
+    "t_carResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["CarResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_carrierResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_checkVehicleAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_cleaningAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_contactAddress": {
+      "properties": [
+        {
+          "name": "contactId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional01",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additional02",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "district",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "federalState",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_containerResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "loadingSlots",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_resourceLoadingSlot"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isLoadable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["ContainerResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_costCenter": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "validFrom",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "validTo",
+          "kind": "dateTime",
+          "nullable": true
+        }
+      ]
+    },
+    "t_costCenterAssignment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "costCenter",
+          "kind": "object",
+          "type": "#/types/t_costCenter",
+          "nullable": true
+        },
+        {
+          "name": "percentage",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_deliveryAttemptStatus": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_detachResourceAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource"
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_detachShipmentAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "shipmentId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_driverResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["DriverResource"]
+              },
+              "targets": [
+                {
+                  "entity": "staff.employee",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_equipmentResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["EquipmentResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_iTourAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource",
+          "onlyFor": ["AttachResourceAction","DetachResourceAction"]
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": true,
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"]
+        },
+        {
+          "name": "shipmentId",
+          "kind": "guid",
+          "nullable": true,
+          "onlyFor": ["AttachShipmentAction","DetachShipmentAction"]
+        },
+        {
+          "name": "title",
+          "kind": "string",
+          "nullable": true,
+          "onlyFor": ["TaskAction"]
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": true,
+          "onlyFor": ["TaskAction"]
+        },
+        {
+          "name": "startDateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "onlyFor": ["TaskAction"]
+        },
+        {
+          "name": "endDateTime",
+          "kind": "dateTime",
+          "nullable": true,
+          "onlyFor": ["TaskAction"]
+        }
+      ],
+      "discriminator": {
+        "element": "_t",
+        "form": "scalar"
+      },
+      "variants": [
+        {
+          "name": "AttachResourceAction",
+          "type": "#/types/t_attachResourceAction"
+        },
+        {
+          "name": "AttachShipmentAction",
+          "type": "#/types/t_attachShipmentAction"
+        },
+        {
+          "name": "CheckVehicleAction",
+          "type": "#/types/t_checkVehicleAction"
+        },
+        {
+          "name": "CleaningAction",
+          "type": "#/types/t_cleaningAction"
+        },
+        {
+          "name": "DetachResourceAction",
+          "type": "#/types/t_detachResourceAction"
+        },
+        {
+          "name": "DetachShipmentAction",
+          "type": "#/types/t_detachShipmentAction"
+        },
+        {
+          "name": "TaskAction",
+          "type": "#/types/t_taskAction"
+        }
+      ]
+    },
+    "t_loadingAidType": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "shortText",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "width",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "length",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "storagePosition",
+          "kind": "double",
+          "nullable": true
+        }
+      ]
+    },
+    "t_loadingDateTimeType": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "None",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Fixed",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "FixedWithBooking",
+          "value": 2,
+          "active": true
+        }
+      ]
+    },
+    "t_quantity": {
+      "properties": [
+        {
+          "name": "value",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "quantityUnit",
+          "kind": "object",
+          "type": "#/types/t_quantityUnit",
+          "nullable": true
+        }
+      ]
+    },
+    "t_quantityUnit": {
+      "properties": [
+        {
+          "name": "guid",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shortName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "digits",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_resourceLoadingSlot": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentDepartment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "fleet.department",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentDocument": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_shipmentItemStatus",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "article",
+          "kind": "object",
+          "type": "#/types/t_article",
+          "nullable": true
+        },
+        {
+          "name": "weightNotes",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_weightNote"
+          },
+          "nullable": false
+        },
+        {
+          "name": "loadingMeters",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "loadingAidType",
+          "kind": "object",
+          "type": "#/types/t_loadingAidType",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "shippingUnit",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "orderNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentItemStatus": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentStatus": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "roles",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "orderNr",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "resolver",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentTag": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "groupName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_shipmentTour": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tourId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "transport.tour",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource"
+        },
+        {
+          "name": "startDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        }
+      ]
+    },
+    "t_taskAction": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "title",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "startDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "globalActionId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "orderId",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "outOfTour",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_templateTime": {
+      "properties": [
+        {
+          "name": "absoluteTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "relativeTime",
+          "kind": "timeSpan",
+          "nullable": true
+        }
+      ]
+    },
+    "t_templateTimeMode": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Absolute",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "RelativeFromStart",
+          "value": 1,
+          "active": true
+        }
+      ]
+    },
+    "t_tractorUnitResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["TractorUnitResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_trailerResource": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "loadingSlots",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_resourceLoadingSlot"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isLoadable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["TrailerResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_weightNote": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "kind": "double",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        }
+      ]
+    },
+    "transport.delivery_attempt": {
+      "displayName": "Delivery Attempt",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_deliveryAttemptStatus",
+          "nullable": true
+        },
+        {
+          "name": "dateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "shipmentId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "transport.shipment",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        }
+      ]
+    },
+    "transport.resource": {
+      "displayName": "Resource",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "matchCode",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "loadingSlots",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedResource",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/transport.resource",
+            "snapshotOf": "transport.resource"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "planningOrderKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "variant": ["DriverResource"]
+              },
+              "targets": [
+                {
+                  "entity": "staff.employee",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "variant": ["TractorUnitResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "variant": ["TrailerResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "variant": ["CarResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "variant": ["ContainerResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "variant": ["EquipmentResource"]
+              },
+              "targets": [
+                {
+                  "entity": "fleet.vehicle",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "loadingSlots",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_resourceLoadingSlot"
+          },
+          "nullable": true,
+          "onlyFor": ["ContainerResource","TrailerResource"]
+        },
+        {
+          "name": "isLoadable",
+          "kind": "bool",
+          "nullable": true,
+          "onlyFor": ["ContainerResource","TrailerResource"]
+        }
+      ],
+      "discriminator": {
+        "element": "_t",
+        "form": "scalar"
+      },
+      "variants": [
+        {
+          "name": "CarResource",
+          "type": "#/types/t_carResource"
+        },
+        {
+          "name": "CarrierResource",
+          "type": "#/types/t_carrierResource"
+        },
+        {
+          "name": "ContainerResource",
+          "type": "#/types/t_containerResource"
+        },
+        {
+          "name": "DriverResource",
+          "type": "#/types/t_driverResource"
+        },
+        {
+          "name": "EquipmentResource",
+          "type": "#/types/t_equipmentResource"
+        },
+        {
+          "name": "TractorUnitResource",
+          "type": "#/types/t_tractorUnitResource"
+        },
+        {
+          "name": "TrailerResource",
+          "type": "#/types/t_trailerResource"
+        }
+      ]
+    },
+    "transport.shipment": {
+      "displayName": "Shipment",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "items",
+          "aliases": []
+        },
+        {
+          "path": "items.weightNotes",
+          "aliases": []
+        },
+        {
+          "path": "billingLines",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.references",
+          "aliases": []
+        },
+        {
+          "path": "documents",
+          "aliases": []
+        },
+        {
+          "path": "tags",
+          "aliases": []
+        },
+        {
+          "path": "tours",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "loadAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "deliveryAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "carrier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "freightPayer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "customer",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "recipientAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "invoiceRecipient",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "senderAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "supplier",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "loadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "loadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "loadingTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "deliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "plannedDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "calculatedDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveLoadStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveLoadEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveDeliveryStart",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "effectiveDeliveryEnd",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualStartDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualDeliveryStartDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "orderDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "shipmentNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryNoteNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "actualWeight",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "isTemplate",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "templateName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/t_shipmentStatus",
+          "nullable": true
+        },
+        {
+          "name": "transportOrder",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "billingLines",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLine"
+          },
+          "nullable": false
+        },
+        {
+          "name": "documents",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentDocument"
+          },
+          "nullable": false
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTag"
+          },
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "externalNotes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadWorkflow",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "deliveryWorkflow",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "tours",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTour"
+          },
+          "nullable": false
+        },
+        {
+          "name": "constructionSite",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "kind": "object",
+          "type": "#/types/t_shipmentDepartment",
+          "nullable": true
+        },
+        {
+          "name": "incoterm",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "tariff",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "carrierTariff",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "transport.shipment_template": {
+      "displayName": "Shipment Template",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "items",
+          "aliases": []
+        },
+        {
+          "path": "items.weightNotes",
+          "aliases": []
+        },
+        {
+          "path": "documents",
+          "aliases": []
+        },
+        {
+          "path": "tags",
+          "aliases": []
+        },
+        {
+          "path": "billingLines",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.references",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "templateName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shipmentNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "loadingTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "deliveryTimeType",
+          "kind": "enum",
+          "type": "#/types/t_loadingDateTimeType",
+          "nullable": false
+        },
+        {
+          "name": "timeMode",
+          "kind": "enum",
+          "type": "#/types/t_templateTimeMode",
+          "nullable": false
+        },
+        {
+          "name": "loadStart",
+          "kind": "object",
+          "type": "#/types/t_templateTime",
+          "nullable": true
+        },
+        {
+          "name": "orderDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "isShipmentConversionDisabled",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "documents",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentDocument"
+          },
+          "nullable": false
+        },
+        {
+          "name": "tags",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_shipmentTag"
+          },
+          "nullable": false
+        },
+        {
+          "name": "billingLines",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLine"
+          },
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "fleet.vehicle",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        }
+      ]
+    },
+    "transport.tour": {
+      "displayName": "Tour",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "number",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "actions",
+          "aliases": []
+        },
+        {
+          "path": "attachedResources",
+          "aliases": []
+        },
+        {
+          "path": "billingLines",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "billingLines.references",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "resource",
+          "kind": "object",
+          "type": "#/types/transport.resource",
+          "nullable": true,
+          "snapshotOf": "transport.resource"
+        },
+        {
+          "name": "startAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "endAddress",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": true
+        },
+        {
+          "name": "startDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "endDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualStartDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actualEndDateTime",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "actions",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_iTourAction"
+          },
+          "nullable": false
+        },
+        {
+          "name": "attachedResources",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_attachedResource"
+          },
+          "nullable": false
+        },
+        {
+          "name": "billingLines",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLine"
+          },
+          "nullable": false
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "financialPartner",
+          "kind": "object",
+          "type": "#/types/t_billableContact",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        }
+      ]
+    }
+  }
+}

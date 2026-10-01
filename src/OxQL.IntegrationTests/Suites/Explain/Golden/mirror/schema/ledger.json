@@ -1,0 +1,2149 @@
+{
+  "schemaVersion": "1.1",
+  "service": "ledger",
+  "api": {
+    "name": "ledger-api",
+    "version": "v1"
+  },
+  "revision": "sha256:3b0461412a3fe07d793c141cac0562c2e805400b5458abcbc61b7035ee0c363e",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200,
+    "maxOffset": 5000,
+    "maxResolveStages": 8,
+    "maxBatchQueries": 10,
+    "maxLookupLimit": 100,
+    "maxContinuedStages": 8,
+    "maxFlattenDepth": 5,
+    "maxReportPageSize": 5000
+  },
+  "types": {
+    "ledger.billing_line": {
+      "displayName": "Billing Line",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "references",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "financialPartner",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "date",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "deliveryDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "sourceText",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "singlePrice",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "isGross",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "references",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineReference"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isManualBillingLine",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "kind": "enum",
+          "type": "#/types/t_billingLineState",
+          "nullable": false
+        },
+        {
+          "name": "assignedTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "sourceBillingLineReference",
+          "kind": "object",
+          "type": "#/types/t_sourceBillingLineReference",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "ledger.transaction": {
+      "displayName": "Transaction",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "number",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "items",
+          "aliases": []
+        },
+        {
+          "path": "items.costCenters",
+          "aliases": []
+        },
+        {
+          "path": "items.costObjects",
+          "aliases": []
+        },
+        {
+          "path": "items.assignedTransactionItems",
+          "aliases": []
+        },
+        {
+          "path": "items.references",
+          "aliases": []
+        },
+        {
+          "path": "items.items",
+          "aliases": []
+        },
+        {
+          "path": "defaultCostCenters",
+          "aliases": []
+        },
+        {
+          "path": "defaultCostObjects",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionType",
+          "nullable": true
+        },
+        {
+          "name": "date",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "deliveryDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "termsOfPayment",
+          "kind": "object",
+          "type": "#/types/t_termsOfPayment",
+          "nullable": true
+        },
+        {
+          "name": "paymentMethod",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "currency",
+          "kind": "object",
+          "type": "#/types/t_currency",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "financialPartner",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "deliveryAddress",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "invoiceRecipient",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "payer",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "creator",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "responsible",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "representative",
+          "kind": "object",
+          "type": "#/types/t_transactionContact",
+          "nullable": true
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "convertState",
+          "kind": "enum",
+          "type": "#/types/t_convertState",
+          "nullable": false
+        },
+        {
+          "name": "alternativePaymentDeadline",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "balance",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "barcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "billToText",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "cashDiscountPercentValue",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "cashDiscountTotal",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "document",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "attachedDocuments",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "financialAccountingPeriod",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "period",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "states",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "manualVat",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "dueDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "referenceNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "taxGroup",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceTax",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "transactionYear",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "updateUser",
+          "kind": "object",
+          "type": "#/types/t_userReference",
+          "nullable": true
+        },
+        {
+          "name": "signedTotalPriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "signedTotalPriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "signedTotalPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "signedTotalPriceTax",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "taxKeyTotalPrices",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_taxKeyTotalPrice"
+          },
+          "nullable": false
+        },
+        {
+          "name": "sign",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "operationItemCombinationMode",
+          "kind": "enum",
+          "type": "#/types/t_operationItemCombinationMode",
+          "nullable": false
+        },
+        {
+          "name": "isGross",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "financialExportDisabled",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "validationResult",
+          "kind": "object",
+          "type": "#/types/t_validationResult",
+          "nullable": true
+        },
+        {
+          "name": "defaultCostCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "defaultCostObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "cashDiscountDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "staff.employee",
+            "field": "userId",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_articleTransactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "articleId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "inputPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "taxRate",
+          "kind": "object",
+          "type": "#/types/t_transactionTaxRate",
+          "nullable": true
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "singlePrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_basicDiscountSurchargeOperationItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "deltaValue",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "assignedTransactionItems",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "valueOperator",
+          "kind": "enum",
+          "type": "#/types/t_valueOperator",
+          "nullable": false
+        },
+        {
+          "name": "amount",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ],
+      "discriminator": {
+        "element": "_t",
+        "form": "scalar"
+      },
+      "variants": [
+        {
+          "name": "CashDiscountOperationItem",
+          "type": "#/types/t_cashDiscountOperationItem"
+        }
+      ],
+      "baseVariant": "BasicDiscountSurchargeOperationItem"
+    },
+    "t_billingLineReference": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "dataType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "referenceId",
+          "kind": "string",
+          "nullable": true,
+          "referenceCases": [
+            {
+              "when": {
+                "path": "dataType",
+                "equals": ["shipment"]
+              },
+              "keyAs": "guid",
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "field": "id"
+                }
+              ]
+            },
+            {
+              "when": {
+                "path": "dataType",
+                "equals": ["tour"]
+              },
+              "keyAs": "guid",
+              "targets": [
+                {
+                  "entity": "transport.tour",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "t_billingLineState": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Open",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Assigned",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "Invoiced",
+          "value": 2,
+          "active": true
+        }
+      ]
+    },
+    "t_billingLineTransactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "billingLineId",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "ledger.billing_line",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "priceUnit",
+          "kind": "object",
+          "type": "#/types/t_quantityUnit",
+          "nullable": true
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "references",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineReference"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isManualBillingLine",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "inputPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "taxRate",
+          "kind": "object",
+          "type": "#/types/t_transactionTaxRate",
+          "nullable": true
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "singlePrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_cashDiscountOperationItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "deltaValue",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "assignedTransactionItems",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "valueOperator",
+          "kind": "enum",
+          "type": "#/types/t_valueOperator",
+          "nullable": false
+        },
+        {
+          "name": "amount",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_convertState": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "NotConverted",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "PartiallyConverted",
+          "value": 1,
+          "active": true
+        },
+        {
+          "name": "QuantitiesConverted",
+          "value": 2,
+          "active": true
+        },
+        {
+          "name": "Converted",
+          "value": 3,
+          "active": true
+        }
+      ]
+    },
+    "t_costAssignment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "percentage",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_currency": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shortName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "symbol",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_generalLedgerAccount": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_generalLedgerAccountTransactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "generalLedgerAccount",
+          "kind": "object",
+          "type": "#/types/t_generalLedgerAccount",
+          "nullable": true
+        },
+        {
+          "name": "inputPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "taxRate",
+          "kind": "object",
+          "type": "#/types/t_transactionTaxRate",
+          "nullable": true
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": false
+        },
+        {
+          "name": "singlePrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceNet",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceGross",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "singlePriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "totalPriceVat",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_groupTransactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": false
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_operationItemCombinationMode": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "DeepestFirst",
+          "value": 0,
+          "active": true
+        }
+      ]
+    },
+    "t_quantity": {
+      "properties": [
+        {
+          "name": "value",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "unit",
+          "kind": "object",
+          "type": "#/types/t_quantityUnit",
+          "nullable": true
+        }
+      ]
+    },
+    "t_quantityUnit": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shortName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_sourceBillingLineReference": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "referenceCases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": ["logistics"]
+              },
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id"
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "t_taxKeyTotalPrice": {
+      "properties": [
+        {
+          "name": "taxKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_termsOfPayment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "cashDiscount",
+          "kind": "decimal",
+          "nullable": false
+        },
+        {
+          "name": "cashDiscountDays",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "paymentDeadlineDays",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "formattedText",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_textTransactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_transactionAddress": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "directory.contact",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_transactionContact": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "accountNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "taxGroupId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "vatId",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_transactionAddress",
+          "nullable": true
+        }
+      ]
+    },
+    "t_transactionItem": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "type",
+          "kind": "object",
+          "type": "#/types/t_transactionItemType",
+          "nullable": true
+        },
+        {
+          "name": "bookedFromTransactionId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.transaction",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "transactionItemCollectionId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "sortNumber",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "text",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "articleId",
+          "kind": "guid",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem"]
+        },
+        {
+          "name": "inputPrice",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "taxRate",
+          "kind": "object",
+          "type": "#/types/t_transactionTaxRate",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "costCenters",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "costObjects",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_costAssignment"
+          },
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "singlePrice",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "totalPrice",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "singlePriceNet",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "totalPriceNet",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "singlePriceGross",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "totalPriceGross",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "singlePriceVat",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "totalPriceVat",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "quantity",
+          "kind": "object",
+          "type": "#/types/t_quantity",
+          "nullable": true,
+          "onlyFor": ["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "deltaValue",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["BasicDiscountSurchargeOperationItem","CashDiscountOperationItem"]
+        },
+        {
+          "name": "assignedTransactionItems",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": true,
+          "onlyFor": ["BasicDiscountSurchargeOperationItem","CashDiscountOperationItem"]
+        },
+        {
+          "name": "valueOperator",
+          "kind": "enum",
+          "type": "#/types/t_valueOperator",
+          "nullable": true,
+          "onlyFor": ["BasicDiscountSurchargeOperationItem","CashDiscountOperationItem"]
+        },
+        {
+          "name": "amount",
+          "kind": "decimal",
+          "nullable": true,
+          "onlyFor": ["BasicDiscountSurchargeOperationItem","CashDiscountOperationItem"]
+        },
+        {
+          "name": "billingLineId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "ledger.billing_line",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          },
+          "onlyFor": ["BillingLineTransactionItem"]
+        },
+        {
+          "name": "priceUnit",
+          "kind": "object",
+          "type": "#/types/t_quantityUnit",
+          "nullable": true,
+          "onlyFor": ["BillingLineTransactionItem"]
+        },
+        {
+          "name": "reference",
+          "kind": "string",
+          "nullable": true,
+          "onlyFor": ["BillingLineTransactionItem"]
+        },
+        {
+          "name": "references",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_billingLineReference"
+          },
+          "nullable": true,
+          "onlyFor": ["BillingLineTransactionItem"]
+        },
+        {
+          "name": "isManualBillingLine",
+          "kind": "bool",
+          "nullable": true,
+          "onlyFor": ["BillingLineTransactionItem"]
+        },
+        {
+          "name": "generalLedgerAccount",
+          "kind": "object",
+          "type": "#/types/t_generalLedgerAccount",
+          "nullable": true,
+          "onlyFor": ["GeneralLedgerAccountTransactionItem"]
+        },
+        {
+          "name": "items",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_transactionItem"
+          },
+          "nullable": true,
+          "onlyFor": ["GroupTransactionItem"]
+        }
+      ],
+      "discriminator": {
+        "element": "_t",
+        "form": "scalar"
+      },
+      "variants": [
+        {
+          "name": "ArticleTransactionItem",
+          "type": "#/types/t_articleTransactionItem"
+        },
+        {
+          "name": "BasicDiscountSurchargeOperationItem",
+          "type": "#/types/t_basicDiscountSurchargeOperationItem"
+        },
+        {
+          "name": "BillingLineTransactionItem",
+          "type": "#/types/t_billingLineTransactionItem"
+        },
+        {
+          "name": "CashDiscountOperationItem",
+          "type": "#/types/t_cashDiscountOperationItem"
+        },
+        {
+          "name": "GeneralLedgerAccountTransactionItem",
+          "type": "#/types/t_generalLedgerAccountTransactionItem"
+        },
+        {
+          "name": "GroupTransactionItem",
+          "type": "#/types/t_groupTransactionItem"
+        },
+        {
+          "name": "TextTransactionItem",
+          "type": "#/types/t_textTransactionItem"
+        }
+      ],
+      "baseVariant": "TransactionItem"
+    },
+    "t_transactionItemType": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "deserializationType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hasPositionNumber",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "detailHtml",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "dataTemplate",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "articleGLAResolver",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_transactionTaxRate": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "rate",
+          "kind": "decimal",
+          "nullable": false
+        }
+      ]
+    },
+    "t_transactionType": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "reportName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "shortName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "functions",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "subtype",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_userReference": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_validationResult": {
+      "properties": [
+        {
+          "name": "inputFieldValidationResults",
+          "kind": "dictionary",
+          "value": {
+            "kind": "bool"
+          },
+          "nullable": false
+        },
+        {
+          "name": "errors",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "isValid",
+          "kind": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    "t_valueOperator": {
+      "kind": "enum",
+      "flags": false,
+      "values": [
+        {
+          "name": "Percentage",
+          "value": 0,
+          "active": true
+        },
+        {
+          "name": "Absolute",
+          "value": 1,
+          "active": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,246 @@
+{
+  "schemaVersion": "1.1",
+  "service": "directory",
+  "api": {
+    "name": "directory-api",
+    "version": "v1"
+  },
+  "revision": "sha256:05ddb7d84b53e6ca33362ca9fb95ac16d8299433388a5b8b4513b87c3cd159b7",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200,
+    "maxOffset": 5000,
+    "maxResolveStages": 8,
+    "maxBatchQueries": 10,
+    "maxLookupLimit": 100,
+    "maxContinuedStages": 8,
+    "maxFlattenDepth": 5,
+    "maxReportPageSize": 5000
+  },
+  "types": {
+    "directory.contact": {
+      "displayName": "Contact",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "matchCode",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "address",
+          "kind": "object",
+          "type": "#/types/t_contactAddress",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "functions",
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          },
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "primaryEmailAddress",
+          "kind": "object",
+          "type": "#/types/t_emailAddress",
+          "nullable": true
+        },
+        {
+          "name": "primaryPhoneNumber",
+          "kind": "object",
+          "type": "#/types/t_phoneNumber",
+          "nullable": true
+        },
+        {
+          "name": "emailAddresses",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_emailAddress"
+          },
+          "nullable": false
+        },
+        {
+          "name": "phoneNumbers",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_phoneNumber"
+          },
+          "nullable": false
+        },
+        {
+          "name": "externalReference",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        }
+      ]
+    },
+    "t_contactAddress": {
+      "properties": [
+        {
+          "name": "firstName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "lastName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "companyName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "street",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "houseNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "zipcode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "city",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "latitude",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "longitude",
+          "kind": "double",
+          "nullable": false
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "location",
+          "kind": "unknown",
+          "nullable": true
+        }
+      ]
+    },
+    "t_emailAddress": {
+      "properties": [
+        {
+          "name": "email",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_phoneNumber": {
+      "properties": [
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    }
+  }
+}

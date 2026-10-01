@@ -21,6 +21,13 @@ namespace OxQL.IntegrationTests.Suites.Explain;
 /// To re-record after an intended change of the answer, run the suite with <c>OXQL_RECORD_GOLDEN=1</c>;
 /// each case then writes its file instead of comparing, and the diff of the files is the change to
 /// review and explain.
+/// </para>
+/// <para>
+/// Beside the answers lies what a client needs to rebuild their types itself
+/// (<c>Golden/mirror</c>, recorded and compared the same way): the fleet's schema documents
+/// (<c>schema/&lt;service&gt;.json</c>), the answer with the types written out of a few cases
+/// (<c>types/&lt;id&gt;.json</c>; documents + default answer == this), and one answer of hosts that
+/// publish their documents' revisions, the revisions replaced by fixed ones (<c>revision/&lt;id&gt;.json</c>).
 /// <code>
 /// OXQL_RECORD_GOLDEN=1 dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Explain.ExplainGoldenTests"
 /// </code>
@@ -62,6 +69,73 @@ public class ExplainGoldenTests
         var files = Directory.EnumerateFiles(ExplainGolden.Directory(), "*.json").Select(Path.GetFileNameWithoutExtension).ToList();
 
         files.Should().BeEquivalentTo(ExplainGolden.Cases.Keys, "a golden answer without a case is never checked");
+
+        var mirrored = Directory.EnumerateFiles(ExplainGolden.MirrorPath(), "*.json", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(ExplainGolden.MirrorPath(), file).Replace(Path.DirectorySeparatorChar, '/')).ToList();
+
+        mirrored.Should().BeEquivalentTo(
+            [
+                .. LabService.All.Select(service => $"schema/{service.Key}.json"),
+                .. ExplainGolden.Tabled.Select(id => $"types/{id}.json"),
+                $"revision/{ExplainGolden.Revisions}.json",
+            ],
+            "a mirror file without a case is never checked");
+    }
+
+    public static TheoryData<string> Services => new(LabService.All.Select(service => service.Key));
+
+    /// <summary>The documents a client reads the types of the golden answers from: what each service of the fleet publishes.</summary>
+    [Theory]
+    [MemberData(nameof(Services))]
+    public async Task The_schema_document_of_a_service_equals_its_recorded_copy(string key)
+    {
+        var document = FleetSchemaDocument.Of(LabService.All.Single(service => service.Key == key));
+
+        await ExplainGolden.CompareAsync(ExplainGolden.MirrorPath("schema", key), ExplainGolden.Pretty(document) + "\n", $"the schema document of '{key}'");
+    }
+
+    public static TheoryData<string> TabledIds => new(ExplainGolden.Tabled);
+
+    /// <summary>
+    /// The same request with <c>include: "types"</c>: the answer a client rebuilds from the schema
+    /// documents and the golden answer (<see cref="ExplainByReferenceTests"/> proves it here).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(TabledIds))]
+    public async Task The_answer_with_the_types_written_out_equals_its_recorded_copy(string id)
+    {
+        var query = ExplainGolden.Cases[id]();
+        var request = new JsonObject { ["query"] = query.DeepClone(), ["include"] = new JsonArray("shape", "notes", "types") };
+        var client = await ReportScenarios.ClientAsync(query);
+        var answer = await client.ExplainHereAsync(request);
+
+        answer.Body?["flagSets"].Should().NotBeNull(answer.Text);
+
+        await ExplainGolden.CompareAsync(ExplainGolden.MirrorPath("types", id), ExplainGolden.Record(request, answer), $"the answer of '{id}' with the types written out");
+    }
+
+    /// <summary>
+    /// The golden hosts publish no revision, so the golden answers carry none. This one is answered by
+    /// hosts that do (in process, as a host of the base package), and keeps <c>revision</c> and each
+    /// type's <c>schemaRevision</c> with every service's revision replaced by a fixed one
+    /// (<see cref="ExplainGolden.FixedRevision"/>): the shape a client checks its documents against.
+    /// </summary>
+    [Fact]
+    public async Task The_answer_of_hosts_that_publish_revisions_equals_its_recorded_copy()
+    {
+        var request = ExplainGolden.RevisionsRequest();
+        var fleet = new ExplainShapeFleetTests.InProcessFleet();
+        var answer = JsonSerializer.SerializeToNode(await fleet.ExplainAsync(JsonSerializer.Deserialize<OxQL.Core.Engine.ExplainRequest>(request.ToJsonString(), OxQL.Core.Models.OxQLJson.Wire)!), OxQL.Core.Models.OxQLJson.Wire)!.AsObject();
+        var real = answer["revision"]!["schema"]!.AsObject().ToDictionary(pair => pair.Key, pair => pair.Value!.GetValue<string>());
+
+        real.Keys.Should().BeEquivalentTo(["fleet", "ledger", "transport"], "this host, its owner, and the owner that one asked");
+
+        foreach (var (service, revision) in real)
+            revision.Should().Be(FleetSchemaDocument.Of(LabService.All.Single(each => each.Key == service))["revision"]!.GetValue<string>(), $"the answer names the revision of {service}'s document");
+
+        var record = new JsonObject { ["request"] = request, ["status"] = 200, ["answer"] = ExplainGolden.WithFixedRevisions(answer, real) };
+
+        await ExplainGolden.CompareAsync(ExplainGolden.MirrorPath("revision", ExplainGolden.Revisions), ExplainGolden.Pretty(record) + "\n", "the answer of hosts that publish revisions");
     }
 }
 
@@ -148,6 +222,88 @@ internal static class ExplainGolden
           ]
         }
         """;
+
+    /// <summary>The cases whose answer with the types written out is recorded: a union without continued stages, the largest, and the example chain.</summary>
+    public static readonly IReadOnlyList<string> Tabled = ["A1", "A5", "EX1-source-chain"];
+
+    /// <summary>The id of the answer recorded with revisions.</summary>
+    public const string Revisions = "EX1-revisions";
+
+    /// <summary>The revision a recorded answer names for <paramref name="service"/> in place of its document's.</summary>
+    public static string FixedRevision(string service) => "sha256:fixed-" + service;
+
+    /// <summary>
+    /// The example chain up to the vehicle of the delivering tour (three services, one of them reached
+    /// through an owner), asked for the shapes only: small, and every revision an answer can name.
+    /// </summary>
+    public static JsonObject RevisionsRequest()
+    {
+        var query = JsonNode.Parse(ExampleChain)!.AsObject();
+        var pipeline = query["pipeline"]!.AsArray();
+
+        while (pipeline.Count > 7)
+            pipeline.RemoveAt(pipeline.Count - 1);
+
+        return new JsonObject { ["query"] = query, ["include"] = new JsonArray("shape") };
+    }
+
+    /// <summary>
+    /// The answer normalised but for its revisions, each service's replaced by its fixed one: in
+    /// <c>revision.schema</c> and in every type's <c>schemaRevision</c>.
+    /// </summary>
+    public static JsonNode WithFixedRevisions(JsonObject answer, IReadOnlyDictionary<string, string> real)
+    {
+        var revision = answer["revision"]!.DeepClone().AsObject();
+
+        foreach (var service in real.Keys)
+            revision["schema"]![service] = FixedRevision(service);
+
+        var stable = Normalise(answer.DeepClone()).AsObject();
+        var ordered = new JsonObject();
+
+        // The revision where the answer has it: after the engine.
+        foreach (var (name, value) in stable.ToList())
+        {
+            stable.Remove(name);
+            ordered[name] = value;
+
+            if (name == "engine")
+                ordered["revision"] = revision;
+        }
+
+        foreach (var (_, type) in ordered["types"]!.AsObject())
+            if (type is JsonObject named && named["schemaRevision"] is JsonValue written)
+            {
+                var service = named["service"]!.GetValue<string>();
+
+                written.GetValue<string>().Should().Be(real[service], "a type names its service's revision");
+                named["schemaRevision"] = FixedRevision(service);
+            }
+
+        return ordered;
+    }
+
+    /// <summary>The directory of what a client rebuilds the types from, or a file of it.</summary>
+    public static string MirrorPath(string? kind = null, string? id = null) =>
+        kind is null ? System.IO.Path.Combine(Directory(), "mirror") : System.IO.Path.Combine(Directory(), "mirror", kind, $"{id}.json");
+
+    /// <summary>Writes <paramref name="recorded"/> when recording, else asserts it is the file's content.</summary>
+    public static async Task CompareAsync(string path, string recorded, string what)
+    {
+        if (Recording)
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, recorded);
+            return;
+        }
+
+        File.Exists(path).Should().BeTrue($"{what} is recorded; record it with {RecordVariable}=1");
+
+        // A checkout that turns LF into CRLF changes nothing.
+        var golden = (await File.ReadAllTextAsync(path)).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        recorded.Should().Be(golden, $"{what} is its recorded copy; an intended change is re-recorded with {RecordVariable}=1 and explained");
+    }
 
     /// <summary>The directory the golden files live in, beside this file.</summary>
     public static string Directory([CallerFilePath] string source = "") => System.IO.Path.Combine(System.IO.Path.GetDirectoryName(source)!, "Golden");

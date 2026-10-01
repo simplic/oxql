@@ -1,0 +1,758 @@
+{
+  "schemaVersion": "1.1",
+  "service": "fleet",
+  "api": {
+    "name": "fleet-api",
+    "version": "v1"
+  },
+  "revision": "sha256:abe522dc9c1f182fb5571d22ea7bd18bd17273bc185ac58a93c319adb7076630",
+  "limits": {
+    "maxPageSize": 500,
+    "defaultPageSize": 100,
+    "maxPipelineStages": 20,
+    "maxLookupStages": 5,
+    "maxUnwindStages": 5,
+    "maxGroupFields": 20,
+    "maxProjectionFields": 500,
+    "regexMaxLength": 200,
+    "maxOffset": 5000,
+    "maxResolveStages": 8,
+    "maxBatchQueries": 10,
+    "maxLookupLimit": 100,
+    "maxContinuedStages": 8,
+    "maxFlattenDepth": 5,
+    "maxReportPageSize": 5000
+  },
+  "types": {
+    "fleet.department": {
+      "displayName": "Department",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "color",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "fleet.equipment": {
+      "displayName": "Equipment",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "name",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "number",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "equipmentType",
+          "kind": "object",
+          "type": "#/types/t_equipmentType",
+          "nullable": true
+        },
+        {
+          "name": "vehicle",
+          "kind": "object",
+          "type": "#/types/t_vehicleSubset",
+          "nullable": true
+        },
+        {
+          "name": "assignedShipmentId",
+          "kind": "guid",
+          "nullable": true,
+          "references": {
+            "entity": "transport.shipment",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "fleet.status": {
+      "displayName": "Vehicle Status",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "name",
+      "extendable": false,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hexColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "fleet.vehicle": {
+      "displayName": "Vehicle",
+      "entity": true,
+      "aliases": [],
+      "key": ["id"],
+      "display": "matchCode",
+      "extendable": true,
+      "queryable": true,
+      "notFilterable": [],
+      "notSortable": [],
+      "items": [
+        {
+          "path": "appointments",
+          "aliases": []
+        },
+        {
+          "path": "loadingSlots",
+          "aliases": []
+        }
+      ],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "location",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "kind": "object",
+          "type": "#/types/fleet.status",
+          "nullable": true,
+          "snapshotOf": "fleet.status"
+        },
+        {
+          "name": "mileage",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "mileageDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "operatingHours",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "fuelTankCapacity",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "dispositionSortingKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "yearOfManufacturing",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "registrationDocument",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleRegistration",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "additionalTechnicalData",
+          "kind": "object",
+          "type": "#/types/t_technicalData",
+          "nullable": true
+        },
+        {
+          "name": "registrationPlate",
+          "kind": "object",
+          "type": "#/types/t_registrationPlate",
+          "nullable": true
+        },
+        {
+          "name": "isSystemVehicle",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "phoneNumber",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "eMailAddress",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "addon",
+          "kind": "dictionary",
+          "value": {
+            "kind": "unknown"
+          },
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "kind": "object",
+          "type": "#/types/t_vehicleDepartment",
+          "nullable": true
+        },
+        {
+          "name": "registrationDocumentLocation",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "appointments",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_appointment"
+          },
+          "nullable": true
+        },
+        {
+          "name": "loadingSlots",
+          "kind": "array",
+          "of": {
+            "kind": "object",
+            "type": "#/types/t_loadingSlot"
+          },
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "usableUntil",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "qrCode",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "externalReference",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_appointment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "appointmentType",
+          "kind": "object",
+          "type": "#/types/t_appointmentType",
+          "nullable": true
+        },
+        {
+          "name": "lastDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "nextDate",
+          "kind": "dateTime",
+          "nullable": true
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "supplierGuid",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "lastValue",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "nextValue",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "checkType",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_appointmentType": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "isDeleted",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "interval",
+          "kind": "int",
+          "nullable": false
+        },
+        {
+          "name": "intervalType",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "createDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "updateDateTime",
+          "kind": "dateTime",
+          "nullable": false
+        },
+        {
+          "name": "createUserId",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "updateUserId",
+          "kind": "guid",
+          "nullable": true
+        },
+        {
+          "name": "createUserName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "updateUserName",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_equipmentType": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "displayKey",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_loadingSlot": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_registrationPlate": {
+      "properties": [
+        {
+          "name": "countryIso",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSeasonal",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "registrationIdentifier",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "remark",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_technicalData": {
+      "properties": [
+        {
+          "name": "emptyWeight",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "totalWeight",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "tireAmount",
+          "kind": "int",
+          "nullable": true
+        },
+        {
+          "name": "payload",
+          "kind": "decimal",
+          "nullable": true
+        },
+        {
+          "name": "rimSizeAxle1",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "rimSizeAxle2",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "rimSizeAxle3",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "frameColor",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "vehicleExecution",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "hasFixedSuperstructure",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "superstructureParkingSpaces",
+          "kind": "int",
+          "nullable": false
+        }
+      ]
+    },
+    "t_vehicleDepartment": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "fleet.department",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "name",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "isSelectable",
+          "kind": "bool",
+          "nullable": false
+        },
+        {
+          "name": "color",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    },
+    "t_vehicleSubset": {
+      "key": ["id"],
+      "properties": [
+        {
+          "name": "id",
+          "kind": "guid",
+          "nullable": false,
+          "references": {
+            "entity": "fleet.vehicle",
+            "field": "id",
+            "joinable": true,
+            "inferred": false
+          }
+        },
+        {
+          "name": "registrationPlate",
+          "kind": "string",
+          "nullable": true
+        },
+        {
+          "name": "matchCode",
+          "kind": "string",
+          "nullable": true
+        }
+      ]
+    }
+  }
+}

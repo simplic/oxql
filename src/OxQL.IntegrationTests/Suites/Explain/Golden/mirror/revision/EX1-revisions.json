@@ -1,0 +1,824 @@
+{
+  "request": {
+    "query": {
+      "entityType": "ledger.transaction",
+      "variables": {
+        "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+      },
+      "pipeline": [
+        {
+          "match": {
+            "id": {
+              "eq": {
+                "$var": "transactionId"
+              }
+            }
+          }
+        },
+        {
+          "unwind": {
+            "path": "items",
+            "flatten": "items",
+            "as": "item",
+            "includeIndex": "position"
+          }
+        },
+        {
+          "match": {
+            "item": {
+              "is": "BillingLineTransactionItem"
+            }
+          }
+        },
+        {
+          "resolve": {
+            "path": "item.billingLineId",
+            "as": "erpLine",
+            "onMissing": "report",
+            "select": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"]
+          }
+        },
+        {
+          "resolve": {
+            "path": "erpLine.sourceBillingLineReference.id",
+            "as": "sourceLine",
+            "onMissing": "report",
+            "select": ["id","totalPrice"],
+            "parentAs": "sourceParent"
+          }
+        },
+        {
+          "resolve": {
+            "path": "sourceParent.tours.tourId",
+            "as": "deliveringTour",
+            "forTarget": "transport.shipment",
+            "elements": "first",
+            "select": ["id","number","resource.id"]
+          }
+        },
+        {
+          "resolve": {
+            "path": "deliveringTour.resource.id",
+            "as": "shipmentVehicle",
+            "target": "fleet.vehicle",
+            "onMissing": "report",
+            "select": ["matchCode","registrationPlate.registrationIdentifier"]
+          }
+        }
+      ]
+    },
+    "include": ["shape"]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["batch","group.page","page.offset","any","unwind.keepPath","resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "revision": {
+      "schema": {
+        "fleet": "sha256:fixed-fleet",
+        "ledger": "sha256:fixed-ledger",
+        "transport": "sha256:fixed-transport"
+      },
+      "addons": null
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": ["fleet","transport"],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "rules": {}
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:ledger.transaction"
+          },
+          "rules": {}
+        }
+      },
+      {
+        "index": 1,
+        "kind": "unwind",
+        "status": "ok",
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
+        "creates": ["item","position"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"item","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 3,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "inline",
+          "phase": "beforePage",
+          "host": "ledger"
+        },
+        "reads": [
+          {"path":"item.billingLineId","use":"resolveKey"}
+        ],
+        "creates": ["erpLine"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4"
+          }
+        }
+      },
+      {
+        "index": 4,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "keyed-remote",
+          "phase": "afterPage",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"erpLine.sourceBillingLineReference.id","use":"resolveKey","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"caseCondition","alias":"erpLine"}
+        ],
+        "creates": ["sourceLine","sourceParent"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5"
+          }
+        }
+      },
+      {
+        "index": 5,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"sourceParent.tours.tourId","use":"resolveKey","alias":"sourceParent"}
+        ],
+        "creates": ["deliveringTour"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "deliveringTour": "r:5"
+          }
+        }
+      },
+      {
+        "index": 6,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"deliveringTour.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource","use":"caseCondition","alias":"deliveringTour"}
+        ],
+        "creates": ["shipmentVehicle"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "deliveringTour": "t:transport.tour",
+            "shipmentVehicle": "t:fleet.vehicle"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "deliveringTour": "r:5",
+            "shipmentVehicle": "r:5"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "item": {
+        "stage": 1,
+        "node": "element",
+        "entities": ["ledger.transaction"],
+        "source": "items",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "t:ledger.transaction#items"
+      },
+      "position": {
+        "stage": 1,
+        "node": "scalar",
+        "kind": "int",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "k:int"
+      },
+      "erpLine": {
+        "stage": 3,
+        "node": "entity",
+        "entities": ["ledger.billing_line"],
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": true,
+        "reference": {
+          "path": "item.billingLineId",
+          "cases": [
+            {
+              "targets": [
+                {
+                  "entity": "ledger.billing_line",
+                  "field": "id",
+                  "remote": false
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "values": ["not_found"]
+        },
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "shows": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
+        "hint": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
+        "targets": [
+          {
+            "target": "ledger.billing_line",
+            "service": "ledger",
+            "remote": false,
+            "type": "t:ledger.billing_line"
+          }
+        ],
+        "type": "t:ledger.billing_line"
+      },
+      "sourceLine": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment#billingLines","transport.tour#billingLines"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "reference": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "cases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": ["logistics"]
+              },
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "loads": ["id","totalPrice"],
+        "shows": ["id","totalPrice"],
+        "hint": ["id","totalPrice"],
+        "targets": [
+          {
+            "target": "transport.shipment#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [5,6],
+            "notApplicable": [],
+            "type": "t:transport.shipment#billingLines"
+          },
+          {
+            "target": "transport.tour#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [],
+            "notApplicable": [5,6],
+            "type": "t:transport.tour#billingLines"
+          }
+        ],
+        "type": "u:sourceLine"
+      },
+      "sourceParent": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment","transport.tour"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "loads": null,
+        "shows": null,
+        "hint": null,
+        "parentOf": "sourceLine",
+        "targets": [
+          {
+            "target": "transport.shipment",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.shipment"
+          },
+          {
+            "target": "transport.tour",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.tour"
+          }
+        ],
+        "type": "u:sourceParent"
+      },
+      "deliveringTour": {
+        "stage": 5,
+        "node": "remote",
+        "entities": ["transport.tour"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "sourceParent",
+          "target": "transport.shipment"
+        },
+        "loads": ["id","number","resource.id"],
+        "shows": ["id","number","resource.id"],
+        "hint": ["id","number","resource.id"],
+        "outcome": {
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "t:transport.tour"
+      },
+      "shipmentVehicle": {
+        "stage": 6,
+        "node": "remote",
+        "entities": ["fleet.vehicle"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "deliveringTour",
+          "target": "transport.shipment"
+        },
+        "loads": ["matchCode","registrationPlate.registrationIdentifier"],
+        "shows": ["matchCode","registrationPlate.registrationIdentifier"],
+        "hint": ["matchCode","registrationPlate.registrationIdentifier"],
+        "outcome": {
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "t:fleet.vehicle"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "service": "ledger",
+        "schemaRevision": "sha256:fixed-ledger"
+      },
+      "t:transport.shipment": {
+        "entity": "transport.shipment",
+        "service": "transport",
+        "schemaRevision": "sha256:fixed-transport"
+      },
+      "t:transport.tour": {
+        "entity": "transport.tour",
+        "service": "transport",
+        "schemaRevision": "sha256:fixed-transport"
+      },
+      "t:fleet.vehicle": {
+        "entity": "fleet.vehicle",
+        "service": "fleet",
+        "schemaRevision": "sha256:fixed-fleet"
+      },
+      "t:transport.shipment#billingLines": {
+        "entity": "transport.shipment",
+        "item": "billingLines",
+        "service": "transport",
+        "schemaRevision": "sha256:fixed-transport"
+      },
+      "t:transport.tour#billingLines": {
+        "entity": "transport.tour",
+        "item": "billingLines",
+        "service": "transport",
+        "schemaRevision": "sha256:fixed-transport"
+      },
+      "t:ledger.transaction#items": {
+        "entity": "ledger.transaction",
+        "item": "items",
+        "service": "ledger",
+        "schemaRevision": "sha256:fixed-ledger"
+      },
+      "t:ledger.billing_line": {
+        "entity": "ledger.billing_line",
+        "service": "ledger",
+        "schemaRevision": "sha256:fixed-ledger"
+      },
+      "u:sourceLine": {
+        "of": ["t:transport.shipment#billingLines","t:transport.tour#billingLines"]
+      },
+      "u:sourceParent": {
+        "of": ["t:transport.shipment","t:transport.tour"]
+      }
+    },
+    "rules": {
+      "r:1": {
+        "unwound": ["items"]
+      },
+      "r:2": {
+        "self": "42800"
+      },
+      "r:3": {
+        "self": "588ff"
+      },
+      "r:4": {
+        "self": "40800"
+      },
+      "r:5": {
+        "self": "40000",
+        "under": "owner"
+      }
+    },
+    "result": {
+      "paging": "offset",
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
+        {"path":"organizationId","kind":"guid","nullable":false,"root":"","present":"always"},
+        {"path":"isDeleted","kind":"bool","nullable":false,"root":"","present":"always"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"reference","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"type.id","kind":"guid","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.name","kind":"string","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.number","kind":"int","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.reportName","kind":"string","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.shortName","kind":"string","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.functions","kind":"array","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"type.subtype","kind":"string","nullable":true,"root":"type","present":"ifStored"},
+        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
+        {"path":"deliveryDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
+        {"path":"termsOfPayment.id","kind":"guid","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.number","kind":"int","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.name","kind":"string","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.cashDiscount","kind":"decimal","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.cashDiscountDays","kind":"int","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.paymentDeadlineDays","kind":"int","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"termsOfPayment.formattedText","kind":"string","nullable":true,"root":"termsOfPayment","present":"ifStored"},
+        {"path":"paymentMethod","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"currency.id","kind":"guid","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.organizationId","kind":"guid","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.isDeleted","kind":"bool","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.number","kind":"int","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.name","kind":"string","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.shortName","kind":"string","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.symbol","kind":"string","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.createDateTime","kind":"dateTime","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.updateDateTime","kind":"dateTime","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.createUserId","kind":"guid","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.updateUserId","kind":"guid","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.createUserName","kind":"string","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"currency.updateUserName","kind":"string","nullable":true,"root":"currency","present":"ifStored"},
+        {"path":"description","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"financialPartner.id","kind":"guid","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.accountNumber","kind":"string","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.companyName","kind":"string","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.firstName","kind":"string","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.lastName","kind":"string","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.taxGroupId","kind":"guid","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.vatId","kind":"string","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"financialPartner.address","kind":"object","nullable":true,"root":"financialPartner","present":"ifStored"},
+        {"path":"deliveryAddress.id","kind":"guid","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.accountNumber","kind":"string","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.companyName","kind":"string","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.firstName","kind":"string","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.lastName","kind":"string","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.taxGroupId","kind":"guid","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.vatId","kind":"string","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"deliveryAddress.address","kind":"object","nullable":true,"root":"deliveryAddress","present":"ifStored"},
+        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"payer.id","kind":"guid","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.accountNumber","kind":"string","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.companyName","kind":"string","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.firstName","kind":"string","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.lastName","kind":"string","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.taxGroupId","kind":"guid","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.vatId","kind":"string","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"payer.address","kind":"object","nullable":true,"root":"payer","present":"ifStored"},
+        {"path":"creator.id","kind":"guid","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.accountNumber","kind":"string","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.companyName","kind":"string","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.firstName","kind":"string","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.lastName","kind":"string","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.taxGroupId","kind":"guid","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.vatId","kind":"string","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"creator.address","kind":"object","nullable":true,"root":"creator","present":"ifStored"},
+        {"path":"responsible.id","kind":"guid","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.accountNumber","kind":"string","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.companyName","kind":"string","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.firstName","kind":"string","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.lastName","kind":"string","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.taxGroupId","kind":"guid","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.vatId","kind":"string","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"responsible.address","kind":"object","nullable":true,"root":"responsible","present":"ifStored"},
+        {"path":"representative.id","kind":"guid","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.accountNumber","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.companyName","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.firstName","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.lastName","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.taxGroupId","kind":"guid","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.vatId","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"representative.address","kind":"object","nullable":true,"root":"representative","present":"ifStored"},
+        {"path":"items.id","kind":"guid","nullable":false,"root":"items","present":"always"},
+        {"path":"items.type","kind":"object","nullable":true,"root":"items","present":"ifStored"},
+        {"path":"items.bookedFromTransactionId","kind":"guid","nullable":true,"root":"items","present":"ifStored"},
+        {"path":"items.transactionItemCollectionId","kind":"guid","nullable":true,"root":"items","present":"ifStored"},
+        {"path":"items.sortNumber","kind":"int","nullable":false,"root":"items","present":"always"},
+        {"path":"items.deserializationType","kind":"string","nullable":true,"root":"items","present":"ifStored"},
+        {"path":"items.text","kind":"string","nullable":true,"root":"items","present":"ifStored"},
+        {"path":"items.articleId","kind":"guid","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.inputPrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.taxRate","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.costCenters","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.costObjects","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.singlePrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.totalPrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.singlePriceNet","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.totalPriceNet","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.singlePriceGross","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.totalPriceGross","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.singlePriceVat","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.totalPriceVat","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.quantity","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.deltaValue","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.assignedTransactionItems","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.valueOperator","kind":"enum","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.amount","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.billingLineId","kind":"guid","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.priceUnit","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.reference","kind":"string","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.references","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.isManualBillingLine","kind":"bool","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.generalLedgerAccount","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"items.items","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
+        {"path":"convertState","kind":"enum","nullable":false,"root":"","present":"always"},
+        {"path":"alternativePaymentDeadline","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
+        {"path":"balance","kind":"decimal","nullable":true,"root":"","present":"ifStored"},
+        {"path":"barcode","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"billToText","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"cashDiscountPercentValue","kind":"decimal","nullable":true,"root":"","present":"ifStored"},
+        {"path":"cashDiscountTotal","kind":"decimal","nullable":true,"root":"","present":"ifStored"},
+        {"path":"document","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"attachedDocuments","kind":"array","nullable":false,"root":"","present":"always"},
+        {"path":"financialAccountingPeriod","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"period","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"states","kind":"array","nullable":false,"root":"","present":"always"},
+        {"path":"manualVat","kind":"decimal","nullable":true,"root":"","present":"ifStored"},
+        {"path":"notes","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"dueDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
+        {"path":"referenceNumber","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"taxGroup","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"totalPrice","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"totalPriceGross","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"totalPriceNet","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"totalPriceTax","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"transactionYear","kind":"int","nullable":false,"root":"","present":"always"},
+        {"path":"updateUser.id","kind":"guid","nullable":true,"root":"updateUser","present":"ifStored"},
+        {"path":"updateUser.name","kind":"string","nullable":true,"root":"updateUser","present":"ifStored"},
+        {"path":"signedTotalPriceNet","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"signedTotalPriceGross","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"signedTotalPrice","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"signedTotalPriceTax","kind":"decimal","nullable":false,"root":"","present":"always"},
+        {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always"},
+        {"path":"sign","kind":"int","nullable":false,"root":"","present":"always"},
+        {"path":"operationItemCombinationMode","kind":"enum","nullable":false,"root":"","present":"always"},
+        {"path":"isGross","kind":"bool","nullable":false,"root":"","present":"always"},
+        {"path":"financialExportDisabled","kind":"bool","nullable":false,"root":"","present":"always"},
+        {"path":"validationResult.inputFieldValidationResults","kind":"dictionary","nullable":true,"root":"validationResult","present":"ifStored"},
+        {"path":"validationResult.errors","kind":"array","nullable":true,"root":"validationResult","present":"ifStored"},
+        {"path":"validationResult.isValid","kind":"bool","nullable":true,"root":"validationResult","present":"ifStored"},
+        {"path":"defaultCostCenters","kind":"array","nullable":false,"root":"","present":"always"},
+        {"path":"defaultCostObjects","kind":"array","nullable":false,"root":"","present":"always"},
+        {"path":"cashDiscountDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
+        {"path":"createDateTime","kind":"dateTime","nullable":false,"root":"","present":"always"},
+        {"path":"updateDateTime","kind":"dateTime","nullable":false,"root":"","present":"always"},
+        {"path":"createUserId","kind":"guid","nullable":false,"root":"","present":"always"},
+        {"path":"updateUserId","kind":"guid","nullable":true,"root":"","present":"ifStored"},
+        {"path":"createUserName","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"updateUserName","kind":"string","nullable":true,"root":"","present":"ifStored"},
+        {"path":"item.id","kind":"guid","nullable":false,"stage":1,"root":"item","present":"always"},
+        {"path":"item.type","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifStored"},
+        {"path":"item.bookedFromTransactionId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifStored"},
+        {"path":"item.transactionItemCollectionId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifStored"},
+        {"path":"item.sortNumber","kind":"int","nullable":false,"stage":1,"root":"item","present":"always"},
+        {"path":"item.deserializationType","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored"},
+        {"path":"item.articleId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.inputPrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.taxRate","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.costCenters","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.costObjects","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.singlePrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.totalPrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.singlePriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.singlePriceGross","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.totalPriceGross","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.singlePriceVat","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.totalPriceVat","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.quantity","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.deltaValue","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.assignedTransactionItems","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.valueOperator","kind":"enum","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.amount","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.billingLineId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.priceUnit","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.reference","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.references","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.isManualBillingLine","kind":"bool","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.generalLedgerAccount","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"item.items","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
+        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
+        {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
+        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
+        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
+        {"path":"sourceParent","kind":"object","nullable":true,"stage":4,"root":"sourceParent","present":"always"},
+        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
+        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
+        {"path":"deliveringTour.resource.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
+        {"path":"shipmentVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
+        {"path":"shipmentVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"}
+      ]
+    },
+    "owners": [
+      {
+        "service": "transport",
+        "remote": true,
+        "route": {
+          "apiName": "transport-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      },
+      {
+        "service": "fleet",
+        "remote": true,
+        "via": "transport",
+        "route": {
+          "apiName": "fleet-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      }
+    ],
+    "catalog": []
+  }
+}

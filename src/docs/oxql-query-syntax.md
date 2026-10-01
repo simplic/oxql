@@ -178,15 +178,24 @@ current entity.
     "from": "logistics.shipment_document",   // the child entity id (local to this host)
     "path": "shipmentId",                     // the child's member declared to reference this entity
     "as": "documents",                        // alias: an array of the child entity
-    "select": ["id", "name", "createdAt"],   // optional wire paths on the child; id is always kept
+    "select": ["id", "name", "createdAt"],   // optional hint: what a whole alias shows (see below); id is always kept
     "filter": { "isDeleted": { "eq": false } },  // optional condition on the child
     "limit": 20                               // optional, at most Limits:MaxLookupLimit
 } }
 ```
 
 The child must declare the reference (`LOOKUP_NOT_DECLARED`) and is scoped to the caller's
-organisation inside the sub-pipeline. Any other member (`localPath`, `foreignPath`, `convert`) is
-`UNKNOWN_STAGE_MEMBER`.
+organisation inside the sub-pipeline. Any other member (`localPath`, `foreignPath`, `convert`,
+`parentSelect`) is `UNKNOWN_STAGE_MEMBER`.
+
+**`select` is a hint, not a bound.** A join loads what the query reads: its key, every path a later
+stage reads under its alias, and what the row shows under it. Every member of the child can be read
+under the alias; nobody lists in advance what later stages need. `select` says only what the alias
+shows when the row keeps it **whole** (no projection, or `"documents": 1`): these paths and the key;
+without `select`, the child's key and display members. A projection that names paths under the
+alias (`"documents.name": 1`) decides alone: the alias shows exactly those paths, whatever `select`
+names. A `select` path the child does not have is `UNKNOWN_PATH`. What joins load is in
+[`oxql-semantics.md`](oxql-semantics.md#what-a-join-loads).
 
 2.1 adds four members:
 
@@ -221,18 +230,19 @@ it names, one object under the alias, `null` when the target does not exist or f
 { "resolve": {
     "path": "vehicleId",
     "as": "vehicle",
-    "select": ["id", "matchCode", "name"],    // optional; default: the target's key and display members
+    "select": ["id", "matchCode", "name"],    // optional hint: what a whole alias shows; default: the target's key and display members
     "filter": { "isDeleted": { "eq": false } }  // optional condition on the target, executed by its owner
 } }
 ```
 
 `path` must carry a declared reference (`RESOLVE_NOT_DECLARED`, whose message names the path's
-kind). Under a join alias, a reference whose cases test a sibling (`type`) needs that sibling in the
-join's `select` as well: without it the error is the join's `UNKNOWN_PATH` "not in the select of",
-naming the member to add. A join compares its id exactly, whatever the id's kind: a string id never folds. At most
+kind). `select` is the same hint as a lookup's: it says what the alias shows kept whole, never what
+may be read under it. Under a join alias, a reference whose cases test a sibling (`type`) reads that
+sibling; the join that holds the reference loads it with the reference, and explain lists the read
+(`use: "caseCondition"`). A join compares its id exactly, whatever the id's kind: a string id never folds. At most
 `MaxResolveStages` (8) resolve stages run on this host; stages continued at an owner count there.
 
-2.1 adds six members for references that are typed, point at items, convert their key or sit in a
+Five more members serve references that are typed, point at items, convert their key or sit in a
 collection (how such references are declared: [`oxql-semantics.md`](oxql-semantics.md#references)):
 
 ```jsonc
@@ -242,7 +252,6 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
     "select": ["id", "status", "quantity.value"],
     "target": "transport.shipment",                  // only this target of a typed reference
     "parentAs": "sourceParent",                      // the row that owns the item target
-    "parentSelect": ["shipmentNumber", "number"],
     "onMissing": "report"
 } }
 { "resolve": { "path": "references.referenceId", "as": "shipment", "elements": "first" } }
@@ -252,15 +261,16 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
 |---|---|---|---|
 | `elements` | `"first"`, `"all"` | none | required when `path` crosses one collection that is not unwound. `first`: the first element, in stored order, whose case is selected and whose key resolves. `all`: an array of every resolved target, at most `MaxLookupLimit` per row (then `RESOLVE_TRUNCATED`). On a path holding one value per row: `OPTION_NOT_APPLICABLE` |
 | `target` | an entity id | none | narrows a typed reference to that target; not a target of any case: `RESOLVE_TARGET_NOT_DECLARED`, whose message lists the targets |
-| `parentAs` | an alias | none | for item targets: the row owning the item, as `{ "entity": "<entity id>", <parentSelect paths> }`. On a reference with an entity target: `RESOLVE_PARENT_NOT_ITEM`; equal to `as`: `ALIAS_COLLISION` |
-| `parentSelect` | flat paths | the owner's key and display members | members of the owning row; without `parentAs`: `OPTION_NOT_APPLICABLE` |
+| `parentAs` | an alias | none | for item targets: the row owning the item, as `{ "entity": "<entity id>", <members> }`: kept whole, the owner's key and display members; under a projection that names paths below it (`"sourceParent.shipmentNumber": 1`), `entity` and those paths. On a reference with an entity target: `RESOLVE_PARENT_NOT_ITEM`; equal to `as`: `ALIAS_COLLISION` |
 | `onMissing` | `"null"`, `"report"`, `"refuse"` | `"null"`, `"refuse"` under `strict` | what a reference that resolves to nothing does: stay `null` silently, stay `null` with a `RESOLVE_MISSING` diagnostic, or refuse (422) |
 | `forTarget` | an entity id | none | only on a continued stage (see *Continued stages*); elsewhere `OPTION_NOT_APPLICABLE` |
 
-`select` is flat; on a reference with several targets a `select` or `parentSelect` path some target
-lacks is dropped for that target (explain note `SELECT_PATH_NOT_ON_TARGET`) and refused
-(`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the six members with
-`LEGACY_STAGE_UNSUPPORTED`.
+There is no `parentSelect`: the owning row shows what the projection names under `parentAs`
+(`UNKNOWN_STAGE_MEMBER` when written). The paths under an alias are flat; on a reference with several
+targets a path some target lacks (in `select`, or projected under the alias or its `parentAs`) is
+dropped for that target (note `SELECT_PATH_NOT_ON_TARGET`), its member is absent on that target's
+rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the five
+members with `LEGACY_STAGE_UNSUPPORTED`.
 
 **The collection guard.** A `path` under a collection that is not unwound names one key per element.
 Without `elements` it is `RESOLVE_ON_COLLECTION` ("unwind it first, or set 'elements' to 'first' or
@@ -310,9 +320,12 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
 - Only `resolve` and `lookup` continue. An `unwind` of a path under R, a `group` key under R, and a
   continued stage under an `elements: "all"` alias are `NOT_CONTINUABLE`; a `sort` under R stays
   `RESOLVE_NOT_SORTABLE` and a `match` under R `RESOLVE_NOT_FILTERABLE` (except the semi-join of a
-  plain remote resolve). Aggregation over chain data belongs in the report. A `project` path under
-  R narrows what R's owner is asked for; a projection that keeps a continued alias but drops R (and
-  R's `parentAs`) is `NOT_CONTINUABLE`.
+  plain remote resolve). Aggregation over chain data belongs in the report. The `project` paths under
+  R are what R's owner is asked for, and those under a continued alias travel to the owner as paths;
+  the owner binds the continued stage and infers what its join loads, the member that picks a
+  reference's case included. A path under a continued alias that its target lacks is `UNKNOWN_PATH`
+  at the projection. A projection that keeps a continued alias but drops R (and R's `parentAs`) is
+  `NOT_CONTINUABLE`.
 - At most `MaxContinuedStages` (8) stages continue under one alias
   (`MAX_CONTINUED_STAGES_EXCEEDED`). Continued stages do not count toward this host's
   `MaxResolveStages` or `MaxLookupStages`; the owner applies its own.
@@ -411,6 +424,16 @@ explicitly; at most `MaxProjectionFields` paths. The reserved key `"$default": 1
 entity's key and display members; it applies to the entity's own shape, not after a `group` or
 `unwind`. How projections interact with join aliases, sorts and cursors:
 [`oxql-semantics.md`](oxql-semantics.md#projections).
+
+**The projection alone decides the row's shape.** Under a join alias it names the paths the alias
+shows (`"vehicle.registrationPlate": 1`): exactly those, without the key unless it names it, and the
+join loads them. What a stage only reads (a `match` on `vehicle.status`, the key of a later
+`resolve`, the member a `lookup` joins on) is loaded and never shown.
+
+**Without a `project`** the row is the whole entity row, and each join alias shows its `select` hint
+with the key, else the target's key and display members: the same as an alias a projection names
+whole (`"vehicle": 1`). To see another member of a join, name it in a projection; a projection then
+lists the entity's own members to keep as well.
 
 ## Stage: `sort`
 

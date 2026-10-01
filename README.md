@@ -337,6 +337,14 @@ operator notice:
   `lookup.remote`); `unwind.keepPath: false` takes the unwound collection out of the row (capability
   `unwind.keepPath`). A caller gates on the capability before sending either.
 
+- **Joins load what the query reads.** `select` on a `lookup` or `resolve` is a hint, never a bound:
+  it says what the alias shows when the row keeps it whole (with the key; without it, key and
+  display). Every member of the target can be read under the alias, and the join loads its key, what
+  later stages read and what the row shows; what is only read is not in the row. A projection that
+  names paths under an alias decides alone what the alias shows, the key included. `parentSelect` is
+  gone (`UNKNOWN_STAGE_MEMBER`): project the paths under `parentAs` instead. Explain answers what
+  each stage reads (`stages[].reads`) and what each join loads and shows (`aliases.X.loads`,
+  `shows`, `hint`). Contract 1 is unchanged: a join fetches its `select`.
 - **Explain.** `OxQL:Explain:Enabled` defaults to `true`; set it to `false` to keep the route off.
   Explain never executes a query (2.0 ran the server's `executionStats` explain for a pipeline with
   a `$lookup`), a query that does not bind is answered 200 with `valid: false` and every error
@@ -387,7 +395,7 @@ operator notice:
   owners: the plain match with two rows per key); an inline resolve onto a non-key field is flagged
   `ambiguous` in the aggregate; an inline resolve with a `filter` stays inline under `strict` (it was
   keyed, which changed what bound). A strict request refuses a lookup or `flatten` cut that a later
-  match hides. A path under a join alias beyond its `select` is `UNKNOWN_PATH`. The stage index in
+  match hides. A join loads what the query reads under its alias (see below). The stage index in
   every diagnostic is the caller's, also after a stage that binds to nothing (an empty `match`).
 - **Batches.** A batch's `maxTimeMs` bounds the whole batch, not each query; the keyed fetch sends
   it a tenth (at most 250 ms) below its own wait. A batch member other than `queries` and

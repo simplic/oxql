@@ -167,7 +167,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxResolveStages` | 8 (2 before 2.1) | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
 | `Limits:MaxGroupFields` | 20 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` | yes | — |
-| `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | a remote `select` becomes the owner's projection and is checked against the owner's value |
+| `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias, else its `select` hint) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
 | `Limits:MaxOffset` | 5 000 | binder, `page.offset`; not an offset cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
@@ -215,7 +215,7 @@ Fixed bounds, not configurable:
 | listed indexes for the explain advisory | cached 60 s per collection | — |
 | owner answers to explain's remote check and forwarded catalog entries | cached 30 s, at most 1 000 entries, failures not kept | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
-| select-path retry rounds for a remote union target | 2 per request | — |
+| ask-again rounds for a remote union target without the paths it lacks | 2 per request | — |
 | JSON nesting of request and answer bodies | 256 (MVC's default is 32; explain answers of flattening and chain queries nest deeper) | — |
 
 ## `GET /oxql/health`
@@ -302,14 +302,17 @@ service's engine answered.
   "entry": { "shape": { "paging": "cursor", "grouped": false, "unwound": [], "projection": null,
                         "roots": { "": "t:ledger.transaction" }, "flags": {} } },
   "stages": [
-    { "index": 1, "kind": "unwind", "status": "ok", "placement": null, "reads": [],
+    { "index": 1, "kind": "unwind", "status": "ok", "placement": null,
+      "reads": [ { "path": "items", "use": "unwind" } ],
       "creates": ["item", "position"],
       "shape": { "paging": "offset", "grouped": false, "unwound": ["items"], "projection": null,
                  "roots": { "": "t:ledger.transaction", "item": "t:ledger.transaction#items", "position": "k:int" },
                  "flags": { "": "o:1", "item": "o:2", "position": "o:3" } } },
     { "index": 4, "kind": "resolve", "status": "ok",
       "placement": { "executor": "keyed-remote", "phase": "afterPage", "host": "transport", "owner": 0 },
-      "reads": [], "creates": ["sourceLine", "sourceParent"],
+      "reads": [ { "path": "erpLine.sourceBillingLineReference.id", "use": "resolveKey", "alias": "erpLine" },
+                 { "path": "erpLine.sourceBillingLineReference.type", "use": "caseCondition", "alias": "erpLine" } ],
+      "creates": ["sourceLine", "sourceParent"],
       "shape": { "…": "…", "roots": { "…": "…", "sourceLine": "u:sourceLine", "sourceParent": "u:sourceParent" },
                  "flags": { "…": "…", "sourceLine": "o:5", "sourceParent": "o:6" } } }
   ],
@@ -317,6 +320,7 @@ service's engine answered.
     "sourceLine": {
       "stage": 4, "node": "remote", "entities": ["transport.shipment#billingLines", "transport.tour#billingLines"],
       "heldBy": "transport", "complete": true, "lookupOn": true, "type": "u:sourceLine",
+      "loads": ["totalPrice"], "shows": ["totalPrice"], "hint": null,   // the projection names sourceLine.totalPrice
       "reference": { "path": "erpLine.sourceBillingLineReference.id",
                      "cases": [ { "when": { "path": "type", "equals": ["logistics"] }, "keyAs": null,
                                   "targets": [ { "entity": "transport.shipment", "item": "billingLines", "field": "id", "remote": true },
@@ -382,8 +386,19 @@ service's engine answered.
   `executor` (`inline`, `keyed-local`, `keyed-remote`, `continued`), `phase` (`beforePage`,
   `afterPage`, `owner`), `host` (the service whose engine runs the stage) and `owner` (the index of
   its owner in `owners`); `creates`, the names of the aliases it adds; `shape`, the row after the
-  stage; `reads`, which is empty until the engine infers what a join loads. The row before stage `i`
+  stage; `reads`, what the stage reads off the row (below). The row before stage `i`
   is `stages[i-1].shape`, and `entry.shape` before the first.
+- **`reads`**, per stage, is the binder's read ledger: `{ path, use, alias? }` each, in the order
+  bound. `path` is the path as the row has it (an `any`'s inner path under its collection). `use` is
+  one of `match`, `sort`, `project`, `unwind`, `groupKey`, `aggregate`, `resolveKey` (the reference a
+  resolve follows), `caseCondition` (the sibling member, or the object whose variant, that picks a
+  reference's case: the read a caller cannot see in the query) and `lookupOn` (the parent key a
+  lookup joins on). `alias` is the join whose rows hold the path and which therefore loads it (a
+  path under an unwound copy or an element of a lookup names the lookup); it is absent for a path
+  of the entity row. A join's own `select`, `filter` and `sort` are bound against its target and
+  are no reads of the row, and neither is a path an exclusion names. A stage continued at an owner
+  carries the reads its owner answered, in this host's paths, since only the owner binds it.
+  "Why is this member loaded" is every read whose `alias` is the join's.
 - **`shape`**: `paging` (`cursor` while every row is one entity row, `offset` after an unwind or
   group), `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection), `roots`
   (each root the row carries, `""` the entity itself, pointing to its type: `t:<entity>[#item]`,
@@ -402,7 +417,14 @@ service's engine answered.
   owner), `outcome` (`{ as, values }`: the data-loss outcomes the join may have; `as` is null until
   a stage names the row member that carries the outcome), `droppedAt` (the stage whose projection
   took it out of the row) and `becomes` (a later stage holds it differently: an unwound lookup
-  alias).
+  alias). A join's alias (a resolve's or lookup's `as`, a `parentAs`, an alias a continued stage adds)
+  also says what the join loads: `loads` (the paths fetched under the alias, in ordinal order: for a
+  join in the aggregate its key, what stages read and its output set; for a join after the page what
+  its owner is asked for beside the member it is matched by), `shows` (the output set: what the row
+  carries under the alias, empty when the row does not carry it) and `hint` (the `select` as written,
+  or `null`). `loads` and `shows` are `null` for an alias of an owner's rows kept whole without a
+  hint: the owner's own key and display members. For an alias a continued stage adds, the three are
+  its owner's answer, absent when the owner did not answer.
 - **`types`**, each member described once. `t:<entity>[#item]` is a concrete type: `entity`, `item`,
   `variants` (the names `is` accepts), `onlyFor` (the distinct variant sets its rows point to),
   `members` and `truncated`. A member row is
@@ -432,8 +454,9 @@ service's engine answered.
   `none`). Its id is the flags themselves (a hexadecimal number), the same at every engine. An
   override set (`o:n`) is one root's differences at one shape: `""` is the root itself, a path is a
   member that differs, `"~"` maps a member's own flags to what it has here, `"*"` is what every
-  member not named has, and `null` means the member is not in the row (a projection removed it, the
-  join's select did not fetch it). A reader takes the member's own entry, else the `"~"` entry of
+  member not named has, and `null` means the member is not in the row (a projection removed it; under
+  contract 1, the join's select did not fetch it). Under contract 2 every member of a join's target
+  is in the row to read. A reader takes the member's own entry, else the `"~"` entry of
   its own flags, else `"*"`, else its own flags. Every flag is the binder's own answer for that path
   at that point (`Shape.Resolve`).
 - **`result`**: `columns`, the final shape's visible members and roots, each with `path`, `kind`,
@@ -585,10 +608,11 @@ owning service, owners in parallel:
 - **Owner faults.** An owner error coded `INTERNAL_ERROR` (and the title of an `internal_error`
   envelope) reaches the caller with a fixed text, whatever the owner's `IncludeErrorDetails`; the
   detail stays in the owner's log.
-- **Union select paths.** A select path an owner says one target of a union lacks is dropped for
-  that target and the query asked again, for every chunk that carried it; what was learned is kept
-  in the cache per organisation, service and plan, so later requests do not send it and still
-  report it.
+- **Union paths.** A path asked under an alias that an owner says one target of a union lacks is
+  dropped for that target and the query asked again, for every chunk that carried it; what was
+  learned is kept in the cache per organisation, service and target, since it is a fact about the
+  target: a later request that asks the path does not send it and still reports it, whatever else
+  it asks.
 - **An owner answer with `hasNextPage`** means the owner cut rows: the chunk's open keys are
   `owner_unanswered` (`RESOLVE_PARTIAL`), never `not_found`, and are not cached.
 - **Time.** See `Execution:ResolveTimeoutMs` and `ChainTimeoutMs` under *Limits*. Split batches of
@@ -608,8 +632,9 @@ owning service, owners in parallel:
 **The owner-fetch cache** holds, per mode, the owner's answers for `Cache:ResolveTtlSeconds` (60 s),
 at most `Cache:OwnerFetchCacheMaxEntries` rows or ids (an answer weighs the rows it holds). A by-keys entry is keyed by target entity,
 item, target field, organisation, key and a hash of the substituted owner query without its keys
-(select, filter, parent select, continued stages, case), so requests that differ in any of these, or
-in their variables, never share an entry. A key the owner answered as not found is kept for
+(the paths asked, filter, continued stages, case), so requests that differ in any of these, or
+in their variables, never share an entry. The paths of the projection are hashed as a set, in ordinal
+order: two requests that name the same paths under an alias in another order share their entries. A key the owner answered as not found is kept for
 `Cache:NegativeResolveTtlSeconds` (10 s); a strict request reads past such entries. An answer that
 carried owner diagnostics for continued stages, and keys of a cut answer, are not cached. The
 semi-join's ids are keyed by organisation and the first-page owner query.

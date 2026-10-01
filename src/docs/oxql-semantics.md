@@ -231,9 +231,8 @@ with no index but `_id`. What changes with the collation is which indexes the se
   strict request also refuses a cut that a later match hides by filtering the cut parent out (a
   second read of the rows up to the lookup, `params.filtered: true`); the same holds for a
   `flatten` cut at its depth.
-- A join fetches only its `select` (the key always): a path under its alias beyond the select is
-  `UNKNOWN_PATH` wherever it is read, and a `lookup` `on` an alias that did not fetch the member it
-  joins on is refused the same way.
+- A join loads what is read under its alias (see *What a join loads*): every member of its target can
+  be filtered, sorted, grouped, projected or joined on, whatever the join's `select` names.
 - `strict` and `onMissing` change what is refused, never what binds: an inline resolve with a
   `filter` stays inline, and the aggregate tells a record the filter excluded from a missing one. An
   inline resolve onto a target field that is not the key joins two records when its outcomes are
@@ -283,9 +282,10 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
   at all: a remote owner is not called for it. An alias a stage writes after the projection is
   in the row.
 - A projection may name a member below a join alias (`"vehicle.matchCode": 1`); the join then
-  stays before the projection and the alias carries the named members only. Under a keyed or remote
-  alias the named members narrow what the owner is asked for; a projection that keeps an alias
-  continued under it but drops the alias itself is `NOT_CONTINUABLE`.
+  stays before the projection and the alias carries the named members only, without its key unless
+  the projection names it. Under a keyed or remote alias the named members are what the owner is
+  asked for; a projection that keeps an alias continued under it but drops the alias itself is
+  `NOT_CONTINUABLE`.
 - The sort fields, the entity key and the key a remote `resolve` or a late join reads survive
   every projection in storage and are dropped from the row when not asked for, so projecting
   them away never changes the rows, the cursor or the join.
@@ -295,11 +295,47 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
   keeps the join where it was written; one that drops it drops the join (see above). The rows are the same either way; explain shows the
   order the server runs.
 - The reserved key `$default` in an inclusion projection stands for the entity's key and display
-  members, the pair a `resolve` without `select` keeps; it is `UNKNOWN_PATH` after a `group` or an
-  `unwind`. A remote `resolve` without `select` sends it to the owner, so a remote default is the
-  same pair.
+  members, the pair a whole alias of a `resolve` without `select` shows; it is `UNKNOWN_PATH` after a
+  `group` or an `unwind`. A remote `resolve` kept whole without `select` sends it to the owner, so a
+  remote default is the same pair.
 - Every value in a projection that is not the number `0` includes the path; a nested object is
   read as dotted paths (`{ "address": { "city": 1 } }` is `address.city`).
+
+## What a join loads
+
+Nobody tells a join what to load. Once every stage is bound, the engine knows every path the query
+reads (each is a literal path; a variable only ever stands for a value) and infers per join:
+
+**load set = its key + what later stages read under its alias + its output set.**
+
+- **The output set** is what the row shows under the alias. Where the last projection names paths
+  under the alias, it is exactly those paths. Where the row keeps the alias whole (no projection, or
+  the projection names the alias itself), it is the `select` hint with the key, or without a hint
+  the target's key and display members. An alias the row does not carry shows nothing.
+- **What is only read is not shown.** A `match`, `sort`, `group` key or aggregate under the alias, the
+  key of a later `resolve`, the member a `lookup` joins `on`, the sibling or variant that picks a
+  reference's case: each is loaded for the stage that reads it and cut from the row. The row's shape
+  depends on the projection alone, never on what the query happened to read.
+- **A join in the aggregate** (`lookup`, an inline `resolve`) projects the load set inside its
+  `$lookup`; an unwound copy of a lookup alias and an element of one of its collections load through
+  the lookup. **A join after the page** (keyed or remote) is read by nothing but the projection, so
+  its owner is asked for the output set: the paths, or nothing, which the owner query spells as the
+  owner's own key and display (`$default`). The key the owner query carries to match the rows by is
+  not shown unless the projection names it; an owning row (`parentAs`) always carries `entity`.
+- **`select` is a hint.** It shapes a whole alias and nothing else: it bounds no read, and under a
+  projection that names paths below the alias it is neither shown nor loaded. A hint path the target
+  does not have is `UNKNOWN_PATH`, since it is a typo and not a load.
+- **At an owner.** A stage continued at an owner travels as written, without an inferred `select`;
+  the owner binds it and infers its join the same way, the case member included. The paths the
+  caller projects under a continued alias travel as paths, never as the alias itself.
+- **Unions.** The paths under an alias with several targets are flat. Each target's owner is asked
+  for them; a path a target lacks is dropped for it (`SELECT_PATH_NOT_ON_TARGET`; for a remote
+  target after its owner said so, once, kept per target) and the member is absent on its rows. Only
+  a path every target lacks is `UNKNOWN_PATH`, at the stage that names it.
+- **Cost.** The paths asked of an owner count toward its `MaxProjectionFields`. Explain shows per
+  alias what it `loads` and `shows`, and per stage what it reads.
+- **Contract 1** is frozen: a join fetches its `select` as written (or key and display), nothing is
+  inferred, and a path beyond the select has no value.
 
 ## Grouping
 
@@ -405,7 +441,8 @@ base package's `[ReferenceId]`). 2.1 adds four:
   `D` form; a value that does not parse is outcome `invalid_key`. A string member referencing a local
   guid key without `KeyAs` is the build finding `reference-key-kind-mismatch`.
 - **Item targets.** The element whose field equals the key is the alias; `parentAs` is the owning row
-  as `{ "entity": "<entity id>", <parentSelect members> }`. Two owning rows holding the same element
+  as `{ "entity": "<entity id>", <members> }`: its key and display members, or the paths the
+  projection names under it. Two owning rows holding the same element
   id are `ambiguous`: the first by target order, then by key, is taken.
 - The schema publishes a simple reference (one unconditional case, one entity target, no item, no
   conversion) under `references` as before; the other forms only as reference cases, so a reader
@@ -484,8 +521,9 @@ Nothing else changes compared with a plain remote resolve:
   under the same forwarded user and organisation. The owner applies the organisation scope at every
   entity it enters, exactly as for a direct query; a continued step reads only what that user could
   read with `POST /oxql/query` at the owner. No header is added.
-- The owner binds the continued steps with its own model. If a step reaches a third service, the
-  owner does the same from its side; a local target of the owner is fetched in process.
+- The owner binds the continued steps with its own model, and infers what their joins load as for
+  any query of its own (see *What a join loads*). If a step reaches a third service, the owner does
+  the same from its side; a local target of the owner is fetched in process.
 - The aliases the continued steps add are lifted back from each owner row to the origin row, so the
   caller sees one row with every hop. An owner's refusal of a step comes back as `RESOLVE_REFUSED`
   at the caller's stage, with the owner's errors mapped to the caller's `stage` and `path` and

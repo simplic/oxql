@@ -34,7 +34,7 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 |---|---|
 | 400 ProblemDetails | the body cannot be read into the request model: not JSON; `entityType` or `pipeline` missing or `null`; a pipeline element that is a number, string or array; a condition that is not an object; `and`/`or` that is not an array; `not` that is not an object; an aggregate that is not an object; a `group.by` or `sort` of the wrong JSON type; a non-integral number where an integer is read; an explain envelope with a member other than `query`, `describe`, `remote`, `include`, a `remote` other than `check`/`skip`, or an `include` other than `indexes` |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
-| 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default since 2.1) |
+| 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
 | 415 | the request is not `application/json` |
 
@@ -74,7 +74,7 @@ the listed status.
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
 | `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; a `null` query in a batch |
-| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a 2.1 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
+| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
 | `MULTIPLE_PAGE_STAGES` | 400 | two `page` stages |
@@ -107,13 +107,12 @@ the listed status.
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
 | `RESOLVE_REFUSED` | 422 | the owner refused its part (its own codes follow in `errors`, for a continued stage mapped to the caller's `stage` and `path` with `params.owner`), or answered a row without the key it was asked for |
-| `OWNER_NOT_CAPABLE` | 422 | a continued stage or a grouped owner query for an owner whose health reports an engine older than 2.1; `params` `service`, `version`, `needs` (`"2.1"`). Nothing was sent |
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without `cursor` or `offset` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
 | `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs` or the batch's `maxTimeMs` |
 | `INTERNAL_ERROR` | 500 | any other fault |
-| `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a v1 `lookup` or `resolve`, an unknown stage member (the 2.1 stage members included), `strict`, the number form of `includeTotalCount` |
+| `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a v1 `lookup` or `resolve`, an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
 
 Diagnostics travel in `diagnostics` of a successful answer. Those marked *loss* refuse a `strict`
 request instead (422 `not_executable`, the diagnostic as the error); `RESOLVE_MISSING` refuses by its
@@ -154,7 +153,7 @@ a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChu
 `MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
 `MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
 twenty-three `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
-`chainTimeoutMs`, `negativeResolveTtlSeconds` and the sixteen explain limits (41 entries). The fifteen
+`chainTimeoutMs`, `negativeResolveTtlSeconds` and the seventeen explain limits (42 entries). The fifteen
 a caller checks a request against before sending it are also published in the schema document's
 `limits` by the Simplic base package (column */schema*).
 
@@ -165,7 +164,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxPipelineStages` | 20 | binder; the scope stage does not count | `MAX_PIPELINE_STAGES_EXCEEDED` | yes | an owner query holds the key match (or `keyedBy`), the filter, the continued stages, the projection and the page, and is checked against the owner's value |
 | `Limits:MaxLookupStages` | 5 | binder | `MAX_LOOKUP_STAGES_EXCEEDED` | yes | — |
 | `Limits:MaxUnwindStages` | 5 | binder | `MAX_UNWIND_STAGES_EXCEEDED` | yes | — |
-| `Limits:MaxResolveStages` | 8 (2 before 2.1) | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
+| `Limits:MaxResolveStages` | 8 | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
 | `Limits:MaxGroupFields` | 20 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` | yes | — |
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias, else its `select` hint) become the owner's projection and are checked against the owner's value |
@@ -175,7 +174,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:CountCap` | 100 000 | compiler: the count stops at the cap | diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
 | `Limits:MaxSemiJoinIds` | 5 000, never above `MaxOffset` | remote resolver | 422 `SEMI_JOIN_TOO_LARGE` | no | refused after the first owner page when the owner's count already exceeds it |
 | `Limits:ResolveKeyChunk` | 500, never above `MaxPageSize` | keyed fetch: keys per owner query; a grouped query (`keyedBy`, two rows per key) carries at most `MaxPageSize / 2` keys | — | no | the owner's `MaxPageSize` and `MaxRequestBytes` bound it |
-| `Limits:MaxResolveKeys` | 10 000 (2 000 before 2.1) | keyed fetch: keys asked of owners per request, over every keyed stage and target in stage order; keys the cache answers are free | diagnostic `RESOLVE_PARTIAL`; refused under `strict` | no | each owner applies its own to what it forwards further |
+| `Limits:MaxResolveKeys` | 10 000 | keyed fetch: keys asked of owners per request, over every keyed stage and target in stage order; keys the cache answers are free | diagnostic `RESOLVE_PARTIAL`; refused under `strict` | no | each owner applies its own to what it forwards further |
 | `Limits:MaxRequestBytes` | 262 144 | request-size filter, before the body is read | 413 `REQUEST_TOO_LARGE` | no | guards the owner's internal batch route too where the host puts the same filter on it (the Simplic base package does); an owner answering 413 is an unreachable owner to the caller |
 | `Limits:MaxBatchQueries` | 10 | query service | `BATCH_TOO_LARGE` | yes | The keyed fetch splits an owner's batch at the owner's `maxBatchQueries` as its shallow health last reported it, and at this host's own value until that is known (before the first health measurement, or with a remote client that does not report owners). An owner configured lower that has not been measured refuses the whole batch with HTTP 400: resolved aliases are `null` with `RESOLVE_UNREACHABLE`, a semi-join is 422 `RESOLVE_UNAVAILABLE`. Keep the value equal across services |
 | `Limits:RegexMaxLength` | 200 | binder | `REGEX_TOO_LONG` | yes | a `regex` under a remote alias is checked by the owner |
@@ -192,7 +191,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
-| `Explain:Enabled` | `true` (was `false`) | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
+| `Explain:Enabled` | `true` | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
 | `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries) | note `REMOTE_UNCHECKED` | no | — |
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
 | `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
@@ -200,6 +199,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Explain:DefaultShapeDepth` / `MaxTypeMembers` | 2 (never above `MaxShapeDepth`) / 300 | only with `include: ["types"]`: the levels of member rows listed below each root when the request names no `shape.depth` / the member rows of one type, then `truncated` | — | no | by default an answer names its types and lists no member; an owner writes its rows out at the depth the origin was asked for |
 | `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the member rows (where asked for) keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
 | `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | the distinct owner services one explain asks / the owner calls it causes in all, one per service and round, transitive ones included | note `EXPLAIN_LIMIT` (`ownerServices`, `ownerCalls`) | no | an internal explain carries the calls left; an owner starts none beyond them |
+| `Explain:MaxBatchChecks` | 64 | the checks one internal explain carries (`checks`): what one round of an origin's explain asks one owner | origin: note `EXPLAIN_LIMIT` (`checks`) for what exceeds it; owner: 400 `EXPLAIN_LIMIT` before anything is bound | no | — |
 | `Explain:RatePerMinute` / `RateBurst` | 20 / 5 | the public explain route, per organisation and user: a token bucket, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic |
 | `Explain:MaxConcurrentPerUser` / `MaxConcurrentPerHost` | 2 / 8 | explains in flight on the public route, per user and per host | 429 `EXPLAIN_LIMIT` (`concurrentPerUser`, `concurrentPerHost`) | no | — |
 | `Explain:MaxConcurrentPerCaller` | 4 | internal explains in flight per calling service; the host of the internal route enforces it (the Simplic base package does) | 429 `EXPLAIN_LIMIT` (`concurrentPerCaller`) | no | the origin notes the part `REMOTE_UNCHECKED` |
@@ -214,7 +214,7 @@ Fixed bounds, not configurable:
 | `Execution:MaxTimeMs` ceiling | 60 000 ms | — |
 | health reachability probe | 2 s per service | the service counts as not reachable |
 | listed indexes for the explain advisory | cached 60 s per collection | — |
-| owner answers to explain's remote check and forwarded catalog entries | cached 30 s, at most 1 000 entries, failures not kept | — |
+| owner answers to explain's remote check and forwarded catalog entries | kept 30 s per organisation, user, owner, owner schema revision and forwarded body, at most 1 000 entries; failures are not kept, and an answer naming another revision of a service retires what was kept for the old one | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
 | ask-again rounds for a remote union target without the paths it lacks | 2 per request | — |
 | JSON nesting of request and answer bodies | 256 (MVC's default is 32; explain answers of flattening and chain queries nest deeper) | — |
@@ -241,7 +241,7 @@ Anonymous, always 200, and never waits for another service:
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
     "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
-    "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainRatePerMinute": 20, "explainRateBurst": 5,
+    "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainMaxBatchChecks": 64, "explainRatePerMinute": 20, "explainRateBurst": 5,
     "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
   "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
@@ -253,8 +253,7 @@ Anonymous, always 200, and never waits for another service:
   contract 2) and the explain answer described below. A caller gates on it, never on a capability
   per feature.
 - `engine.version` is the version of the `OxQL.Core` assembly the host runs, which is the package
-  version. Another host reads it from this
-  endpoint to decide whether it may send 2.1 vocabulary (see *Keyed fetch and remote continuation*).
+  version.
 - `capabilities`: `batch`, `group.page`, `page.offset`, `any` and `unwind.keepPath` always
   (`unwind.keepPath`: an unwind may take its collection out of the row; a caller gates on it before
   sending `keepPath`, which an engine without it refuses as an unknown member);
@@ -424,7 +423,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner that knows it did not answer), `lookupOn` (a lookup may name it as its parent row), and where
   they apply `source` (an element's collection), `kind` (a scalar's), `many` (it holds an array),
   `parentOf` (it is the owning row of that alias), `reference` (the reference a resolve follows, as
-  bound), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
+  bound, with the `name` the engine derived for its relation where this host's model holds the member), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
   it is asked at, whether its owner query is `grouped`, and the stages `continued` there or
   `notApplicable` to its rows), `continuedFrom` (`{ alias, target }` of a stage continued at an
   owner; for a union join the alias of the keyed stage and no target), `branches` (only on the
@@ -584,11 +583,37 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner's error keeps its own `params` and gains `params.owner`. A contract 1 answer carries none.
 - **`remote`.** With `check` (the default) the owner queries of every keyed stage are bound by their
   owners' internal explain: an owner error becomes this request's error at the caller's stage
-  (`params.owner` as in a refusal) and the stage's status `error`. `cached` is accepted and answered
-  as `check` until owners' answers are served from the cache alone. All owner calls of one explain
+  (`params.owner` as in a refusal) and the stage's status `error`. All owner calls of one explain
   share `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (a client that cannot explain,
   unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED` note with `params.reason`,
-  never an error. Owner answers are cached 30 s by organisation, user, service and forwarded body.
+  never an error.
+  - *Rounds.* The checks go out in rounds. The first carries every owner query of every keyed stage;
+    each owner service gets one call with all its checks (`POST internal/oxql/explain`, `checks`), and
+    the services are asked at once. A further round asks again what a run asks again: a target whose
+    owner refused only paths it lacks, without them (at most two more). What an earlier request (an
+    explain or a run) learned a target lacks is dropped before the first round, so a warm explain needs
+    one. An owner explains the checks of one call side by side and asks each of its own owners once per
+    round for all of them, so a transitive owner costs one call per round as well.
+  - *Kept answers.* An owner's answer is kept 30 s by organisation, user, owner service, the revision
+    of that owner's schema document and the forwarded body. An answer that names another revision of a
+    service retires every answer kept for the old one, also those of other owners that reached it. An
+    answer that was not complete is kept as not complete. Nothing an explain answers depends on what
+    is kept: with nothing kept the owners are asked.
+  - *`cached`.* The tier for an edit in progress: the answer is built from the owner answers already
+    kept and no owner is asked, not for a check, not for a catalog entry and not for its health. What
+    is not kept is left out and said: a `REMOTE_UNCHECKED` note with `params.reason: "cached"`, the
+    owner listed with `answered: null`, `reason: "cached"` and no call, the alias `complete: false`
+    with `type: null`, `cache.complete: false`. What this host binds itself is all there. Once every
+    owner answer is kept, the cached answer is the answer a `check` gives, with the same `etag`.
+- **The validator.** `etag` covers the request (but not `remote`), the contract, the engine version,
+  the capabilities, every revision and whether the answer is complete. The route answers it as the
+  `ETag` header (with `Cache-Control: private, no-cache`), and a request with `If-None-Match` naming it
+  (weak comparison; `*` matches) is 304 without a body. The answer is still computed, so a 304 saves
+  the transfer and the parse, not the bind: 2 to 4 ms warm for the reference queries.
+- **Content coding.** The answer is written in the coding the caller accepts (`Accept-Encoding`):
+  Brotli, else gzip, at the fastest level, with `Vary: Accept-Encoding`; a body under 1 KB, a refusal
+  and a 304 are not coded. The reference queries are 22 to 43 KB as they are, 4.8 to 7.6 KB gzipped
+  and 3.9 to 5.8 KB in Brotli.
 
 **Limits of one explain.** Explain is rare, so its limits are tight; none is an error.
 
@@ -602,13 +627,16 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `concurrentPerUser`, `concurrentPerHost`). It is separate from run traffic and nothing waits. The
   internal route admits at most `MaxConcurrentPerCaller` (4) in flight per calling service.
 - *Cost*, mid-way: at most `Explain:MaxOwnerServices` (4) distinct owner services and
-  `MaxOwnerCalls` (8) owner calls in all, transitive ones included, where a call is one service in
-  one round (the first ask, and each ask-again of a union target; until owners take a round's checks
-  as one request, a round is one request per check); and `Explain:TimeoutMs` (2 000 ms) of wall
-  time. An internal explain carries what is left of the time and the calls (`budget`, internal route
-  only), so an owner asks its own owners only within its origin's budget. A part a limit left out is
-  an `EXPLAIN_LIMIT` note (`params.limit`: `ownerServices`, `ownerCalls`, `time`; `service`,
-  `target`), the answer says what is known with `cache.complete: false`, and nothing is retried.
+  `MaxOwnerCalls` (8) owner calls in all, transitive ones included, where a call is one request to
+  one service in one round (the first ask, and each ask-again of a union target), whatever number of
+  checks it carries (at most `MaxBatchChecks`, 64); and `Explain:TimeoutMs` (2 000 ms) of wall time.
+  An internal explain carries what is left of the time and the calls (`budget`, internal route only)
+  for all its checks together, so an owner asks its own owners only within its origin's budget. The
+  calls left are shared out among the owners asked at once that carry continued stages (an owner
+  asked only for paths of its own entities asks no owner and gets none), so owners asked in parallel
+  cannot together cause more than is left. A part a limit left out is an `EXPLAIN_LIMIT` note
+  (`params.limit`: `ownerServices`, `ownerCalls`, `checks`, `time`; `service`, `target`), the answer
+  says what is known with `cache.complete: false`, and nothing is retried.
 - *Size*: the answer names its types and writes no member, so it is small: the reference queries
   of the report scenarios are 22 to 44 KB (3.4 to 5.5 KB gzipped), of which the types are under
   2 KB. An answer over `Explain:MaxAnswerBytes` (256 KB) keeps the first level of the member rows
@@ -634,12 +662,29 @@ shows the caller's organisation id. No row data, no other organisation's data, n
 secret appears.
 
 A host that serves continued stages for other services also answers the internal twin, `POST
-internal/oxql/explain` in the Simplic base package: the same body and answer, admitted by the
-internal key under the forwarded identity. An origin calls it for the remote check and for catalog
-entries of the owner's entities through `IRemoteQueryClient.ExplainAsync`. The stages continued
-under a keyed stage of the host itself are checked the same way in process, as its own owner binds
-them when the query runs; what continues from there to another service (every target of a union
-without `forTarget`) is that owner's remote check, so explain refuses what the run would refuse.
+internal/oxql/explain` in the Simplic base package, admitted by the internal key under the forwarded
+identity. Its body is what one round of an origin's explain asks the owner:
+`{ "checks": [ explain envelope, … ], "budget": { "ms", "calls" } }`, answered
+`{ "answers": [ … ] }` with one entry per check, in order; an entry is null where a check was
+refused before binding or the budget ran out before it. An origin sends it through
+`IRemoteQueryClient.ExplainBatchAsync` (`IOxQLQueryService.ExplainBatchAsync` on the owner's side),
+for the remote check and for catalog entries of the owner's entities. An owner answers each check
+*slim*: what an origin reads and nothing it would compute itself and drop, namely `valid`,
+`contract`, `engine`, `revision`, `cache`, `errors`, the notes about the answer itself
+(`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`), `stages` with `index`, `kind`, `status`,
+`reads` and `creates`, `aliases`, `types`, `owners` and `catalog`; no shapes, placements, rules, flag
+sets, result columns, diagnostics, plan or `etag`. That is 32 to 52 % of the whole answer for the
+reference queries. The stages continued under a keyed stage of the host itself are checked the same
+way in process, as its own owner binds them when the query runs; what continues from there to
+another service (every target of a union without `forTarget`) is that owner's remote check, so
+explain refuses what the run would refuse.
+
+**A catalog entry of an entity only another owner reaches.** A catalog entry names an entity of
+another service; this host asks that service when it knows it (`InternalHosts`). When it does not,
+it asks the owner that reached the service, in this explain or an earlier one (the entity of a third
+service a continued stage reaches), and that owner asks on: the answer is the entity's owner's, marked
+`forwarded`. Without such a route the entry answers `UNKNOWN_ENTITY`. The entries of one owner travel
+in one call.
 
 ## Keyed fetch and remote continuation
 
@@ -653,7 +698,7 @@ through one mechanism, the **keyed fetch**, in two modes:
   `IRemoteQueryClient.BatchAsync`; a local target's owner is this host, called in process with the
   same context (`SelfOwner`), so a local typed, item, converted or element-wise resolve takes the same
   path.
-- **By condition**, before the page: 2.0's semi-join. A condition on a member of a plain remote alias
+- **By condition**, before the page: the semi-join. A condition on a member of a plain remote alias
   asks the owner for the matching target keys page by page, refuses above `MaxSemiJoinIds`, and
   substitutes them as an `$in`. It exists for plain remote resolves only.
 
@@ -664,29 +709,33 @@ owning service, owners in parallel:
 | target | owner query |
 |---|---|
 | an entity by its own key | `match <field> in [keys]`, the filter, the continued stages, the projection, a page of the chunk's size |
-| an item, or a non-key field | the internal member `keyedBy: { path, keys, perKey: 2 }`: the owner matches the keys (for an item, unwinds only the elements holding a key as `oxEl`, keeping their position), ranks the records per key by record key (and position), keeps two, then the filter, the continued stages and the projection; a second record means `ambiguous`. String keys compare exactly even inside a collated aggregate. At most `MaxPageSize / 2` keys per query, and no more than the owner's own page holds. A plain 2.0 resolve onto a non-key field keeps the plain key match while nothing reads its outcomes; under `strict` or an `onMissing` other than `null` it is grouped, or, at an owner known to run 2.0, asked the plain match with two rows per key |
+| an item, or a non-key field | the internal member `keyedBy: { path, keys, perKey: 2 }`: the owner matches the keys (for an item, unwinds only the elements holding a key as `oxEl`, keeping their position), ranks the records per key by record key (and position), keeps two, then the filter, the continued stages and the projection; a second record means `ambiguous`. String keys compare exactly even inside a collated aggregate. At most `MaxPageSize / 2` keys per query, and no more than the owner's own page holds. A plain resolve onto a non-key field keeps the plain key match while nothing reads its outcomes; in a request that reads them (`strict`, an `onMissing` other than `null`, `outcomeAs`) it is grouped |
 | the existence probe | the same without the filter and projecting only the key, for keys the filtered answer lacked, when the stage has a `filter` and an `onMissing` other than `null` |
 
 - `keyedBy` is accepted only on the internal route and in process (`IOxQLQueryService.BatchAsync(batch,
   internalCall: true, …)`, which marks the request context internal); on the public routes it is
   `UNKNOWN_REQUEST_MEMBER`. It is the only new wire vocabulary; no header is added. A plain remote
-  resolve onto an entity's key sends the plain key match, so an owner still on 2.0 keeps answering
-  it.
+  resolve onto an entity's key sends the plain key match.
 - **Owner facts.** The keyed fetch splits each owner's batch at the owner's `maxBatchQueries`, sizes
-  its key chunks by the owner's `maxPageSize`, and refuses 2.1 vocabulary (continued stages,
-  `keyedBy`) to an owner whose engine is older (`OWNER_NOT_CAPABLE`), all read from the owner's
-  shallow health by a remote client that implements `IRemoteOwnerInfo`. Before the first batch of a
+  its key chunks by the owner's `maxPageSize`, both read from the owner's
+  shallow health by a remote client that implements `IRemoteOwnerInfo`. It refuses nothing by an
+  owner's version. Before the first batch of a
   request the fetch asks the client for each owner's facts (`OwnerOfAsync`), which may read the
   owner's shallow health right then, within a tenth of the phase (at most 250 ms); explain reads them
-  the same way, within its owner budget, and answers `OWNER_NOT_CAPABLE` where the run would. A
+  the same way, within its owner budget. A
   client that does not know them in time leaves the host's own caps (an owner configured with a
   smaller page then refuses `PAGE_SIZE_EXCEEDED` inside `RESOLVE_REFUSED`; the next request, with the
-  facts read, succeeds). An owner still on 2.0 whose facts are unknown ignores `keyedBy` and answers
-  rows not grouped per key: the fetch refuses them (`RESOLVE_REFUSED`, a row without its key) or
-  reports the keys it did not get as `owner_unanswered`, never as values. An owner on 2.1 packages
+  facts read, succeeds). An owner
   behind a base package whose internal route does not use the internal-call overloads refuses
   `keyedBy` as `UNKNOWN_REQUEST_MEMBER`, which the caller sees as `RESOLVE_REFUSED`: an owner other
   services call needs the matching base package.
+- **Owners.** Every owner an origin reaches runs this package: an owner needs the internal
+  routes (`internal/oxql/batch`, `internal/oxql/explain`), which only this package has. A service
+  still on the version 1 package has no internal route, is not listed in `InternalHosts` and cannot
+  be an owner; its entities stay unknown or unavailable to origins (`UNKNOWN_ENTITY`,
+  `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run reports
+  `RESOLVE_UNREACHABLE` (and refuses under `strict`) and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
+  gate.
 - **Remote lookups** rank each key's children at the owner in the lookup's sort, then by record key;
   elements of one owning row that tie there come back in no guaranteed order (sort by an element
   member to fix it).

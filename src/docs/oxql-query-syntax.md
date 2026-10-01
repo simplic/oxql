@@ -12,7 +12,7 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 {
   "entityType": "logistics.shipment",         // the entity id, exactly as the schema publishes it
   "variables": { "from": "2026-01-01T00:00:00Z" },   // optional, bound by { "$var": "from" }
-  "strict": true,                              // optional (2.1): refuse instead of losing data
+  "strict": true,                              // optional: refuse instead of losing data
   "pipeline": [                                // stages, executed as written
     { "match": { … } },
     { "page": { "limit": 50 } }
@@ -21,7 +21,7 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 ```
 
 - A request carries `entityType`, `variables`, `pipeline` and `strict`. Any other top-level member
-  is `UNKNOWN_REQUEST_MEMBER` under contract 2 (2.0 ignored it silently). The member `keyedBy`
+  is `UNKNOWN_REQUEST_MEMBER` under contract 2. The member `keyedBy`
   exists only on the internal route an owner is called through (see
   [`oxql-operations.md`](oxql-operations.md#keyed-fetch-and-remote-continuation)); on the public
   routes it is `UNKNOWN_REQUEST_MEMBER` like any other.
@@ -197,7 +197,7 @@ alias (`"documents.name": 1`) decides alone: the alias shows exactly those paths
 names. A `select` path the child does not have is `UNKNOWN_PATH`. What joins load is in
 [`oxql-semantics.md`](oxql-semantics.md#what-a-join-loads).
 
-2.1 adds four members:
+Contract 2 has four more members:
 
 ```jsonc
 { "lookup": {
@@ -276,8 +276,7 @@ members with `LEGACY_STAGE_UNSUPPORTED`.
 
 **The collection guard.** A `path` under a collection that is not unwound names one key per element.
 Without `elements` it is `RESOLVE_ON_COLLECTION` ("unwind it first, or set 'elements' to 'first' or
-'all'"); a path crossing two such collections is `UNWIND_ORDER`. 2.0 bound such a path and joined an
-arbitrary element.
+'all'"); a path crossing two such collections is `UNWIND_ORDER`.
 
 **Where it runs.** A resolve with one unconditional case, one local entity target, no item, no key
 conversion and no `elements` runs inline, as an indexed `$lookup` in the aggregate; its alias is an
@@ -288,7 +287,7 @@ owner: another service, or this host in process for a local target. Its alias ma
 continued; a `match` on it is `RESOLVE_NOT_FILTERABLE` and a `sort` `RESOLVE_NOT_SORTABLE`, since it
 is joined after the page is taken.
 
-**Plain remote resolves** (a simple reference into another service) keep 2.0's behaviour: a `match`
+**Plain remote resolves** (a simple reference into another service) behave as follows: a `match`
 on a member of the alias is a semi-join (the owner supplies the matching ids; more than
 `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`), a `match` on the alias itself (`{ "veh": { "eq":
 null } }`, `{ "veh": { "exists": true } }`) is refused before the owner is called
@@ -378,8 +377,7 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
   `MaxResolveStages` or `MaxLookupStages`; the owner applies its own.
 - Variables in a continued stage are bound here and sent substituted; an unbound one is
   `UNBOUND_VARIABLE` here. The same holds for the `filter` of every remote resolve.
-- An owner on an engine older than 2.1 (read from its health) is refused before anything is sent:
-  422 `OWNER_NOT_CAPABLE`. Contract 1 refuses continued stages with `NOT_CONTINUABLE`.
+- Contract 1 refuses continued stages with `NOT_CONTINUABLE`.
 
 ### The union join
 
@@ -424,6 +422,8 @@ target, each a branch.
 - **Paths under the alias are flat**, as under any union: a path one branch does not reach (in
   `select`, or projected under the alias) is dropped for that branch (`SELECT_PATH_NOT_ON_TARGET`
   with `params.branch`) and absent on its rows; only a path no branch reaches is `UNKNOWN_PATH`.
+  The alias is `null` only where its record is not there: a branch that reaches none of the paths
+  projected under the alias leaves an empty object (`{}`) on the rows whose record exists.
 - **Like any continued alias** it is projected and continued (a stage under it goes to the owners
   of the targets that have a branch), never sorted or filtered here (`RESOLVE_NOT_SORTABLE`,
   `RESOLVE_NOT_FILTERABLE`); under `elements: "all"` nothing continues (`NOT_CONTINUABLE`). The
@@ -449,20 +449,20 @@ documents whose collection is empty or absent.
 { "unwind": { "path": "items", "as": "item", "keepPath": false } }
 ```
 
-`keepPath` (2.1, default `true`) set to `false` takes the unwound collection out of the row once
+`keepPath` (default `true`) set to `false` takes the unwound collection out of the row once
 its element is under `as`: the row carries `item` and no `items`, and a later path under `items` is
 `UNKNOWN_PATH` naming the alias to read instead. It needs `as` and a member collection (a join alias
 unwound without `as` is already replaced by its element); otherwise `OPTION_NOT_APPLICABLE`. It is
 also `OPTION_NOT_APPLICABLE` when a join of an earlier stage reads its keys from the collection (a
 resolve through `items.*`): join after the unwind through the alias instead. A value other than
 `true` or `false` is `INVALID_OPERAND`. Refused under contract 1 (`LEGACY_STAGE_UNSUPPORTED`).
-Leaving it out keeps the 2.0 rows.
+Leaving it out keeps the collection in the row.
 
 ```jsonc
 { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }
 ```
 
-`flatten` (2.1) unwinds a self-similar tree: it names a member of the element (members only some
+`flatten` unwinds a self-similar tree: it names a member of the element (members only some
 variants carry included) that is a collection of the same kind of element, such as a group item's
 `items`. The rows are every element and every descendant, in pre-order, each without its nested
 collection, down to `MaxFlattenDepth` levels (5; the collection itself is level 1). Rows nested
@@ -569,9 +569,9 @@ stage at all, `DefaultPageSize`. `offset` above `MaxOffset` is `MAX_OFFSET_EXCEE
 
 Cursors are opaque, signed, and bound to the query: a cursor from another pipeline, another
 sort or a tampered one is `CURSOR_INVALID`. Keyset paging is null-aware on the root shape;
-after `group` the cursor carries an offset. A 2.0 cursor continues under 2.1: a 2.1 member is
-written into the fingerprint only when it changes what the stage does, and `strict` and
-`onMissing` never are.
+after `group` the cursor carries an offset. A member enters the cursor fingerprint only when a
+request sets it, so a cursor of a request that does not use it stays valid; `strict` and
+`onMissing` never enter it.
 
 `includeTotalCount` is `true`, `false` (the default) or a positive integer. `true` runs a count
 concurrently with the page, up to the host's `CountCap`; a positive integer is the request's own
@@ -667,13 +667,13 @@ caller's `stage` and `path`, each with `params.owner`:
 ```
 
 `owner.service` is `null` when the owner is this host. A contract 1 request refused for a
-construct only contract 2 has (a 2.1 member, `is`, `strict`, a continued stage, `caseSensitive`,
+construct only contract 2 has (a contract 2 stage member, `is`, `strict`, a continued stage, `caseSensitive`,
 the object form of a sort entry, the number form of `includeTotalCount`) ends its message with "This request was read as contract 1 because it
 carries no 'X-OxQL-Contract: 2' header." The codes are unchanged.
 
 ### Error codes
 
-The closed list, 72 codes (2.1 added the twelve marked †):
+The closed list, 71 codes (contract 2 has the eleven marked †):
 
 | area | codes |
 |---|---|
@@ -686,7 +686,7 @@ The closed list, 72 codes (2.1 added the twelve marked †):
 | limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
 | cursor | `CURSOR_INVALID` |
 | access | `ACCESS_DENIED` (403) |
-| execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `OWNER_NOT_CAPABLE`† (422), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500), `PAGE_INCOMPLETE`† (422, strict only) |
+| execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500), `PAGE_INCOMPLETE`† (422, strict only) |
 | compat | `LEGACY_STAGE_UNSUPPORTED` (a v1 `lookup` or `resolve`, `strict`, or a contract 2 stage member under contract 1) |
 
 Under `strict` (or a stage's `onMissing: "refuse"`) the data-loss diagnostics below are errors of a
@@ -695,7 +695,7 @@ Under `strict` (or a stage's `onMissing: "refuse"`) the data-loss diagnostics be
 ### Diagnostic codes
 
 Never a refusal outside `strict`; carried in `diagnostics` with machine-readable `params` where
-useful. 13 codes (2.1 added the five marked †):
+useful. 13 codes (contract 2 has the five marked †):
 `ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`),
 `RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`, `RESOLVE_PARTIAL` (keys an owner was not asked for or did
 not answer in full), `SORT_ON_ADDON`, `REGEX_UNANCHORED`, `DECIMAL_TEXT_EXCLUDED` (an ordered
@@ -739,8 +739,12 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
   apply to it alone. `docs`: the descriptions of types, members and enum values in the member rows.
   `plan`: the bound form, the emitted stages and every owner query. `indexes`: the index advisory,
   the only extra read explain makes.
-- `remote`: `check` checks what an owner binds at that owner. `cached` is accepted and answered as
-  `check` until owners' answers are served from the cache alone.
+- `remote`: `check` checks what an owner binds at that owner. `cached` asks no owner: it answers
+  from the owner answers a `check` of the last 30 seconds left (per organisation, user and forwarded
+  body), and says what it therefore does not know (`cache.complete: false`, a `REMOTE_UNCHECKED` note
+  with reason `cached`). It is the tier for an edit in progress: explain with `cached` while the query
+  changes and with `check` once it has settled. A complete `cached` answer carries the `etag` of its
+  `check`; send it as `If-None-Match` and an unchanged answer is 304.
 - A catalog entry looks up an entity outside the query (a lookup's `from`, a palette, the entities
   referencing one). It carries `id`, `entity` (an entity id, or `entity#item` for the element of an
   item collection; another service's entity is answered by its owner), an optional `prefix` (a path,
@@ -776,7 +780,7 @@ and sort directions are read case-insensitively, a string comparison is exact un
 are exact, a sort entry's direction is a string (the object form is `INVALID_SORT_DIRECTION`),
 and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
 stages are refused with `LEGACY_STAGE_UNSUPPORTED`, and so is the number form of
-`page.includeTotalCount`: contract 1 keeps the boolean. Every 2.1 construct is contract 2 only:
+`page.includeTotalCount`: contract 1 keeps the boolean. What only contract 2 has is not read under contract 1:
 `strict` and the new stage members are `LEGACY_STAGE_UNSUPPORTED`, `is` is `UNKNOWN_OPERATOR`, a
 continued stage is `NOT_CONTINUABLE`, and unknown top-level members are ignored as before. Each
 such refusal says the request was read as contract 1 for want of the header (see *Refusal*). Every

@@ -68,7 +68,7 @@ database under changed configuration (`OxQL:Limits:MaxPageSize`, `OxQL:Explain:E
 Explain is on by default, as on a real host.
 
 **The lab model.** Synthetic entities under neutral names; the shapes carry the storage hazards
-real services have. Since 2.1 the member names, nesting, polymorphism and reference declarations of
+real services have. The member names, nesting, polymorphism and reference declarations of
 the report entities mirror the real services (ERP, logistics, HR, vehicle, contact), so a scenario
 path on the fleet is the path the real service accepts after its migration; only the namespace
 differs. The variants' class maps are registered with the storage conventions
@@ -78,17 +78,17 @@ organisations A and B.
 
 | service | entity | collection | rows A / B | what it is for |
 |---|---|---|---:|---|
-| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag; since 2.1 `userId`, which a transaction's `createUserId` names |
+| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag; `userId`, which a transaction's `createUserId` names |
 | `fleet` | `fleet.vehicle` | `vehicle` | 20 / 2 | numbers: decimals stored as Decimal128 and as strings, zero, negative, 25 places, Int32 max; a storage name the derivation does not give (`QRCode`) |
 | | `fleet.equipment` | `equipment` | 5 / 1 | a local reference onto vehicles: hit, duplicate, miss, null source |
 | | `fleet.department` | `department` | 3 / 1 | the target of the vehicle and shipment departments |
 | | `fleet.status` | `status` | 4 / 1 | a small lookup table with a null name |
-| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department`; since 2.1 its `billingLines[]` are the item target of typed references, and `tours[].tourId` references `transport.tour` beside a polymorphic `tours[].resource` |
+| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department`; its `billingLines[]` are the item target of typed references, and `tours[].tourId` references `transport.tour` beside a polymorphic `tours[].resource` |
 | | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling; duplicate, null and missing names at scale; a remote reference onto vehicles |
 | | `transport.tour` | `tour` | — | billing lines (the shipment's item type), a polymorphic `resource`, `attachedResources[]`, and `actions`, an interface-typed collection of seven variants |
 | | `transport.delivery_attempt` | `deliveryAttempt` | — | `shipmentId` onto the shipment, `dateTime`, `status { displayName }`, `text`: "the latest attempt" |
 | | `transport.resource` | `resource` | — | an abstract entity of seven variants; the host-side declaration makes a driver's id an employee and a vehicle-like resource's id a vehicle; a carrier references nothing |
-| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag; since 2.1 `items` of seven variants with nested group items, billing-line items referencing `ledger.billing_line`, `references[].referenceId` typed by `dataType` onto shipment or tour (key as guid), the recipient's `address.id` onto `directory.contact`, `createUserId` onto `staff.employee.userId` |
+| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag; `items` of seven variants with nested group items, billing-line items referencing `ledger.billing_line`, `references[].referenceId` typed by `dataType` onto shipment or tour (key as guid), the recipient's `address.id` onto `directory.contact`, `createUserId` onto `staff.employee.userId` |
 | | `ledger.billing_line` | `billing_line` | — | `sourceBillingLineReference { type, id }`, typed by `type`, onto the billing lines of a shipment or a tour (item targets, a union) |
 | `directory` | `directory.contact` | `contact` | — | the contact-like service: `primaryEmailAddress.email`, `primaryPhoneNumber.number`, `address.companyName`, a GeoJSON location (`unknown`) |
 | `conformance` | `conformance.entity` | `conformance` | 3 / 1 | every kind the model has: long above 2^53, date, char, binary, long enum, both dictionary forms, unstored members, local and remote references |
@@ -271,21 +271,23 @@ late (`Delay`) or with an error `Status`, and reports an engine `Version` and a 
 on its shallow health. Every batch it receives is kept (`Batches`, `Since(mark)`), so a case can
 assert what a forwarded query carried.
 
-## The 2.1 suites
+## The contract 2 suites
 
 | suite | what it proves |
 |---|---|
 | `Rows/RowsVariantsTests` | polymorphic members on rows and in conditions, `is`, `flatten` |
 | `Joins/JoinsLookupMembersTests`, `JoinsResolveMembersTests` | lookup `sort`, `first`, `on`, `LOOKUP_TRUNCATED`; the resolve members and their refusals |
 | `Joins/JoinsKeyedFetchTests`, `JoinsOutcomesTests`, `JoinsRemoteVariablesTests` | the keyed fetch by keys, every outcome with `onMissing` and `strict`, variables substituted before sending |
-| `Joins/JoinsContinuationTests` | continued stages across services and in process, `forTarget`, `not_applicable`, `OWNER_NOT_CAPABLE` |
+| `Joins/JoinsContinuationTests` | continued stages across services and in process, `forTarget`, `not_applicable` |
 | `Joins/JoinsOutcomeAsTests` | the outcome under a name (`outcomeAs`): every outcome of an inline, a keyed, an element-wise, a remote, a continued and a union join on the row; an inline outcome filtered, grouped and counted; `excluded` told from `not_found`; `ambiguous` onto a field that is not the key; nothing reported or refused by the member itself, and `strict` with `onMissing: "report"`; cursor pages; explain's member, values and rule |
 | `Joins/JoinsUnionJoinTests` | the union join (`byTarget`): one alias filled as two `forTarget` stages fill two, a path one branch does not reach dropped for it, one no branch reaches refused, a branch its owner cannot bind, a union join split by the owner of a continued alias, `UNION_CARDINALITY_MISMATCH`, and explain valid exactly when the run is not refused |
 | `Refusals/RefusalsRequestMembersTests` | `strict`, unknown top-level members, `keyedBy` refused on the public route |
-| `Chain/ChainOwnerFailureTests`, `ChainOwnerCapabilityTests` | against the scripted owner, each outside strict, under `onMissing: "report"` and under `strict`: unreachable and late owners, a cut answer (`hasNextPage`), the key budget, a negative cache entry a strict request reads past, an owner batch cap below this host's, the chain ceiling, what a forwarded query carries; an owner on 2.0 |
+| `Chain/ChainOwnerFailureTests` | against the scripted owner, each outside strict, under `onMissing: "report"` and under `strict`: unreachable and late owners, a cut answer (`hasNextPage`), the key budget, a negative cache entry a strict request reads past, an owner batch cap below this host's, the chain ceiling, what a forwarded query carries |
 | `Explain/ExplainNeverExecutesTests` | a command monitor on the engine's client sees no command without `include`, only `listIndexes` with `include: ["indexes"]`, and the `aggregate` when the same query runs |
 | `Explain/ExplainShapeFleetTests` | the fleet's engines explaining for one another in process: every prefix of A1–A5 (what a studio explains while the query is built) binds, is complete and types every root of every stage, the owners' types included; a remote union is one union type; and the reference answers stay within their time budget, and at depth 1 within their size budget (T4) |
 | `Explain/ExplainGoldenTests` | the explain answers of the reference set equal their recorded golden answers (`Suites/Explain/Golden`), the engine–studio contract; re-recorded with `OXQL_RECORD_GOLDEN=1`. Beside them, recorded and compared the same way (`Golden/mirror`): the fleet's schema documents (`schema/<service>.json`), the answers of `A1`, `A5` and `EX1-source-chain` with the types written out (`types/<id>.json`), and one answer of hosts that publish revisions, with fixed revisions (`revision/EX1-revisions.json`) |
+| `Explain/ExplainRemoteFleetTests` | the remote side of explain over the fleet's hosts: a round asks each owner once whatever it carries, a cold explain stays within eight owner calls, owners answer slim; a warm explain and `remote: "cached"` ask no owner and answer what the check answered; what a target lacks is learned once; the tiers measured (cold check, warm check, cached, 304, the content codings); T5, a flood of valid, oversized and over-long explains of five users is refused at the limits (429, 413, 400) while queries keep answering (`OXQL_LOAD_SECONDS`, `OXQL_LOAD_CLIENTS`) |
+| `Explain/ExplainRunDifferentialTests` | T1: explain and the run agree on the reference set and on every route of at most two hops from five source entities along the fleet's declared references (and on routes that do not bind); the entity an owning row names is one explain lists |
 | `Report/ReportRequestTests` | the studio's scenario requests (`Fixtures/scenarios/<id>.request.json`) equal the design's JSON, structurally |
 | `Report/ReportExplainTests`, `ReportQueryTests` | A1–A5 and every prefix of them through `POST /oxql/explain` (valid, complete, the executor, phase and owner of every join, every alias typed, continued parts checked) and through `POST /oxql/query` under `strict`, over organisation R; the contract-1 hint |
 | `Report/ReportFailureModesTests`, `ReportInvalidKeyTests` | duplicate keys in one grouped chunk, ambiguity through a plain non-key remote resolve, the existence probe, a flatten cut at its depth, the key budget over an in-process chain, the 5 000-row report page and `PAGE_INCOMPLETE`, `MAX_CONTINUED_STAGES_EXCEEDED`, `invalid_key` |

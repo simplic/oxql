@@ -3,7 +3,7 @@
 What a well-formed request means once it binds: which rows an operator matches when a value is
 null, absent or empty, how each kind is matched against the representations storage may hold,
 what folds case and accents, how rows are ordered and paged, how projections interact with
-joins, sorts and cursors, how `group` types its output, and, since 2.1, polymorphic values,
+joins, sorts and cursors, how `group` types its output, polymorphic values,
 flattened trees, typed and item references, the outcome of every join, strict requests and chains
 across services. The grammar is in
 [`oxql-query-syntax.md`](oxql-query-syntax.md); status codes, limits and the operational
@@ -401,10 +401,10 @@ members. The model reads the variants from the class maps registered with the dr
   finding `polymorphic-member-conflict`). A concrete subclass the scan finds but the driver does not
   know is `polymorphic-subtype-unregistered` and is not a variant.
 - An interface-typed member whose implementations are registered is an object of the union of
-  their members, all with `onlyFor`; before 2.1 it was `unknown`. A polymorphic entity keeps its
+  their members, all with `onlyFor`. A polymorphic entity keeps its
   declared class as the root, merged the same way, once its subclasses are registered.
 - A row renders each value with the members of the variant it is stored as: the base members in
-  order, then that variant's own. 2.0 rendered the base members only.
+  order, then that variant's own.
 
 On a row of another variant a variant-only member is absent, so `eq null` and `neq <value>` match it
 (explain notes `ONLY_FOR_VARIANTS`). `is` tests the variant itself: a name stands for that variant
@@ -427,9 +427,9 @@ into one row per item at any level down to `MaxFlattenDepth`:
 
 ## References
 
-A join follows a reference the model declares; nothing is inferred from names. 2.0 had one form, a
+A join follows a reference the model declares; nothing is inferred from names. The simple form is a
 member naming one entity by its key or another field (`[OxQLReference("<entity>", field?)]`, or the
-base package's `[ReferenceId]`). 2.1 adds four:
+base package's `[ReferenceId]`). There are four more:
 
 | form | declaration | what the key names |
 |---|---|---|
@@ -459,9 +459,37 @@ base package's `[ReferenceId]`). 2.1 adds four:
   conversion) under `references` as before; the other forms only as reference cases, so a reader
   that maps every `references` entry to an entity join never meets one it cannot follow.
 
+**Relation names.** Every reference has a name, derived by the engine from the model alone:
+nothing declares one, no start, build or schema load checks one, and no query names one. A name
+labels a declared reference for tools (a relation list, the default alias of a join along it); it
+never creates a reference. The schema document publishes it as `relation` and explain echoes it as
+`aliases.<alias>.reference.name`. The rule, by wire names:
+
+1. A reference member whose id member a navigation property names (the base package's
+   `[ReferenceId("StartAddressId")]` on `StartAddress`) takes the navigation property's name:
+   `startAddress`.
+2. A reference on the key member of an embedded object, or of the objects of a collection, is named
+   at the *slot*, the member that holds the object or the collection: the slot's name without a
+   trailing `Reference` or `Ref`. `sourceBillingLineReference.id` is `sourceBillingLine`,
+   `resources[].id` is `resources`. The key member is `id`, else `referenceId`; where both carry a
+   reference the slot names `id` and `referenceId` keeps its own name.
+3. Any other reference member is named by its own name without a trailing `Ids` (the plural `s`
+   stays), `Id`, `Number` or `Key`: `tourId` is `tour`, `vehicleIds` is `vehicles`,
+   `contactNumber` is `contact`.
+4. Where none of those ends the name, without a trailing `Reference` or `Ref` (`ownerRef` is
+   `owner`), else the name as it is (`reference`).
+
+A suffix is stripped only when something is left (`id` stays `id`), one suffix only, and the result
+starts in lower case. Names are unique among the relation names of one type: two members that derive
+the same name both take their own wire name instead (`driverId` and `driverRef` stay as they are),
+and so does a member whose derived name is the wire name another one fell back to. A stored member
+of the same name (`updateUser` beside `updateUserId`) is no collision: relation names are a
+namespace of their own. An alias, unlike a name, must be free in the row, so a tool that takes the
+name as an alias makes it unique against the row's roots itself.
+
 `target` narrows a typed reference to one target entity; rows whose case selects another target are
 `excluded`. `elements` resolves a reference inside a collection that is not unwound; without it such
-a path is refused (`RESOLVE_ON_COLLECTION`), where 2.0 joined an arbitrary element.
+a path is refused (`RESOLVE_ON_COLLECTION`).
 
 ## Outcomes and data loss
 
@@ -509,8 +537,8 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
   `reference_null`). It never reports or refuses; it only makes a stage read its outcomes.
 
 **Where ambiguity is seen.** The keyed fetch asks an owner for at most two records per key whenever
-the target is an item or a non-key field, so a second record is always seen. Two plain forms keep
-2.0's single-record query and cannot always see it: a simple local reference onto a non-key field
+the target is an item or a non-key field, so a second record is always seen. Two plain forms ask a
+single-record query and cannot always see it: a simple local reference onto a non-key field
 runs inline and takes the first match; a simple remote reference onto a non-key field sends the
 plain key match, so the second record is seen only when the owner's page happens to hold both, and
 not when the key is answered from the cache. Declare such a reference onto the target's key, or
@@ -582,18 +610,22 @@ Nothing else changes compared with a plain remote resolve:
   branch reaches is its owner's to say: the alias's type is the union of what the branches reach, a
   path under it that one branch does not reach is dropped for that branch and asked again (the
   drop-and-ask-again of a union target, at most twice, kept per target and branch for the cache's
-  lifetime), and only a path no branch reaches refuses. A union join under an alias a continued stage
+  lifetime), and only a path no branch reaches refuses. A branch that reaches none of the paths the
+  row shows under the alias is asked for the alias itself, so its owner still joins: the alias is an
+  empty object where the record exists and `null` only where it does not. A union join under an alias a continued stage
   added is sent to that alias's owner as written, which splits it the same way.
-- **Owner version.** Continued stages and grouped owner queries need the owner on 2.1. An owner whose
-  health reports an older engine is refused before anything is sent (`OWNER_NOT_CAPABLE`); an owner
-  not yet probed is sent the query, and an old one refuses the unknown members inside
-  `RESOLVE_REFUSED`.
+- **Owners.** Every owner an origin reaches runs this package: an owner needs the internal
+  routes (`internal/oxql/batch`, `internal/oxql/explain`), which only this package has. A service
+  still on the version 1 package has no internal route, is not listed in `InternalHosts` and cannot
+  be an owner; its entities stay unknown or unavailable to origins (`UNKNOWN_ENTITY`,
+  `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run refuses with
+  `RESOLVE_UNREACHABLE` and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
+  gate.
 
 Aggregation over chain data (`unwind`, `group` under a chain alias) is refused (`NOT_CONTINUABLE`);
 it belongs in the report that reads the rows.
 
 **Variables in chains.** An owner never receives `variables`. The origin binds every `{ "$var": … }`
 inside a continued stage and inside the `filter` of every remote resolve and writes the value into
-the owner query; an unbound one is `UNBOUND_VARIABLE` at the origin. 2.0 forwarded a remote filter
-with its `$var` and no variables, so the owner refused it. Because the cache key is taken over the
+the owner query; an unbound one is `UNBOUND_VARIABLE` at the origin. Because the cache key is taken over the
 substituted query, two requests with different variables never share a cached answer.

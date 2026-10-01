@@ -222,6 +222,22 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     }
 
     [Fact]
+    public async Task A_resolve_continued_under_the_first_child_says_its_outcome_and_this_host_says_it_where_there_is_no_child()
+    {
+        var answer = await (await LedgerAsync()).QueryAsync(Over("""
+            { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "latest", "sort": [ { "loadStart": "desc" } ], "first": true } },
+            { "resolve": { "path": "latest.billingLines.assignedTransactionId", "as": "billed", "elements": "first", "outcomeAs": "billedOutcome" } }
+            """, "\"number\": 1, \"latest.shipmentNumber\": 1, \"billed.number\": 1, \"billedOutcome\": 1"));
+
+        answer.ShouldBeOk();
+        Row(answer, Invoice)["billedOutcome"]!.GetValue<string>().Should().Be("resolved", "the owner of the child ran the stage and said so");
+        Row(answer, Invoice)["billed"]!["number"]!.GetValue<string>().Should().StartWith("RL-");
+        Row(answer, Busy)["billedOutcome"]!.GetValue<string>().Should().Be("resolved");
+        Row(answer, NoLines)["latest"].Should().BeNull();
+        Row(answer, NoLines)["billedOutcome"]!.GetValue<string>().Should().Be("reference_null", "no child, so no owner ever saw the row: an earlier hop was null");
+    }
+
+    [Fact]
     public async Task A_lookup_continued_from_an_owning_shipment_the_projection_does_not_name_answers_the_same_gear_without_the_shipment()
     {
         const string Stages = """

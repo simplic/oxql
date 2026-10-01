@@ -1,0 +1,820 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "unwind": {
+          "path": "items",
+          "flatten": "items",
+          "as": "item",
+          "includeIndex": "position"
+        }
+      },
+      {
+        "match": {
+          "item": {
+            "is": "BillingLineTransactionItem"
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "item.billingLineId",
+          "as": "erpLine",
+          "outcomeAs": "erpLineOutcome"
+        }
+      },
+      {
+        "resolve": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "as": "sourceLine",
+          "parentAs": "sourceParent",
+          "outcomeAs": "sourceLineOutcome"
+        }
+      },
+      {
+        "resolve": {
+          "path": "sourceParent.tours.tourId",
+          "as": "deliveringTour",
+          "forTarget": "transport.shipment",
+          "elements": "first",
+          "outcomeAs": "deliveringTourOutcome"
+        }
+      },
+      {
+        "resolve": {
+          "as": "vehicle",
+          "outcomeAs": "vehicleOutcome",
+          "byTarget": {
+            "transport.shipment": "deliveringTour.resource.id",
+            "transport.tour": "sourceParent.resource.id"
+          }
+        }
+      },
+      {
+        "project": {
+          "position": 1,
+          "erpLineOutcome": 1,
+          "sourceParent.id": 1,
+          "sourceLineOutcome": 1,
+          "deliveringTourOutcome": 1,
+          "vehicle.matchCode": 1,
+          "vehicleOutcome": 1
+        }
+      },
+      {
+        "sort": [
+          {
+            "position": "asc"
+          }
+        ]
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["batch","group.page","page.offset","any","unwind.keepPath","resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": ["fleet","staff","transport"],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {"code":"OFFSET_PAGING","message":"After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.","stage":1,"params":{"maxOffset":5000}},
+      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data. 'erpLineOutcome' carries the outcome of every row.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"null","strict":false,"dataLoss":["not_found"],"outcomeAs":"erpLineOutcome"}},
+      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
+      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS). 'sourceLineOutcome' carries the outcome of every row.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"],"outcomeAs":"sourceLineOutcome"}},
+      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}},
+      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS). 'deliveringTourOutcome' carries the outcome of every row.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"deliveringTour","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"],"outcomeAs":"deliveringTourOutcome"}},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owners, each of which binds and runs the branch of its target ('transport.shipment', 'transport.tour'); rows resolved to another target leave the alias null.","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null,"targets":["transport.shipment","transport.tour"]}},
+      {"code":"MISSING_POLICY","message":"A reference of 'vehicle' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS). 'vehicleOutcome' carries the outcome of every row.","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"vehicle","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"],"outcomeAs":"vehicleOutcome"}}
+    ],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "rules": {}
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:ledger.transaction"
+          },
+          "rules": {}
+        }
+      },
+      {
+        "index": 1,
+        "kind": "unwind",
+        "status": "ok",
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
+        "creates": ["item","position"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"item","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 3,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "inline",
+          "phase": "beforePage",
+          "host": "ledger"
+        },
+        "reads": [
+          {"path":"item.billingLineId","use":"resolveKey"}
+        ],
+        "creates": ["erpLine","erpLineOutcome"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "erpLineOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "erpLineOutcome": "r:5"
+          }
+        }
+      },
+      {
+        "index": 4,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "keyed-remote",
+          "phase": "afterPage",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"erpLine.sourceBillingLineReference.id","use":"resolveKey","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"caseCondition","alias":"erpLine"}
+        ],
+        "creates": ["sourceLine","sourceParent","sourceLineOutcome"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "erpLineOutcome": "k:string",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "sourceLineOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "erpLineOutcome": "r:5",
+            "sourceLine": "r:6",
+            "sourceParent": "r:6",
+            "sourceLineOutcome": "r:7"
+          }
+        }
+      },
+      {
+        "index": 5,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"sourceParent.tours.tourId","use":"resolveKey","alias":"sourceParent"}
+        ],
+        "creates": ["deliveringTour","deliveringTourOutcome"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "erpLineOutcome": "k:string",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "sourceLineOutcome": "k:string",
+            "deliveringTour": "t:transport.tour",
+            "deliveringTourOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "erpLineOutcome": "r:5",
+            "sourceLine": "r:6",
+            "sourceParent": "r:6",
+            "sourceLineOutcome": "r:7",
+            "deliveringTour": "r:6",
+            "deliveringTourOutcome": "r:7"
+          }
+        }
+      },
+      {
+        "index": 6,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"deliveringTour.resource.id","use":"resolveKey","alias":"deliveringTour"},
+          {"path":"deliveringTour.resource","use":"caseCondition","alias":"deliveringTour"},
+          {"path":"sourceParent.resource.id","use":"resolveKey","alias":"sourceParent"},
+          {"path":"sourceParent.resource","use":"caseCondition","alias":"sourceParent"}
+        ],
+        "creates": ["vehicle","vehicleOutcome"],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "erpLineOutcome": "k:string",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "sourceLineOutcome": "k:string",
+            "deliveringTour": "t:transport.tour",
+            "deliveringTourOutcome": "k:string",
+            "vehicle": "u:vehicle",
+            "vehicleOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "erpLineOutcome": "r:5",
+            "sourceLine": "r:6",
+            "sourceParent": "r:6",
+            "sourceLineOutcome": "r:7",
+            "deliveringTour": "r:6",
+            "deliveringTourOutcome": "r:7",
+            "vehicle": "r:6",
+            "vehicleOutcome": "r:7"
+          }
+        }
+      },
+      {
+        "index": 7,
+        "kind": "project",
+        "status": "ok",
+        "reads": [
+          {"path":"position","use":"project"},
+          {"path":"erpLineOutcome","use":"project"},
+          {"path":"sourceParent.id","use":"project","alias":"sourceParent"},
+          {"path":"sourceLineOutcome","use":"project"},
+          {"path":"deliveringTourOutcome","use":"project"},
+          {"path":"vehicle.matchCode","use":"project","alias":"vehicle"},
+          {"path":"vehicleOutcome","use":"project"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["deliveringTourOutcome","erpLineOutcome","id","position","sourceLineOutcome","sourceParent.id","vehicle.matchCode","vehicleOutcome"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "position": "k:int",
+            "erpLineOutcome": "k:string",
+            "sourceParent": "u:sourceParent",
+            "sourceLineOutcome": "k:string",
+            "deliveringTourOutcome": "k:string",
+            "vehicle": "u:vehicle",
+            "vehicleOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "position": "r:3",
+            "erpLineOutcome": "r:5",
+            "sourceParent": "r:6",
+            "sourceLineOutcome": "r:7",
+            "deliveringTourOutcome": "r:7",
+            "vehicle": "r:6",
+            "vehicleOutcome": "r:7"
+          }
+        }
+      },
+      {
+        "index": 8,
+        "kind": "sort",
+        "status": "ok",
+        "reads": [
+          {"path":"position","use":"sort"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "offset",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["deliveringTourOutcome","erpLineOutcome","id","position","sourceLineOutcome","sourceParent.id","vehicle.matchCode","vehicleOutcome"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "position": "k:int",
+            "erpLineOutcome": "k:string",
+            "sourceParent": "u:sourceParent",
+            "sourceLineOutcome": "k:string",
+            "deliveringTourOutcome": "k:string",
+            "vehicle": "u:vehicle",
+            "vehicleOutcome": "k:string"
+          },
+          "rules": {
+            "": "r:1",
+            "position": "r:3",
+            "erpLineOutcome": "r:5",
+            "sourceParent": "r:6",
+            "sourceLineOutcome": "r:7",
+            "deliveringTourOutcome": "r:7",
+            "vehicle": "r:6",
+            "vehicleOutcome": "r:7"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "item": {
+        "stage": 1,
+        "node": "element",
+        "entities": ["ledger.transaction"],
+        "source": "items",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "droppedAt": 7,
+        "type": "t:ledger.transaction#items"
+      },
+      "position": {
+        "stage": 1,
+        "node": "scalar",
+        "kind": "int",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "k:int"
+      },
+      "erpLine": {
+        "stage": 3,
+        "node": "entity",
+        "entities": ["ledger.billing_line"],
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": true,
+        "droppedAt": 7,
+        "reference": {
+          "path": "item.billingLineId",
+          "cases": [
+            {
+              "targets": [
+                {
+                  "entity": "ledger.billing_line",
+                  "field": "id",
+                  "remote": false
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "as": "erpLineOutcome",
+          "values": ["not_found"]
+        },
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type"],
+        "shows": [],
+        "hint": null,
+        "targets": [
+          {
+            "target": "ledger.billing_line",
+            "service": "ledger",
+            "remote": false,
+            "type": "t:ledger.billing_line"
+          }
+        ],
+        "type": "t:ledger.billing_line"
+      },
+      "erpLineOutcome": {
+        "stage": 3,
+        "node": "scalar",
+        "kind": "string",
+        "outcomeOf": "erpLine",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "values": ["resolved","reference_null","not_found"],
+        "type": "k:string"
+      },
+      "sourceLine": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment#billingLines","transport.tour#billingLines"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "droppedAt": 7,
+        "reference": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "cases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": ["logistics"]
+              },
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "as": "sourceLineOutcome",
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "loads": [],
+        "shows": [],
+        "hint": null,
+        "targets": [
+          {
+            "target": "transport.shipment#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [5,6],
+            "notApplicable": [],
+            "type": "t:transport.shipment#billingLines"
+          },
+          {
+            "target": "transport.tour#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [6],
+            "notApplicable": [5],
+            "type": "t:transport.tour#billingLines"
+          }
+        ],
+        "type": "u:sourceLine"
+      },
+      "sourceParent": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment","transport.tour"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "loads": ["id","resource.id","tours.tourId"],
+        "shows": ["id"],
+        "hint": null,
+        "parentOf": "sourceLine",
+        "targets": [
+          {
+            "target": "transport.shipment",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.shipment"
+          },
+          {
+            "target": "transport.tour",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.tour"
+          }
+        ],
+        "type": "u:sourceParent"
+      },
+      "sourceLineOutcome": {
+        "stage": 4,
+        "node": "scalar",
+        "kind": "string",
+        "outcomeOf": "sourceLine",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "values": ["resolved","ambiguous","reference_null","excluded","not_found","invalid_key","owner_unanswered"],
+        "type": "k:string"
+      },
+      "deliveringTour": {
+        "stage": 5,
+        "node": "remote",
+        "entities": ["transport.tour"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "droppedAt": 7,
+        "continuedFrom": {
+          "alias": "sourceParent",
+          "target": "transport.shipment"
+        },
+        "loads": ["resource.id"],
+        "shows": [],
+        "hint": null,
+        "outcome": {
+          "as": "deliveringTourOutcome",
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "t:transport.tour"
+      },
+      "deliveringTourOutcome": {
+        "stage": 5,
+        "node": "scalar",
+        "kind": "string",
+        "outcomeOf": "deliveringTour",
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": false,
+        "values": ["resolved","ambiguous","reference_null","excluded","not_applicable","not_found","invalid_key","owner_unanswered"],
+        "type": "k:string"
+      },
+      "vehicle": {
+        "stage": 6,
+        "node": "remote",
+        "entities": ["staff.employee","fleet.vehicle"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "sourceLine"
+        },
+        "branches": [
+          {
+            "anchorTarget": "transport.shipment",
+            "path": "deliveringTour.resource.id",
+            "entities": ["staff.employee","fleet.vehicle"],
+            "heldBy": "transport",
+            "status": "ok",
+            "types": ["t:staff.employee","t:fleet.vehicle"]
+          },
+          {
+            "anchorTarget": "transport.tour",
+            "path": "sourceParent.resource.id",
+            "entities": ["staff.employee","fleet.vehicle"],
+            "heldBy": "transport",
+            "status": "ok",
+            "types": ["t:staff.employee","t:fleet.vehicle"]
+          }
+        ],
+        "loads": ["matchCode"],
+        "shows": ["matchCode"],
+        "hint": null,
+        "outcome": {
+          "as": "vehicleOutcome",
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "type": "u:vehicle"
+      },
+      "vehicleOutcome": {
+        "stage": 6,
+        "node": "scalar",
+        "kind": "string",
+        "outcomeOf": "vehicle",
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": false,
+        "values": ["resolved","ambiguous","reference_null","excluded","not_applicable","not_found","invalid_key","owner_unanswered"],
+        "type": "k:string"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "service": "ledger"
+      },
+      "t:transport.shipment": {
+        "entity": "transport.shipment",
+        "service": "transport"
+      },
+      "t:transport.tour": {
+        "entity": "transport.tour",
+        "service": "transport"
+      },
+      "t:staff.employee": {
+        "entity": "staff.employee",
+        "service": "staff"
+      },
+      "t:fleet.vehicle": {
+        "entity": "fleet.vehicle",
+        "service": "fleet"
+      },
+      "t:transport.shipment#billingLines": {
+        "entity": "transport.shipment",
+        "item": "billingLines",
+        "service": "transport"
+      },
+      "u:vehicle": {
+        "of": ["t:staff.employee","t:fleet.vehicle"]
+      },
+      "t:transport.tour#billingLines": {
+        "entity": "transport.tour",
+        "item": "billingLines",
+        "service": "transport"
+      },
+      "t:ledger.transaction#items": {
+        "entity": "ledger.transaction",
+        "item": "items",
+        "service": "ledger"
+      },
+      "t:ledger.billing_line": {
+        "entity": "ledger.billing_line",
+        "service": "ledger"
+      },
+      "u:sourceLine": {
+        "of": ["t:transport.shipment#billingLines","t:transport.tour#billingLines"]
+      },
+      "u:sourceParent": {
+        "of": ["t:transport.shipment","t:transport.tour"]
+      }
+    },
+    "rules": {
+      "r:1": {
+        "unwound": ["items"]
+      },
+      "r:2": {
+        "self": "42800"
+      },
+      "r:3": {
+        "self": "588ff"
+      },
+      "r:4": {
+        "self": "40800"
+      },
+      "r:5": {
+        "self": "500c3"
+      },
+      "r:6": {
+        "self": "40000",
+        "under": "owner"
+      },
+      "r:7": {
+        "self": "40000"
+      }
+    },
+    "result": {
+      "paging": "offset",
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
+        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
+        {"path":"erpLineOutcome","kind":"string","nullable":false,"stage":3,"root":"","present":"always"},
+        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
+        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
+        {"path":"sourceLineOutcome","kind":"string","nullable":false,"stage":4,"root":"","present":"always"},
+        {"path":"deliveringTourOutcome","kind":"string","nullable":false,"stage":5,"root":"","present":"always"},
+        {"path":"vehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"vehicle","present":"ifJoined"},
+        {"path":"vehicleOutcome","kind":"string","nullable":false,"stage":6,"root":"","present":"always"}
+      ]
+    },
+    "owners": [
+      {
+        "service": "transport",
+        "remote": true,
+        "route": {
+          "apiName": "transport-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      },
+      {
+        "service": "staff",
+        "remote": true,
+        "via": "transport",
+        "route": {
+          "apiName": "staff-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      },
+      {
+        "service": "fleet",
+        "remote": true,
+        "via": "transport",
+        "route": {
+          "apiName": "fleet-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      }
+    ],
+    "catalog": []
+  }
+}

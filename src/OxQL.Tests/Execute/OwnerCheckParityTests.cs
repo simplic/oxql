@@ -149,6 +149,19 @@ public class OwnerCheckParityTests
             ], Strict: true,
             ["rc.shipment", "rc.tour"]),
 
+        ["outcomes named on a remote resolve, on a stage continued under it and on a union join"] = new(
+            """
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "outcomeAs": "lineOutcome" } },
+             { "resolve": { "path": "owner.driverId", "as": "drv", "forTarget": "transport.shipment", "outcomeAs": "drvOutcome" } },
+             { "resolve": { "as": "who", "outcomeAs": "whoOutcome", "byTarget": { "rc.tour": "owner.driverId", "transport.shipment": "owner.driverId" } } },
+             { "project": { "number": 1, "lineOutcome": 1, "drvOutcome": 1, "who.name": 1, "whoOutcome": 1 } }]
+            """,
+            [
+                InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(ShipmentId) }),
+                InvoiceRow(SecondId, row => row["Source"] = new BsonDocument { ["Type"] = "logistics", ["_id"] = Id(TourId) }),
+            ], Strict: false,
+            ["rc.tour", "transport.shipment"]),
+
         ["union join: a local and a remote branch, a third target without one"] = new(
             """
             [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },

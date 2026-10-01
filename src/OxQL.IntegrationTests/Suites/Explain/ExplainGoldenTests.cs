@@ -170,6 +170,8 @@ internal static class ExplainGolden
         ["EX1-source-chain"] = () => JsonNode.Parse(ExampleChain)!.AsObject(),
         ["EX2-continued-refused"] = () => JsonNode.Parse(ContinuedRefused)!.AsObject(),
         ["EX3-union-join"] = () => JsonNode.Parse(UnionJoin)!.AsObject(),
+        // Every kind of join naming its outcome (§3.O): inline, remote, continued for one target, a union join.
+        ["EX4-outcomes"] = () => JsonNode.Parse(Joins.JoinsOutcomeAsTests.Chain(ReportSeed.TransactionId))!.AsObject(),
     }.AsReadOnly();
 
     /// <summary>

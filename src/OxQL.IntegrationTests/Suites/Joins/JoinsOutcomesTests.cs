@@ -127,6 +127,10 @@ public class JoinsOutcomesTests
 
         [OxQLReference("oc.depot", "id", Item = "lines")]
         public Guid LineId { get; set; }
+
+        /// <summary>A reference onto a member that is not the key: two customers may bear one name.</summary>
+        [OxQLReference("oc.customer", "name")]
+        public string? CustomerName { get; set; }
     }
 
     public sealed class OcCustomer
@@ -169,13 +173,14 @@ public class JoinsOutcomesTests
     /// <summary>
     /// Three orders: the first resolves its customer, a line of one depot and 101 customer ids (one
     /// more than <c>MaxLookupLimit</c>); the second a customer that is gone and a line two depots
-    /// hold; the third no customer and a line no depot holds.
+    /// hold; the third no customer and a line no depot holds. By name the first is the one Alice, the
+    /// second one of two Twins, the third nobody.
     /// </summary>
-    private static async Task<(TestDatabase Owned, CustomHost Host)> StartAsync(string name)
+    internal static async Task<(TestDatabase Owned, CustomHost Host)> StartAsync(string name)
     {
         var owned = await MongoFixture.CreateDatabaseAsync(name);
 
-        await owned.Database.GetCollection<BsonDocument>("customers").InsertOneAsync(Owned(1, "Alice"));
+        await owned.Database.GetCollection<BsonDocument>("customers").InsertManyAsync([Owned(1, "Alice"), Owned(2, "Twin"), Owned(3, "Twin")]);
 
         var one = Owned(21, "North");
         one["Lines"] = new BsonArray { new BsonDocument { ["_id"] = Bin(SharedLine), ["Code"] = "N-SHARED" }, new BsonDocument { ["_id"] = Bin(OwnLine), ["Code"] = "N-OWN" } };
@@ -196,9 +201,9 @@ public class JoinsOutcomesTests
 
         await owned.Database.GetCollection<BsonDocument>("orders").InsertManyAsync(
         [
-            Order(31, order => { order["CustomerId"] = Bin(Customer); order["LineId"] = Bin(OwnLine); order["CustomerIds"] = new BsonArray(Enumerable.Repeat(Bin(Customer), 101)); }),
-            Order(32, order => { order["CustomerId"] = Bin(Gone); order["LineId"] = Bin(SharedLine); order["CustomerIds"] = new BsonArray { Bin(Customer) }; }),
-            Order(33, order => { order["LineId"] = Bin(GoneLine); order["CustomerIds"] = new BsonArray(); }),
+            Order(31, order => { order["CustomerId"] = Bin(Customer); order["LineId"] = Bin(OwnLine); order["CustomerIds"] = new BsonArray(Enumerable.Repeat(Bin(Customer), 101)); order["CustomerName"] = "Alice"; }),
+            Order(32, order => { order["CustomerId"] = Bin(Gone); order["LineId"] = Bin(SharedLine); order["CustomerIds"] = new BsonArray { Bin(Customer) }; order["CustomerName"] = "Twin"; }),
+            Order(33, order => { order["LineId"] = Bin(GoneLine); order["CustomerIds"] = new BsonArray(); order["CustomerName"] = "Nobody"; }),
         ]);
 
         var model = ClrModelBuilder.Build(

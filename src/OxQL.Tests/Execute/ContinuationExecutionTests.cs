@@ -386,6 +386,38 @@ public class ContinuationExecutionTests
     }
 
     [Fact]
+    public async Task The_outcome_under_its_name_is_on_every_row_lifted_from_the_owner_or_said_by_this_host()
+    {
+        var host = ChainHost.Start();
+        SeedMemos(host);
+
+        // A fourth invoice names an alpha that does not exist, a fifth no source at all.
+        host.Runner.Rows[ChainModel.Invoice].Add(ChainModel.InvoiceRow(Guid.Parse("10000000-0000-0000-0000-0000000000a4"), "RE-4", row => row["Source"] = new BsonDocument { ["Type"] = "a", ["_id"] = Id(Guid.Parse("a0000000-0000-0000-0000-0000000000ff")) }));
+        host.Runner.Rows[ChainModel.Invoice].Add(ChainModel.InvoiceRow(Guid.Parse("10000000-0000-0000-0000-0000000000a5"), "RE-5", _ => { }));
+
+        // What each owner's aggregate writes under the member: the fake runner answers the rows as stored.
+        host.Runner.Rows["ct.alpha"][0]["memoOutcome"] = "resolved";
+        host.Runner.Rows["ct.beta"][0]["memoOutcome"] = "not_found";
+
+        var result = Succeeded(await host.RunAsync("""
+            [{ "resolve": { "path": "source.id", "as": "src", "outcomeAs": "srcOutcome" } },
+             { "resolve": { "as": "memo", "outcomeAs": "memoOutcome", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.memoId" } } },
+             { "project": { "number": 1, "srcOutcome": 1, "memoOutcome": 1 } }]
+            """));
+
+        result.Items.Select(row => row!["srcOutcome"]!.GetValue<string>()).Should().Equal(["resolved", "resolved", "resolved", "not_found", "reference_null"], "resolved is said as well");
+        result.Items.Select(row => row!["memoOutcome"]!.GetValue<string>()).Should().Equal(
+            ["resolved", "not_found", "not_applicable", "reference_null", "reference_null"],
+            "the owners' own for the rows they answered; not applicable for a target without a branch; reference_null where the alias it continues under is null");
+        result.Items.Should().OnlyContain(row => !row!.AsObject().ContainsKey("src") && !row.AsObject().ContainsKey("memo"), "the projection names only the outcomes: the joins run for them and stay out of the row");
+        result.Diagnostics.Should().BeNull("the member reports nothing: onMissing is null");
+
+        var sent = host.Runner.Calls.Where(call => call.Entity.Id is "ct.alpha" or "ct.beta").ToList();
+
+        sent.Should().HaveCount(2).And.OnlyContain(call => call.Stages.Any(stage => stage.Contains("$set") && stage["$set"].AsBsonDocument.Contains("memoOutcome")), "each owner writes the member in its aggregate");
+    }
+
+    [Fact]
     public async Task An_owners_refusal_of_a_branch_maps_back_to_the_union_join_with_the_branchs_path_and_target()
     {
         var host = ChainHost.Start();

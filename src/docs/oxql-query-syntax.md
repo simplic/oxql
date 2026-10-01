@@ -26,8 +26,8 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
   [`oxql-operations.md`](oxql-operations.md#keyed-fetch-and-remote-continuation)); on the public
   routes it is `UNKNOWN_REQUEST_MEMBER` like any other.
 - `strict: true` turns every loss of data into a 422 refusal and allows a larger single page;
-  see [Strict requests](#strict-requests-and-the-report-page). A caller gates on the
-  `oxql.2.1` capability before sending it or any other 2.1 construct.
+  see [Strict requests](#strict-requests-and-the-report-page). A caller gates on contract 2
+  (`engine.contract` on health) before sending it or any other contract 2 construct.
 - `entityType` is matched exactly and case-sensitively. An unknown id is `UNKNOWN_ENTITY`; a
   retired id the host declared is answered as the current entity with an `ENTITY_ID_RETIRED`
   diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
@@ -590,31 +590,38 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 ```jsonc
 {
   "query": { "entityType": "…", "variables": { … }, "strict": true, "pipeline": [ … ] },   // page.cursor is ignored
-  "describe": [
-    { "id": "d1", "at": 6, "prefix": "erpLine", "usage": "match", "depth": 1 },
-    { "id": "d2", "at": 6, "paths": ["erpLine.text", "item.billingLineId"], "usage": "project" },
-    { "id": "d3", "entity": "transport.delivery_attempt", "prefix": "", "usage": "sort", "referencing": true }
-  ],
-  "remote": "check",      // "check" (default): check continued stages at their owners; "skip"
-  "include": ["indexes"]  // optional: the index advisory, the only extra read explain makes
+  "include": ["shape", "notes"],   // default; also "docs", "plan", "indexes"
+  "shape": { "depth": 2 },         // levels of members the type table lists below each root: 1 to 3
+  "remote": "check",               // "check" (default) or "cached"
+  "catalog": [
+    { "id": "c1", "entity": "transport.delivery_attempt", "referencing": true },
+    { "id": "c2", "entity": "transport.shipment", "prefix": "tours", "depth": 1 }
+  ]
 }
 ```
 
-- A body with `entityType` at the top is a plain query: no describe, remote `check`, no include.
-  An envelope member other than these four, a `remote` other than `check`/`skip`, or an `include`
-  naming anything but `indexes` is a 400 ProblemDetails.
-- A describe entry carries `id`, then either `at` (the shape before pipeline index `at`: `0` is the
-  entry shape, `pipeline.length` the final one; after a failed stage the last good shape) or
-  `entity` (that entity's entry shape; another service's entity is described by its owner), then
-  either `prefix` (a root, a path or `""`: its children) or `paths` (exact paths), a `usage` (one of
-  `match sort project unwind groupKey aggregate select resolve lookupOn`, which decides the flags),
-  an optional `depth` 1–3, and `referencing: true` for the same-host entities referencing the entity.
-  A malformed entry is answered with an `error` under the usual codes (`UNKNOWN_STAGE_MEMBER`,
-  `INVALID_OPERAND`, `INVALID_PATH`, `UNKNOWN_ENTITY`, `UNKNOWN_PATH`, `OPTION_NOT_APPLICABLE`);
-  entries beyond `Explain:MaxDescribeRequests` (10) are answered with `REQUEST_TOO_LARGE`, and an
-  entry lists at most `Explain:MaxDescribeChildren` (500) children, then `truncated: true`.
+- A body with `entityType` at the top is a plain query, which is the envelope with its defaults:
+  `include` `shape` and `notes`, the host's default depth, remote `check`, no catalog. An envelope
+  member other than these five, or a member of the wrong kind, is a 400 ProblemDetails. More than
+  `Explain:MaxStages` stages or `MaxCatalogEntries` catalog entries, a `shape.depth` above
+  `MaxShapeDepth`, and an `include` or `remote` value the engine does not know are 400
+  `EXPLAIN_LIMIT`, before anything is bound.
+- `include` names what the answer carries beyond the verdict, the errors, the stages and the
+  aliases; a list replaces the default. `shape`: the row after each stage, the type table and the
+  flag sets. `notes`: the engine-behaviour notes. `docs`: the descriptions of types, members and enum
+  values in the type table. `plan`: the bound form, the emitted stages and every owner query.
+  `indexes`: the index advisory, the only extra read explain makes.
+- `remote`: `check` checks what an owner binds at that owner. `cached` is accepted and answered as
+  `check` until owners' answers are served from the cache alone.
+- A catalog entry looks up an entity outside the query (a lookup's `from`, a palette, the entities
+  referencing one). It carries `id`, `entity` (an entity id, or `entity#item` for the element of an
+  item collection; another service's entity is answered by its owner), an optional `prefix` (a path:
+  the answer then lists the members below it, which is how a member the type table cut is read), an
+  optional `depth` 1–3, and `referencing: true` for the same-host entities referencing the entity. A
+  malformed entry is answered with an `error` under the usual codes (`UNKNOWN_STAGE_MEMBER`,
+  `INVALID_OPERAND`, `INVALID_PATH`, `UNKNOWN_ENTITY`, `UNKNOWN_PATH`), never a refusal.
 
-The answer, and what explain reads and reveals, are in
+The answer, the limits of one explain, and what explain reads and reveals are in
 [`oxql-operations.md`](oxql-operations.md#post-oxqlexplain).
 
 ## Batch

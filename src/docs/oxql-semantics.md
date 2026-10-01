@@ -501,8 +501,10 @@ Nothing else changes compared with a plain remote resolve:
   resolve keeps `min(remaining, ResolveTimeoutMs)`; the batch's `maxTimeMs` is that less a tenth (at
   most 250 ms), and split batches of one owner share one deadline. An owner that runs out answers
   nothing for its keys: `RESOLVE_TIMEOUT`, rows `owner_unanswered`. An owner checking its own
-  continued stages at explain starts a fresh `Explain:RemoteTimeoutMs` budget while the origin waits
-  only for what is left of its own, so a slow second owner comes back `REMOTE_UNCHECKED`.
+  continued stages at explain is given what is left of its origin's explain (time and owner calls) and
+  asks its own owners only within it, so a slow second owner comes back unchecked (`REMOTE_UNCHECKED`,
+  or `EXPLAIN_LIMIT` when the explain's own time ran out) and one explain never causes more than
+  `Explain:MaxOwnerCalls` owner calls in all.
 - **Cost.** Owner queries per level are bounded by stages × key chunks, and keys per level by the
   rows the previous level returned; the remaining limits are `MaxResolveKeys` (per request),
   `MaxContinuedStages`, the owner's `MaxBatchQueries` and the time ceiling.

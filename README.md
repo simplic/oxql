@@ -13,7 +13,7 @@ operator, flattened item trees, typed, item and key-converting references, `look
 `first` and `on`, the outcome of every join with `onMissing` and `strict`, chains across services
 by remote continuation, and `POST /oxql/explain` as the one "all information about this query"
 endpoint, on by default and never executing. Explain's answer changed shape; see *Upgrading from
-2.0 to 2.1*.
+contract 1*.
 
 The full request syntax, the operand rules per kind, and the closed lists of error and
 diagnostic codes are in [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md).
@@ -129,8 +129,8 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 |---|---|
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; always 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. More than `Limits:MaxBatchQueries` queries is `BATCH_TOO_LARGE`. Queries run sequentially on one host. |
-| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. Capabilities: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1`, `unwind.keepPath`, and with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
-| `POST /oxql/explain` | On by default; 404 while `Explain:Enabled` is false. Takes a query or the envelope `{ query, describe?, remote?, include? }` and never executes it. Answers 200 with `valid`, every error, the steps (shape, executor, phase and forwarded owner queries of each stage), the result columns, describe of child paths, engine-behaviour notes, and for a valid query the canonical bound form, the emitted page and count stages and the collation. The index advisory is opt-in (`include: ["indexes"]`) and reads only `listIndexes`. See [`oxql-operations.md`](src/docs/oxql-operations.md#post-oxqlexplain). |
+| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. `engine.contract` 2 is the marker of this package: every contract 2 construct and the explain answer. Capabilities: `batch`, `group.page`, `page.offset`, `any`, `unwind.keepPath`, and with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
+| `POST /oxql/explain` | On by default; 404 while `Explain:Enabled` is false. Takes a query or the envelope `{ query, include?, shape?, remote?, catalog? }` and never executes it. Answers 200 with `valid`, every error, each stage with its placement and the shape of the row after it, the aliases, one shared table of types with the flags of every member, the result columns, the owners asked, engine-behaviour notes, and on request the plan (`include: ["plan"]`: the canonical bound form, the emitted page and count stages, the collation, the owner queries) and the index advisory (`include: ["indexes"]`, which reads only `listIndexes`). Rate-limited per user (429 with `Retry-After`) and bounded in what one explain may ask of other services. See [`oxql-operations.md`](src/docs/oxql-operations.md#post-oxqlexplain). |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
 
@@ -162,7 +162,10 @@ Where each limit is enforced, and how it reaches calls between services, is in
 |---|---|---|
 | `Compat:Enabled` | `true` | contract 1 for requests without the header |
 | `Explain:Enabled` | `true` | `POST /oxql/explain` answers (it was `false` before 2.1) |
-| `Explain:RemoteTimeoutMs` / `MaxDescribeChildren` / `MaxDescribeRequests` | 1 500 / 500 / 10 | explain's wait for owners in all / children per describe answer / describe entries per explain |
+| `Explain:RemoteTimeoutMs` / `TimeoutMs` | 1 500 / 2 000 | explain's wait for owners in all / the wall time of one explain |
+| `Explain:DefaultShapeDepth` / `MaxTypeMembers` / `MaxAnswerBytes` | 2 / 300 / 262 144 | levels of members the type table lists / member rows per type / the size an answer is trimmed to |
+| `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | owner services one explain asks / owner calls it causes in all |
+| `Explain:RatePerMinute` / `RateBurst` / `MaxConcurrentPerUser` / `MaxConcurrentPerHost` / `MaxConcurrentPerCaller` | 20 / 5 / 2 / 8 / 4 | the rate and concurrency of explain, per user, per host and per calling service; more is 429 |
 | `Limits:MaxPageSize` / `DefaultPageSize` | 500 / 100 | the page a request may ask for / gets without a limit (`DefaultPageSize` is clamped to `MaxPageSize`) |
 | `Limits:MaxPipelineStages` | 20 | caller stages; the engine's scope stage does not count |
 | `Limits:MaxLookupStages` / `MaxUnwindStages` / `MaxResolveStages` | 5 / 5 / 8 | resolve stages bound on this host (2 before 2.1); continued stages count at their owner |
@@ -318,7 +321,10 @@ scenarios A1–A5 run through explain and query on them. How it works, how to ru
 add a case and how to export the Angular studio's fixtures is in
 [`src/docs/oxql-conformance.md`](src/docs/oxql-conformance.md).
 
-## Upgrading from 2.0 to 2.1
+## Upgrading from contract 1
+
+The 2.0 release package is the first with contract 2; `engine.contract: 2` on health marks it.
+What follows lists what changed against the 2.0 builds that preceded it ("2.0" below).
 
 A host bumps the packages; nothing in the registration changes. A host other services call as an
 owner also needs the base package whose internal batch and explain routes use the internal-call
@@ -332,16 +338,18 @@ operator notice:
   `unwind.keepPath`). A caller gates on the capability before sending either.
 
 - **Explain.** `OxQL:Explain:Enabled` defaults to `true`; set it to `false` to keep the route off.
-  Explain never executes a query any more (2.0 ran the server's `executionStats` explain for a
-  pipeline with a `$lookup`), a query that does not bind is answered 200 with `valid: false` and
-  every error instead of a 400 refusal (`bound` and `stages` are then absent), and the index
-  advisory needs `include: ["indexes"]`. `bound`, `stages`, `count`, `collation` and `diagnostics`
-  keep their names and meaning. The body may be an envelope with `describe`, `remote` and
-  `include`. The only 2.0 consumer, the `OxQL.Studio` console, is updated in the same release.
+  Explain never executes a query (2.0 ran the server's `executionStats` explain for a pipeline with
+  a `$lookup`), a query that does not bind is answered 200 with `valid: false` and every error
+  instead of a 400 refusal, and the answer is the bind trace: `stages`, `aliases`, `types`,
+  `flagSets`, `result`, `owners`, `catalog`. The plan (`bound`, `stages`, `count`, `collation`) moved
+  under `plan` and needs `include: ["plan"]`; the index advisory needs `include: ["indexes"]`. The
+  body may be an envelope with `include`, `shape`, `remote` and `catalog`. Explain is rate-limited
+  per user and bounded in what it asks of other services. The only 2.0 consumer, the `OxQL.Studio`
+  console, is updated in the same release.
 - **Limits.** `MaxResolveStages` 2 → 8, `MaxResolveKeys` 2 000 → 10 000 and now per request over
   every keyed stage. New: `MaxContinuedStages`, `MaxFlattenDepth`, `MaxReportPageSize`,
-  `MaxReportedRows`, `Execution:ChainTimeoutMs`, `Cache:NegativeResolveTtlSeconds` and the three
-  `Explain` bounds. Health publishes 28 limit entries, the schema's `limits` fifteen.
+  `MaxReportedRows`, `Execution:ChainTimeoutMs`, `Cache:NegativeResolveTtlSeconds` and the sixteen
+  `Explain` limits. Health publishes 41 limit entries, the schema's `limits` fifteen.
 - **Requests.** A contract 2 request with a top-level member other than `entityType`, `variables`,
   `pipeline` and `strict` is refused with `UNKNOWN_REQUEST_MEMBER`; 2.0 ignored it. A resolve path
   under a collection that is not unwound is refused with `RESOLVE_ON_COLLECTION` unless it says

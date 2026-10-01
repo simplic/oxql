@@ -67,14 +67,14 @@ the listed status.
 | `INVALID_VARIABLE` | 400 | a variable holds an object, or an array where an element is expected |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `pipeline`, `strict`; `keyedBy` on a public route |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `pipeline`, `strict`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
 | `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; a `null` query in a batch |
-| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a 2.1 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed describe entry |
+| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a 2.1 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
 | `MULTIPLE_PAGE_STAGES` | 400 | two `page` stages |
@@ -101,7 +101,7 @@ the listed status.
 | `MAX_OFFSET_EXCEEDED` | 400 | `offset` above `MaxOffset` |
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
-| `EXPLAIN_LIMIT` | 400 | an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound |
+| `EXPLAIN_LIMIT` | 400, or 429 | 400: an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound. 429 (`rate_limited`, with `Retry-After`): more explains than a caller may send or have in flight, refused before the body is read; `params` `limit`, `max`, `retryAfter`. As an explain note: a cost limit was hit mid-way and a part was left out |
 | `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
@@ -153,7 +153,7 @@ a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChu
 `MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
 `MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
 twenty-three `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
-`chainTimeoutMs`, `negativeResolveTtlSeconds` and the three explain bounds (28 entries). The fifteen
+`chainTimeoutMs`, `negativeResolveTtlSeconds` and the sixteen explain limits (41 entries). The fifteen
 a caller checks a request against before sending it are also published in the schema document's
 `limits` by the Simplic base package (column */schema*).
 
@@ -192,10 +192,16 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
 | `Explain:Enabled` | `true` (was `false`) | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
-| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (remote check and remote describes) | note `REMOTE_UNCHECKED` | no | — |
-| `Explain:MaxDescribeChildren` / `MaxDescribeRequests` | 500 / 10 | children per describe answer (then `truncated`) / describe entries per explain (then an error) | `REQUEST_TOO_LARGE` per entry | no | — |
+| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries) | note `REMOTE_UNCHECKED` | no | — |
+| `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
 | `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
-| `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too; `catalog` and `shape` are only bounded so far |
+| `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too |
+| `Explain:DefaultShapeDepth` / `MaxTypeMembers` | 2 (never above `MaxShapeDepth`) / 300 | the levels of members the type table lists below each root when the request names no `shape.depth` / the member rows of one type, then `truncated` | — | no | an owner answers its types at the depth the origin was asked for |
+| `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the types keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
+| `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | the distinct owner services one explain asks / the owner calls it causes in all, one per service and round, transitive ones included | note `EXPLAIN_LIMIT` (`ownerServices`, `ownerCalls`) | no | an internal explain carries the calls left; an owner starts none beyond them |
+| `Explain:RatePerMinute` / `RateBurst` | 20 / 5 | the public explain route, per organisation and user: a token bucket, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic |
+| `Explain:MaxConcurrentPerUser` / `MaxConcurrentPerHost` | 2 / 8 | explains in flight on the public route, per user and per host | 429 `EXPLAIN_LIMIT` (`concurrentPerUser`, `concurrentPerHost`) | no | — |
+| `Explain:MaxConcurrentPerCaller` | 4 | internal explains in flight per calling service; the host of the internal route enforces it (the Simplic base package does) | 429 `EXPLAIN_LIMIT` (`concurrentPerCaller`) | no | the origin notes the part `REMOTE_UNCHECKED` |
 
 Fixed bounds, not configurable:
 
@@ -207,8 +213,7 @@ Fixed bounds, not configurable:
 | `Execution:MaxTimeMs` ceiling | 60 000 ms | — |
 | health reachability probe | 2 s per service | the service counts as not reachable |
 | listed indexes for the explain advisory | cached 60 s per collection | — |
-| owner answers to explain's remote check and remote describes | cached 30 s, at most 1 000 entries, failures not kept | — |
-| describe `depth` | 1 to 3 | `INVALID_OPERAND` |
+| owner answers to explain's remote check and forwarded catalog entries | cached 30 s, at most 1 000 entries, failures not kept | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
 | select-path retry rounds for a remote union target | 2 per request | — |
 | JSON nesting of request and answer bodies | 256 (MVC's default is 32; explain answers of flattening and chain queries nest deeper) | — |
@@ -222,7 +227,7 @@ Anonymous, always 200, and never waits for another service:
   "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
-  "capabilities": ["batch", "group.page", "page.offset", "any", "oxql.2.1", "unwind.keepPath",
+  "capabilities": ["batch", "group.page", "page.offset", "any", "unwind.keepPath",
                    "resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
@@ -232,25 +237,29 @@ Anonymous, always 200, and never waits for another service:
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
     "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10,
-    "explainRemoteTimeoutMs": 1500, "maxDescribeChildren": 500, "maxDescribeRequests": 10,
-    "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3
+    "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
+    "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
+    "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
+    "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainRatePerMinute": 20, "explainRateBurst": 5,
+    "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
   "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
 }
 ```
 
+- `engine.contract` is the contract the engine speaks. `2` is the marker of this package: an engine
+  that reports it has the whole contract 2 language (`strict`, `is`, `flatten`, every stage member of
+  contract 2) and the explain answer described below. A caller gates on it, never on a capability
+  per feature.
 - `engine.version` is the version of the `OxQL.Core` assembly the host runs, which is the package
   version. Another host reads it from this
   endpoint to decide whether it may send 2.1 vocabulary (see *Keyed fetch and remote continuation*).
-- `capabilities`: `batch`, `group.page`, `page.offset`, `any`, `oxql.2.1` and `unwind.keepPath` always
+- `capabilities`: `batch`, `group.page`, `page.offset`, `any` and `unwind.keepPath` always
   (`unwind.keepPath`: an unwind may take its collection out of the row; a caller gates on it before
   sending `keepPath`, which an engine without it refuses as an unknown member);
   `resolve.remote`, `semiJoin`, `resolve.chain` and `lookup.remote` (a `lookup` whose `from` is another
   service's entity) when the host installed a remote query client;
-  `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`. `oxql.2.1`
-  covers every language feature of 2.1 and the explain answer described below; a caller gates on it
-  before sending `strict`, `is`, `flatten` or a 2.1 stage member, or before reading an explain answer
-  as 2.1.
+  `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`.
 - `limits` are the values in force after registration adjusted them, not the configured ones;
   `chainTimeoutMs` is the effective value (clamped to `MaxTimeMs`).
 - `remote` lists every service the model references remotely, from a root member, a member of
@@ -266,77 +275,187 @@ Anonymous, always 200, and never waits for another service:
 
 ## `POST /oxql/explain`
 
-Everything about a query without running it: whether it binds and every error, the shape after
-each stage, where each join runs and what is sent to other services, the result columns, describe
-of child paths, engine-behaviour notes, and, for a query that binds, the compiled form. On by
-default since 2.1 (`Explain:Enabled`); 404 while it is off. It is the rule source of the Angular
-OxQL Studio: the builder, completion, hover and markers ask explain and nothing else. There is no
-separate validate endpoint. The request (a plain query or the envelope with `describe`, `remote`
-and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-request).
+Everything about a query without running it, in one answer: whether it binds and every error, each
+stage with where it runs and the shape of the row after it, every alias, one shared table of types,
+the result columns, the owners asked, engine-behaviour notes, and, on request, the plan. On by
+default (`Explain:Enabled`); 404 while it is off. It is the rule source of the Angular OxQL Studio:
+the builder, completion, hover and markers read explain and nothing else, with one call per edit.
+There is no separate validate or describe endpoint. The request (a plain query or the envelope
+with `include`, `shape`, `remote` and `catalog`) is in
+[`oxql-query-syntax.md`](oxql-query-syntax.md#explain-request).
+
+Explain is the bind trace, normalised. Nothing in it is derived a second way: the shapes are the
+binder's, the owner facts are the plan a run builds, and what lies at another service is what that
+service's engine answered.
 
 ```jsonc
 {
   "valid": true, "contract": 2,
-  "engine": { "version": "2.1.0.0", "capabilities": ["batch", "…", "oxql.2.1", "explain"] },
+  "engine": { "version": "2.1.0.0", "contract": 2, "capabilities": ["batch", "…", "explain"] },
+  "etag": "W/\"x3:4575645a135436d89b17f6ade5f1f30d\"",
+  "revision": { "schema": "sha256:…", "addons": null, "owners": { "transport": "sha256:…" } },
+  "cache": { "maxAge": 30, "dependsOn": ["fleet", "transport"], "complete": true },
   "errors": [],                                     // every binding error when valid is false
-  "diagnostics": [],                                // what binding diagnosed (a retired id, an unanchored regex, …)
-  "notes": [ { "code": "JOIN_AFTER_PAGE", "stage": 6, "path": "sourceLine", "message": "…",
+  "diagnostics": [],                                // what binding diagnosed, also when it does not bind
+  "notes": [ { "code": "JOIN_AFTER_PAGE", "stage": 4, "path": "sourceLine", "message": "…",
                "params": { "alias": "sourceLine", "kind": "resolve" } } ],
-  "steps": [
-    { "index": 3, "kind": "unwind", "status": "ok", "executor": null, "phase": null, "owner": null,
-      "creates": [ { "alias": "item", "node": "element", "entity": "ledger.transaction", "source": "items" },
-                   { "alias": "position", "node": "scalar", "kind": "int" } ],
-      "shapeAfter": { "paging": "offset", "grouped": false, "unwound": ["items"], "projection": null } },
-    { "index": 6, "kind": "resolve", "status": "ok", "executor": "keyed-remote", "phase": "afterPage",
-      "owner": { "service": "transport", "route": { "apiName": "transport-api", "apiVersion": null },
-                 "query": { "entityType": "transport.shipment", "pipeline": [ "…keys elided: \"…\"" ] },
-                 "targets": [ { "target": "transport.shipment#billingLines", "service": "transport", "remote": true,
-                                "grouped": true, "route": { … }, "query": { … }, "continued": [7], "notApplicable": [] },
-                              { "target": "transport.tour#billingLines", "…": "…", "continued": [], "notApplicable": [7] } ] },
-      "reference": { "cases": [ { "when": { "path": "type", "equals": ["logistics"] },
+  "entry": { "shape": { "paging": "cursor", "grouped": false, "unwound": [], "projection": null,
+                        "roots": { "": "t:ledger.transaction" }, "flags": {} } },
+  "stages": [
+    { "index": 1, "kind": "unwind", "status": "ok", "placement": null, "reads": [],
+      "creates": ["item", "position"],
+      "shape": { "paging": "offset", "grouped": false, "unwound": ["items"], "projection": null,
+                 "roots": { "": "t:ledger.transaction", "item": "t:ledger.transaction#items", "position": "k:int" },
+                 "flags": { "": "o:1", "item": "o:2", "position": "o:3" } } },
+    { "index": 4, "kind": "resolve", "status": "ok",
+      "placement": { "executor": "keyed-remote", "phase": "afterPage", "host": "transport", "owner": 0 },
+      "reads": [], "creates": ["sourceLine", "sourceParent"],
+      "shape": { "…": "…", "roots": { "…": "…", "sourceLine": "u:sourceLine", "sourceParent": "u:sourceParent" },
+                 "flags": { "…": "…", "sourceLine": "o:5", "sourceParent": "o:6" } } }
+  ],
+  "aliases": {
+    "sourceLine": {
+      "stage": 4, "node": "remote", "entities": ["transport.shipment#billingLines", "transport.tour#billingLines"],
+      "heldBy": "transport", "complete": true, "lookupOn": true, "type": "u:sourceLine",
+      "reference": { "path": "erpLine.sourceBillingLineReference.id",
+                     "cases": [ { "when": { "path": "type", "equals": ["logistics"] }, "keyAs": null,
                                   "targets": [ { "entity": "transport.shipment", "item": "billingLines", "field": "id", "remote": true },
                                                { "entity": "transport.tour", "item": "billingLines", "field": "id", "remote": true } ] } ],
                      "keyAs": null, "elements": null },
-      "creates": [ { "alias": "sourceLine", "node": "remote", "entities": ["transport.shipment#billingLines", "transport.tour#billingLines"] },
-                   { "alias": "sourceParent", "node": "remote", "entities": ["transport.shipment", "transport.tour"] } ],
-      "continued": [ { "index": 7, "forTarget": "transport.shipment" } ],
-      "shapeAfter": { "paging": "offset", "grouped": false, "unwound": ["items"], "projection": null } }
-  ],
-  "result": { "paging": "offset", "columns": [ { "path": "number", "kind": "string", "nullable": false, "stage": null, "root": "" } ] },
-  "describe": [ { "id": "d1", "at": 6, "prefix": "erpLine", "usage": "match",
-                  "root": { "node": "entity", "entity": "ledger.billing_line" }, "forwarded": false, "truncated": false,
-                  "children": [ … ] } ],
-  "bound": { … },          // the canonical bound form the cursor fingerprint is taken over; absent when not valid
-  "stages": [ … ],         // the page aggregate, in the order the server runs it; absent when not valid
-  "count": [ … ],          // the count aggregate, when a count was requested
-  "collation": { "locale": "de", "strength": 1 },   // when something folds
-  "advisory": [ … ]        // only with include: ["indexes"]
+      "outcome": { "as": null, "values": ["ambiguous", "not_found", "invalid_key", "owner_unanswered"] },
+      "targets": [ { "target": "transport.shipment#billingLines", "service": "transport", "remote": true, "grouped": true,
+                     "owner": 0, "continued": [5, 6, 8], "notApplicable": [7], "type": "t:transport.shipment#billingLines" },
+                   { "target": "transport.tour#billingLines", "…": "…", "continued": [7], "notApplicable": [5, 6, 8] } ] },
+    "deliveringTour": { "stage": 5, "node": "remote", "entities": ["transport.tour"], "heldBy": "transport", "complete": true,
+                        "continuedFrom": { "alias": "sourceParent", "target": "transport.shipment" }, "type": "t:transport.tour" }
+  },
+  "types": {
+    "t:ledger.transaction#items": {
+      "entity": "ledger.transaction", "item": "items",
+      "variants": ["TransactionItem", "ArticleTransactionItem", "BillingLineTransactionItem", "…"],
+      "onlyFor": [ ["BillingLineTransactionItem"], ["ArticleTransactionItem", "BillingLineTransactionItem"] ],
+      "members": [ ["id", "guid", 0, "588c3"],
+                   ["billingLineId", "guid", 1, "1588c3", null, 0, { "simple": true, "cases": [ { "targets": [ { "entity": "ledger.billing_line", "field": "id" } ] } ] }],
+                   ["type", "object", 1, "40800", { "children": true }] ] },
+    "u:sourceParent": { "of": ["t:transport.shipment", "t:transport.tour"],
+                        "members": [ ["id"], ["shipmentNumber", [0]], ["number", [1]] ] }
+  },
+  "flagSets": {
+    "588c3": { "operators": ["eq", "neq", "in", "nin", "exists"], "sortable": true, "groupable": true,
+               "unwindable": false, "projectable": true, "folds": false, "underCollection": 0 },
+    "o:5": { "": "40000", "~": { "588c3": "40000", "1588c3": "140000" } },
+    "o:10": { "*": null, "id": "588c3" }
+  },
+  "result": { "paging": "offset",
+              "columns": [ { "path": "number", "kind": "string", "nullable": false, "stage": null, "root": "", "present": "always" } ],
+              "outcomes": [ { "alias": "sourceLine", "as": null, "stage": 4, "values": ["ambiguous", "not_found", "invalid_key", "owner_unanswered"] } ] },
+  "owners": [ { "service": "transport", "remote": true, "via": null, "route": { "apiName": "transport-api", "apiVersion": null },
+                "answered": true, "calls": 2, "cached": false, "ms": 18, "revision": "sha256:…",
+                "engine": { "version": "2.1.0.0", "contract": 2 } },
+              { "service": "fleet", "remote": true, "via": "transport", "…": "…" } ],
+  "catalog": [],
+  "plan": { "bound": { … }, "stages": [ … ], "count": [ … ], "collation": { "locale": "de", "strength": 1 } },   // only with include: ["plan"]
+  "advisory": [ … ]                                                                                             // only with include: ["indexes"]
 }
 ```
 
-- **`valid`.** A query that does not bind is answered 200 with `valid: false` and every error, so a
-  caller still gets the steps, the shapes and describe for the part that binds; `bound` and `stages`
-  are then absent, joins carry no executor, phase or owner, `result.columns` is empty, and the notes
-  are describe's only. A query that binds but that this host cannot run (a remote resolve without a
-  remote query client: `RESOLVE_UNAVAILABLE`) or whose continued stages an owner refuses is
-  `valid: false` too. Refusals remain only for what stops explain before binding: 400 for a malformed
-  body, 403 without an organisation, 413 for a body over the limit, 500 for an engine fault.
-  `contract` is the contract the request was read as; a contract 1 request is rewritten by the
-  compatibility binder and answered the same way.
-- **`steps`**, one per caller stage: `status` `ok`, `error`, or `skipped` (it failed only because it
-  reads an alias an earlier stage failed to create); for a join `executor` (`inline`,
-  `keyed-local`, `keyed-remote`, `continued`) and `phase` (`beforePage`, `afterPage`, `owner`); for a
-  keyed or continued stage `owner` with every owner query as it is forwarded, keys and the page limit
-  elided as `"…"` (`route.apiVersion` is the version the remote client routes the service to,
-  `IRemoteOwnerInfo.ApiVersionOf`, or `null` when it does not say); `reference` for a
-  resolve, as bound; `creates`, the aliases added (`node` `entity`, `element`, `array`, `remote`,
-  `keyed`, `scalar`, `group`; a resolve continued under another alias without a `target` lists the
-  targets its owners bound the reference to, on its `forTarget` entity or on each target of the
-  alias, and none when no owner answered the check); `continued` on a keyed stage; `shapeAfter` (`paging` is `cursor`
-  while every row is one entity row, `offset` after an unwind or group).
-- **`result.columns`**: the final shape's visible members and roots, each with `path`, `kind`,
-  `nullable`, the `stage` that created it (`null`: the entry shape) and its `root`. Members of a
-  remote alias are `unknown`: their shape is the owner's.
+- **`valid`.** A query that does not bind is answered 200 with `valid: false` and every error (and
+  the `diagnostics` binding produced up to there), so a caller still gets the stages, the aliases and
+  the shapes of the part that binds; the joins then carry no `placement`, `result.columns` is empty,
+  and there is no `plan`. A query that binds but that this host cannot run (a remote resolve without
+  a remote query client: `RESOLVE_UNAVAILABLE`) or whose continued stages an owner refuses is
+  `valid: false` too. Refusals remain only for what stops explain before binding: 400 for a
+  malformed body or one past an explain bound, 403 without an organisation, 413 for a body over the
+  limit, 429 over the rate, 500 for an engine fault. `contract` is the contract the request was read
+  as; a contract 1 request is rewritten by the compatibility binder and answered the same way.
+- **`engine`.** `contract` is the contract the engine speaks. `2` is the marker of this package: an
+  engine that reports it has the whole contract 2 language and this answer.
+- **`etag`, `revision`, `cache`.** `etag` changes when the request, a revision, the capabilities or
+  the completeness of the answer changes. `revision` names what the answer was bound against: the
+  host's schema revision, a hash of the asking organisation's addon definitions it read, and each
+  answering owner's schema revision. `cache.dependsOn` lists the owner services the answer depends
+  on, transitive ones included; `cache.complete` is false when something the answer would say is
+  missing (an owner did not answer, a limit was hit, the answer was trimmed), and such an answer is
+  never kept as the complete one. The host sets no `ETag` header yet.
+- **`stages`**, one per caller stage: `status` `ok`, `error`, or `skipped` (it failed only because it
+  reads an alias an earlier stage failed to create); `placement` for a join that runs, else `null`:
+  `executor` (`inline`, `keyed-local`, `keyed-remote`, `continued`), `phase` (`beforePage`,
+  `afterPage`, `owner`), `host` (the service whose engine runs the stage) and `owner` (the index of
+  its owner in `owners`); `creates`, the names of the aliases it adds; `shape`, the row after the
+  stage; `reads`, which is empty until the engine infers what a join loads. The row before stage `i`
+  is `stages[i-1].shape`, and `entry.shape` before the first.
+- **`shape`**: `paging` (`cursor` while every row is one entity row, `offset` after an unwind or
+  group), `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection), `roots`
+  (each root the row carries, `""` the entity itself, pointing to its type: `t:<entity>[#item]`,
+  `u:<alias>`, `k:<kind>` for a scalar or a group output, `null` for an alias whose owner did not
+  answer), and `flags` (per root, the override set that says where a member differs here from its
+  type's own flags).
+- **`aliases`**, by name: `stage` (the creating stage), `node` (`entity`, `element`, `array`,
+  `remote`, `keyed`, `scalar`, `group`), `entities` (the targets it may hold, `entity` or
+  `entity#item`), `type`, `heldBy` (the service that holds its rows), `complete` (false when an
+  owner that knows it did not answer), `lookupOn` (a lookup may name it as its parent row), and where
+  they apply `source` (an element's collection), `kind` (a scalar's), `many` (it holds an array),
+  `parentOf` (it is the owning row of that alias), `reference` (the reference a resolve follows, as
+  bound), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
+  it is asked at, whether its owner query is `grouped`, and the stages `continued` there or
+  `notApplicable` to its rows), `continuedFrom` (`{ alias, target }` of a stage continued at an
+  owner), `outcome` (`{ as, values }`: the data-loss outcomes the join may have; `as` is null until
+  a stage names the row member that carries the outcome), `droppedAt` (the stage whose projection
+  took it out of the row) and `becomes` (a later stage holds it differently: an unwound lookup
+  alias).
+- **`types`**, each member described once. `t:<entity>[#item]` is a concrete type: `entity`, `item`,
+  `variants` (the names `is` accepts), `onlyFor` (the distinct variant sets its rows point to),
+  `members` and `truncated`. A member row is
+  `[path, kind, nullable, flags, more, onlyFor, reference, addon, description]` and ends at its last
+  fact: `path` is dotted below the type, `nullable` is 0 or 1, `flags` the id of the member's own
+  flags, `more` the rarer facts (`leafKind`, `displayName`, `stored: false`, `collection` for a
+  dictionary stored as one, `enum`, `variants`, `flatten`, `flattenMembers`, `snapshotOf`,
+  `deprecated`, `constraints`, and `children` when the member has members the rows do not list),
+  `onlyFor` an index into the type's `onlyFor`, `reference` the declared reference (`simple`,
+  `keyAs`, `cases`), `addon` the organisation's addon definition, and `description` only with
+  `include: ["docs"]`. Rows go level by level to `shape.depth` (default `Explain:DefaultShapeDepth`, 2) and
+  stop at `Explain:MaxTypeMembers` (300, then `truncated`); a `catalog` entry with the member's path
+  as `prefix` reads what was cut. The addon members of the asking organisation are members of the
+  entity's type. `u:<alias>` is the union type of an alias with several targets: `of` (its targets'
+  types) and `members`, each `[path]`, `[path, have]` when not every target has it (`have`: indexes
+  into `of`) and `[path, have, "unknown"]` when the targets' kinds disagree; a member's facts are
+  those of the first target that has it.
+- **Types of another service** are never built here. A remote alias's type is its owner's answer to
+  the check of the owner query the run sends, and a continued alias's is what its owner bound it to;
+  an owner's answer carries its own owners' types in turn. For a request that does not bind there is
+  no owner query to check, and the owner describes its entity itself. An owner that does not answer
+  leaves the alias `complete: false` without a type; nothing else stands in for it.
+- **`flagSets`.** A flag set says what may be done with a member at one point: the `operators` a
+  condition admits (a member is filterable exactly when it admits one), `sortable`, `groupable`,
+  `unwindable`, `projectable`, `folds` (a string comparison folds by default), `underCollection`
+  (collections above it that are not unwound) and, on a reference, `follow` (`one`, `elements`,
+  `none`). Its id is the flags themselves (a hexadecimal number), the same at every engine. An
+  override set (`o:n`) is one root's differences at one shape: `""` is the root itself, a path is a
+  member that differs, `"~"` maps a member's own flags to what it has here, `"*"` is what every
+  member not named has, and `null` means the member is not in the row (a projection removed it, the
+  join's select did not fetch it). A reader takes the member's own entry, else the `"~"` entry of
+  its own flags, else `"*"`, else its own flags. Every flag is the binder's own answer for that path
+  at that point (`Shape.Resolve`).
+- **`result`**: `columns`, the final shape's visible members and roots, each with `path`, `kind`,
+  `nullable`, the `stage` that created it (`null`: the entry shape), its `root`, and `present`: when
+  a row carries the key. `always`: on every row, the value may be null. `ifJoined`: absent on a row
+  whose join found nothing. `ifVariant`: only on rows of the variants that have the member.
+  `ifStored`: absent on a row whose stored record does not hold the member, or whose parent object
+  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. `outcomes`
+  lists per join that may lose data its `alias`, `stage` and `values`.
+- **`owners`**: each owner service once, in pipeline order, this host among them when it answers a
+  keyed stage of its own (`remote: false`): `via` (the owner it was reached through, `null` when this
+  host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,
+  `IRemoteOwnerInfo.ApiVersionOf`, or `null`), `answered` (`null`: never asked), `reason` when it did
+  not (`unsupported`, `unreachable`, `timeout`, `limit`), `calls` (one per round it was asked in),
+  `cached`, `ms`, `revision` and its `engine`. With `include: ["plan"]` an owner also lists the
+  `queries` it is sent, each once: `stage`, `alias`, `target`, `grouped`, the `query` with keys and
+  the page limit elided as `"…"`, and the stages `continued` and `notApplicable`.
+- **`catalog`**: one answer per `catalog` entry of the request, in order: `id`, `entity`, the `type`
+  it points to in `types`, `forwarded` (an owner answered it), with `prefix` the `members` below it
+  and `truncated`, with `referencing: true` `referencedBy` (per path, the same-host entities whose
+  members reference it there) and `remoteLookup`, or an `error` (`{ code, message, params }`). It is
+  the one lookup of an entity outside the query.
 - **`notes`** (`{ code, message, stage, path, params }`, in stage order, request-wide last) say what
   the engine will do that a reader of the query might not expect: `TEXT_FOLDS`,
   `PATTERN_FOLDS_CASE_ONLY`, `EXACT_FORCES_EXACT`, `SOME_ELEMENT`, `NEQ_MATCHES_ABSENT`,
@@ -344,36 +463,53 @@ and `include`) is in [`oxql-query-syntax.md`](oxql-query-syntax.md#explain-reque
   `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP`, `LOOKUP_LIMIT`, `OFFSET_PAGING`,
   `MISSING_POLICY` (the effective `onMissing`, `strict`, and which outcomes lose data),
   `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`; an index list that cannot be read
-  is an `INDEX_ADVICE` note saying so). Codes are stable; messages may change. A remote union
-  target's `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check),
-  which then checks that target again without the paths it lacks, as a run asks again, so the
-  stages continued at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics, from the cache as well.
-  `MISSING_POLICY` names only the outcomes the stage can have: an inline resolve has no
-  `owner_unanswered` or `invalid_key`, and `ambiguous` only onto a target field that is not the key.
-- **`describe`**: one answer per describe entry, in order, echoing `id`, `at` or `entity`, `prefix`
-  or `paths` and `usage`, with the `root` it was taken under, whether an owner answered it
-  (`forwarded`), `truncated`, and the `children`. A child carries its `name`, `path`, `displayName`
-  (`null` when derivable from the name), `description`, `kind`, `leafKind`, `nullable`, `stored`,
-  `collection`, `underCollection`, the flags `filterable sortable projectable unwindable groupable`
-  (the binder's own answer for that usage at that point of the pipeline), `operators` (those the
-  binder admits there, plus `is` and `any` where they apply), `caseFolding` (`folds` or `none`),
-  `enum` (values with descriptions), `variants`, `flatten` (the collection's own recursion first,
-  and `flattenMembers` listing every candidate when there are several), `onlyFor`, `snapshotOf`, `reference`
-  (`simple`, `keyAs`, `cases`, `followable`), `referencedBy` (with `referencing: true`), `addon`,
-  `deprecated` (`since`, `replacedBy`, `note`), `constraints`, `hasChildren`, `notes`, and an `error`
-  when the entry could not be answered.
-- **`remote`.** With `check` (the default) the stages continued at another service are checked by
-  that owner's internal explain; an owner error becomes this request's error at the caller's stage
-  (`params.owner` as in a refusal) and the step's status `error`. The describes of another service's
-  entities are answered the same way. All owner calls of one explain share
-  `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (skipped by `remote: "skip"`, a
-  client that cannot explain, unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED`
-  note with `params.reason`, never an error. Owner answers are cached 30 s by organisation, service
-  and forwarded body.
+  is an `INDEX_ADVICE` note saying so), `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
+  are stable; messages may change. Without `include: "notes"` only the notes about the answer itself
+  are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). A remote union target's
+  `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check), which then
+  checks that target again without the paths it lacks, as a run asks again, so the stages continued
+  at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics,
+  from the cache as well. `MISSING_POLICY` names only the outcomes the stage can have: an inline
+  resolve has no `owner_unanswered` or `invalid_key`, and `ambiguous` only onto a target field that
+  is not the key.
+- **Errors** carry `params` where a caller acts on them. A path that does not resolve says why in
+  `params.reason`: `notAMember` (`entity`), `projected`, `unwound` (`collection`, `alias`),
+  `afterPage` (`alias`), `noTarget` (`alias`, `targets`), `noMembers` (`alias`), `notStored`. An
+  owner's error keeps its own `params` and gains `params.owner`. A contract 1 answer carries none.
+- **`remote`.** With `check` (the default) the owner queries of every keyed stage are bound by their
+  owners' internal explain: an owner error becomes this request's error at the caller's stage
+  (`params.owner` as in a refusal) and the stage's status `error`. `cached` is accepted and answered
+  as `check` until owners' answers are served from the cache alone. All owner calls of one explain
+  share `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (a client that cannot explain,
+  unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED` note with `params.reason`,
+  never an error. Owner answers are cached 30 s by organisation, user, service and forwarded body.
+
+**Limits of one explain.** Explain is rare, so its limits are tight; none is an error.
+
+- *Before binding*, on the parsed body alone: a body over `Explain:MaxRequestBytes` is 413; more
+  than `Explain:MaxStages` stages, more than `MaxCatalogEntries` catalog entries, a `shape.depth`
+  above `MaxShapeDepth`, or an unknown `include` or `remote` value is 400 `EXPLAIN_LIMIT`.
+- *Rate and concurrency*, on the public route, per organisation and user, before the body is read:
+  a token bucket of `Explain:RateBurst` (5) refilled at `RatePerMinute` (20), at most
+  `MaxConcurrentPerUser` (2) in flight, and at most `MaxConcurrentPerHost` (8) in flight on the host;
+  more is 429 `rate_limited` with `Retry-After` and the code `EXPLAIN_LIMIT` (`params.limit`: `rate`,
+  `concurrentPerUser`, `concurrentPerHost`). It is separate from run traffic and nothing waits. The
+  internal route admits at most `MaxConcurrentPerCaller` (4) in flight per calling service.
+- *Cost*, mid-way: at most `Explain:MaxOwnerServices` (4) distinct owner services and
+  `MaxOwnerCalls` (8) owner calls in all, transitive ones included, where a call is one service in
+  one round (the first ask, and each ask-again of a union target; until owners take a round's checks
+  as one request, a round is one request per check); and `Explain:TimeoutMs` (2 000 ms) of wall
+  time. An internal explain carries what is left of the time and the calls (`budget`, internal route
+  only), so an owner asks its own owners only within its origin's budget. A part a limit left out is
+  an `EXPLAIN_LIMIT` note (`params.limit`: `ownerServices`, `ownerCalls`, `time`; `service`,
+  `target`), the answer says what is known with `cache.complete: false`, and nothing is retried.
+- *Size*: an answer over `Explain:MaxAnswerBytes` (256 KB) keeps the first level of its types only,
+  then loses the plan, and says so with an `EXPLAIN_TRIMMED` note (`params.dropped`, `bytes`, `max`)
+  and `cache.complete: false`.
 
 **It never executes the query.** Explain binds and compiles; it sends the database no `aggregate`
-and no `explain` command. Without `include` it reads nothing from the database but, on a cache miss,
-the organisation's addon definitions. With `include: ["indexes"]` it reads the
+and no `explain` command. Without `include: ["indexes"]` it reads nothing from the database but, on
+a cache miss, the organisation's addon definitions. With it, it reads the
 index lists of the collections involved (`listIndexes`, cached 60 s per collection) and matches
 them statically against the leading `$match` (scope, cursor predicate and first caller condition,
 which the server coalesces), the sort and each `$lookup`'s join field; each advisory line is also an
@@ -381,33 +517,21 @@ which the server coalesces), the sort and each `$lookup`'s join field; each advi
 aggregate fetches `limit + 1` rows; the extra one decides `hasNextPage`. A join that runs after the
 page appears after the `$limit`.
 
-**What it reveals.** To any authenticated caller of the organisation: storage paths, collection
-names, the emitted Mongo stages, the collation, the forwarded owner queries, and with the opt-in
-the index names and keys. None of it is more sensitive than what `GET /schema` serves anonymously
-(storage names, keys, references, routes), and it concerns the caller's own organisation only: the
-scope stage shows the caller's organisation id. No row data, no other organisation's data, no
-configuration secret appears. Explain has no rate limit; it costs one bind and one compile.
-
-**Changes from 2.0**, all taken up by the `OxQL.Studio` console in the same release:
-
-- on by default (`Explain:Enabled` was `false`);
-- a query that does not bind is 200 `valid: false` with `errors`, no longer a 400 refusal;
-- the index advisory needs `include: ["indexes"]` and is static: 2.0 listed indexes on every call
-  and ran the server's `executionStats` explain for a pipeline with a `$lookup`, which executed the
-  page pipeline once;
-- the body may be an envelope, whose malformed forms are 400 ProblemDetails;
-- the answer gains `valid`, `contract`, `engine`, `errors`, `notes`, `steps`, `result` and
-  `describe`; `bound`, `stages`, `count`, `collation` and `diagnostics` keep their names and
-  meaning, and `bound` renders a continued stage as `{ "continued": { anchor, kind, forTarget,
-  aliases, stage } }`.
+**What it reveals.** To any authenticated caller of the organisation: member names and kinds of the
+entities the query reaches, and with the plan storage paths, collection names, the emitted Mongo
+stages, the collation and the forwarded owner queries, and with the index opt-in the index names
+and keys. None of it is more sensitive than what `GET /schema` serves anonymously (storage names,
+keys, references, routes), and it concerns the caller's own organisation only: the scope stage
+shows the caller's organisation id. No row data, no other organisation's data, no configuration
+secret appears.
 
 A host that serves continued stages for other services also answers the internal twin, `POST
 internal/oxql/explain` in the Simplic base package: the same body and answer, admitted by the
-internal key under the forwarded identity. An origin calls it for the remote check and remote
-describes through `IRemoteQueryClient.ExplainAsync`. The stages continued under a keyed stage of
-the host itself are checked the same way in process, as its own owner binds them when the query
-runs; what continues from there to another service (every target of a union without `forTarget`)
-is that owner's remote check, so explain refuses what the run would refuse.
+internal key under the forwarded identity. An origin calls it for the remote check and for catalog
+entries of the owner's entities through `IRemoteQueryClient.ExplainAsync`. The stages continued
+under a keyed stage of the host itself are checked the same way in process, as its own owner binds
+them when the query runs; what continues from there to another service (every target of a union
+without `forTarget`) is that owner's remote check, so explain refuses what the run would refuse.
 
 ## Keyed fetch and remote continuation
 
@@ -506,8 +630,8 @@ query request sends `X-OxQL-Contract: 2`.
 
 1. `GET {api}/oxql/health` without a token → 200, `engine.contract` 2, the expected
    `engine.version`, `status` `healthy`, every `remote` entry `configured: true` and, after a
-   second call ten seconds later, `reachable: true`; `oxql.2.1` in `capabilities`, and `explain`
-   unless the host switched it off.
+   second call ten seconds later, `reachable: true`; `explain` in `capabilities` unless the host
+   switched it off.
 2. `GET {api}/schema` → 200; its `limits` equal the corresponding values on `/oxql/health`; the
    entity ids you expect are there.
 3. `POST {api}/oxql/query` with `{ "entityType": "{entity}", "pipeline": [ { "page": { "limit": 1 } } ] }`

@@ -87,7 +87,7 @@ the listed status.
 | `INVALID_SORT_DIRECTION` | 400 | a direction other than `asc`/`desc`; the object form without `direction`; the object form under contract 1 |
 | `LOOKUP_NOT_DECLARED` | 400 | the child's `path` declares no reference to the current entity (or to the entity of the `on` alias), or the referenced key is not stored |
 | `LOOKUP_ON_NOT_ENTITY` | 400 | a lookup's `on` names a lookup array, an unwound element, a scalar or a group output |
-| `NOT_CONTINUABLE` | 400 | on an alias that comes from an owner after the page, a stage other than a `resolve` or `lookup` (an `unwind`, a `group` key); a continued stage under an `elements: "all"` alias; a projection keeping a continued alias but dropping the alias it continues under; any continued stage under contract 1 |
+| `NOT_CONTINUABLE` | 400 | on an alias that comes from an owner after the page, a stage other than a `resolve` or `lookup` (an `unwind`, a `group` key); a continued stage under an `elements: "all"` alias or under a remote `lookup` without `first`; any continued stage under contract 1 |
 | `RESOLVE_NOT_DECLARED` | 400 | the `resolve` path declares no reference (the message names its kind), the target key or items are not stored, or a case tests a sibling that is not stored |
 | `RESOLVE_ON_COLLECTION` | 400 | a resolve path under a collection that is not unwound, without `elements` |
 | `RESOLVE_TARGET_NOT_DECLARED` | 400 | a resolve's `target` is not a target of any case of the reference; the message lists them |

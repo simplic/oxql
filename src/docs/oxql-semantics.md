@@ -278,14 +278,15 @@ stops at the cap in force (the host's `CountCap`, or the request's own below it)
 - **A projection after a join decides whether the row carries its alias.** An inclusion that
   does not name the alias (nor a member below it), or an exclusion that names it, leaves the
   alias out of the row, for a `lookup`, a local and a remote `resolve` alike. A join whose alias
-  no later `match`, `unwind`, `group` or `resolve` reads and that a projection dropped is not run
-  at all: a remote owner is not called for it. An alias a stage writes after the projection is
+  no later `match`, `unwind`, `group`, `resolve` or `lookup` reads and that a projection dropped is
+  not run at all: a remote owner is not called for it. A keyed or remote join counts as read while
+  the row shows an alias a stage continued under it adds. An alias a stage writes after the projection is
   in the row.
 - A projection may name a member below a join alias (`"vehicle.matchCode": 1`); the join then
   stays before the projection and the alias carries the named members only, without its key unless
   the projection names it. Under a keyed or remote alias the named members are what the owner is
-  asked for; a projection that keeps an alias continued under it but drops the alias itself is
-  `NOT_CONTINUABLE`.
+  asked for. A projection that names only an alias continued under it is enough: the alias it
+  continues under is fetched for the continued stage and is not in the row (see *What a join loads*).
 - The sort fields, the entity key and the key a remote `resolve` or a late join reads survive
   every projection in storage and are dropped from the row when not asked for, so projecting
   them away never changes the rows, the cursor or the join.
@@ -322,6 +323,16 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   its owner is asked for the output set: the paths, or nothing, which the owner query spells as the
   owner's own key and display (`$default`). The key the owner query carries to match the rows by is
   not shown unless the projection names it; an owning row (`parentAs`) always carries `entity`.
+- **A join another join continues from is read by it.** A `resolve` or `lookup` continued under a
+  keyed or remote alias (or its `parentAs`) reads that alias, as a keyed `resolve` reads the inline
+  alias its key lies under, and so on up the chain. The projection need not name any of them: each
+  runs while the row shows something that depends on it, loads what the next join reads, and is cut
+  from the row. An alias kept alive this way shows nothing; its owner is asked for the key alone
+  (no `$default`), runs the continued stages, and answers what the projection names under their
+  aliases. The rows are those of the same query with the aliases projected, less those aliases.
+  Explain lists the read at the continued stage (`resolveKey`, `lookupOn`), the path in the alias's
+  `loads`, and an empty `shows`. Only when the row shows none of a keyed stage's aliases, nor any
+  alias continued under them, is its owner not called.
 - **`select` is a hint.** It shapes a whole alias and nothing else: it bounds no read, and under a
   projection that names paths below the alias it is neither shown nor loaded. A hint path the target
   does not have is `UNKNOWN_PATH`, since it is a typo and not a load.

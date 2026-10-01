@@ -324,8 +324,10 @@ in [`oxql-semantics.md`](oxql-semantics.md#chains-across-services).
   R are what R's owner is asked for, and those under a continued alias travel to the owner as paths;
   the owner binds the continued stage and infers what its join loads, the member that picks a
   reference's case included. A path under a continued alias that its target lacks is `UNKNOWN_PATH`
-  at the projection. A projection that keeps a continued alias but drops R (and R's `parentAs`) is
-  `NOT_CONTINUABLE`.
+  at the projection. A projection need not name R to show an alias continued under it: a continued
+  stage reads R, so R (and whatever R in turn reads its key from) is fetched for it and left out of
+  the row. `{ "project": { "number": 1, "vehicle.matchCode": 1 } }` after a chain answers `number`
+  and `vehicle.matchCode` and none of the aliases in between.
 - At most `MaxContinuedStages` (8) stages continue under one alias
   (`MAX_CONTINUED_STAGES_EXCEEDED`). Continued stages do not count toward this host's
   `MaxResolveStages` or `MaxLookupStages`; the owner applies its own.

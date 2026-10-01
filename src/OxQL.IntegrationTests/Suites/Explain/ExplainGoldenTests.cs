@@ -15,7 +15,7 @@ namespace OxQL.IntegrationTests.Suites.Explain;
 /// T2, the golden explain answers (improvement plan §3.T): the reference set explained over the fleet
 /// exactly as the studio calls explain, normalised (<see cref="ExplainGolden.Normalise"/>) and compared
 /// with the answer recorded in <c>Suites/Explain/Golden/&lt;id&gt;.json</c>. The reference set is the
-/// report scenarios A1–A5 (A2b included) and fleet queries shaped like EXAMPLE-CASE. The files are the
+/// report scenarios A1–A5 (A2b included) and fleet queries shaped like EXAMPLE-CASE, one of them with a union join. The files are the
 /// engine–studio contract: the studio's parser and replay cases read copies of them (synced later).
 /// <para>
 /// To re-record after an intended change of the answer, run the suite with <c>OXQL_RECORD_GOLDEN=1</c>;
@@ -169,6 +169,7 @@ internal static class ExplainGolden
         ["EX1-no-select"] = () => ReportScenarios.WithoutSelects(JsonNode.Parse(ExampleChain)!.AsObject()),
         ["EX1-source-chain"] = () => JsonNode.Parse(ExampleChain)!.AsObject(),
         ["EX2-continued-refused"] = () => JsonNode.Parse(ContinuedRefused)!.AsObject(),
+        ["EX3-union-join"] = () => JsonNode.Parse(UnionJoin)!.AsObject(),
     }.AsReadOnly();
 
     /// <summary>
@@ -200,6 +201,33 @@ internal static class ExplainGolden
             { "project": { "position": 1, "item.text": 1, "erpLine": 1, "sourceLine": 1,
                            "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1,
                            "shipmentVehicle": 1, "tourVehicle": 1, "lastAttempt": 1 } },
+            { "sort": [ { "position": "asc" } ] }
+          ]
+        }
+        """;
+
+    /// <summary>
+    /// The example chain as the improvement plan writes it (§2, §3.U): no select, and the vehicle of a
+    /// line under one alias, a union join with a branch per target of the source line's owning row —
+    /// the shipment's through its delivering tour, the tour's own. Neither branch names a target, so
+    /// each reaches what the resource's reference declares: an employee or a vehicle.
+    /// </summary>
+    private static string UnionJoin => $$"""
+        {
+          "entityType": "ledger.transaction",
+          "variables": { "transactionId": "{{ReportSeed.TransactionId:D}}" },
+          "pipeline": [
+            { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+            { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+            { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "onMissing": "report" } },
+            { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "onMissing": "report" } },
+            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first" } },
+            { "resolve": { "as": "vehicle", "onMissing": "report",
+                           "byTarget": { "{{ReportSeed.Shipment}}": "deliveringTour.resource.id", "{{ReportSeed.Tour}}": "sourceParent.resource.id" } } },
+            { "project": { "position": 1, "item.text": 1, "erpLine.text": 1, "sourceLine.totalPrice": 1,
+                           "sourceParent.shipmentNumber": 1, "sourceParent.number": 1,
+                           "vehicle.matchCode": 1, "vehicle.registrationPlate.registrationIdentifier": 1 } },
             { "sort": [ { "position": "asc" } ] }
           ]
         }

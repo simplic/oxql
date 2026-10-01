@@ -239,7 +239,7 @@ public class DiagnosticsTests
         // (RefusalsCatalogueTests checks that half), so these are the diagnostics.
         provoked.Should().BeSubsetOf(catalogue);
         RefusalsCatalogueTests.DiagnosticCodes.Should().BeEquivalentTo(provoked);
-        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 20 + provoked.Length,
-            "52 codes of the V table, 20 provoked outside it (8 in the catalogue suite, EXPLAIN_LIMIT among them, UNKNOWN_REQUEST_MEMBER in RefusalsRequestMembersTests, PAGE_INCOMPLETE in JoinsOutcomesTests, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY in JoinsLookupMembersTests, NOT_CONTINUABLE, MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE in JoinsContinuationTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 13 diagnostics");
+        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 21 + provoked.Length,
+            "52 codes of the V table, 21 provoked outside it (8 in the catalogue suite, EXPLAIN_LIMIT among them, UNKNOWN_REQUEST_MEMBER in RefusalsRequestMembersTests, PAGE_INCOMPLETE in JoinsOutcomesTests, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY in JoinsLookupMembersTests, NOT_CONTINUABLE, MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE in JoinsContinuationTests, UNION_CARDINALITY_MISMATCH in JoinsUnionJoinTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 13 diagnostics");
     }
 }

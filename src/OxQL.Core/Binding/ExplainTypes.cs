@@ -1045,7 +1045,8 @@ public sealed class ExplainTypes
         // By reference an owner's type is what the owner named: the entity, its service and the revision, or a union's targets.
         if (!tables)
         {
-            foreach (var (key, value) in types.ToList())
+            // The concrete types first, as with the rows written out: both answers then list the types in one order.
+            foreach (var (key, value) in types.OrderBy(pair => pair.Key.StartsWith("u:", StringComparison.Ordinal) ? 1 : 0).ToList())
             {
                 if (Types.ContainsKey(key) || value is not JsonObject named)
                     continue;

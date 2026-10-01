@@ -20,8 +20,9 @@ namespace OxQL.Tests.Execute;
 /// keys (the check carries <see cref="KeyedFetch.CheckKey"/>, the run the page's keys, and the page
 /// limit follows their count). Since the run itself asks its owners for what the projection names
 /// under an alias (improvement plan §3.S), the check projects nothing beside it. One case per join kind: a remote resolve, a local keyed resolve with a stage
-/// continued under it, a stage continued under a remote alias, a remote lookup, and unions narrowed
-/// with <c>forTarget</c> at a local and at a remote target. The run's queries are recorded where
+/// continued under it, a stage continued under a remote alias, a remote lookup, unions narrowed
+/// with <c>forTarget</c> at a local and at a remote target, and a union join (<c>byTarget</c>) over
+/// local targets and over a local and a remote one. The run's queries are recorded where
 /// they leave: the remote client for an owner, this host's own engine for a local target.
 /// </summary>
 public class OwnerCheckParityTests
@@ -139,6 +140,26 @@ public class OwnerCheckParityTests
             """,
             [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(ShipmentId) })], Strict: false,
             ["transport.shipment"]),
+
+        ["union join: a branch per local target"] = new(
+            """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "as": "d", "select": ["name"], "byTarget": { "rc.shipment": "b.driverId", "rc.tour": "b.driverId" } } }, { "project": { "number": 1, "d": 1 } }]""",
+            [
+                InvoiceRow(InvoiceId, row => row["Billing"] = new BsonDocument { ["DataType"] = "shipment", ["ReferenceId"] = ShipmentId.ToString() }),
+                InvoiceRow(SecondId, row => row["Billing"] = new BsonDocument { ["DataType"] = "tour", ["ReferenceId"] = TourId.ToString() }),
+            ], Strict: true,
+            ["rc.shipment", "rc.tour"]),
+
+        ["union join: a local and a remote branch, a third target without one"] = new(
+            """
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+             { "resolve": { "as": "drv", "onMissing": "report", "byTarget": { "rc.tour": "owner.driverId", "transport.shipment": "owner.driverId" } } },
+             { "project": { "number": 1, "drv.name": 1 } }]
+            """,
+            [
+                InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(ShipmentId) }),
+                InvoiceRow(SecondId, row => row["Source"] = new BsonDocument { ["Type"] = "logistics", ["_id"] = Id(TourId) }),
+            ], Strict: false,
+            ["rc.tour", "transport.shipment"]),
     };
 
     [Theory]

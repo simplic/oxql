@@ -125,10 +125,19 @@ internal static class ReportFleetServer
     {
         var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
 
-        context.Response.StatusCode = status;
-        context.Response.ContentType = "application/json";
-        context.Response.ContentLength64 = bytes.Length;
-        await context.Response.OutputStream.WriteAsync(bytes);
-        context.Response.Close();
+        // A client that gave up on its request (a recorder's timeout, an aborted fetch) closes the
+        // connection under the answer: that request has no reader left, and the server serves the next.
+        try
+        {
+            context.Response.StatusCode = status;
+            context.Response.ContentType = "application/json";
+            context.Response.ContentLength64 = bytes.Length;
+            await context.Response.OutputStream.WriteAsync(bytes);
+            context.Response.Close();
+        }
+        catch (Exception gone) when (gone is HttpListenerException or IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            context.Response.Abort();
+        }
     }
 }

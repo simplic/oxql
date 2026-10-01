@@ -52,6 +52,7 @@ public class RefusalsCatalogueTests
         ["LOOKUP_ON_NOT_ENTITY"] = nameof(Joins.JoinsLookupMembersTests.On_a_lookup_array_is_LOOKUP_ON_NOT_ENTITY),
         ["NOT_CONTINUABLE"] = nameof(Joins.JoinsContinuationTests.An_unwind_under_a_remote_alias_is_NOT_CONTINUABLE),
         ["MAX_CONTINUED_STAGES_EXCEEDED"] = nameof(Joins.JoinsContinuationTests.More_stages_continued_under_one_alias_than_MaxContinuedStages_is_MAX_CONTINUED_STAGES_EXCEEDED),
+        ["UNION_CARDINALITY_MISMATCH"] = nameof(Joins.JoinsUnionJoinTests.Branches_of_one_record_and_of_every_element_are_UNION_CARDINALITY_MISMATCH),
         ["OWNER_NOT_CAPABLE"] = nameof(Joins.JoinsContinuationTests.A_continued_stage_for_an_owner_whose_health_reports_OxQL_2_0_is_OWNER_NOT_CAPABLE_before_anything_is_sent),
         ["RESOLVE_ON_COLLECTION"] = nameof(Joins.JoinsResolveMembersTests.A_resolve_through_items_that_are_not_unwound_is_RESOLVE_ON_COLLECTION),
         ["RESOLVE_TARGET_NOT_DECLARED"] = nameof(Joins.JoinsResolveMembersTests.A_target_that_is_not_a_target_of_the_reference_is_RESOLVE_TARGET_NOT_DECLARED),
@@ -96,9 +97,9 @@ public class RefusalsCatalogueTests
         // then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
         // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
         // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
-        // MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE, then EXPLAIN_LIMIT.
-        catalogue.Should().HaveCount(85);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(72);
+        // MAX_CONTINUED_STAGES_EXCEEDED and OWNER_NOT_CAPABLE, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH.
+        catalogue.Should().HaveCount(86);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(73);
         catalogue.Count(DiagnosticCodes.Contains).Should().Be(13);
     }
 

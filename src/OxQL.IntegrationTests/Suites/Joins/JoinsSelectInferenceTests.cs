@@ -213,8 +213,105 @@ public class JoinsSelectInferenceTests
         vehicle.Should().Contain(("deliveringTour.resource.id", "resolveKey", "deliveringTour"));
         vehicle.Should().Contain(read => read.Item2 == "caseCondition" && read.Item3 == "deliveringTour", "the member that picks the reference's case, which only the owner's model knows");
         explained.Body["aliases"]!["deliveringTour"]!["shows"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("number");
-        explained.Body["aliases"]!["sourceParent"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("id");
+        explained.Body["aliases"]!["sourceParent"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal(["id", "tours.tourId"],
+            "what the projection names under the owning row, and what the stage continued under it reads");
         explained.Body["aliases"]!["sourceParent"]!["hint"].Should().BeNull();
+    }
+
+    // ---- an alias a later join only continues from is loaded, and not shown --------------------------------
+
+    private const string ErpLine = """{ "resolve": { "path": "item.billingLineId", "as": "erpLine" } }""";
+    private const string SourceLine = """{ "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "onMissing": "report" } }""";
+    private static readonly string DeliveringTour = $$"""{ "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first" } }""";
+    private static readonly string TourVehicle = $$"""{ "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "target": "fleet.vehicle" } }""";
+    private const string ShipmentVehicle = """{ "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "target": "fleet.vehicle" } }""";
+
+    /// <summary>
+    /// One case per kind of join another join depends on: the stages, the paths of the last aliases
+    /// alone, the paths that name the aliases they depend on, and those aliases.
+    /// </summary>
+    public static TheoryData<string, string, string, string, string[]> Anchors => new()
+    {
+        { "an inline alias a keyed resolve reads its key from", $"{ErpLine}, {SourceLine}",
+            "\"sourceLine.totalPrice\": 1", "\"erpLine.id\": 1", ["erpLine"] },
+        { "a keyed alias's owning row a continued resolve of a union target reads", $"{ErpLine}, {SourceLine}, {DeliveringTour}",
+            "\"deliveringTour.number\": 1", "\"erpLine.id\": 1, \"sourceLine.totalPrice\": 1, \"sourceParent.id\": 1", ["erpLine", "sourceLine", "sourceParent"] },
+        { "the owning row under two continued resolves, one per union target", $"{ErpLine}, {SourceLine}, {DeliveringTour}, {TourVehicle}",
+            "\"deliveringTour.number\": 1, \"tourVehicle.matchCode\": 1", "\"sourceLine.totalPrice\": 1, \"sourceParent.id\": 1", ["sourceLine", "sourceParent"] },
+        { "a continued alias a stage continued under it reads", $"{ErpLine}, {SourceLine}, {DeliveringTour}, {ShipmentVehicle}",
+            "\"shipmentVehicle.matchCode\": 1", "\"sourceParent.id\": 1, \"deliveringTour.number\": 1", ["sourceParent", "deliveringTour"] },
+        { "the owning row with only the keyed alias named", $"{ErpLine}, {SourceLine}, {DeliveringTour}",
+            "\"sourceLine.totalPrice\": 1, \"deliveringTour.number\": 1", "\"sourceParent.id\": 1", ["sourceParent"] },
+    };
+
+    private static string Anchored(string stages, string projection) => Lines($$"""
+        {{stages}},
+        { "project": { "position": 1, {{projection}} } }
+        """);
+
+    [Theory]
+    [MemberData(nameof(Anchors))]
+    public async Task S10_a_projection_that_names_only_the_last_alias_answers_the_rows_with_the_aliases_it_depends_on_less_those_aliases(string kind, string stages, string leaf, string anchors, string[] dropped)
+    {
+        var ledger = await LedgerClient();
+        var only = (await ledger.QueryAsync(Anchored(stages, leaf))).ShouldBeOk();
+        var with = (await ledger.QueryAsync(Anchored(stages, leaf + ", " + anchors))).ShouldBeOk();
+
+        var expected = with.Items.Select(row => row!.DeepClone().AsObject()).ToList();
+
+        foreach (var row in expected)
+            foreach (var alias in dropped)
+                row.Remove(alias).Should().BeTrue($"{kind}: the row with the aliases projected carries '{alias}'");
+
+        only.Items.Should().NotBeEmpty();
+        only.Items.OfType<JsonObject>().Select(row => row.ToJsonString()).Should().Equal(expected.Select(row => row.ToJsonString()),
+            $"{kind}: the aliases a join depends on are loaded for it and cut from the row");
+
+        var last = leaf.Split('"')[1].Split('.')[0];
+
+        only.Items.OfType<JsonObject>().Should().Contain(row => row[last] is JsonObject, $"{kind}: '{last}' resolves through aliases the row does not show");
+    }
+
+    [Theory]
+    [MemberData(nameof(Anchors))]
+    public async Task S11_explain_is_valid_for_a_projection_that_names_only_the_last_alias_and_shows_nothing_under_the_aliases_it_depends_on(string kind, string stages, string leaf, string anchors, string[] dropped)
+    {
+        var ledger = await LedgerClient();
+        var explained = await ledger.ExplainHereAsync(Anchored(stages, leaf));
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue($"{kind}: {explained.Text}");
+        anchors.Should().NotBeEmpty();
+
+        var columns = explained.Body["result"]!["columns"]!.AsArray().Select(column => Text(column, "path")!).ToList();
+
+        foreach (var alias in dropped)
+        {
+            var described = explained.Body["aliases"]![alias]!.AsObject();
+
+            described["shows"]!.AsArray().Should().BeEmpty($"{kind}: '{alias}' is loaded for the join that reads it and is not in the row");
+            described["droppedAt"].Should().NotBeNull();
+            columns.Should().NotContain(path => path == alias || path.StartsWith(alias + ".", StringComparison.Ordinal));
+            // The line itself is read by nothing: it is fetched with its owning row, which the continued stages read.
+            if (alias != "sourceLine")
+                explained.Body["stages"]!.AsArray().SelectMany(stage => stage!["reads"]?.AsArray().ToList() ?? [])
+                    .Should().Contain(read => Text(read, "alias") == alias && (Text(read, "use") == "resolveKey" || Text(read, "use") == "lookupOn"), $"{kind}: a later join reads '{alias}'");
+        }
+
+        // Every join the row depends on is placed: explain says where the run fetches it.
+        foreach (var stage in explained.Body["stages"]!.AsArray().OfType<JsonObject>().Where(stage => Text(stage, "kind") == "resolve"))
+            stage["placement"].Should().NotBeNull($"{kind}: the resolve at stage {stage["index"]} runs");
+    }
+
+    [Fact]
+    public async Task S12_explain_answers_what_an_alias_kept_alive_loads_the_reads_of_the_stages_continued_under_it()
+    {
+        var ledger = await LedgerClient();
+        var explained = await ledger.ExplainHereAsync(Anchored($"{ErpLine}, {SourceLine}, {DeliveringTour}, {TourVehicle}", "\"deliveringTour.number\": 1, \"tourVehicle.matchCode\": 1"));
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        explained.Body["aliases"]!["sourceParent"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("resource.id", "tours.tourId");
+        explained.Body["aliases"]!["sourceLine"]!["loads"]!.AsArray().Should().BeEmpty("nothing reads the line itself: its owner is asked for the key alone");
+        explained.Body["aliases"]!["erpLine"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Contain("sourceBillingLineReference.id");
     }
 
     [Fact]

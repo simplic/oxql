@@ -91,6 +91,37 @@ public class ContinuationExecutionTests
     // ---- the owner query ------------------------------------------------------------------------------
 
     [Fact]
+    public async Task A_projection_that_names_only_the_continued_alias_fetches_its_anchor_for_the_key_alone_and_leaves_it_out_of_the_row()
+    {
+        const string Stages = """{ "resolve": { "path": "contactId", "as": "r" } }, { "resolve": { "path": "r.companyId", "as": "co" } }""";
+
+        async Task<(JsonObject Row, QueryRequest Sent)> RowAsync(string projection)
+        {
+            var (engine, runner, client) = Host();
+            runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+            client.Script = (_, query, _) => new FakeRemoteClient.Answer.Rows(query.Pipeline.Last(stage => stage.Project is not null).Project!.Fields.ContainsKey("name")
+                ? FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice"), ("co", new { title = "ACME" }))
+                : FakeRemoteClient.Row("id", ContactId.ToString(), ("co", new { title = "ACME" })));
+
+            var result = Succeeded(await RunAsync(engine, $$"""[{{Stages}}, { "project": { {{projection}} } }]"""));
+
+            return (result.Items.Should().ContainSingle().Subject!.AsObject(), client.Calls.Should().ContainSingle().Subject.Request.Queries.Should().ContainSingle().Subject);
+        }
+
+        var (leaf, sent) = await RowAsync("\"number\": 1, \"co.title\": 1");
+        var (anchored, _) = await RowAsync("\"number\": 1, \"r.name\": 1, \"co.title\": 1");
+
+        sent.Pipeline.Select(stage => stage.Kind).Should().Equal("match", "resolve", "project", "page");
+        sent.Pipeline[2].Project!.Fields.Keys.Should().BeEquivalentTo(["id", "co.title"], "the anchor is asked for its key alone: neither a default set nor a path the row would not show");
+
+        leaf["co"]!.ToJsonString().Should().Be("""{"title":"ACME"}""");
+        leaf.ContainsKey("r").Should().BeFalse();
+
+        anchored.Remove("r").Should().BeTrue();
+        leaf.ToJsonString().Should().Be(anchored.ToJsonString(), "the row is the one with the anchor projected, less the anchor");
+    }
+
+    [Fact]
     public async Task The_continued_stages_ride_in_the_owner_query_between_the_filter_and_the_projection_and_come_back_lifted()
     {
         var (engine, runner, client) = Host();

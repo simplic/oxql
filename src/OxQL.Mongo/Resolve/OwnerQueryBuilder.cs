@@ -105,7 +105,8 @@ public static class OwnerQueryBuilder
 
         // The paths the binder inferred for the alias (improvement plan §3.S): what the caller's
         // projection names under it, or, kept whole, its select hint (a local target's as bound, the
-        // paths it has). Without any, the reserved $default key, which the owner expands to its own
+        // paths it has). An empty set is an alias the row does not show, kept alive for the stages
+        // continued under it: the keyed member alone. Without a set, the reserved $default key, which the owner expands to its own
         // entity's key and display members — the pair the local half of this stage keeps — or, for an
         // item, the matched member. Without a projection the owner answers with whole documents,
         // organizationId and every other member included, to a caller that wanted a label.
@@ -116,9 +117,9 @@ public static class OwnerQueryBuilder
         if (!probe && select is { Count: > 0 })
             foreach (var path in select)
                 projection[element + path] = 1;
-        else if (!probe && item is null)
+        else if (!probe && select is null && item is null)
             projection["$default"] = 1;
-        else if (!probe && lookup is not null)
+        else if (!probe && select is null && lookup is not null)
             projection[BoundKeyedBy.Element] = 1;   // a looked-up element without a select is the whole element
 
         // A whole row answered per key carries the key under its own member (DESIGN §3.4.4); every
@@ -133,7 +134,7 @@ public static class OwnerQueryBuilder
             if (target.RemoteParentSelect is { Count: > 0 } parent)
                 foreach (var path in parent)
                     projection[path] = 1;
-            else
+            else if (target.RemoteParentSelect is null)
                 projection["$default"] = 1;
         }
 

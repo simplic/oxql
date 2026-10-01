@@ -104,6 +104,28 @@ public class OwnerCheckParityTests
             ], Strict: false,
             ["rc.tour"]),
 
+        ["anchor only: a remote alias the projection drops"] = new(
+            """[{ "resolve": { "path": "contactId", "as": "r" } }, { "resolve": { "path": "r.companyId", "as": "co" } }, { "project": { "number": 1, "co.title": 1 } }]""",
+            [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))], Strict: false,
+            ["crm.contact"]),
+
+        ["anchor only: a local keyed union the projection drops"] = new(
+            """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "path": "b.driverId", "as": "d", "forTarget": "rc.tour" } }, { "project": { "number": 1, "d.name": 1 } }]""",
+            [
+                InvoiceRow(InvoiceId, row => row["Billing"] = new BsonDocument { ["DataType"] = "shipment", ["ReferenceId"] = ShipmentId.ToString() }),
+                InvoiceRow(SecondId, row => row["Billing"] = new BsonDocument { ["DataType"] = "tour", ["ReferenceId"] = TourId.ToString() }),
+            ], Strict: false,
+            ["rc.tour"]),
+
+        ["anchor only: the owning row of a remote union the projection drops"] = new(
+            """
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+             { "resolve": { "path": "owner.driverId", "as": "drv", "forTarget": "transport.shipment" } },
+             { "project": { "number": 1, "drv.name": 1 } }]
+            """,
+            [InvoiceRow(InvoiceId, row => row["Source"] = new BsonDocument { ["Type"] = "remote", ["_id"] = Id(ShipmentId) })], Strict: false,
+            ["transport.shipment"]),
+
         ["remote lookup"] = new(
             """[{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "select": ["number"] } }, { "project": { "number": 1, "shipments.number": 1, "shipments.date": 1 } }]""",
             [InvoiceRow(InvoiceId, _ => { })], Strict: false,

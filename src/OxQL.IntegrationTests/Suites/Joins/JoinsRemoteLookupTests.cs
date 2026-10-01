@@ -222,6 +222,38 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     }
 
     [Fact]
+    public async Task A_lookup_continued_from_an_owning_shipment_the_projection_does_not_name_answers_the_same_gear_without_the_shipment()
+    {
+        const string Stages = """
+            { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lastLine", "first": true,
+                          "sort": [ { "date": "desc" } ], "parentAs": "ship" } },
+            { "lookup": { "from": "fleet.equipment", "path": "assignedShipmentId", "on": "ship", "as": "gear", "first": true } }
+            """;
+        var client = await LedgerAsync();
+        var only = (await client.QueryAsync(Over(Stages, "\"number\": 1, \"gear.name\": 1"))).ShouldBeOk();
+        var with = (await client.QueryAsync(Over(Stages, "\"number\": 1, \"lastLine.text\": 1, \"ship.shipmentNumber\": 1, \"gear.name\": 1"))).ShouldBeOk();
+
+        var expected = with.Items.Select(row => row!.DeepClone().AsObject()).ToList();
+
+        foreach (var row in expected)
+        {
+            row.Remove("lastLine").Should().BeTrue();
+            row.Remove("ship").Should().BeTrue();
+        }
+
+        only.Items.OfType<JsonObject>().Select(row => row.ToJsonString()).Should().Equal(expected.Select(row => row.ToJsonString()),
+            "the lookup's rows are fetched for the lookup continued on their owning shipment and cut from the row");
+        Row(only, Invoice)["gear"]!["name"]!.GetValue<string>().Should().Be("Crane");
+        Row(only, Invoice).Select(member => member.Key).Should().Equal("id", "number", "gear");
+
+        var explained = await client.ExplainHereAsync(Over(Stages, "\"number\": 1, \"gear.name\": 1"));
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        explained.Body["aliases"]!["ship"]!["shows"]!.AsArray().Should().BeEmpty();
+        explained.Body["aliases"]!["lastLine"]!["shows"]!.AsArray().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task A_stage_under_a_lookup_array_is_not_continuable_and_an_element_lookup_names_a_collection()
     {
         var client = await LedgerAsync();

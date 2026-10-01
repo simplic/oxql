@@ -321,9 +321,6 @@ public sealed class Binder
 
             errors.RemoveAll(error => error.Code == Shape.PoisonedCode);
 
-            if (errors.Count == 0)
-                CheckContinuedAnchorsKept();
-
             if (conditions > options.Limits.MaxConditions)
                 errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
 
@@ -477,18 +474,20 @@ public sealed class Binder
         {
             var own = RootOutput.Of(final, resolve.As);
             var parent = resolve.ParentAs is { } parentAs ? RootOutput.Of(final, parentAs) : null;
-            IReadOnlyList<string>? sent = !own.Carried ? null
+            // An alias the row does not carry shows nothing: its owner is asked for the key alone, which is
+            // all this host needs of it to lift what the stages continued under it add (an anchor).
+            IReadOnlyList<string>? sent = !own.Carried ? []
                 : own.Whole ? resolve.Hint is { } hint ? RootOutput.Written(hint) : null
                 : RootOutput.Cover(own.Projected);
             // The owning row's 'entity' is this host's to write, not a member of the owner's row.
             IReadOnlyList<string>? parentSent = parent is { Carried: true, Whole: false }
                 ? RootOutput.Cover(parent.Projected.Where(path => path != ParentEntity && !path.StartsWith(ParentEntity + ".", StringComparison.Ordinal)))
-                : null;
+                : parent is { Carried: false } ? [] : null;
 
-            loads[resolve.As] = new JoinLoad(sent, own.Carried ? sent : [], resolve.Hint);
+            loads[resolve.As] = new JoinLoad(WithAnchorReads(sent, resolve.As), own.Carried ? sent : [], resolve.Hint);
 
             if (resolve.ParentAs is not null)
-                loads[resolve.ParentAs] = new JoinLoad(parentSent, parent!.Carried ? parent.Whole ? null : RootOutput.Cover(parent.Projected) : [], null);
+                loads[resolve.ParentAs] = new JoinLoad(WithAnchorReads(parentSent, resolve.ParentAs), parent!.Carried ? parent.Whole ? null : RootOutput.Cover(parent.Projected) : [], null);
 
             var cases = (resolve.Cases ?? []).Select(bound => bound with
             {
@@ -504,6 +503,20 @@ public sealed class Binder
                 RemoteLookup = resolve.RemoteLookup is { } lookup ? lookup with { Select = sent, ParentSelect = parentSent } : null,
             };
         }
+
+        /// <summary>
+        /// What an owner loads under <paramref name="alias"/>: the paths it is asked for and those the
+        /// stages continued under the alias root at. A continued stage reads the alias it continues under,
+        /// whether or not the row shows it: the owner loads the path for the stage it runs, and the row is
+        /// cut to what the projection names. The paths asked for keep their order, the reads follow. Null
+        /// where only the owner knows what it loads.
+        /// </summary>
+        private IReadOnlyList<string>? WithAnchorReads(IReadOnlyList<string>? sent, string alias) => sent is null
+            ? null
+            : RootOutput.Written(sent.Concat(reads
+                .Where(read => read.Alias == alias && read.Use is ReadUse.ResolveKey or ReadUse.LookupOn && read.Relative is { Length: > 0 })
+                .Select(read => read.Relative!)
+                .Order(StringComparer.Ordinal)));
 
         /// <summary>The member of an owning row (<c>parentAs</c>) that names its entity; the keyed fetch writes it.</summary>
         private const string ParentEntity = "entity";
@@ -2185,31 +2198,6 @@ public sealed class Binder
             errors.Add(Error(Codes.NotContinuable,
                 $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. Aggregate chain data in the report.", index, path));
             return true;
-        }
-
-        /// <summary>
-        /// A continued alias the final row shows needs its keyed stage fetched, and the fetch runs
-        /// only for a keyed stage whose alias or owning row the row shows: a projection that keeps a
-        /// continued alias but drops both is refused rather than answered with an alias that is
-        /// always null.
-        /// </summary>
-        private void CheckContinuedAnchorsKept()
-        {
-            foreach (var continued in stages.OfType<ContinuedStage>())
-            {
-                // A group after it replaced the row, and the continued alias with it.
-                if (!anchors.TryGetValue(continued.Anchor, out var anchored))
-                    continue;
-
-                var anchor = anchored.Stage;
-
-                if (shape.Carries(anchor.As) || (anchor.ParentAs is { } parentAs && shape.Carries(parentAs)))
-                    continue;
-
-                if (continued.Aliases.FirstOrDefault(shape.Carries) is { } shown)
-                    errors.Add(Error(Codes.NotContinuable,
-                        $"'{shown}' continues at the owner of '{anchor.As}', which the projection drops; keep '{anchor.As}'{(anchor.ParentAs is null ? "" : $" or '{anchor.ParentAs}'")} in the projection as well.", continued.OriginIndex, shown));
-            }
         }
 
         /// <summary>

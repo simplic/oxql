@@ -313,15 +313,62 @@ public class ContinuationBindTests
         }
     }
 
-    [Fact]
-    public async Task A_projection_that_keeps_a_continued_alias_but_drops_the_alias_it_continues_under_is_NOT_CONTINUABLE()
+    /// <summary>
+    /// A continued stage reads the alias it continues under (improvement plan §3.S): a projection that
+    /// names only the continued alias keeps the keyed stage running, asks its owner for the key alone,
+    /// and the row shows neither the alias nor its owning row. One case per kind of anchor.
+    /// </summary>
+    [Theory]
+    [InlineData(Contact, """{ "resolve": { "path": "r.customerId", "as": "c" } }""", "c.name", "r", "customerId")]
+    [InlineData(Line, """{ "resolve": { "path": "r.customerId", "as": "c" } }""", "c.name", "r", "customerId")]
+    [InlineData(Contact, """{ "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "as": "c", "first": true } }""", "c.number", "r", null)]
+    [InlineData(Source, """{ "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "as": "c" } }""", "c.number", "owner", null)]
+    [InlineData(Union, """{ "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "as": "c", "forTarget": "rc.shipment" } }""", "c", "owner", null)]
+    public async Task A_projection_that_names_only_a_continued_alias_keeps_the_alias_it_continues_under_alive_and_out_of_the_row(string first, string second, string projected, string anchor, string? read)
     {
-        var error = await ErrorAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c" } }, { "project": { "number": 1, "c": 1 } }]""", Codes.NotContinuable);
+        var bound = await BoundAsync($$"""[{{first}}, {{second}}, { "project": { "number": 1, "{{projected}}": 1 } }]""");
+        var keyed = bound.Stages.OfType<BoundStage.Resolve>().Should().ContainSingle().Subject;
 
-        error.Stage.Should().Be(1);
-        error.Message.Should().Contain("keep 'r'");
+        bound.FinalShape.Carries(keyed.As).Should().BeFalse("the projection does not name it");
+        bound.FinalShape.Carries("c").Should().BeTrue();
+        OxQL.Mongo.MongoCompiler.KeyedRuns(bound, keyed).Should().BeTrue("the continued stage reads the alias it continues under, so its keyed stage is fetched");
 
-        await BoundAsync($$"""[{{Union}}, { "lookup": { "from": "rc.invoice", "path": "shipmentKey", "on": "owner", "as": "l" } }, { "project": { "owner": 1, "l": 1 } }]""");
+        bound.Loads[anchor].Shows.Should().BeEmpty("the row does not show an alias that is only kept alive");
+        bound.Loads[anchor].Loads.Should().Equal(read is null ? [] : [read], "it loads what the continued stage reads under it and nothing the row would show");
+        bound.Loads[keyed.As].Shows.Should().BeEmpty();
+
+        foreach (var target in keyed.Cases!.SelectMany(selected => selected.Targets))
+        {
+            (target.RemoteSelect ?? []).Should().BeEmpty("no path is asked for the row");
+
+            if (!target.IsRemote)
+                target.Select!.Select(path => path.Wire).Should().OnlyContain(path => path == target.Entity!.Key!.Wire || path == target.Declared.Field, "a local target loads its key alone");
+        }
+
+        bound.Reads.Should().Contain(each => each.Stage == 1 && each.Alias == anchor && (each.Use == ReadUse.ResolveKey || each.Use == ReadUse.LookupOn), "the ledger holds the continued stage's read of its anchor");
+    }
+
+    [Fact]
+    public async Task A_stage_continued_under_a_continued_alias_keeps_both_alive_when_the_projection_names_only_the_last()
+    {
+        var bound = await BoundAsync($$"""
+            [{{Contact}}, { "resolve": { "path": "r.companyId", "as": "co" } }, { "resolve": { "path": "co.parentId", "as": "top" } }, { "project": { "number": 1, "top.title": 1 } }]
+            """);
+        var keyed = bound.Stages.OfType<BoundStage.Resolve>().Should().ContainSingle().Subject;
+
+        bound.Stages.OfType<ContinuedStage>().Select(stage => stage.Anchor).Should().Equal("r", "r");
+        bound.FinalShape.Carries("r").Should().BeFalse();
+        bound.FinalShape.Carries("co").Should().BeFalse();
+        OxQL.Mongo.MongoCompiler.KeyedRuns(bound, keyed).Should().BeTrue();
+        bound.Loads["r"].Loads.Should().Equal("companyId");
+    }
+
+    [Fact]
+    public async Task A_keyed_stage_whose_aliases_and_continued_aliases_the_row_all_drops_is_not_fetched()
+    {
+        var bound = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c" } }, { "project": { "number": 1 } }]""");
+
+        OxQL.Mongo.MongoCompiler.KeyedRuns(bound, bound.Stages.OfType<BoundStage.Resolve>().Single()).Should().BeFalse("nothing the row shows reads it");
     }
 
     [Fact]

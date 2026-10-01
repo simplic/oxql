@@ -325,9 +325,9 @@ public static class MongoCompiler
                     break;
 
                 // The keyed fetch's rows only ever reach the wire row; a projection that dropped
-                // the alias and the owning row leaves nothing to fetch. A match under a remote
-                // alias is a semi-join, which fetches its ids apart from this.
-                case BoundStage.Resolve keyedResolve when IsKeyed(keyedResolve) && !Shown(bound.FinalShape, keyedResolve.As) && !(keyedResolve.ParentAs is { } parentAs && Shown(bound.FinalShape, parentAs)):
+                // the alias, the owning row and every alias continued under them leaves nothing to
+                // fetch. A match under a remote alias is a semi-join, which fetches its ids apart from this.
+                case BoundStage.Resolve keyedResolve when IsKeyed(keyedResolve) && !KeyedRuns(bound, keyedResolve):
                     break;
 
                 case BoundStage.Resolve keyedResolve when IsKeyed(keyedResolve):
@@ -1708,8 +1708,23 @@ public static class MongoCompiler
         ArgumentNullException.ThrowIfNull(bound);
 
         return bound.Stages[position] is BoundStage.Resolve resolve && IsKeyed(resolve)
-            ? Shown(bound.FinalShape, alias)
+            ? KeyedRuns(bound, resolve)
             : JoinUsed(bound, position, alias);
+    }
+
+    /// <summary>
+    /// Whether a keyed resolve is fetched: the final row shows its alias, its owning row, or an alias
+    /// a stage continued under them adds. A continued stage reads the alias it continues under, so the
+    /// keyed stage runs for it although the projection names neither; the row then leaves both out.
+    /// </summary>
+    public static bool KeyedRuns(BoundPipeline bound, BoundStage.Resolve resolve)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(resolve);
+
+        return Shown(bound.FinalShape, resolve.As)
+            || (resolve.ParentAs is { } parentAs && Shown(bound.FinalShape, parentAs))
+            || bound.Stages.OfType<ContinuedStage>().Any(continued => continued.Anchor == resolve.As && continued.Aliases.Any(alias => Shown(bound.FinalShape, alias)));
     }
 
     /// <summary>Whether the final row carries an alias: it is still a root and no projection after it dropped it.</summary>

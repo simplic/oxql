@@ -715,7 +715,7 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["deliveryAddress","deliveryNoteNumber","effectiveDeliveryEnd","id","items.weightNotes.number","items.weightNotes.quantity","loadAddress","referenceNumber","shipmentNumber"],
+        "loads": ["deliveryAddress","deliveryNoteNumber","effectiveDeliveryEnd","id","items.weightNotes.number","items.weightNotes.quantity","loadAddress","referenceNumber","shipmentNumber","tours.tourId"],
         "shows": ["deliveryAddress","deliveryNoteNumber","effectiveDeliveryEnd","id","items.weightNotes.number","items.weightNotes.quantity","loadAddress","referenceNumber","shipmentNumber"],
         "hint": null,
         "targets": [
@@ -742,7 +742,7 @@
         "continuedFrom": {
           "alias": "lineShipment"
         },
-        "loads": ["id","number"],
+        "loads": ["id","number","attachedResources.resource.id","resource.id"],
         "shows": ["id","number"],
         "hint": null,
         "outcome": {

@@ -255,6 +255,23 @@ public class JoinLoadExecutionTests
     }
 
     [Fact]
+    public async Task A_projection_that_names_only_a_continued_alias_explains_as_valid_with_its_anchor_loaded_and_not_shown()
+    {
+        var result = await ExplainAsync("""
+            [{ "resolve": { "path": "contactId", "as": "r" } },
+             { "resolve": { "path": "r.companyId", "as": "co" } },
+             { "project": { "number": 1, "co.title": 1 } }]
+            """, OwnerFleet.Client());
+
+        result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
+        result.Stage(1).Reads.Select(read => read.ToJsonString()).Should().Equal(
+            ["""{"path":"r.companyId","use":"resolveKey","alias":"r"}"""], "the continued stage's read of its anchor");
+        Strings(result.Alias("r")["loads"]).Should().Equal("companyId");
+        Strings(result.Alias("r")["shows"]).Should().BeEmpty("the row does not show an alias that is only kept alive");
+        Strings(result.Alias("co")["shows"]).Should().Equal("title");
+    }
+
+    [Fact]
     public async Task A_stage_continued_at_an_owner_answers_the_reads_and_the_loads_its_owner_inferred()
     {
         var result = await ExplainAsync("""
@@ -266,7 +283,7 @@ public class JoinLoadExecutionTests
         result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
         result.Stage(1).Reads.Select(read => read.ToJsonString()).Should().Equal(
             ["""{"path":"r.companyId","use":"resolveKey","alias":"r"}"""], "the owner's read of its row, in the origin row's paths");
-        Strings(result.Alias("r")["loads"]).Should().Equal("name");
+        Strings(result.Alias("r")["loads"]).Should().Equal(["name", "companyId"], "what the projection names, and what the continued stage reads under the alias");
         Strings(result.Alias("co")["loads"]).Should().Equal(["id", "title"], "the owner's join, as the owner inferred it for the run's query");
         Strings(result.Alias("co")["shows"]).Should().Equal("id", "title");
         Strings(result.Alias("co")["hint"]).Should().Equal("title");

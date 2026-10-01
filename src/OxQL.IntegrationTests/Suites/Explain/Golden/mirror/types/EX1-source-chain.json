@@ -768,7 +768,7 @@
         "heldBy": "transport",
         "complete": true,
         "lookupOn": true,
-        "loads": ["id","number","shipmentNumber"],
+        "loads": ["id","number","shipmentNumber","resource.id","tours.tourId"],
         "shows": ["id","number","shipmentNumber"],
         "hint": null,
         "parentOf": "sourceLine",

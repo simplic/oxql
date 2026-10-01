@@ -81,6 +81,19 @@ public static class WireEncoder
                         result[name] = EncodeScalar(scalarValue, scalar.Kind, null, name, unfit);
                     break;
 
+                // A join's outcome under its name: the aggregate wrote it into the row, or the keyed fetch says it after the page.
+                case ShapeNode.Outcome outcome:
+                    if (outcome.InAggregate)
+                    {
+                        if (row.TryGetValue(name, out var told) && told is BsonString)
+                            result[name] = told.AsString;
+                    }
+                    else if (remote is not null && remote.TryGetValue(name, out var said))
+                    {
+                        result[name] = said?.DeepClone();
+                    }
+                    break;
+
                 case ShapeNode.GroupOutput output:
                     if (row.TryGetValue(name, out var outputValue))
                         result[name] = EncodeOutput(outputValue, output, name, shape, unfit);

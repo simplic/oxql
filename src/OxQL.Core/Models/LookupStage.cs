@@ -117,6 +117,13 @@ public sealed record ResolveStage
     /// </summary>
     public IReadOnlyList<ResolveBranch>? ByTarget { get; init; }
 
+    /// <summary>
+    /// The name of a row member that carries what became of the reference on every row: the outcome
+    /// as the wire spells it (<c>resolved</c>, <c>not_found</c>, …). A root of the row like
+    /// <see cref="As"/>, named by the caller; nothing carries the outcome unless a stage names one. Contract 2.
+    /// </summary>
+    public string? OutcomeAs { get; init; }
+
     /// <summary>Members the caller wrote with a value of the wrong JSON kind or outside their values, such as an <c>elements</c> of <c>"some"</c>.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Malformed { get; init; } = [];
@@ -274,6 +281,12 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
                     else
                         malformed.Add(property.Name);
                     break;
+                case "outcomeAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { OutcomeAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
@@ -363,6 +376,7 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
             writer.WriteEndObject();
         }
 
+        if (value.OutcomeAs is not null) writer.WriteString("outcomeAs", value.OutcomeAs);
         writer.WriteEndObject();
     }
 }

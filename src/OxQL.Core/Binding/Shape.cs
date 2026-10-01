@@ -381,6 +381,7 @@ public sealed class Shape
                     Filterable = true, Sortable = true, Root = node,
                 })
                 : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a scalar; '{wire}' has no members.", PathReasons.NoMembers, ("alias", rootName)),
+            ShapeNode.Outcome outcome => ResolveOutcome(outcome, rootName, rest.Count, wire, usage),
             ShapeNode.GroupOutput output => rest.Count == 0
                 ? PathResolution.Ok(new ResolvedPath
                 {
@@ -393,6 +394,33 @@ public sealed class Shape
         };
 
         return resolution;
+    }
+
+    /// <summary>
+    /// A join's outcome under its name: a string of the row. One the aggregate writes can be filtered,
+    /// grouped by and aggregated; one written after the page can only be projected. Neither orders a page.
+    /// </summary>
+    private static PathResolution ResolveOutcome(ShapeNode.Outcome outcome, string rootName, int below, string wire, PathUsage usage)
+    {
+        if (below > 0)
+            return PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is the outcome of '{outcome.Join}', a string; '{wire}' has no members.", PathReasons.NoMembers, ("alias", rootName));
+
+        if (usage == PathUsage.Sort)
+            return PathResolution.Fail(Codes.ResolveNotSortable, $"'{wire}' is the outcome of '{outcome.Join}'; an outcome does not order the page.", PathReasons.AfterPage, ("alias", rootName));
+
+        if (!outcome.InAggregate && usage == PathUsage.Match)
+            return PathResolution.Fail(Codes.ResolveNotFilterable,
+                $"'{wire}' is the outcome of '{outcome.Join}', which is joined after the page is taken; it cannot filter the rows.", PathReasons.AfterPage, ("alias", rootName));
+
+        if (!outcome.InAggregate && usage is PathUsage.Unwind or PathUsage.GroupKey or PathUsage.Aggregate)
+            return PathResolution.Fail(Codes.UnknownPath,
+                $"'{wire}' is the outcome of '{outcome.Join}', which is joined after the page is taken, and cannot be used here.", PathReasons.AfterPage, ("alias", rootName));
+
+        return PathResolution.Ok(new ResolvedPath
+        {
+            Wire = wire, Storage = outcome.InAggregate ? outcome.StoragePrefix : null, Kind = Kind.String, CollectionAncestors = 0,
+            Filterable = outcome.InAggregate, Sortable = false, Root = outcome,
+        });
     }
 
     private PathResolution ResolveElement(ShapeNode.Element element, string rootName, ArraySegment<string> rest, string wire, PathUsage usage)

@@ -760,7 +760,7 @@ public sealed class Binder
             IEnumerable<string?> aliases = stage.Kind switch
             {
                 "lookup" => [stage.Lookup!.As, stage.Lookup.ParentAs],
-                "resolve" => [stage.Resolve!.As, stage.Resolve.ParentAs],
+                "resolve" => [stage.Resolve!.As, stage.Resolve.ParentAs, stage.Resolve.OutcomeAs],
                 "unwind" => [stage.Unwind!.As, stage.Unwind.IncludeIndex],
                 _ => [],
             };
@@ -1001,6 +1001,10 @@ public sealed class Binder
                 return null;
             }
 
+            // A join's outcome compares with its own vocabulary, exactly.
+            if (path.Root is ShapeNode.Outcome)
+                return BindOutcomeCondition(condition, path, op, index);
+
             // The alias of a remote resolve is the owner's row, not a path of the owner: only a
             // member of it travels as a semi-join, so a condition on the alias itself stops here
             // instead of reaching the owner as a match on a name it does not have.
@@ -1097,6 +1101,60 @@ public sealed class Binder
                 diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, IsSemiJoin: false);
+        }
+
+        /// <summary>
+        /// A condition on a join's outcome (<c>outcomeAs</c>): <c>eq</c>, <c>neq</c>, <c>in</c> or
+        /// <c>nin</c> against the outcomes as the wire spells them. The member always holds one of them,
+        /// so it compares exactly: nothing folds, no option applies, and a name that is no outcome is
+        /// refused rather than matching nothing.
+        /// </summary>
+        private BoundCondition? BindOutcomeCondition(FilterCondition condition, ResolvedPath path, string op, int index)
+        {
+            if (op is not ("eq" or "neq" or "in" or "nin"))
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not apply to an outcome; compare '{condition.Path}' with eq, neq, in or nin.", index, condition.Path));
+                return null;
+            }
+
+            if (condition.Options is not null)
+            {
+                errors.Add(Error(Codes.OptionNotApplicable, $"'{condition.Path}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path));
+                return null;
+            }
+
+            var operand = coercer.Coerce(condition.Value, path, op, index, errors);
+
+            if (operand is null)
+                return null;
+
+            var named = operand switch
+            {
+                BoundOperand.Single { Value: BsonString one } => [one.Value],
+                BoundOperand.Set set when set.Values.All(value => value is BsonString) => set.Values.Select(value => value.AsString).ToList(),
+                _ => (List<string>?)null,
+            };
+
+            if (named is null)
+            {
+                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' is an outcome; compare it with one of {string.Join(", ", Notes.Outcomes)}.", index, condition.Path));
+                return null;
+            }
+
+            if (named.FirstOrDefault(name => !Notes.Outcomes.Contains(name, StringComparer.Ordinal)) is { } unknown)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownEnumMember,
+                    Message = $"'{unknown}' is not an outcome; the outcomes are {string.Join(", ", Notes.Outcomes)}.",
+                    Stage = index,
+                    Path = condition.Path,
+                    Params = contract2 ? new Dictionary<string, object?> { ["values"] = Notes.Outcomes } : null,
+                });
+                return null;
+            }
+
+            return new BoundCondition.Leaf(path, op, operand, IgnoreCase: false, IsSemiJoin: false);
         }
 
         /// <summary>
@@ -1768,6 +1826,7 @@ public sealed class Binder
             {
                 ("elements", resolve.Elements is not null), ("target", resolve.Target is not null), ("parentAs", resolve.ParentAs is not null),
                 ("onMissing", resolve.OnMissing is not null), ("forTarget", resolve.ForTarget is not null), ("byTarget", resolve.ByTarget is not null),
+                ("outcomeAs", resolve.OutcomeAs is not null),
             };
             IReadOnlyList<string> unknown = contract2
                 ? resolve.Unknown
@@ -1776,7 +1835,7 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget, byTarget" : "path, as, select, filter")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget, byTarget, outcomeAs" : "path, as, select, filter")}."
                     + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
                 return;
             }
@@ -1809,7 +1868,7 @@ public sealed class Binder
 
             if (anchors.TryGetValue(head, out var anchor))
             {
-                BindContinued(new PipelineStage { Resolve = resolve, Keys = ["resolve"] }, index, path, anchor, resolve.ForTarget, [resolve.As, resolve.ParentAs]);
+                BindContinued(new PipelineStage { Resolve = resolve, Keys = ["resolve"] }, index, path, anchor, resolve.ForTarget, [resolve.As, resolve.ParentAs], resolve.OutcomeAs);
                 return;
             }
 
@@ -1843,6 +1902,9 @@ public sealed class Binder
 
                 parentAs = checkedParent;
             }
+
+            if (!CheckOutcomeAlias(resolve.OutcomeAs, [alias, parentAs], index, out var outcomeAs))
+                return;
 
             var resolution = Read(shape, path, PathUsage.Match, ReadUse.ResolveKey, index, Reading.Row);
 
@@ -1989,6 +2051,7 @@ public sealed class Binder
                 inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index)
             {
                 Hint = resolve.Select is { Count: > 0 } hint ? hint : null,
+                OutcomeAs = outcomeAs,
             };
 
             stages.Add(stage);
@@ -2010,6 +2073,11 @@ public sealed class Binder
                     : new ShapeNode.Keyed(
                         cases.SelectMany(bound => bound.Targets).Select(target => new KeyedTarget(target.Entity!, null)).Distinct().ToList(),
                         elements == ResolveElements.All, parentAs));
+
+            // The outcome under its name follows the join: written by the aggregate for an inline
+            // resolve, after the page for every other.
+            if (outcomeAs is not null)
+                shape = shape.WithRoot(outcomeAs, new ShapeNode.Outcome(alias, inline, outcomeAs));
 
             // A keyed or remote alias and its owning row: later resolves and lookups under them
             // continue at their owner.
@@ -2033,7 +2101,7 @@ public sealed class Binder
         /// at most <c>MaxContinuedStages</c> per keyed stage, the new aliases free at the origin — so no continued alias collides with an origin alias — and every
         /// variable bound, since the owner never receives <c>variables</c> (DESIGN §3.5.5).
         /// </summary>
-        private void BindContinued(PipelineStage raw, int index, string root, ContinuationAnchor anchor, string? forTarget, IReadOnlyList<string?> aliases)
+        private void BindContinued(PipelineStage raw, int index, string root, ContinuationAnchor anchor, string? forTarget, IReadOnlyList<string?> aliases, string? outcome = null)
         {
             var kind = raw.Kind!;
             var head = root.Split('.')[0];
@@ -2112,6 +2180,10 @@ public sealed class Binder
                 added.Add(checkedAlias);
             }
 
+            // The outcome under its name: the owner writes it on the rows it answers, and it is lifted with the alias.
+            if (!CheckOutcomeAlias(outcome, added, index, out var outcomeAs))
+                return;
+
             // What the wire form cannot carry to the owner is refused here, not dropped on the way.
             if (RefuseUnknownOptions(raw.Resolve?.Filter?.Condition ?? raw.Lookup?.Filter?.Condition, index))
                 return;
@@ -2130,7 +2202,7 @@ public sealed class Binder
             var stage = OperandCoercer.HoldsVariable(written) ? JsonSerializer.Deserialize<PipelineStage>(sent.GetRawText(), OxQLJson.Wire)! : raw;
 
             continuedPerAnchor[anchor.Stage.As] = count;
-            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective is [var only] ? only : null, added) { Targets = effective is { Count: > 1 } ? effective : null });
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective is [var only] ? only : null, outcomeAs is null ? added : [.. added, outcomeAs]) { Targets = effective is { Count: > 1 } ? effective : null });
 
             // What this host can see of the stage's reads: the path it roots at. Its owner binds it and
             // answers the rest (a case member, the parent's key), which explain takes from the owner.
@@ -2148,6 +2220,34 @@ public sealed class Binder
                 shape = shape.WithRoot(alias, new ShapeNode.Remote(known ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false, TargetOpen: known is null));
                 anchors[alias] = new ContinuationAnchor(anchor.Stage, effective, many, Nested: true);
             }
+
+            if (outcomeAs is not null)
+                shape = shape.WithRoot(outcomeAs, new ShapeNode.Outcome(added[0], InAggregate: false, outcomeAs));
+        }
+
+        /// <summary>
+        /// The name a stage gives its join's outcome (<c>outcomeAs</c>): an alias like any other, free in
+        /// the row and not one of the stage's own (<paramref name="own"/>). True with
+        /// <paramref name="outcomeAs"/> null when the stage names none.
+        /// </summary>
+        private bool CheckOutcomeAlias(string? written, IEnumerable<string?> own, int index, out string? outcomeAs)
+        {
+            outcomeAs = null;
+
+            if (written is null)
+                return true;
+
+            if (!CheckAlias(written, index, out var checkedAlias))
+                return false;
+
+            if (own.Contains(checkedAlias, StringComparer.Ordinal))
+            {
+                errors.Add(Error(Codes.AliasCollision, $"'outcomeAs' is '{checkedAlias}', which this stage already names; the outcome needs a name of its own.", index, checkedAlias));
+                return false;
+            }
+
+            outcomeAs = checkedAlias;
+            return true;
         }
 
         /// <summary>
@@ -2329,6 +2429,9 @@ public sealed class Binder
             if (!CheckAlias(resolve.As, index, out var alias))
                 return;
 
+            if (!CheckOutcomeAlias(resolve.OutcomeAs, [alias], index, out var outcomeAs))
+                return;
+
             // What the wire form cannot carry to the owner is refused here, not dropped on the way.
             if (RefuseUnknownOptions(resolve.Filter?.Condition, index))
                 return;
@@ -2352,7 +2455,7 @@ public sealed class Binder
             var applies = direct ? branches.Select(branch => branch.Target).ToList() : anchor.Targets;
 
             continuedPerAnchor[anchor.Stage.As] = count;
-            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, applies is [var only] ? only : null, [alias])
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, applies is [var only] ? only : null, outcomeAs is null ? [alias] : [alias, outcomeAs])
             {
                 Targets = applies is { Count: > 1 } ? applies : null,
                 Branches = direct ? stage.Resolve!.ByTarget : null,
@@ -2366,6 +2469,9 @@ public sealed class Binder
             // branch reaches is its owner's to say, unless the stage names the one target.
             shape = shape.WithRoot(alias, new ShapeNode.Remote(resolve.Target ?? anchor.Stage.TargetEntity, anchor.Stage.Reference, alias, SemiJoinable: false, TargetOpen: resolve.Target is null));
             anchors[alias] = new ContinuationAnchor(anchor.Stage, applies, all, Nested: true);
+
+            if (outcomeAs is not null)
+                shape = shape.WithRoot(outcomeAs, new ShapeNode.Outcome(alias, InAggregate: false, outcomeAs));
         }
 
         /// <summary>
@@ -3557,7 +3663,7 @@ public sealed class Binder
         // ---- helpers -------------------------------------------------------------------------
 
         /// <summary>Whether a path holds text the collation folds: a string member that is not a single character stored as its code point.</summary>
-        private static bool FoldsAsText(ResolvedPath path) => path.LeafKind == Kind.String && !OperandCoercer.IsCharRepresented(path);
+        private static bool FoldsAsText(ResolvedPath path) => path.LeafKind == Kind.String && !OperandCoercer.IsCharRepresented(path) && path.Root is not ShapeNode.Outcome;
 
         private bool CheckAlias(string? alias, int index, out string checkedAlias)
         {

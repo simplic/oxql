@@ -117,6 +117,16 @@ public abstract record ShapeNode(string StoragePrefix)
     public sealed record Scalar(Kind Kind, string StoragePrefix) : ShapeNode(StoragePrefix);
 
     /// <summary>
+    /// The outcome of a join under the name its stage gave it (<c>outcomeAs</c>, improvement plan
+    /// §3.O): a string on every row saying what became of the reference. <paramref name="Join"/> is the
+    /// alias of the join it is the outcome of. It follows its join: with <paramref name="InAggregate"/>
+    /// (an inline resolve) the aggregate writes it, so a condition, a group key and an aggregate may
+    /// read it before the page; otherwise it is written after the page with the join's rows and can
+    /// only be projected. It never orders a page.
+    /// </summary>
+    public sealed record Outcome(string Join, bool InAggregate, string StoragePrefix) : ShapeNode(StoragePrefix);
+
+    /// <summary>
     /// A group output under its alias. A pushed array has no shape of its own — the alias is a
     /// collection nothing filters or sorts — so it carries its element's kind and shape
     /// instead, and the encoder renders each element the way a row renders the member.
@@ -377,6 +387,20 @@ public abstract record BoundStage
 
         /// <summary>The <c>select</c> as the caller wrote it: the hint of what the alias shows kept whole; null when none was written. Bound-only, never rendered.</summary>
         public IReadOnlyList<string>? Hint { get; init; }
+
+        /// <summary>
+        /// The root that carries the join's outcome on every row (<c>outcomeAs</c>); null when the stage
+        /// names none. A stage that names one reads its outcomes: a key two records hold is told
+        /// (<c>ambiguous</c>) and a record its filter left out is told from a missing one
+        /// (<c>excluded</c>), as under an <c>onMissing</c> other than <c>null</c>.
+        /// </summary>
+        public string? OutcomeAs { get; init; }
+
+        /// <summary>The roots the stage fills: its alias and, when it names one, its outcome.</summary>
+        public IEnumerable<string> Names => OutcomeAs is null ? [As] : [As, OutcomeAs];
+
+        /// <summary>Whether something reads the stage's outcomes: an effective <c>onMissing</c> other than <c>null</c>, or the outcome under a name.</summary>
+        public bool ReadsOutcomes => EffectiveOnMissing != ResolveOnMissing.Null || OutcomeAs is not null;
     }
 
     /// <summary>An unwind; <paramref name="Flatten"/> when it also descends a nested collection of the same items.</summary>

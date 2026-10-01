@@ -246,7 +246,7 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Resolve resolve:
                 {
-                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, resolve.As);
+                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, resolve);
 
                     draft.Placements[index] = ("inline", after ? "afterPage" : "beforePage", host, null, false);
                     draft.Notes.Add(Notes.Join(index, resolve.As, "resolve", after));
@@ -704,6 +704,12 @@ public sealed partial class MongoQueryEngine
                         entry["kind"] = Kinds.NameOf(scalar.Kind);
                         break;
 
+                    // A join's outcome under its name: a string of the row, and the join it speaks of.
+                    case ShapeNode.Outcome outcome:
+                        entry["kind"] = Kinds.NameOf(Kind.String);
+                        entry["outcomeOf"] = outcome.Join;
+                        break;
+
                     case ShapeNode.GroupOutput output:
                         entry["kind"] = Kinds.NameOf(output.Kind);
                         break;
@@ -769,7 +775,7 @@ public sealed partial class MongoQueryEngine
         ShapeNode.Array => "array",
         ShapeNode.Remote => "remote",
         ShapeNode.Keyed => "keyed",
-        ShapeNode.Scalar => "scalar",
+        ShapeNode.Scalar or ShapeNode.Outcome => "scalar",
         ShapeNode.GroupOutput => "group",
         _ => "unknown",
     };
@@ -821,7 +827,15 @@ public sealed partial class MongoQueryEngine
                         entry["many"] = true;
 
                     if (outcomes.TryGetValue(resolve.As, out var policy))
-                        entry["outcome"] = OutcomeOf(policy);
+                        entry["outcome"] = OutcomeOf(policy, resolve.OutcomeAs);
+
+                    if (resolve.OutcomeAs is { } told && aliases[told] is JsonObject telling)
+                    {
+                        var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
+
+                        telling["values"] = Values(Notes.OutcomesOf(inline, continued: false,
+                            nonKey: targets.Any(target => target.Item is not null || !target.FieldIsKey), filtered: resolve.Filter is not null));
+                    }
 
                     Loads(entry, bound.Loads.GetValueOrDefault(resolve.As));
 
@@ -881,6 +895,14 @@ public sealed partial class MongoQueryEngine
                             continue;
 
                         entry["heldBy"] = first?.Service ?? host;
+
+                        // The outcome under its name: the owners write it, and this host for the rows no owner ran the stage for.
+                        if (continued.Stage.Resolve?.OutcomeAs == alias)
+                        {
+                            entry["values"] = Values(Notes.OutcomesOf(inline: false, continued: true));
+                            continue;
+                        }
+
                         // A union join continues from the keyed stage's alias: each branch names its own root.
                         entry["continuedFrom"] = new JsonObject { ["alias"] = root.Length == 0 || continued.Branches is not null ? continued.Anchor : root };
 
@@ -908,7 +930,7 @@ public sealed partial class MongoQueryEngine
                                 entry[name] = value?.DeepClone();
 
                         if (outcomes.TryGetValue(alias, out var policy))
-                            entry["outcome"] = OutcomeOf(policy);
+                            entry["outcome"] = OutcomeOf(policy, continued.Stage.Resolve?.As == alias ? continued.Stage.Resolve.OutcomeAs : null);
                     }
 
                     break;
@@ -958,11 +980,24 @@ public sealed partial class MongoQueryEngine
         return branches;
     }
 
-    /// <summary>The outcome block of a join: the data-loss outcomes its rows may have. No row member carries the outcome until a stage names one.</summary>
-    private static JsonObject OutcomeOf(Diagnostic policy) => new()
+    /// <summary>
+    /// The outcome block of a join: under <c>as</c> the row member that carries the outcome, when the
+    /// stage names one (<c>outcomeAs</c>; absent otherwise: nothing carries it), and the data-loss
+    /// outcomes its rows may have. Everything the member may hold is on the member's own alias (<c>values</c>).
+    /// </summary>
+    private static JsonObject OutcomeOf(Diagnostic policy, string? outcomeAs)
     {
-        ["values"] = new JsonArray((policy.Params?["dataLoss"] as IEnumerable<string> ?? []).Select(value => (JsonNode)value).ToArray()),
-    };
+        var outcome = new JsonObject();
+
+        if (outcomeAs is not null)
+            outcome["as"] = outcomeAs;
+
+        outcome["values"] = Values(policy.Params?["dataLoss"] as IEnumerable<string> ?? []);
+
+        return outcome;
+    }
+
+    private static JsonArray Values(IEnumerable<string> values) => new(values.Select(value => (JsonNode)value).ToArray());
 
     /// <summary>
     /// The type of an alias whose rows an owner holds, from the owners' answers (plan §3.E, K14): the
@@ -1222,6 +1257,11 @@ public sealed partial class MongoQueryEngine
 
                 case ShapeNode.Scalar scalar:
                     columns.Add(Column(name, scalar.Kind, nullable: false, stage, Shape.ImplicitRoot, ExplainColumn.Always));
+                    break;
+
+                // Every row says what became of the reference, a row whose join found nothing as well.
+                case ShapeNode.Outcome:
+                    columns.Add(Column(name, Kind.String, nullable: false, stage, Shape.ImplicitRoot, ExplainColumn.Always));
                     break;
 
                 case ShapeNode.GroupOutput output:

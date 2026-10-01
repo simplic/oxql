@@ -97,6 +97,26 @@ public static class Notes
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
     public static readonly IReadOnlyList<string> DataLossOutcomes = ["ambiguous", "not_found", "invalid_key", "owner_unanswered"];
 
+    /// <summary>Every outcome a join's row may have, as the wire spells it (DESIGN §3.6): what a member named by <c>outcomeAs</c> holds.</summary>
+    public static readonly IReadOnlyList<string> Outcomes = ["resolved", "ambiguous", "reference_null", "excluded", "not_applicable", "not_found", "invalid_key", "owner_unanswered"];
+
+    /// <summary>
+    /// The outcomes a join can have: an inline resolve joins one local entity in the aggregate, so it
+    /// has no <c>owner_unanswered</c>, no <c>invalid_key</c> and no <c>not_applicable</c>, an
+    /// <c>ambiguous</c> only onto a field that is not the key and an <c>excluded</c> only with a
+    /// filter; a keyed or remote one every outcome but <c>not_applicable</c>, which only a stage
+    /// continued at an owner has.
+    /// </summary>
+    public static IReadOnlyList<string> OutcomesOf(bool inline, bool continued, bool nonKey = true, bool filtered = true) =>
+        Outcomes.Where(outcome => outcome switch
+        {
+            "not_applicable" => continued,
+            "invalid_key" or "owner_unanswered" => !inline,
+            "ambiguous" => !inline || nonKey,
+            "excluded" => !inline || filtered,
+            _ => true,
+        }).ToList();
+
     /// <summary>
     /// The caller's stage index of each bound stage, by position: as the binder recorded them, or for a
     /// pipeline built without it the caller's stages in order, except a default sort the binder
@@ -217,7 +237,7 @@ public static class Notes
                         if (key.Path is { } path)
                             collector.Path(path, stage);
 
-                        if (contract == 2 && bound.Collated && key.OutputKind == Kind.String && key.Path is { } folded && !OperandCoercer.IsCharRepresented(folded))
+                        if (contract == 2 && bound.Collated && key.OutputKind == Kind.String && key.Path is { Root: not ShapeNode.Outcome } folded && !OperandCoercer.IsCharRepresented(folded))
                             collector.Folds(stage, folded.Wire, "groupKey");
                     }
                     break;
@@ -417,7 +437,7 @@ public static class Notes
             var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
             var nonKey = (resolve.Cases ?? []).SelectMany(bound => bound.Targets).Any(target => target.Declared.Item is not null || !target.Declared.FieldIsKey);
 
-            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey);
+            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey, resolve.OutcomeAs);
         }
 
         /// <summary>
@@ -436,13 +456,13 @@ public static class Notes
             };
 
             // The binder checked the alias before it continued the stage.
-            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true);
+            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true, resolve.OutcomeAs);
         }
 
-        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey)
+        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey, string? outcomeAs = null)
         {
             var onMissing = WireName(effective);
-            var readsOutcomes = strict || effective != ResolveOnMissing.Null;
+            var readsOutcomes = strict || effective != ResolveOnMissing.Null || outcomeAs is not null;
             var ambiguity = inline ? nonKey && readsOutcomes : true;
             var dataLoss = inline
                 ? DataLossOutcomes.Where(outcome => outcome == "not_found" || (outcome == "ambiguous" && ambiguity)).ToList()
@@ -455,10 +475,20 @@ public static class Notes
                 _ => "leaves the alias null; only an owner that fails is reported",
             };
 
+            var parameters = new Dictionary<string, object?> { ["alias"] = alias, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss };
+
+            // The member is said only where a stage names one, so every other note stays as it was.
+            if (outcomeAs is not null)
+                parameters["outcomeAs"] = outcomeAs;
+
             Add(MissingPolicy, stage, path,
                 $"A reference of '{alias}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
-                + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : ""),
-                new() { ["alias"] = alias, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss });
+                + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : "")
+                + (outcomeAs is null ? ""
+                    : effective == ResolveOnMissing.Refuse || strict
+                        ? $" '{outcomeAs}' carries the outcome of every row of a page that is answered; a row that loses data refuses the request{(effective == ResolveOnMissing.Refuse ? "" : " (a missing reference only where 'onMissing' does not say \"report\")")}, so no row shows that outcome there."
+                        : $" '{outcomeAs}' carries the outcome of every row."),
+                parameters);
         }
 
         public void Condition(BoundCondition condition, int? stage)

@@ -263,6 +263,10 @@ public static class BoundCanonical
         if (resolve.ParentAs is not null)
             node["parentAs"] = resolve.ParentAs;
 
+        // The row carries one more member, so a cursor of the request without it is another request's.
+        if (resolve.OutcomeAs is not null)
+            node["outcomeAs"] = resolve.OutcomeAs;
+
         if (resolve.Cases is { } cases && !(cases is [{ Declared.IsSimple: true }] && resolve.ParentAs is null))
             node["cases"] = new JsonArray(cases.Select(bound => (JsonNode)RenderCase(bound)).ToArray());
 

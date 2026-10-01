@@ -295,7 +295,7 @@ public static class MongoCompiler
 
             // A join whose alias no later stage reads and the row does not show adds nothing
             // anyone sees, and a projection would only drop it again: it is not run at all.
-            if (JoinAlias(stage) is { } joined && !JoinUsed(bound, index, joined))
+            if (JoinAlias(stage) is { } joined && !JoinUsed(bound, index, joined) && !(OutcomeOf(stage) is { } told && JoinUsed(bound, index, told)))
                 continue;
 
             switch (stage)
@@ -334,7 +334,7 @@ public static class MongoCompiler
                     keyed.Add(keyedResolve);
                     break;
 
-                case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve.As):
+                case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve):
                     lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
                     break;
@@ -413,7 +413,8 @@ public static class MongoCompiler
             // The count pipeline carries everything up to the sort and the page; a join only
             // when a later match, unwind, group or resolve reads its alias. What only the
             // rows' display reads does not change how many rows there are.
-            if (countStages is not null && stage is not (BoundStage.Sort or BoundStage.Page) && (JoinAlias(stage) is not { } alias || CountReads(bound.Stages.Skip(index + 1), alias)))
+            if (countStages is not null && stage is not (BoundStage.Sort or BoundStage.Page)
+                && (JoinAlias(stage) is not { } alias || CountReads(bound.Stages.Skip(index + 1), alias) || (OutcomeOf(stage) is { } counted && CountReads(bound.Stages.Skip(index + 1), counted))))
                 countStages.AddRange(emitted);
         }
 
@@ -522,15 +523,16 @@ public static class MongoCompiler
     /// Registers an inline resolve's outcome probe when the row shows its alias and something reads
     /// the outcomes: an effective <c>onMissing</c> other than <c>null</c> (missing rows, and with a
     /// filter the existence flag that tells an excluded record from a missing one), or a strict
-    /// request (a non-key target's ambiguity). A target onto a member that is not its key is joined
-    /// with two records, so a key two records hold is <c>ambiguous</c> whatever the page and cache
-    /// hold. Null when there is nothing to probe.
+    /// request (a non-key target's ambiguity), or the outcome under a name (<c>outcomeAs</c>), which
+    /// says <c>ambiguous</c> and so has the ambiguity seen and reported. A target onto a member that is
+    /// not its key is joined with two records, so a key two records hold is <c>ambiguous</c> whatever
+    /// the page and cache hold. Null when there is nothing to probe.
     /// </summary>
     private static InlineProbe? Probe(BoundPipeline bound, int index, BoundStage.Resolve resolve, List<InlineProbe> probes, List<string> keys)
     {
         var reports = resolve.EffectiveOnMissing != ResolveOnMissing.Null;
 
-        if (!(reports || bound.Strict) || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
+        if (!(reports || bound.Strict || resolve.OutcomeAs is not null) || resolve.Reference.Storage is not { } storage || !Shown(bound.FinalShape, resolve.As))
             return null;
 
         var ambiguity = TargetIsKey(resolve) ? null : ReservedAmbiguityFlag + probes.Count;
@@ -1248,11 +1250,17 @@ public static class MongoCompiler
         if (resolve.Filter is not null)
             pipeline.Add(new BsonDocument("$match", Filter(resolve.Filter, semiJoins, collated)));
 
+        // The outcome under a name is written by the aggregate: it needs the second record where the
+        // target field is not the key, and with a filter whether the unfiltered target has the record.
+        var outcomeAs = resolve.OutcomeAs;
+        var two = probe?.AmbiguityFlag is not null || (outcomeAs is not null && !TargetIsKey(resolve));
+        var probed = probe?.ExistsFlag is not null || (outcomeAs is not null && resolve.Filter is not null);
+
         // Two records of one key: the first by record key is the one taken, as the keyed fetch takes it.
-        if (probe?.AmbiguityFlag is not null)
+        if (two)
             pipeline.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
 
-        pipeline.Add(new BsonDocument("$limit", probe?.AmbiguityFlag is null ? 1 : 2));
+        pipeline.Add(new BsonDocument("$limit", two ? 2 : 1));
         pipeline.Add(new BsonDocument("$project", Select(resolve.Select!, keepDiscriminators, resolve.Target)));
 
         // No caller alias ends in the suffix, so the temporary field shadows nothing.
@@ -1264,15 +1272,19 @@ public static class MongoCompiler
         if (probe?.AmbiguityFlag is { } ambiguity)
             set[ambiguity] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + temporary), 1 });
 
-        if (probe?.ExistsFlag is not { } exists)
+        // The existence join: the same key match without the filter, one key read.
+        var existing = resolve.As + "Has" + Aliases.ReservedSuffix;
+
+        if (outcomeAs is not null)
+            set[outcomeAs] = OutcomeExpression(resolve.Reference.Storage!, temporary, two, probed ? existing : null);
+
+        if (!probed)
         {
             yield return new BsonDocument("$set", set);
             yield return new BsonDocument("$unset", temporary);
             yield break;
         }
 
-        // The existence join: the same key match without the filter, one key read.
-        var existing = resolve.As + "Has" + Aliases.ReservedSuffix;
         var probeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
 
         if (exactKey)
@@ -1283,10 +1295,38 @@ public static class MongoCompiler
 
         yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, probeline, existing));
 
-        set[exists] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 });
+        if (probe?.ExistsFlag is { } exists)
+            set[exists] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 });
 
         yield return new BsonDocument("$set", set);
         yield return new BsonDocument("$unset", new BsonArray { temporary, existing });
+    }
+
+    /// <summary>
+    /// The outcome of an inline resolve as the aggregate writes it on every row (improvement plan §3.O),
+    /// in the keyed fetch's words: <c>reference_null</c> where the reference holds nothing; with a record
+    /// joined, <c>ambiguous</c> where a second holds the key (<paramref name="two"/>) and else
+    /// <c>resolved</c>; without one, <c>excluded</c> where the unfiltered target has the record
+    /// (<paramref name="existing"/>) and else <c>not_found</c>.
+    /// </summary>
+    private static BsonDocument OutcomeExpression(string reference, string joined, bool two, string? existing)
+    {
+        var branches = new BsonArray
+        {
+            Branch(new BsonDocument("$eq", new BsonArray { new BsonDocument("$ifNull", new BsonArray { "$" + reference, BsonNull.Value }), BsonNull.Value }), "reference_null"),
+        };
+
+        if (two)
+            branches.Add(Branch(new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + joined), 1 }), "ambiguous"));
+
+        branches.Add(Branch(new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + joined), 0 }), "resolved"));
+
+        if (existing is not null)
+            branches.Add(Branch(new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 }), "excluded"));
+
+        return new BsonDocument("$switch", new BsonDocument { ["branches"] = branches, ["default"] = "not_found" });
+
+        static BsonDocument Branch(BsonDocument when, string outcome) => new() { ["case"] = when, ["then"] = outcome };
     }
 
     /// <summary>
@@ -1690,6 +1730,9 @@ public static class MongoCompiler
         _ => null,
     };
 
+    /// <summary>The root an inline resolve writes its outcome under (<c>outcomeAs</c>); null for every other stage.</summary>
+    private static string? OutcomeOf(BoundStage stage) => stage is BoundStage.Resolve resolve && !IsKeyed(resolve) ? resolve.OutcomeAs : null;
+
     /// <summary>
     /// Whether a local join is needed: a later stage other than a projection reads its alias,
     /// or the final row shows it. A projection that names the alias only passes it on.
@@ -1709,13 +1752,14 @@ public static class MongoCompiler
 
         return bound.Stages[position] is BoundStage.Resolve resolve && IsKeyed(resolve)
             ? KeyedRuns(bound, resolve)
-            : JoinUsed(bound, position, alias);
+            : JoinUsed(bound, position, alias) || (OutcomeOf(bound.Stages[position]) is { } told && JoinUsed(bound, position, told));
     }
 
     /// <summary>
     /// Whether a keyed resolve is fetched: the final row shows its alias, its owning row, or an alias
     /// a stage continued under them adds. A continued stage reads the alias it continues under, so the
     /// keyed stage runs for it although the projection names neither; the row then leaves both out.
+    /// So does the outcome it names: a row that shows only whether the record exists still has it looked for.
     /// </summary>
     public static bool KeyedRuns(BoundPipeline bound, BoundStage.Resolve resolve)
     {
@@ -1723,6 +1767,7 @@ public static class MongoCompiler
         ArgumentNullException.ThrowIfNull(resolve);
 
         return Shown(bound.FinalShape, resolve.As)
+            || (resolve.OutcomeAs is { } outcomeAs && Shown(bound.FinalShape, outcomeAs))
             || (resolve.ParentAs is { } parentAs && Shown(bound.FinalShape, parentAs))
             || bound.Stages.OfType<ContinuedStage>().Any(continued => continued.Anchor == resolve.As && continued.Aliases.Any(alias => Shown(bound.FinalShape, alias)));
     }
@@ -1762,6 +1807,20 @@ public static class MongoCompiler
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// <see cref="JoinsAfterPage(IReadOnlyList{BoundStage}, int, string)"/> for an inline resolve: its
+    /// alias can be joined after the page, and no later stage reads the outcome it names
+    /// (<c>outcomeAs</c>): a condition or a group over the outcome needs it on every candidate row. A
+    /// projection only passes the outcome on or drops it.
+    /// </summary>
+    public static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, BoundStage.Resolve resolve)
+    {
+        ArgumentNullException.ThrowIfNull(resolve);
+
+        return JoinsAfterPage(stages, index, resolve.As)
+            && !(resolve.OutcomeAs is { } outcomeAs && stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs)));
     }
 
     /// <summary>

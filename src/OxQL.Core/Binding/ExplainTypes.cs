@@ -546,7 +546,7 @@ public sealed class ExplainTypes
             group is { Succeeded: true, Path: { CollectionAncestors: 0 } key } && key.Kind != Kind.Array && Kinds.IsScalar(key.Kind),
             Unwindable(unwind),
             project.Succeeded,
-            matched is { Filterable: true } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched),
+            matched is { Filterable: true, Root: not ShapeNode.Outcome } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched),
             project.Path?.CollectionAncestors ?? 0,
             facts?.Path?.References is { Count: > 0 } && facts.Addon is null ? Followable(Crossed(shape, path)) : 0);
     }
@@ -793,6 +793,9 @@ public sealed class ExplainTypes
 
             case ShapeNode.Scalar scalar:
                 return KindKey(scalar.Kind);
+
+            case ShapeNode.Outcome:
+                return KindKey(Kind.String);
 
             case ShapeNode.GroupOutput output:
                 return KindKey(output.Kind);
@@ -1453,6 +1456,16 @@ public sealed class ExplainTypes
             return 0;
 
         var admitted = 0;
+
+        // A join's outcome compares with its own names: equality and membership, nothing of text or order.
+        if (path.Root is ShapeNode.Outcome)
+        {
+            for (var bit = 0; bit < OperatorOrder.Count; bit++)
+                if (path.Filterable && OperatorOrder[bit] is "eq" or "neq" or "in" or "nin")
+                    admitted |= 1 << bit;
+
+            return admitted;
+        }
 
         if (path.IsRemote)
         {

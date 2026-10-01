@@ -1306,7 +1306,7 @@ public sealed class KeyedFetch
             // An owner known to run an engine before 2.1 takes no keyedBy; it is asked the plain query
             // with two rows per key instead, so a second row arrives or the answer has a next page.
             var nonKey = target.Declared.Item is not null || !target.Declared.FieldIsKey;
-            var readsOutcomes = strict || stage.EffectiveOnMissing != ResolveOnMissing.Null;
+            var readsOutcomes = strict || stage.ReadsOutcomes;
 
             Grouped = nonKey && (stage.NeedsKeyedFetch || (readsOutcomes && !legacyOwner));
             PlainRowsPerKey = !Grouped && nonKey && readsOutcomes ? PerKey : 1;
@@ -1314,7 +1314,7 @@ public sealed class KeyedFetch
 
             // The probe tells a key the filter left out from a missing one, which only a stage
             // that reports or refuses missing references needs (DESIGN §3.5.2 step 3).
-            Probed = target.RemoteFilter is { ValueKind: JsonValueKind.Object } && stage.EffectiveOnMissing != ResolveOnMissing.Null;
+            Probed = target.RemoteFilter is { ValueKind: JsonValueKind.Object } && stage.ReadsOutcomes;
 
             // The plan: the owner query as sent, without its keys (DESIGN §3.5.6).
             planHash = OwnerFetchCache.PlanHashOf(Query([]), Probed);
@@ -2113,6 +2113,13 @@ public sealed class KeyedFetch
                 if (slots.Count == 0)
                     outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, null, null, KeyedOutcome.ReferenceNull));
 
+                // The row's one outcome under its name: that of the elements taken, else the fold of the others.
+                if (stage.OutcomeAs is { } folded)
+                    values[folded] = OutcomePolicy.WireName(
+                        resolved.Count == 0 ? First(slots).Slot.Outcome
+                        : resolved.Any(slot => slot.Outcome == KeyedOutcome.Ambiguous) ? KeyedOutcome.Ambiguous
+                        : KeyedOutcome.Resolved);
+
                 continue;
             }
 
@@ -2125,6 +2132,10 @@ public sealed class KeyedFetch
 
             if (chosen.Outcome != KeyedOutcome.Resolved)
                 outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, stage.Elements is null ? null : at, chosen.Key, chosen.Outcome));
+
+            // The outcome under its name, on every row: resolved as well.
+            if (stage.OutcomeAs is { } outcomeAs)
+                values[outcomeAs] = OutcomePolicy.WireName(chosen.Outcome);
 
             Lift(plan, chosen, rowIndex, values, outcomes, liftedRows);
         }
@@ -2214,6 +2225,11 @@ public sealed class KeyedFetch
 
             foreach (var alias in continued.Aliases)
                 values[alias] = null;
+
+            // The outcome under its name on a row no owner ran the stage for: this host says it. The stage
+            // does not apply to the row's target, or the alias it continues under is null there.
+            if (continued.Stage.Resolve?.OutcomeAs is { } outcomeAs)
+                values[outcomeAs] = OutcomePolicy.WireName(chosen.Hit is null ? KeyedOutcome.ReferenceNull : KeyedOutcome.NotApplicable);
 
             if (chosen.Hit is not null)
                 outcomes.Add(new KeyedRowOutcome(continued.OriginIndex, continued.Aliases[0], rowIndex, null, chosen.Key, KeyedOutcome.NotApplicable));

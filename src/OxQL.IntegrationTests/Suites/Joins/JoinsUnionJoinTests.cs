@@ -325,6 +325,33 @@ public class JoinsUnionJoinTests
         row["next"]!["id"]!.GetValue<string>().Should().Be(Id(ReportSeed.TractorTourId), "the shipment's branch: its first tour");
     }
 
+    // ---- a stage continued under the one alias ----------------------------------------------------------
+
+    [Fact]
+    public async Task A_stage_continued_under_the_union_joins_alias_runs_for_the_rows_of_every_branch()
+    {
+        var ledger = await LedgerClient();
+        var request = Lines($$"""
+            {{DeliveringTour}},
+            { "resolve": { "as": "vehicle", "byTarget": { "{{ReportSeed.Shipment}}": "deliveringTour.resource.id", "{{ReportSeed.Tour}}": "sourceParent.resource.id" } } },
+            { "resolve": { "path": "vehicle.department.id", "as": "home", "forTarget": "fleet.vehicle", "outcomeAs": "homeOutcome" } }
+            """, """ "position": 1, "sourceParent.id": 1, "vehicle.matchCode": 1, "home.name": 1, "homeOutcome": 1 """);
+
+        var explained = await ledger.ExplainHereAsync(request);
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        explained.Body!["aliases"]!["home"]!["continuedFrom"]!.ToJsonString().Should().Be("""{"alias":"vehicle"}""");
+        explained.Body!["aliases"]!["sourceLine"]!["targets"]!.AsArray().Select(target => target!["continued"]!.ToJsonString()).Should().Equal(["[5,6,7]", "[6,7]"], "the stage goes where the alias it continues under exists");
+
+        var rows = Rows(await ledger.QueryAsync(request));
+        var withVehicle = rows.Where(row => row["vehicle"] is JsonObject).ToList();
+
+        withVehicle.Should().Contain(row => IsShipmentRow(row)).And.Contain(row => IsTourRow(row));
+        withVehicle.Should().OnlyContain(row => row["homeOutcome"]!.GetValue<string>() == withVehicle[0]["homeOutcome"]!.GetValue<string>(),
+            "a vehicle reached through either branch is continued from alike");
+        rows.Where(row => row["vehicle"] is null).Should().OnlyContain(row => row["homeOutcome"]!.GetValue<string>() == "reference_null", "nothing to continue from");
+    }
+
     // ---- explain ≡ run ----------------------------------------------------------------------------------
 
     public static TheoryData<string> Requests => new()

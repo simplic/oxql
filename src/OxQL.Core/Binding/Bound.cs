@@ -396,9 +396,6 @@ public abstract record BoundStage
         /// </summary>
         public string? OutcomeAs { get; init; }
 
-        /// <summary>The roots the stage fills: its alias and, when it names one, its outcome.</summary>
-        public IEnumerable<string> Names => OutcomeAs is null ? [As] : [As, OutcomeAs];
-
         /// <summary>Whether something reads the stage's outcomes: an effective <c>onMissing</c> other than <c>null</c>, or the outcome under a name.</summary>
         public bool ReadsOutcomes => EffectiveOnMissing != ResolveOnMissing.Null || OutcomeAs is not null;
     }

@@ -21,6 +21,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The reference client of an explain answer by reference, and the schema document it reads, shared with the fleet's tests. -->
+    <Compile Include="..\OxQL.IntegrationTests\Suites\Explain\SchemaTypes.cs" Link="Execute\ByReference\SchemaTypes.cs" />
+    <Compile Include="..\OxQL.IntegrationTests\Suites\Explain\Reconstruction.cs" Link="Execute\ByReference\Reconstruction.cs" />
+    <Compile Include="..\OxQL.IntegrationTests\Suites\Report\SchemaDocumentWriter.cs" Link="Execute\ByReference\SchemaDocumentWriter.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\OxQL.Model\OxQL.Model.csproj" />
     <ProjectReference Include="..\OxQL.Core\OxQL.Core.csproj" />
     <ProjectReference Include="..\OxQL.Mongo\OxQL.Mongo.csproj" />

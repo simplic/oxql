@@ -1137,17 +1137,14 @@ public sealed class KeyedFetch
     public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Explain(bound, stage, strict, null);
 
     /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by.</summary>
-    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client) => Explain(bound, stage, strict, client, null);
-
-    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?)"/>, without the paths <paramref name="drops"/> holds as lacked by a target, as a run sends the queries.</summary>
-    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, OwnerFetchCache? drops)
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(stage);
 
         var continued = Continuation.Of(bound, stage);
 
-        return PlansOf(bound, stage, strict, continued, client, drops).Select(plan => new ExplainedOwnerQuery(
+        return PlansOf(bound, stage, strict, continued, client).Select(plan => new ExplainedOwnerQuery(
             plan.TargetName,
             plan.Target.IsRemote,
             plan.Target.Declared.Entity.Split('.')[0],

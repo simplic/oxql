@@ -265,7 +265,9 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Resolve resolve when resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed:
                 {
-                    var explained = KeyedFetch.Explain(bound, resolve, draft.Strict, remote, ownerCache);
+                    // The owner queries as the request asks them, before anything an owner said a target
+                    // lacks is dropped: what is answered here does not depend on what was learned before.
+                    var explained = KeyedFetch.Explain(bound, resolve, draft.Strict, remote);
                     var first = explained.FirstOrDefault(owner => owner.Remote) ?? explained[0];
 
                     draft.Explained[resolve.As] = explained;

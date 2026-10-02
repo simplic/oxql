@@ -1471,7 +1471,6 @@ public sealed class KeyedFetch
         public ContinuedStage? OriginOf(int? ownerStage) =>
             ownerStage is { } index && index >= ContinuedAt && index - ContinuedAt < Continued.Origins.Count ? Continued.Origins[index - ContinuedAt] : null;
 
-        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
         /// <summary>
         /// Whether this target's branch reaches none of the paths the row shows under
         /// <paramref name="alias"/>: every one of them was dropped for it. The alias then holds an
@@ -1493,6 +1492,7 @@ public sealed class KeyedFetch
 
         /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
         public bool Union { get; }
+        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
 
         /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query (DESIGN §3.4.1 flat paths).</summary>
         public HashSet<string> DroppedSelect { get; } = new(StringComparer.Ordinal);
@@ -1511,10 +1511,24 @@ public sealed class KeyedFetch
         public ContinuedStage? UnionJoinOf(string alias) =>
             Continued.Origins.FirstOrDefault(origin => origin.Branches is not null && origin.Aliases.Contains(alias, StringComparer.Ordinal));
 
-        /// <summary>The cache key of what this target's branch of the union join adding <paramref name="alias"/> does not reach: per target and stage as sent.</summary>
-        public string? BranchDropsKey(string alias) => UnionJoinOf(alias) is { } union
-            ? DropsKey + "|" + alias + "|" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(Continuation.BranchOf(union, Entity), OxQLJson.Wire)))[..16]
-            : null;
+        /// <summary>
+        /// The cache key of what this target's branch of the union join adding <paramref name="alias"/>
+        /// does not reach: per target, the branch as sent, and the stages continued at the owner before
+        /// it. A branch may root at an alias one of those stages adds, and what it reaches then depends
+        /// on how that alias was joined, so two requests share what was learned only when they define
+        /// everything upstream of the branch alike.
+        /// </summary>
+        public string? BranchDropsKey(string alias)
+        {
+            if (UnionJoinOf(alias) is not { } union)
+                return null;
+
+            var at = Continued.Origins.ToList().IndexOf(union);
+            var upstream = JsonSerializer.SerializeToUtf8Bytes(Continued.Stages.Take(Math.Max(0, at)).ToList(), OxQLJson.Wire);
+            var branch = JsonSerializer.SerializeToUtf8Bytes(Continuation.BranchOf(union, Entity), OxQLJson.Wire);
+
+            return DropsKey + "|" + alias + "|" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData([.. upstream, 0x0A, .. branch]))[..16];
+        }
 
         /// <summary>Takes what an earlier request learned this target's branch does not reach, as far as this plan asks it.</summary>
         public void LearnedContinued(string alias, IEnumerable<string> paths)
@@ -2779,6 +2793,10 @@ public sealed class KeyedFetch
         BoundCondition.And and => and.Conditions.Any(inner => Contains(inner, leaf)),
         BoundCondition.Or or => or.Conditions.Any(inner => Contains(inner, leaf)),
         BoundCondition.Not not => Contains(not.Condition, leaf),
+    /// <summary>
+    /// An owner row without the member the host projected and keys by. The host asked for that member,
+    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
+    /// </summary>
         BoundCondition.Any any => Contains(any.Inner, leaf),
         _ => ReferenceEquals(condition, leaf),
     };

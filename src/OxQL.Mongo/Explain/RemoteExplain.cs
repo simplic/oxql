@@ -24,10 +24,16 @@ namespace OxQL.Mongo.Explain;
 /// changed). Without a fresh answer the 30 seconds bound how long a changed owner model is answered from before.
 /// </para>
 /// <para>
-/// Only answers are kept, never a failed call, and never as more than they were: an answer that was not
-/// complete stays not complete. The cache also remembers through which owner a service this host does not
+/// Only whole answers are kept: never a failed call, and never an answer that was not complete (an
+/// owner short of time or calls answers less than it would with more, so what it said then is not what
+/// it says to the next ask). The cache also remembers through which owner a service this host does not
 /// know itself was reached (<see cref="RouteOf"/>), so a catalog lookup of such an entity can be routed.
 /// Nothing an explain answers depends on what is kept: with an empty cache the same answer is asked for again.
+/// </para>
+/// <para>
+/// What is kept is bounded twice: at most <see cref="MaxEntries"/> answers and at most
+/// <see cref="MaxBytes"/> bytes of them, so neither many small answers nor a few large ones (an owner's
+/// answer with its types written out is up to <c>Explain:MaxAnswerBytes</c>) grow it further.
 /// </para>
 /// </summary>
 public sealed class ExplainForwardCache : IDisposable
@@ -38,6 +44,12 @@ public sealed class ExplainForwardCache : IDisposable
     /// <summary>The most answers kept.</summary>
     public const int MaxEntries = 1_000;
 
+    /// <summary>The most bytes of answers kept, as their JSON text in UTF-8.</summary>
+    public const long MaxBytes = 16 * 1024 * 1024;
+
+    /// <summary>What the smallest answer is charged, so that <see cref="MaxEntries"/> of them fill <see cref="MaxBytes"/>.</summary>
+    private const long MinCharge = MaxBytes / MaxEntries;
+
     private readonly MemoryCache answers;
     private readonly TimeProvider time;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> revisions = new(StringComparer.Ordinal);
@@ -47,16 +59,20 @@ public sealed class ExplainForwardCache : IDisposable
     public ExplainForwardCache(TimeProvider? time = null)
     {
         this.time = time ?? TimeProvider.System;
-        answers = new MemoryCache(new MemoryCacheOptions { SizeLimit = MaxEntries });
+        answers = new MemoryCache(new MemoryCacheOptions { SizeLimit = MaxBytes, TrackStatistics = true });
     }
 
-    /// <summary>The key of one forwarded body, for no user in particular and no revision.</summary>
-    public static string KeyOf(Guid organisation, string service, ExplainRequest request) => KeyOf(organisation, null, service, request);
+    /// <summary>How many answers are kept.</summary>
+    public int Count => answers.Count;
+
+    /// <summary>The bytes the kept answers are charged with: each its UTF-8 size, at least a thousandth of <see cref="MaxBytes"/>; never more than <see cref="MaxBytes"/>.</summary>
+    public long Bytes => answers.GetCurrentStatistics()?.CurrentEstimatedSize ?? 0;
 
     /// <summary>
-    /// The key of one forwarded body for one user of an organisation, before the owner's revision. The
-    /// budget an internal explain carries is not part of it: what is left of an origin's explain changes
-    /// nothing an owner answers. Neither is the tier (<c>remote</c>): the cached tier reads what a check kept.
+    /// The key of one forwarded body for one user of an organisation (null: none), before the owner's
+    /// revision. The budget an internal explain carries is not part of it: what is left of an origin's
+    /// explain changes nothing a whole answer says, and an answer an owner cut short for it is not kept.
+    /// Neither is the tier (<c>remote</c>): the cached tier reads what a check kept.
     /// </summary>
     public static string KeyOf(Guid organisation, string? user, string service, ExplainRequest request)
     {
@@ -95,13 +111,11 @@ public sealed class ExplainForwardCache : IDisposable
         return (JsonObject)kept.Answer.DeepClone();
     }
 
-    /// <summary>A kept answer by its key alone (no revision), or null.</summary>
-    public JsonObject? Get(string key) => Get(ServiceOf(key), key);
-
     /// <summary>
     /// Keeps an answer of <paramref name="service"/> for <see cref="Ttl"/>, under the revisions it names.
     /// It is kept as parsed text, which nothing reads: a copy of it costs nothing until its reader touches
-    /// a part, and the parts it does not touch are written on as they stand.
+    /// a part, and the parts it does not touch are written on as they stand. It is charged its size in
+    /// bytes; one that does not fit beside what is kept is not kept.
     /// </summary>
     public void Set(string service, string key, JsonObject answer)
     {
@@ -114,16 +128,14 @@ public sealed class ExplainForwardCache : IDisposable
                 if (value is JsonValue stated && stated.TryGetValue<string>(out var revision))
                     named[reached] = revisions[reached] = revision;
 
-        answers.Set(Keyed(service, key), new Entry(JsonNode.Parse(answer.ToJsonString(Compact))!.AsObject(), time.GetUtcNow() + Ttl, named), new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = Ttl });
-    }
+        var text = answer.ToJsonString(Compact);
 
-    /// <summary>Keeps an answer by its key alone.</summary>
-    public void Set(string key, JsonObject answer) => Set(ServiceOf(key), key, answer);
+        answers.Set(Keyed(service, key), new Entry(JsonNode.Parse(text)!.AsObject(), time.GetUtcNow() + Ttl, named),
+            new MemoryCacheEntryOptions { Size = Math.Max(MinCharge, Encoding.UTF8.GetByteCount(text)), AbsoluteExpirationRelativeToNow = Ttl });
+    }
 
     /// <summary>The key with the revision of the owner's schema document as last named: an answer of another revision is another entry.</summary>
     private string Keyed(string service, string key) => key + "|" + (RevisionOf(service) ?? "");
-
-    private static string ServiceOf(string key) => key.Split('|') is { Length: >= 3 } parts ? parts[2] : "";
 
     private static readonly JsonSerializerOptions Compact = new() { MaxDepth = OxQLJson.MaxDepth };
 
@@ -1090,7 +1102,11 @@ public sealed class RemoteExplain : IExplainOwners
                     continue;
                 }
 
-                cache.Set(use.Service, keys[index]!, answer);
+                // Only a whole answer is kept: one an owner cut short (its time, its calls, an owner of its
+                // own that did not answer) is asked for again by the next explain.
+                if (IsWhole(answer))
+                    cache.Set(use.Service, keys[index]!, answer);
+
                 use.Answered = true;
                 use.Cached = false;
                 ReadFacts(use, answer);
@@ -1106,6 +1122,10 @@ public sealed class RemoteExplain : IExplainOwners
 
         return results;
     }
+
+    /// <summary>Whether an owner's answer says everything it would say with all the time and calls it may take: it does not call itself incomplete.</summary>
+    private static bool IsWhole(JsonObject answer) =>
+        !(answer["cache"]?["complete"] is JsonValue complete && complete.TryGetValue<bool>(out var whole) && !whole);
 
     private ExplainOwnerUse Use(string service, string? via)
     {

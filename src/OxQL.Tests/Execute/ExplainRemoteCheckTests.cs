@@ -189,24 +189,37 @@ public class ExplainRemoteCheckTests
     }
 
     [Fact]
-    public async Task An_answer_that_was_not_complete_is_never_kept_as_complete()
+    public async Task An_answer_that_was_not_complete_is_not_kept_so_the_next_check_asks_the_owner_again()
     {
-        // The owner could not check a part itself; its answer is kept as it is, and read as it is.
+        // The owner could not check a part itself (it was short of time or calls, or an owner of its own
+        // did not answer): what it says with more of either is another answer.
+        var complete = false;
         var client = new FakeRemoteClient
         {
             Explains = (_, _) => new JsonObject
             {
                 ["valid"] = true,
                 ["errors"] = new JsonArray(),
-                ["cache"] = new JsonObject { ["complete"] = false },
+                ["cache"] = new JsonObject { ["complete"] = complete },
             },
         };
         var engine = Engine(client);
 
         (await ExplainAsync(Continued, engine: engine)).Cache.Complete.Should().BeFalse();
-        (await ExplainAsync(Continued, engine: engine)).Cache.Complete.Should().BeFalse("the kept answer is as incomplete as it was");
-        (await ExplainAsync(Continued, engine: engine, envelope: """ "remote": "cached" """)).Cache.Complete.Should().BeFalse();
-        client.ExplainCalls.Should().ContainSingle();
+
+        var cached = await ExplainAsync(Continued, engine: engine, envelope: """ "remote": "cached" """);
+
+        cached.Cache.Complete.Should().BeFalse();
+        cached.Notes.Should().Contain(note => note.Code == Notes.RemoteUnchecked && Equals(note.Params!["reason"], RemoteExplain.Cached), "nothing was kept of the answer that was cut short");
+        client.ExplainCalls.Should().ContainSingle("the cached tier asks nobody");
+
+        // The owner now answers in full: the next check asks it, and that answer is kept.
+        complete = true;
+        await ExplainAsync(Continued, engine: engine);
+        client.ExplainCalls.Should().HaveCount(2, "the answer that was cut short did not stand in for 30 seconds");
+        await ExplainAsync(Continued, engine: engine);
+        client.ExplainCalls.Should().HaveCount(2, "a whole answer is kept");
+        (await ExplainAsync(Continued, engine: engine, envelope: """ "remote": "cached" """)).Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked);
     }
 
     [Fact]
@@ -585,18 +598,75 @@ public class ExplainRemoteCheckTests
     }
 
     [Fact]
+    public async Task What_a_check_kept_is_one_users_of_one_organisation_through_the_explain_itself()
+    {
+        var client = OwnerFleet.Client();
+        var engine = Engine(client);
+        var userA = BindHost.Context(BindHost.Options()) with { UserId = "user-a" };
+        var userB = BindHost.Context(BindHost.Options()) with { UserId = "user-b" };
+        var otherOrganisation = BindHost.Context(BindHost.Options(), organisation: Guid.NewGuid()) with { UserId = "user-a" };
+        const string CachedTier = """ "remote": "cached" """;
+
+        (await ExplainAsync(Continued, engine: engine, context: userA)).Cache.Complete.Should().BeTrue();
+        client.ExplainCalls.Should().ContainSingle();
+
+        // Another user of the organisation, and the same user id in another organisation: nothing is kept for them.
+        foreach (var stranger in new[] { userB, otherOrganisation })
+        {
+            var cached = await ExplainAsync(Continued, engine: engine, envelope: CachedTier, context: stranger);
+
+            cached.Cache.Complete.Should().BeFalse("what one identity's check kept answers no other identity");
+            cached.Alias("co")["type"].Should().BeNull("nothing of the other identity's owner answer is in this one");
+            cached.Notes.Should().Contain(note => note.Code == Notes.RemoteUnchecked && Equals(note.Params!["reason"], RemoteExplain.Cached));
+        }
+
+        client.ExplainCalls.Should().ContainSingle("the cached tier asked nobody");
+        (await ExplainAsync(Continued, engine: engine, envelope: CachedTier, context: userA)).Cache.Complete.Should().BeTrue("the one who checked is answered from what was kept");
+
+        // Their own checks ask the owner themselves.
+        await ExplainAsync(Continued, engine: engine, context: userB);
+        client.ExplainCalls.Should().HaveCount(2);
+        await ExplainAsync(Continued, engine: engine, context: otherOrganisation);
+        client.ExplainCalls.Should().HaveCount(3);
+        client.ExplainCalls.Select(call => call.Service).Should().OnlyContain(service => service == "crm");
+    }
+
+    [Fact]
+    public void The_kept_answers_are_bounded_by_their_bytes_as_well_as_their_number()
+    {
+        using var cache = new ExplainForwardCache();
+        var request = new ExplainRequest { Query = BindHost.Request("crm.contact", "[]") };
+        // An owner's answer with its types written out: a quarter of a megabyte each.
+        var large = new JsonObject { ["valid"] = true, ["pad"] = new string('x', 250_000) };
+
+        for (var user = 0; user < 200; user++)
+            cache.Set("crm", ExplainForwardCache.KeyOf(BindHost.Organisation, "user-" + user, "crm", request), (JsonObject)large.DeepClone());
+
+        cache.Bytes.Should().BeLessThanOrEqualTo(ExplainForwardCache.MaxBytes, "200 answers of 250 KB are 50 MB; what is kept of them stays within the byte bound");
+        cache.Count.Should().BeGreaterThan(0).And.BeLessThanOrEqualTo((int)(ExplainForwardCache.MaxBytes / 250_000));
+
+        using var small = new ExplainForwardCache();
+
+        for (var user = 0; user < 3 * ExplainForwardCache.MaxEntries; user++)
+            small.Set("crm", ExplainForwardCache.KeyOf(BindHost.Organisation, "user-" + user, "crm", request), new JsonObject { ["valid"] = true });
+
+        small.Count.Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(ExplainForwardCache.MaxEntries, "small answers are bounded by their number");
+        small.Bytes.Should().BeLessThanOrEqualTo(ExplainForwardCache.MaxBytes);
+    }
+
+    [Fact]
     public void The_cache_key_holds_the_organisation_the_user_the_service_and_the_bodys_hash_and_not_the_budget()
     {
         var request = new ExplainRequest { Query = BindHost.Request("crm.contact", "[]") };
-        var key = ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request);
+        var key = ExplainForwardCache.KeyOf(BindHost.Organisation, null, "crm", request);
 
         key.Should().StartWith(BindHost.Organisation.ToString("N") + "|").And.Contain("|crm|");
         ExplainForwardCache.KeyOf(BindHost.Organisation, "user-a", "crm", request).Should().NotBe(ExplainForwardCache.KeyOf(BindHost.Organisation, "user-b", "crm", request),
             "an owner may refuse one user what it answers another (RE-11)");
-        ExplainForwardCache.KeyOf(Guid.NewGuid(), "crm", request).Should().NotBe(key);
-        ExplainForwardCache.KeyOf(BindHost.Organisation, "hr", request).Should().NotBe(key);
-        ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request with { ShapeDepth = 3 }).Should().NotBe(key);
-        ExplainForwardCache.KeyOf(BindHost.Organisation, "crm", request with { Budget = new ExplainBudget(10, 1) }).Should().Be(key, "what is left of an origin's explain changes nothing an owner answers");
+        ExplainForwardCache.KeyOf(Guid.NewGuid(), null, "crm", request).Should().NotBe(key);
+        ExplainForwardCache.KeyOf(BindHost.Organisation, null, "hr", request).Should().NotBe(key);
+        ExplainForwardCache.KeyOf(BindHost.Organisation, null, "crm", request with { ShapeDepth = 3 }).Should().NotBe(key);
+        ExplainForwardCache.KeyOf(BindHost.Organisation, null, "crm", request with { Budget = new ExplainBudget(10, 1) }).Should().Be(key, "what is left of an origin's explain changes nothing a whole answer says");
     }
 
     // ---- explain quality (RE-25) ------------------------------------------------------------------

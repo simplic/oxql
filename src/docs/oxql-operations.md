@@ -214,7 +214,7 @@ Fixed bounds, not configurable:
 | `Execution:MaxTimeMs` ceiling | 60 000 ms | — |
 | health reachability probe | 2 s per service | the service counts as not reachable |
 | listed indexes for the explain advisory | cached 60 s per collection | — |
-| owner answers to explain's remote check and forwarded catalog entries | kept 30 s per organisation, user, owner, owner schema revision and forwarded body, at most 1 000 entries; failures are not kept, and an answer naming another revision of a service retires what was kept for the old one | — |
+| owner answers to explain's remote check and forwarded catalog entries | kept 30 s per organisation, user, owner, owner schema revision and forwarded body, at most 1 000 entries and 16 MB; failures and answers that were not complete are not kept, and an answer naming another revision of a service retires what was kept for the old one | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
 | ask-again rounds for a remote union target without the paths it lacks | 2 per request | — |
 | JSON nesting of request and answer bodies | 256 (MVC's default is 32; explain answers of flattening and chain queries nest deeper) | — |
@@ -597,8 +597,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   - *Kept answers.* An owner's answer is kept 30 s by organisation, user, owner service, the revision
     of that owner's schema document and the forwarded body. An answer that names another revision of a
     service retires every answer kept for the old one, also those of other owners that reached it. An
-    answer that was not complete is kept as not complete. Nothing an explain answers depends on what
-    is kept: with nothing kept the owners are asked.
+    answer that was not complete is not kept (an owner short of time or calls answers less than it
+    would with more), so the next `check` asks that owner again. What is kept is bounded by number
+    (1 000 answers) and by size (16 MB of answers; one is charged at least 16 KB). Nothing an explain
+    answers depends on what is kept: with nothing kept the owners are asked.
   - *`cached`.* The tier for an edit in progress: the answer is built from the owner answers already
     kept and no owner is asked, not for a check, not for a catalog entry and not for its health. What
     is not kept is left out and said: a `REMOTE_UNCHECKED` note with `params.reason: "cached"`, the

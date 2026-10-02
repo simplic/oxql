@@ -56,22 +56,47 @@ public interface IOxQLQueryService
     /// <summary>
     /// Explains the checks of one internal explain (<c>POST internal/oxql/explain</c>, body
     /// <c>{ checks, budget }</c>): what one round of an origin's explain asks this owner, in one call.
-    /// Every check is explained as an internal call and answered slim, in order, each within what the
-    /// ones before it left of the batch's budget (time, and the owner calls this host may cause for it);
-    /// an entry is null where a check was refused before binding or the budget ran out before it. More
-    /// checks than <c>Explain:MaxBatchChecks</c> refuse the batch whole. The default explains check by
-    /// check through <see cref="ExplainAsync(ExplainRequest, bool, CancellationToken)"/>.
+    /// Every check is explained as an internal call and answered slim, in order, within the batch's
+    /// budget (time, and the owner calls this host may cause for it); an entry is null where a check
+    /// was refused before binding or the budget ran out before it. A host's service
+    /// (<see cref="OxQLQueryService"/>) refuses a batch of more checks than <c>Explain:MaxBatchChecks</c>
+    /// whole and explains the checks side by side, sharing the budget.
+    /// <para>
+    /// The default explains check by check through
+    /// <see cref="ExplainAsync(ExplainRequest, bool, CancellationToken)"/>: each gets what the ones
+    /// before it left of the budget (the time they took, the owner calls their answers name), and one
+    /// the time ran out before is left unanswered. It knows no options, so it does not bound the number
+    /// of checks: an implementation that takes batches from callers it does not trust bounds them itself.
+    /// </para>
     /// </summary>
     async Task<ExplainBatchOutcome> ExplainBatchAsync(ExplainBatchRequest batch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
 
         var answers = new List<System.Text.Json.Nodes.JsonNode?>(batch.Checks.Count);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var calls = batch.Budget?.Calls ?? 0;
 
         foreach (var check in batch.Checks)
-            answers.Add(await ExplainAsync(check with { Budget = batch.Budget, Slim = true }, internalCall: true, cancellationToken).ConfigureAwait(false) is ExplainOutcome.Success success
-                ? System.Text.Json.JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire)
-                : null);
+        {
+            var left = batch.Budget is null ? null : new ExplainBudget(batch.Budget.Ms - (int)Math.Min(int.MaxValue, clock.ElapsedMilliseconds), calls);
+
+            // A check the time ran out before binds nothing.
+            if (left is { Ms: <= 0 })
+            {
+                answers.Add(null);
+                continue;
+            }
+
+            var answer = await ExplainAsync(check with { Budget = left, Slim = true }, internalCall: true, cancellationToken).ConfigureAwait(false) is ExplainOutcome.Success success
+                ? System.Text.Json.JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire) as System.Text.Json.Nodes.JsonObject
+                : null;
+
+            if (answer is not null)
+                calls = Math.Max(0, calls - ExplainBatchRequest.CallsOf(answer));
+
+            answers.Add(answer);
+        }
 
         return new ExplainBatchOutcome.Success(new ExplainBatchResponse { Answers = answers });
     }

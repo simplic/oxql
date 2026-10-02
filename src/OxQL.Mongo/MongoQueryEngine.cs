@@ -111,18 +111,29 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         IReadOnlyList<BsonDocument> rows;
         IReadOnlyList<BsonDocument>? countRows = null;
         var timedOut = false;
+        var strict = context.Contract == 2 && request.IsStrict;
 
-        // The page and the count run together and end together: when one fails the other is
-        // cancelled rather than left to hold a connection until its own time budget runs out.
+        // The page, the count and a strict request's truncation probes run together and end
+        // together: when one fails the others are cancelled rather than left to hold a connection
+        // until their own time budget runs out. Sent at the same moment under the same maxTimeMS,
+        // they also share one deadline: the request's time limit is a ceiling for all of them, not
+        // a budget each.
         using var aggregates = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task<IReadOnlyList<BsonDocument>>? pageTask = null;
         Task<IReadOnlyList<BsonDocument>>? countTask = null;
+        var probeTasks = new List<Task<IReadOnlyList<BsonDocument>>>();
 
         try
         {
             // The page asks for its rows in one reply: the limit and the row that tells whether a next page exists.
             pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 1 }, aggregates.Token);
             countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token) : null;
+
+            // A probe reads the rows up to a truncation, not the page, so it does not wait for the
+            // page: only whether its answer is still needed depends on what the page reports.
+            if (strict)
+                foreach (var probe in compiled.TruncationProbes)
+                    probeTasks.Add(runner.AggregateAsync(bound.Entity, probe.Stages, runOptions, aggregates.Token));
 
             rows = await pageTask.ConfigureAwait(false);
 
@@ -131,9 +142,16 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            return Failed(exception);
+        }
+
+        // An aggregate that failed: the others are stopped and the driver's error is the refusal.
+        QueryOutcome Failed(Exception exception)
+        {
             aggregates.Cancel();
             Observe(pageTask);
             Observe(countTask);
+            probeTasks.ForEach(Observe);
 
             var refusal = MapDriverError(exception);
 
@@ -145,7 +163,6 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var hasNextPage = rows.Count > compiled.Limit;
         var page = hasNextPage ? rows.Take(compiled.Limit).ToList() : rows;
-        var strict = context.Contract == 2 && request.IsStrict;
         var losses = new List<Diagnostic>();
 
         // A flattening unwind marks the rows whose collection nests deeper than it descends.
@@ -164,7 +181,21 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A truncated row a later match filtered out is not on the page, but the answer may depend
         // on what was cut: a strict request checks the rows up to the truncation (DESIGN §3.4.3).
         if (strict)
-            losses.AddRange(await HiddenTruncationsAsync(bound, compiled, runOptions, losses, cancellationToken).ConfigureAwait(false));
+        {
+            try
+            {
+                losses.AddRange(await HiddenTruncationsAsync(compiled, probeTasks, losses).ConfigureAwait(false));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                return Failed(exception);
+            }
+            finally
+            {
+                // A probe whose stage the page already reported was not waited for; it stops here.
+                aggregates.Cancel();
+            }
+        }
 
         // A strict request that neither continues nor jumps reads every matching row in its one
         // page, or refuses (DESIGN §3.4.3).
@@ -286,18 +317,26 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// <summary>
     /// The truncations a strict request's page does not show because a later match filtered the
     /// truncated rows out: one diagnostic per probe that finds a flagged candidate row, unless the
-    /// page already reported that stage.
+    /// page already reported that stage. The probes were sent with the page
+    /// (<paramref name="probes"/>, in the order of <see cref="CompiledQuery.TruncationProbes"/>); one
+    /// whose stage is already reported is not waited for, and what becomes of it is not this
+    /// request's any more.
     /// </summary>
-    private async Task<IReadOnlyList<Diagnostic>> HiddenTruncationsAsync(BoundPipeline bound, CompiledQuery compiled, AggregateRunOptions runOptions, IReadOnlyList<Diagnostic> reported, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<Diagnostic>> HiddenTruncationsAsync(CompiledQuery compiled, IReadOnlyList<Task<IReadOnlyList<BsonDocument>>> probes, IReadOnlyList<Diagnostic> reported)
     {
         var hidden = new List<Diagnostic>();
 
-        foreach (var probe in compiled.TruncationProbes)
+        for (var index = 0; index < compiled.TruncationProbes.Count; index++)
         {
-            if (reported.Any(diagnostic => diagnostic.Code == probe.Code && diagnostic.Stage == probe.Stage))
-                continue;
+            var probe = compiled.TruncationProbes[index];
 
-            var rows = await runner.AggregateAsync(bound.Entity, probe.Stages, runOptions, cancellationToken).ConfigureAwait(false);
+            if (reported.Any(diagnostic => diagnostic.Code == probe.Code && diagnostic.Stage == probe.Stage))
+            {
+                Observe(probes[index]);
+                continue;
+            }
+
+            var rows = await probes[index].ConfigureAwait(false);
 
             if (rows.Count == 0)
                 continue;

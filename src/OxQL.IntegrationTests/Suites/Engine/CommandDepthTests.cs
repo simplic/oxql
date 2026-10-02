@@ -93,6 +93,7 @@ public class CommandDepthTests
     {
         var depths = await DepthsAsync("D6", ReportAsync);
 
+        depths["ledger"].Should().Be(1, "the page and the truncation probe of a strict request are sent together");
         depths["transport"].Should().BeLessThanOrEqualTo(3, "five aggregates in three waves: what a join reads of another join's alias waits for it");
         depths["staff"].Should().BeLessThanOrEqualTo(2);
     }

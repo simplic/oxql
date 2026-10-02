@@ -381,6 +381,33 @@ public class ExplainStagesTests
     }
 
     [Fact]
+    public async Task A_call_the_check_at_this_host_had_cut_spent_the_budget_whatever_the_clock_reads()
+    {
+        // The timer that cuts a call runs on a coarser clock than the one the budget is read from, and
+        // may fire before that one has reached the budget: here the call is cut at once, with nearly
+        // the whole budget still on the clock. The time was the nested explain's to spend, so the
+        // explain it ran for asks no owner after it either.
+        var client = new FakeRemoteClient();
+        client.CutEarly.Add("crm");
+
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client);
+        var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """
+            [{ "resolve": { "path": "contactId", "as": "c", "select": ["name"] } },
+             { "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice", "select": ["contactId"] } },
+             { "resolve": { "path": "invoice.contactId", "as": "ic", "select": ["name"] } }]
+            """), BindHost.Context(options));
+
+        var result = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+        result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
+        client.ExplainCalls.Select(call => call.Service + ":" + call.Budget.TotalMilliseconds).Should().ContainSingle("the nested explain's cut call spent the budget of the explain it ran for");
+        result.Cache.Complete.Should().BeFalse("an owner did not answer");
+        result.OwnerOf("crm")["answered"]!.GetValue<bool>().Should().BeFalse();
+        result.OwnerOf("crm")["reason"]!.GetValue<string>().Should().Be("timeout");
+    }
+
+    [Fact]
     public async Task The_check_at_this_host_still_binds_when_the_owners_spent_the_budget()
     {
         var client = new FakeRemoteClient();

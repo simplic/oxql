@@ -220,6 +220,7 @@ public sealed class RemoteExplain : IExplainOwners
     private readonly List<ExplainOwnerUse> uses = [];
     private readonly List<Diagnostic> limitNotes = [];
     private readonly ExplainOwnerPool pool;
+    private readonly RemoteExplain? origin;
 
     /// <summary>The calls of one explain of <paramref name="request"/> under <paramref name="context"/>.</summary>
     public RemoteExplain(IRemoteQueryClient? client, ExplainForwardCache cache, RequestContext context, ExplainRequest request)
@@ -269,7 +270,9 @@ public sealed class RemoteExplain : IExplainOwners
         maxServices = Math.Max(0, options.MaxOwnerServices);
         maxCalls = Math.Max(0, options.MaxOwnerCalls);
         // The explains that belong together share what is left of the calls; an explain alone has its own.
-        pool = context.ExplainOwners as ExplainOwnerPool ?? new ExplainOwnerPool(1, given is null ? maxCalls : Math.Min(maxCalls, given.Calls));
+        // An explain run at this host for another asks through that one's pool, and spends its time.
+        origin = context.ExplainOwners as RemoteExplain;
+        pool = origin?.pool ?? context.ExplainOwners as ExplainOwnerPool ?? new ExplainOwnerPool(1, given is null ? maxCalls : Math.Min(maxCalls, given.Calls));
     }
 
     /// <summary>
@@ -1073,7 +1076,7 @@ public sealed class RemoteExplain : IExplainOwners
                     failed = Limited(outcome.Failure == ExplainOwnerPool.NoCalls ? "ownerCalls" : "checks", outcome.Failure == ExplainOwnerPool.NoCalls ? maxCalls : maxChecks, use.Service, head.Target, head.Stage);
                 else if (outcome.Failure == Timeout)
                 {
-                    spent = true;
+                    Spend();
                     failed = OutOfTime(use, use.Service, head.Target, head.Stage);
                 }
                 else
@@ -1231,6 +1234,17 @@ public sealed class RemoteExplain : IExplainOwners
 
     /// <summary>Whether a call already ran out of the shared budget.</summary>
     private bool spent;
+
+    /// <summary>
+    /// A call was cut by the budget: it is spent, for this explain and for the one it runs at this host
+    /// for, whose time it was given. That one does not go by its clock afterwards, which may read a
+    /// moment less than the budget when the timer fired (it runs on a coarser clock, in whole milliseconds).
+    /// </summary>
+    private void Spend()
+    {
+        for (var each = this; each is not null; each = each.origin)
+            each.spent = true;
+    }
 
     private static Diagnostic Unchecked(OwnerCheck check, string reason) => new()
     {

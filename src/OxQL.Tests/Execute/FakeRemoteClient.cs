@@ -72,6 +72,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
     /// <summary>Services that never answer within the budget.</summary>
     public HashSet<string> Silent { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Services whose explain is cut at once, as by a timer that fires before the clock the budget is read from has reached it.</summary>
+    public HashSet<string> CutEarly { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Services the host knows; every service when null.</summary>
     public HashSet<string>? Configured { get; set; }
 
@@ -158,6 +161,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 
         if (Unreachable.Contains(serviceKey))
             throw new HttpRequestException($"'{serviceKey}' is not reachable.");
+
+        if (CutEarly.Contains(serviceKey))
+            throw new OperationCanceledException($"The call to '{serviceKey}' was cut.");
 
         if (Silent.Contains(serviceKey))
         {

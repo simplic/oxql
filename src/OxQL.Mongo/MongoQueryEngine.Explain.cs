@@ -97,9 +97,9 @@ public sealed partial class MongoQueryEngine
 
         // The owners' answers share one budget of time and calls (DESIGN §4.3, plan §3.E protection).
         RemoteExplain? asking = null;
-        // An explain this one runs at this host asks its owners through this explain's pool.
+        // An explain this one runs at this host asks its owners through this explain's pool, on its time.
         var owners = asking = new RemoteExplain(remote, explainCache, context, request,
-            (owned, token) => ExplainOwnedAsync(owned, context with { ExplainOwners = asking!.Pool }, token), types, wall.Elapsed, ownerCache);
+            (owned, token) => ExplainOwnedAsync(owned, context with { ExplainOwners = asking! }, token), types, wall.Elapsed, ownerCache);
         var draft = new Draft(request, context, binding, types, owners, depth);
 
         if (binding is BindOutcome.Failed failed)

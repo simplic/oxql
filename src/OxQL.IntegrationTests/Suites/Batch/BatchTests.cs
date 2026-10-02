@@ -97,10 +97,25 @@ public class BatchTests
         answer.Results.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A client over the 100 001 bulk rows of organisation C, where <see cref="Heavy"/> sorts long
+    /// enough to run out of a millisecond every time. The server ends a command at its next interrupt
+    /// check after the limit, so a sort of organisation A's few thousand rows gets through a limit of
+    /// one millisecond every few runs when its page comes in one reply; measured, 109 of 600.
+    /// </summary>
+    private static async Task<LabClient> OverBulkAsync()
+    {
+        var shared = await CorpusFleet.SharedAsync();
+
+        await shared.SeedBulkAsync();
+
+        return shared.Client(LabService.Transport, Org.C);
+    }
+
     [Fact]
     public async Task R05_an_entry_that_times_out_carries_the_timeout_class_and_QUERY_TIMEOUT()
     {
-        var answer = await (await Lab.ClientAsync(LabService.Transport)).BatchAsync([Heavy()], maxTimeMs: 1);
+        var answer = await (await OverBulkAsync()).BatchAsync([Heavy()], maxTimeMs: 1);
 
         answer.StatusCode.Should().Be(200);
         var entry = answer.Results.Should().ContainSingle().Subject;
@@ -211,7 +226,7 @@ public class BatchTests
     {
         var client = await Lab.ClientAsync(LabService.Transport);
 
-        var tight = await client.BatchAsync([Heavy(), Heavy()], maxTimeMs: 1);
+        var tight = await (await OverBulkAsync()).BatchAsync([Heavy(), Heavy()], maxTimeMs: 1);
         tight.StatusCode.Should().Be(200);
         tight.Results.Select(entry => entry.Type).Should().Equal("timeout", "timeout");
         tight.Results.SelectMany(entry => entry.ErrorCodes).Should().Equal("QUERY_TIMEOUT", "QUERY_TIMEOUT");

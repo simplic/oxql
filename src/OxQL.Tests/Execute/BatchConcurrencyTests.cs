@@ -80,16 +80,21 @@ public class BatchConcurrencyTests
         var run = () => BatchRun.RunAsync(Enumerable.Range(0, 10).ToList(), 2, async (item, token) =>
         {
             Interlocked.Increment(ref started);
-            await Task.Delay(20, token);
 
             if (item == 0)
+            {
+                await Task.Yield();
                 throw new InvalidDataException("the first one failed");
+            }
+
+            // The one beside the failure runs until it is stopped; nothing behind them gets a place.
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
 
             return item;
         }, CancellationToken.None);
 
         (await run.Should().ThrowAsync<InvalidDataException>()).WithMessage("the first one failed");
-        started.Should().BeLessThan(10, "the items behind the failure were not started");
+        started.Should().Be(2, "the items behind the failure were not started, and the one beside it was stopped");
     }
 
     [Fact]
@@ -111,12 +116,20 @@ public class BatchConcurrencyTests
 
     // ---- the fixtures ---------------------------------------------------------------------------
 
-    /// <summary>Answers every aggregate after <see cref="Delay"/> and knows how many ran at once, and under which time limit.</summary>
+    /// <summary>
+    /// Answers every aggregate after <see cref="Delay"/> and knows how many ran at once, and under which
+    /// time limit. With <see cref="Together"/> set, the first aggregates wait for that many to be in
+    /// flight before any of them answers (or for five seconds, when they never are), so how many run
+    /// side by side is read off a count, not off a clock.
+    /// </summary>
     private sealed class SlowRunner : IAggregateRunner
     {
+        private readonly TaskCompletionSource together = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int running;
 
-        public TimeSpan Delay { get; set; } = TimeSpan.FromMilliseconds(150);
+        public int Together { get; set; }
+
+        public TimeSpan Delay { get; set; } = TimeSpan.FromMilliseconds(40);
 
         public int Peak { get; private set; }
 
@@ -139,10 +152,16 @@ public class BatchConcurrencyTests
             {
                 Calls.Add((entity.Id, options.MaxTimeMs));
                 Peak = Math.Max(Peak, ++running);
+
+                if (running >= Together)
+                    together.TrySetResult();
             }
 
             try
             {
+                if (Together > 0)
+                    await Task.WhenAny(together.Task, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
+
                 await Task.Delay(Delay, cancellationToken);
 
                 return Rows(entity);
@@ -232,6 +251,7 @@ public class BatchConcurrencyTests
     public async Task The_queries_of_an_internal_batch_run_side_by_side_up_to_the_configured_degree()
     {
         var (service, runner, _, _, _) = Host();
+        runner.Together = 4;
 
         var results = await ResultsAsync(service.BatchAsync(Batch(6), internalCall: true));
 
@@ -244,6 +264,8 @@ public class BatchConcurrencyTests
     {
         var (two, twoRunner, _, _, _) = Host(options => options.Execution.BatchConcurrency = 2);
         var (one, oneRunner, _, oneScope, _) = Host(options => options.Execution.BatchConcurrency = 1);
+
+        twoRunner.Together = 2;
 
         await ResultsAsync(two.BatchAsync(Batch(5), internalCall: true));
         await ResultsAsync(one.BatchAsync(Batch(3), internalCall: true));
@@ -306,13 +328,15 @@ public class BatchConcurrencyTests
     public async Task The_batchs_time_is_one_deadline_and_a_query_that_starts_later_has_less_of_it()
     {
         var (service, runner, _, _, _) = Host(options => options.Execution.BatchConcurrency = 2);
+        runner.Together = 2;
+        runner.Delay = TimeSpan.FromMilliseconds(120);
 
         await ResultsAsync(service.BatchAsync(Batch(4, maxTimeMs: 5_000), internalCall: true));
 
         var limits = runner.Calls.Select(call => call.MaxTimeMs).ToList();
 
         limits.Should().HaveCount(4).And.OnlyContain(limit => limit <= 5_000);
-        limits.Skip(2).Should().OnlyContain(limit => limit <= 5_000 - 30, "the second pair started a delay later, under what was left");
+        limits.Skip(2).Should().OnlyContain(limit => limit <= 5_000 - 100, "the second pair started a delay later, under what was left");
     }
 
     [Fact]
@@ -381,7 +405,7 @@ public class BatchConcurrencyTests
     public async Task This_host_runs_the_queries_it_sends_itself_side_by_side_and_answers_in_order()
     {
         var options = BindHost.Options();
-        var runner = new SlowRunner { Rows = entity => [Row(Id1, entity.Id)] };
+        var runner = new SlowRunner { Rows = entity => [Row(Id1, entity.Id)], Together = 4, Delay = TimeSpan.FromMilliseconds(120) };
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options);
         var owner = new SelfOwner(engine, BindHost.Context(options));
         var limits = new[] { 1, 2, 3, 4, 5, 6 };
@@ -395,6 +419,6 @@ public class BatchConcurrencyTests
         response.Results.Should().HaveCount(6).And.OnlyContain(result => result!["items"] != null);
         runner.Peak.Should().Be(4);
         runner.Calls.Select(call => call.MaxTimeMs).Should().OnlyContain(limit => limit <= 4_000);
-        runner.Calls.Skip(4).Select(call => call.MaxTimeMs).Should().OnlyContain(limit => limit <= 4_000 - 30, "the batch's time is one deadline, not a budget per query");
+        runner.Calls.Skip(4).Select(call => call.MaxTimeMs).Should().OnlyContain(limit => limit <= 4_000 - 100, "the batch's time is one deadline, not a budget per query");
     }
 }

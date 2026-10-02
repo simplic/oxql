@@ -45,6 +45,9 @@ public static class BatchRun
 
             try
             {
+                // A place that came free in the moment the batch was stopped is not a start.
+                stop.Token.ThrowIfCancellationRequested();
+
                 results[index] = await run(items[index], stop.Token).ConfigureAwait(false);
             }
             catch

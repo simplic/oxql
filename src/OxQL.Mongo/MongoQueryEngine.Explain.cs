@@ -60,7 +60,7 @@ public sealed partial class MongoQueryEngine
 
                 return (ExplainOutcome)new ExplainOutcome.Refused(Refusal.Internal("The engine could not explain this check."));
             }
-        }))).ConfigureAwait(false);
+        }, cancellationToken))).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

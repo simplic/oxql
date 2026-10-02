@@ -52,14 +52,26 @@ public sealed class ExplainOwnerPool
     /// <summary>
     /// Runs one of the pool's explains: it computes while it holds the turn and is counted as done when
     /// it ends, however it ends. Every explain the pool was made for must be run through here, or the
-    /// others would wait for it.
+    /// others would wait for it. An explain whose caller gives up while it waits for its turn leaves
+    /// the queue there and then: it is counted as done without having run, and the cancellation travels.
     /// </summary>
-    public async Task<T> RunAsync<T>(Func<Task<T>> explain)
+    public async Task<T> RunAsync<T>(Func<Task<T>> explain, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(explain);
 
         if (turn is not null)
-            await turn.WaitAsync().ConfigureAwait(false);
+        {
+            try
+            {
+                await turn.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // The turn was never taken, so there is none to give back; the others stop waiting for this one.
+                Step(null);
+                throw;
+            }
+        }
 
         try
         {

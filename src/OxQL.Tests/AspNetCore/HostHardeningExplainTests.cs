@@ -226,6 +226,22 @@ public class HostHardeningExplainTests
     }
 
     [Fact]
+    public async Task One_organisations_etag_is_no_validator_of_anothers_answer()
+    {
+        using var host = new SampleHost();
+
+        var first = await host.Client().SendAsync(ExplainMessage(WithLookup));
+        var etag = first.Headers.ETag!.ToString();
+
+        // The same request under another organisation, with the first one's validator: answered, not 304.
+        var other = await host.Client(organisation: Guid.NewGuid()).SendAsync(ExplainMessage(WithLookup, ifNoneMatch: etag));
+
+        other.StatusCode.Should().Be(HttpStatusCode.OK, "the validator carries who asked");
+        other.Headers.ETag!.ToString().Should().NotBe(etag);
+        other.Headers.ETag!.ToString().Should().Be(((JsonObject)(await SampleHost.Body(other))!)["etag"]!.GetValue<string>(), "the header and the member are one value");
+    }
+
+    [Fact]
     public async Task The_cached_tier_of_a_complete_answer_has_the_etag_of_its_check()
     {
         using var host = new SampleHost();

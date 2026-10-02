@@ -426,7 +426,7 @@ public sealed partial class MongoQueryEngine
         if (request.Slim && context.Internal)
             return Slim(answer);
 
-        return answer with { Etag = EtagOf(request, answer) };
+        return answer with { Etag = EtagOf(request, answer, context) };
     }
 
     /// <summary>
@@ -552,21 +552,41 @@ public sealed partial class MongoQueryEngine
         return answer with { Notes = Ordered(notes), Cache = answer.Cache with { Complete = false } };
     }
 
-    /// <summary>A weak validator over what the answer depends on: the request, the revisions, the capabilities and whether it is complete.</summary>
-    private static string EtagOf(ExplainRequest request, ExplainResult answer)
+    /// <summary>The members of an owner entry that say what this explain cost, not what it answers: no part of the validator.</summary>
+    private static readonly string[] OwnerCosts = ["ms", "calls", "cached"];
+
+    /// <summary>
+    /// A weak validator of the answer itself: the request, who asked (organisation and user), and the
+    /// answer as it is written, without what differs between two tellings of one answer (the
+    /// validator, and what each owner cost this time: <c>owners[].ms</c>, <c>calls</c>, <c>cached</c>).
+    /// So two answers that differ in anything a caller reads (<c>valid</c>, an error, a note, an alias,
+    /// what an owner said, a revision, whether it is complete) never share it, and one identity's
+    /// validator never stands for another's answer.
+    /// </summary>
+    private static string EtagOf(ExplainRequest request, ExplainResult answer, RequestContext context)
     {
-        var text = new StringBuilder();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         // The tier is not part of it: a cached answer that is complete is the answer a check gives.
-        text.Append(JsonSerializer.Serialize(request with { Budget = null, Remote = ExplainRequest.RemoteCheck }, OxQLJson.Wire)).Append('\n')
-            .Append(answer.Contract).Append('\n')
-            .Append(answer.Engine.Version).Append('\n')
-            .AppendJoin(',', answer.Engine.Capabilities).Append('\n')
-            .AppendJoin(',', answer.Revision.Schema.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value)).Append('\n')
-            .Append(answer.Revision.Addons).Append('\n')
-            .Append(answer.Cache.Complete);
+        hash.AppendData(JsonSerializer.SerializeToUtf8Bytes(request with { Budget = null, Remote = ExplainRequest.RemoteCheck }, OxQLJson.Wire));
+        hash.AppendData(Encoding.UTF8.GetBytes($"\n{context.Organisation:N}|"));
+        hash.AppendData(SHA256.HashData(Encoding.UTF8.GetBytes(context.UserId ?? "")));
+        hash.AppendData("\n"u8);
+        hash.AppendData(JsonSerializer.SerializeToUtf8Bytes(answer with
+        {
+            Etag = null,
+            Owners = answer.Owners.Select(owner =>
+            {
+                var said = owner.DeepClone();
 
-        return "W/\"x3:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..32].ToLowerInvariant() + "\"";
+                foreach (var cost in OwnerCosts)
+                    (said as JsonObject)?.Remove(cost);
+
+                return said;
+            }).ToList(),
+        }, OxQLJson.Wire));
+
+        return "W/\"x3:" + Convert.ToHexString(hash.GetHashAndReset())[..32].ToLowerInvariant() + "\"";
     }
 
     // ---- owners ---------------------------------------------------------------------------------

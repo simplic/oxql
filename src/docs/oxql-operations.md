@@ -379,8 +379,9 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
 - **Absent members.** A member that would be null is left out, except where null says something:
   a root whose owner did not answer (`roots`), `loads`, `shows` and `hint`, an owner never asked
   (`answered`), and the revisions.
-- **`etag`, `revision`, `cache`.** `etag` changes when the request, a revision, the capabilities or
-  the completeness of the answer changes. `revision` names what the answer was bound against:
+- **`etag`, `revision`, `cache`.** `etag` is a validator of the answer itself: it changes when the
+  request, who asks (organisation, user) or anything the answer says changes (see *The validator*
+  below). `revision` names what the answer was bound against:
   `schema`, per service, the revision of the schema document of this host and of every owner that
   answered, the owners those asked included (`null` for a host that publishes none), and `addons`, a
   hash of the asking organisation's addon definitions it read. A caller whose document of a service
@@ -388,7 +389,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `cache.dependsOn` lists the owner services the answer depends
   on, transitive ones included; `cache.complete` is false when something the answer would say is
   missing (an owner did not answer, a limit was hit, the answer was trimmed), and such an answer is
-  never kept as the complete one. The host sets no `ETag` header yet.
+  never kept as the complete one.
 - **`stages`**, one per caller stage: `status` `ok`, `error`, or `skipped` (it failed only because it
   reads an alias an earlier stage failed to create); `placement` for a join that runs, else absent
   (a stage that is no join, a join nothing reads, every join of a request that does not bind here,
@@ -607,11 +608,20 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     owner listed with `answered: null`, `reason: "cached"` and no call, the alias `complete: false`
     with `type: null`, `cache.complete: false`. What this host binds itself is all there. Once every
     owner answer is kept, the cached answer is the answer a `check` gives, with the same `etag`.
-- **The validator.** `etag` covers the request (but not `remote`), the contract, the engine version,
-  the capabilities, every revision and whether the answer is complete. The route answers it as the
-  `ETag` header (with `Cache-Control: private, no-cache`), and a request with `If-None-Match` naming it
-  (weak comparison; `*` matches) is 304 without a body. The answer is still computed, so a 304 saves
-  the transfer and the parse, not the bind: 2 to 4 ms warm for the reference queries.
+- **The validator.** `etag` is a hash of the request (but not of `remote`), of who asks (the
+  organisation and the user) and of the answer as it is written, less what differs between two
+  tellings of one answer: the `etag` itself and what each owner cost this time (`owners[].ms`,
+  `calls`, `cached`). So it covers `valid`, every error, note, stage, alias, type, column and
+  catalog entry, what each owner answered (`owners[].answered`, `reason`, `engine`), the revisions and
+  `cache`: two answers that differ in anything a caller reads never share it, also when an owner
+  answers differently under an unchanged revision (an addon defined at the owner, an owner that
+  publishes no revision and was redeployed, an index created for `include: "indexes"`). One identity's
+  validator never matches another identity's answer. A `cached` answer that is complete is the answer
+  its `check` gave and has that `etag`; an incomplete one has another. The body member `etag` and the
+  `ETag` header are one value. The route answers it as the `ETag` header (with
+  `Cache-Control: private, no-cache`), and a request with `If-None-Match` naming it (weak comparison;
+  `*` matches) is 304 without a body. The answer is computed before it is compared, so a 304 saves the
+  transfer and the parse, not the bind: 2 to 4 ms warm for the reference queries.
 - **Content coding.** The answer is written in the coding the caller accepts (`Accept-Encoding`):
   Brotli, else gzip, at the fastest level, with `Vary: Accept-Encoding`; a body under 1 KB, a refusal
   and a 304 are not coded. The reference queries are 22 to 43 KB as they are, 4.8 to 7.6 KB gzipped

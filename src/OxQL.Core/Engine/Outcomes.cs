@@ -620,7 +620,11 @@ public sealed record ExplainResult
     [JsonPropertyName("engine")]
     public required ExplainEngine Engine { get; init; }
 
-    /// <summary>A weak validator of the answer: it changes when the request, a revision or the capabilities change.</summary>
+    /// <summary>
+    /// A weak validator of the answer: a hash of the request, of who asked (organisation and user) and
+    /// of everything the answer says, less what an owner cost this time (<c>owners[].ms</c>,
+    /// <c>calls</c>, <c>cached</c>). Two answers that differ in anything else never share it.
+    /// </summary>
     [JsonPropertyName("etag")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Etag { get; init; }

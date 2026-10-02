@@ -744,7 +744,8 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
   body), and says what it therefore does not know (`cache.complete: false`, a `REMOTE_UNCHECKED` note
   with reason `cached`). It is the tier for an edit in progress: explain with `cached` while the query
   changes and with `check` once it has settled. A complete `cached` answer carries the `etag` of its
-  `check`; send it as `If-None-Match` and an unchanged answer is 304.
+  `check`; send it as `If-None-Match` and an unchanged answer is 304. The `etag` covers the whole
+  answer and who asked, so a 304 always means the answer the caller holds is the one it would get.
 - A catalog entry looks up an entity outside the query (a lookup's `from`, a palette, the entities
   referencing one). It carries `id`, `entity` (an entity id, or `entity#item` for the element of an
   item collection; another service's entity is answered by its owner), an optional `prefix` (a path,

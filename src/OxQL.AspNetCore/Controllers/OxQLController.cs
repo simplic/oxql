@@ -190,7 +190,8 @@ public class OxQLController : ControllerBase
     /// <para>
     /// An answer carries its validator as <c>ETag</c> (the answer's <c>etag</c>). A caller that holds an
     /// answer sends that value as <c>If-None-Match</c> and gets 304 without a body while the answer
-    /// still stands: the same request, revisions, capabilities and completeness. The body is written in
+    /// still stands: the same request by the same organisation and user, answered the same in
+    /// everything but what the owners cost this time. The body is written in
     /// the content coding the caller accepts (<c>Accept-Encoding</c>: Brotli, else gzip).
     /// </para>
     /// </summary>

@@ -222,6 +222,101 @@ public class ExplainRemoteCheckTests
         (await ExplainAsync(Continued, engine: engine, envelope: """ "remote": "cached" """)).Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked);
     }
 
+    // ---- the validator -----------------------------------------------------------------------------------
+
+    /// <summary>The real owner behind the fake client, which refuses a path of the continued stage while <paramref name="refuses"/> says so.</summary>
+    private static FakeRemoteClient OwnerThatMayRefuse(Func<bool> refuses, string? revision = null)
+    {
+        var real = OwnerFleet.Client();
+
+        return new FakeRemoteClient
+        {
+            Explains = (service, request) =>
+            {
+                var answer = real.Explains!(service, request)!;
+
+                if (refuses())
+                {
+                    answer["valid"] = false;
+                    answer["errors"] = new JsonArray(new JsonObject { ["code"] = Codes.UnknownPath, ["message"] = "'title' is not a path of crm.company for this organisation.", ["stage"] = 1, ["path"] = "title" });
+                }
+
+                if (revision is not null)
+                    answer["revision"] = new JsonObject { ["schema"] = new JsonObject { ["crm"] = revision } };
+
+                return answer;
+            },
+        };
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("sha256:same")]
+    public async Task The_etag_changes_when_an_owner_refuses_what_it_accepted_and_when_it_accepts_what_it_refused(string? revision)
+    {
+        // The owner's answer changes while nothing the origin knows of does: no revision, or the same one
+        // (an addon defined at the owner, an index created there, a redeployed owner that publishes none).
+        var refuse = false;
+        var client = OwnerThatMayRefuse(() => refuse, revision);
+        var time = new ManualTime();
+        var engine = Engine(client, cache: new ExplainForwardCache(time));
+
+        var accepted = await ExplainAsync(Continued, engine: engine);
+
+        refuse = true;
+        time.Now += ExplainForwardCache.Ttl;
+
+        var refused = await ExplainAsync(Continued, engine: engine);
+
+        refuse = false;
+        time.Now += ExplainForwardCache.Ttl;
+
+        var acceptedAgain = await ExplainAsync(Continued, engine: engine);
+
+        client.ExplainCalls.Should().HaveCount(3);
+        accepted.Valid.Should().BeTrue();
+        accepted.Cache.Complete.Should().BeTrue();
+        refused.Valid.Should().BeFalse();
+        refused.Cache.Complete.Should().BeTrue("both answers are complete: only what the owner said differs");
+        refused.Etag.Should().NotBe(accepted.Etag, "a client holding the valid answer must be sent the errors, not a 304");
+        acceptedAgain.Valid.Should().BeTrue();
+        acceptedAgain.Etag.Should().NotBe(refused.Etag, "a client holding the errors must be sent the valid answer, not a 304");
+        acceptedAgain.Etag.Should().Be(accepted.Etag, "the same answer has the same validator, whenever it is given");
+    }
+
+    [Fact]
+    public async Task The_etag_does_not_change_with_what_an_owner_cost_this_time()
+    {
+        var client = OwnerFleet.Client();
+        var engine = Engine(client);
+
+        var cold = await ExplainAsync(Continued, engine: engine);
+        var warm = await ExplainAsync(Continued, engine: engine);
+
+        cold.OwnerOf("crm").Should().Match<JsonObject>(owner => owner["calls"]!.GetValue<int>() == 1 && !owner["cached"]!.GetValue<bool>());
+        warm.OwnerOf("crm").Should().Match<JsonObject>(owner => owner["calls"]!.GetValue<int>() == 0 && owner["cached"]!.GetValue<bool>());
+        warm.Etag.Should().Be(cold.Etag, "calls, cached and ms say what the explain cost, not what it answers");
+    }
+
+    [Fact]
+    public async Task The_etag_is_one_identitys_another_user_or_organisation_never_has_it_for_the_same_answer()
+    {
+        var engine = Engine(OwnerFleet.Client());
+        var userA = BindHost.Context(BindHost.Options()) with { UserId = "user-a" };
+        var userB = BindHost.Context(BindHost.Options()) with { UserId = "user-b" };
+        var otherOrganisation = BindHost.Context(BindHost.Options(), organisation: Guid.NewGuid()) with { UserId = "user-a" };
+
+        var a = await ExplainAsync(Continued, engine: engine, context: userA);
+        var b = await ExplainAsync(Continued, engine: engine, context: userB);
+        var other = await ExplainAsync(Continued, engine: engine, context: otherOrganisation);
+
+        a.Cache.Complete.Should().BeTrue();
+        b.Cache.Complete.Should().BeTrue();
+        b.Etag.Should().NotBe(a.Etag, "an owner may refuse one user what it answers another: one's validator is not the other's");
+        other.Etag.Should().NotBe(a.Etag);
+        (await ExplainAsync(Continued, engine: engine, context: userA)).Etag.Should().Be(a.Etag);
+    }
+
     [Fact]
     public async Task An_answer_naming_another_schema_revision_of_an_owner_retires_what_was_kept_for_the_old_one()
     {

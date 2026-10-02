@@ -293,6 +293,12 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         output.WriteLine($"  answer: {first.Body.Length} B raw, {gzip.Body.Length} B gzip, {brotli.Body.Length} B br (fastest level)");
 
         Median(bare).Should().BeLessThan(Median(cold), "the cached tier asks no owner, so it answers before a cold check does");
+        // The validator is one identity's: another user who sends it for the same request is answered, not told 304.
+        var foreign = await SendAsync(Guid.NewGuid(), "check", ifNoneMatch: etag);
+
+        foreign.Response.StatusCode.Should().Be(HttpStatusCode.OK, "an owner may answer another user differently, so one user's validator never stands for another's answer");
+        foreign.Response.Headers.ETag!.ToString().Should().NotBe(etag);
+
         brotli.Body.Length.Should().BeLessThan(first.Body.Length / 4);
         gzip.Body.Length.Should().BeLessThan(first.Body.Length / 4);
     }

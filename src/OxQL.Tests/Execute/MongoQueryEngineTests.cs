@@ -151,10 +151,22 @@ public class MongoQueryEngineTests
         });
 
         await Success(engine, "[]");
-        runner.Calls[0].Options.Should().Be(new AggregateRunOptions(60_000, false), "the ceiling clamps");
+        runner.Calls[0].Options.Should().Be(new AggregateRunOptions(60_000, false) { BatchSize = 101 }, "the ceiling clamps");
 
         await Success(engine, "[]", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { MaxTimeMs = 500 });
         runner.Calls[1].Options.MaxTimeMs.Should().Be(500, "a batch ceiling narrows");
+    }
+
+    [Fact]
+    public async Task The_page_asks_for_its_rows_in_one_reply_and_the_count_for_the_default_batch()
+    {
+        var (engine, runner) = Host();
+
+        await Success(engine, """[{ "page": { "limit": 250, "includeTotalCount": true } }]""");
+
+        runner.Calls.Should().HaveCount(2);
+        runner.Calls[0].Options.BatchSize.Should().Be(251, "the page's rows and the one that tells whether a next page exists arrive without a getMore");
+        runner.Calls[1].Options.BatchSize.Should().BeNull("a count returns one row");
     }
 
     [Fact]

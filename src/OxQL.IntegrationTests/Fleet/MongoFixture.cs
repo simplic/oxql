@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using EphemeralMongo;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Events;
 
 namespace OxQL.IntegrationTests.Fleet;
 
@@ -35,6 +36,12 @@ public static class MongoFixture
 
     /// <summary>Distinguishes this run's databases from another run's on a shared server.</summary>
     public static string RunId { get; } = Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>
+    /// Every command the run's client sends, for the tests that count them (<see cref="CommandLog.Watch"/>):
+    /// what a request costs the database is asserted, not assumed.
+    /// </summary>
+    public static CommandLog Commands { get; } = new();
 
     /// <summary>The run's client, connected to the shared server; starts the server on first use.</summary>
     public static async Task<IMongoClient> ClientAsync() => (await Shared.Value).Client;
@@ -71,7 +78,7 @@ public static class MongoFixture
         var uri = Environment.GetEnvironmentVariable(ConnectionVariable);
 
         if (!string.IsNullOrWhiteSpace(uri))
-            return await ConnectAsync(new MongoClient(uri), runner: null, $"the server named by {ConnectionVariable}");
+            return await ConnectAsync(Monitored(uri), runner: null, $"the server named by {ConnectionVariable}");
 
         IMongoRunner runner;
         var options = RunnerOptions();
@@ -85,7 +92,20 @@ public static class MongoFixture
             throw Unavailable($"EphemeralMongo could not start MongoDB {(int)options.Version}: {exception.Message.TrimEnd('.')}", exception);
         }
 
-        return await ConnectAsync(new MongoClient(runner.ConnectionString), runner, $"MongoDB {(int)options.Version} started by EphemeralMongo");
+        return await ConnectAsync(Monitored(runner.ConnectionString), runner, $"MongoDB {(int)options.Version} started by EphemeralMongo");
+    }
+
+    /// <summary>The client of <paramref name="uri"/> with every command it sends offered to <see cref="Commands"/>.</summary>
+    private static MongoClient Monitored(string uri)
+    {
+        var settings = MongoClientSettings.FromConnectionString(uri);
+
+        settings.ClusterConfigurator = cluster => cluster
+            .Subscribe<CommandStartedEvent>(Commands.Started)
+            .Subscribe<CommandSucceededEvent>(succeeded => Commands.Ended(succeeded.RequestId))
+            .Subscribe<CommandFailedEvent>(failed => Commands.Ended(failed.RequestId));
+
+        return new MongoClient(settings);
     }
 
     private static MongoRunnerOptions RunnerOptions()

@@ -120,7 +120,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         try
         {
-            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions, aggregates.Token);
+            // The page asks for its rows in one reply: the limit and the row that tells whether a next page exists.
+            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 1 }, aggregates.Token);
             countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token) : null;
 
             rows = await pageTask.ConfigureAwait(false);

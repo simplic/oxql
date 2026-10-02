@@ -1,0 +1,9 @@
+root = true
+
+# Cancellation is followed through in the packages a host runs: a token that is in scope is
+# forwarded to a callee that takes one (CA2016), and a token parameter comes last (CA1068), so
+# a call site cannot lose it unnoticed. Both fail the build. The test and sample projects are
+# not held to it: a test passes no token on purpose more often than not.
+[src/OxQL.{Model,Core,Mongo,AspNetCore,Studio}/**.cs]
+dotnet_diagnostic.CA2016.severity = error
+dotnet_diagnostic.CA1068.severity = error

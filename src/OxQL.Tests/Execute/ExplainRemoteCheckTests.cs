@@ -906,6 +906,43 @@ public class ExplainRemoteCheckTests
         result.Notes!.Should().Contain(note => note.Code == Notes.IndexAdvice && note.Message.Contains("could not be read"));
     }
 
+    private sealed class SilentIndexes : IIndexSource
+    {
+        public async Task<IReadOnlyList<MongoDB.Bson.BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+            return [];
+        }
+    }
+
+    [Fact]
+    public async Task Index_lists_that_do_not_come_within_the_explains_time_are_given_up_and_noted()
+    {
+        var options = BindHost.Options(configure => configure.Explain.TimeoutMs = 150);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, indexes: new SilentIndexes());
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await ExplainAsync("[]", envelope: """ "include": ["notes", "indexes"] """, engine: engine, context: BindHost.Context(options));
+
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5), "the index read falls under Explain:TimeoutMs");
+        result.Valid.Should().BeTrue();
+        result.Advisory.Should().BeNull();
+        result.Notes!.Should().ContainSingle(note => note.Code == Notes.IndexAdvice).Which.Params!["reason"].Should().Be(nameof(TimeoutException));
+    }
+
+    [Fact]
+    public async Task A_caller_that_gives_up_while_the_index_lists_are_read_is_a_cancellation_not_a_note()
+    {
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), indexes: new SilentIndexes());
+        using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var explain = () => engine.ExplainAsync(
+            ExplainAnswer.Envelope($$"""{ "query": { "entityType": "{{Invoice}}", "pipeline": [] }, "include": ["notes", "indexes"] }"""), BindHost.Context(), caller.Token);
+
+        await explain.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     [Fact]
     public async Task An_inline_resolve_names_only_the_outcomes_it_can_have()
     {

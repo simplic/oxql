@@ -129,11 +129,18 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 1 }, aggregates.Token);
             countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token) : null;
 
+            // Whatever ends this request before the count is read (the caller giving up while the
+            // page runs, say), the count's own failure is read, never left unobserved.
+            Observe(countTask);
+
             // A probe reads the rows up to a truncation, not the page, so it does not wait for the
             // page: only whether its answer is still needed depends on what the page reports.
             if (strict)
                 foreach (var probe in compiled.TruncationProbes)
+                {
                     probeTasks.Add(runner.AggregateAsync(bound.Entity, probe.Stages, runOptions, aggregates.Token));
+                    Observe(probeTasks[^1]);
+                }
 
             rows = await pageTask.ConfigureAwait(false);
 

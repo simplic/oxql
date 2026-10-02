@@ -89,7 +89,7 @@ public sealed partial class MongoQueryEngine
             return new ExplainOutcome.Refused(refused.Refusal);
 
         var depth = Math.Clamp(request.ShapeDepth ?? context.Options.Explain.DefaultShapeDepth, 1, Math.Max(1, context.Options.Explain.MaxShapeDepth));
-        var types = new ExplainTypes(models.Model, context, binding.Trace, depth, request.IncludesDocs, cancellationToken, request.IncludesTypes, models.SchemaRevision);
+        var types = new ExplainTypes(models.Model, context, binding.Trace, depth, request.IncludesDocs, request.IncludesTypes, models.SchemaRevision, cancellationToken);
 
         // The entity the pipeline entered leads the types, before what the owners answer.
         if (request.IncludesShape && binding.Trace is { } entered)
@@ -144,9 +144,17 @@ public sealed partial class MongoQueryEngine
         }
 
         // The advisory reads index lists; a list that cannot be read is a note, never a failed explain.
+        // The read falls under the explain's own time (Explain:TimeoutMs, or what its origin has left
+        // of it): once that is spent it is given up, and the note says so.
         try
         {
-            draft.Advisory = request.IncludesIndexes ? await AdviseAsync(bound, compiled, cancellationToken).ConfigureAwait(false) : null;
+            if (request.IncludesIndexes)
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+                timeout.CancelAfter(AdvisoryTime(request, context, wall.Elapsed));
+                draft.Advisory = await AdviseAsync(bound, compiled, timeout.Token).ConfigureAwait(false);
+            }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -154,7 +162,7 @@ public sealed partial class MongoQueryEngine
             {
                 Code = Notes.IndexAdvice,
                 Message = "The index lists could not be read, so no index advice is given.",
-                Params = new Dictionary<string, object?> { ["reason"] = exception.GetType().Name },
+                Params = new Dictionary<string, object?> { ["reason"] = exception is OperationCanceledException ? nameof(TimeoutException) : exception.GetType().Name },
             });
         }
 
@@ -1493,6 +1501,23 @@ public sealed partial class MongoQueryEngine
                 resolve.Target, resolve.TargetFieldStorage, null, resolve.Select, resolve.RemoteSelect, resolve.Filter, resolve.RemoteFilter, resolve.TargetScope, null, null, [])];
 
     // ---- the index advisory and the plan --------------------------------------------------------
+
+    /// <summary>
+    /// What the index advisory may still take: what is left of <c>Explain:TimeoutMs</c>, or of what an
+    /// internal explain's origin has left when that is less, after <paramref name="elapsed"/>; never
+    /// less than a millisecond, so a list the source still holds is answered.
+    /// </summary>
+    private static TimeSpan AdvisoryTime(ExplainRequest request, RequestContext context, TimeSpan elapsed)
+    {
+        var limit = Math.Max(1, context.Options.Explain.TimeoutMs);
+
+        if (context.Internal && request.Budget is { } given && given.Ms < limit)
+            limit = given.Ms;
+
+        var left = TimeSpan.FromMilliseconds(limit) - elapsed;
+
+        return left > TimeSpan.FromMilliseconds(1) ? left : TimeSpan.FromMilliseconds(1);
+    }
 
     /// <summary>
     /// The opt-in index advisory (DESIGN §4.1): the index lists of the entity's collection and of

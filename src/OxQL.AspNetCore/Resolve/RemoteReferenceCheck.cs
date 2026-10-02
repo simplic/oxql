@@ -88,7 +88,7 @@ internal sealed class RemoteReferenceStartupFilter(IServiceProvider provider) : 
                 if (findings.Count > 0 && Strict())
                 {
                     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-                    await context.Response.WriteAsync("OxQL: a declared remote reference has no configured service on this host; see the log.");
+                    await context.Response.WriteAsync("OxQL: a declared remote reference has no configured service on this host; see the log.", context.RequestAborted);
                     return;
                 }
 

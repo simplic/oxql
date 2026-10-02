@@ -203,7 +203,7 @@ public sealed class ExplainTypes
     /// <paramref name="depth"/> levels below each root and with <paramref name="docs"/> each member's
     /// description; without, a type is a reference to the schema document at <paramref name="revision"/>.
     /// </summary>
-    public ExplainTypes(EntityModel model, RequestContext context, BindTrace? trace, int depth, bool docs = false, CancellationToken cancellationToken = default, bool tables = true, string? revision = null)
+    public ExplainTypes(EntityModel model, RequestContext context, BindTrace? trace, int depth, bool docs = false, bool tables = true, string? revision = null, CancellationToken cancellationToken = default)
     {
         this.model = model ?? throw new ArgumentNullException(nameof(model));
         this.context = context ?? throw new ArgumentNullException(nameof(context));

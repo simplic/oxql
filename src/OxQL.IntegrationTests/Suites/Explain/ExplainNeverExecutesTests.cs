@@ -109,4 +109,33 @@ public class ExplainNeverExecutesTests
         answer.Plan.Should().BeNull();
         commands.Should().BeEmpty("a query that does not bind is not compiled, so not even its indexes are read");
     }
+
+    [Fact]
+    public async Task X04_listIndexes_carries_a_server_side_time_limit_and_a_collection_that_does_not_exist_has_no_indexes()
+    {
+        var database = (await (await CorpusFleet.SharedAsync()).Fleet.DatabaseAsync(LabService.Fleet)).DatabaseNamespace.DatabaseName;
+        var settings = (await MongoFixture.ClientAsync()).Settings.Clone();
+        var limits = new ConcurrentQueue<long?>();
+
+        settings.ClusterConfigurator = cluster => cluster.Subscribe<CommandStartedEvent>(started =>
+        {
+            if (started.CommandName == "listIndexes" && started.DatabaseNamespace?.DatabaseName == database)
+                limits.Enqueue(started.Command.TryGetValue("maxTimeMS", out var limit) ? limit.ToInt64() : null);
+        });
+
+        var source = new MongoIndexSource(new MongoClient(settings), database, maxTime: TimeSpan.FromMilliseconds(750));
+        var model = LabService.Fleet.Model;
+
+        model.TryResolve(Corpus.Vehicle, out var vehicle, out _).Should().BeTrue();
+
+        var listed = await source.IndexesAsync(vehicle, CancellationToken.None);
+
+        listed.Should().Contain(index => index["name"] == "_id_", "the list is the server's, read off the one reply");
+        limits.Should().Equal([750L], "a caller that stops waiting does not leave the command running on the server");
+
+        // A source over a database nothing was written to: the collection does not exist.
+        var empty = new MongoIndexSource(new MongoClient(settings), MongoFixture.DatabaseName("no_such_collection"));
+
+        (await empty.IndexesAsync(vehicle, CancellationToken.None)).Should().BeEmpty();
+    }
 }

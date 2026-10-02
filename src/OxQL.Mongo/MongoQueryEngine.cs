@@ -64,6 +64,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         this.includeErrorDetails = includeErrorDetails;
     }
 
+    /// <summary>What this engine keeps of its owners' explain answers: read by a host that reports or bounds what it holds.</summary>
+    public ExplainForwardCache ExplainCache => explainCache;
+
+    /// <summary>What this engine keeps of its owners' keyed fetches and of what they said a target lacks.</summary>
+    public OwnerFetchCache OwnerCache => ownerCache;
+
     /// <inheritdoc/>
     public bool RemoteResolve => remoteClient;
 

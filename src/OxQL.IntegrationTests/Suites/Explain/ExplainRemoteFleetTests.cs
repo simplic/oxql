@@ -10,6 +10,8 @@ using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
 using OxQL.IntegrationTests.Suites.Report;
+using OxQL.Mongo;
+using OxQL.Mongo.Explain;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -112,6 +114,19 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         calls.Should().OnlyContain(call => call.Batch.Budget != null && call.Batch.Checks.All(check => check.Budget == null));
         owners.Where(owner => owner["remote"]!.GetValue<bool>()).Sum(owner => owner["calls"]!.GetValue<int>())
             .Should().BeLessThanOrEqualTo(8, "one explain causes at most eight owner calls, transitive ones included");
+
+        // A call carries several checks, each a bind at its owner: the calls alone do not bound the owners'
+        // work. A round asks an owner at most once per remote target of the request, so what one explain
+        // has its owners bind is bounded by its remote targets and the three rounds, not by 8 calls x 64 checks.
+        var remoteTargets = answer.Body["aliases"]!.AsObject()
+            .Where(alias => alias.Value?["parentOf"] is null)
+            .SelectMany(alias => alias.Value?["targets"]?.AsArray().OfType<JsonObject>() ?? [])
+            .Count(target => target["remote"]!.GetValue<bool>());
+        var binds = calls.Sum(call => call.Batch.Checks.Count);
+
+        output.WriteLine($"{id}: {binds} checks bound at owners by this host in {calls.Count} calls, for {remoteTargets} remote targets");
+        calls.Should().OnlyContain(call => call.Batch.Checks.Count <= remoteTargets, "a round asks an owner at most one check per remote target");
+        binds.Should().BeInRange(1, 3 * remoteTargets, "one explain has its owners bind each remote target's query at most once per round");
 
         // The owners answered slim: what this host reads, and nothing it computes itself.
         var slim = calls.Sum(call => call.Bytes);
@@ -278,6 +293,12 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
 
         remote.ExplainCalls.Count.Should().Be(calls, "a kept answer is not asked for again");
 
+        // The validator is one identity's: another user who sends it for the same request is answered, not told 304.
+        var foreign = await SendAsync(Guid.NewGuid(), "check", ifNoneMatch: etag);
+
+        foreign.Response.StatusCode.Should().Be(HttpStatusCode.OK, "an owner may answer another user differently, so one user's validator never stands for another's answer");
+        foreign.Response.Headers.ETag!.ToString().Should().NotBe(etag);
+
         var brotli = await SendAsync(user, "cached", acceptEncoding: "br");
         var gzip = await SendAsync(user, "cached", acceptEncoding: "gzip");
 
@@ -293,12 +314,6 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         output.WriteLine($"  answer: {first.Body.Length} B raw, {gzip.Body.Length} B gzip, {brotli.Body.Length} B br (fastest level)");
 
         Median(bare).Should().BeLessThan(Median(cold), "the cached tier asks no owner, so it answers before a cold check does");
-        // The validator is one identity's: another user who sends it for the same request is answered, not told 304.
-        var foreign = await SendAsync(Guid.NewGuid(), "check", ifNoneMatch: etag);
-
-        foreign.Response.StatusCode.Should().Be(HttpStatusCode.OK, "an owner may answer another user differently, so one user's validator never stands for another's answer");
-        foreign.Response.Headers.ETag!.ToString().Should().NotBe(etag);
-
         brotli.Body.Length.Should().BeLessThan(first.Body.Length / 4);
         gzip.Body.Length.Should().BeLessThan(first.Body.Length / 4);
     }
@@ -306,12 +321,29 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
     // ---- T5: the limits under a flood --------------------------------------------------------------------
 
     /// <summary>
-    /// T5 (improvement plan §3.T): clients of five users flood one host with valid explains near the
-    /// largest body, oversized ones and ones past the stage bound, while queries run beside them. What
-    /// exceeds a limit is refused (429, 413, 400) and nothing else happens: no explain causes more than
-    /// eight owner calls, a refusal is answered at once, the queries keep answering, and the memory the
-    /// flood took is given back. The flood lasts <c>OXQL_LOAD_SECONDS</c> seconds (3 by default; the
-    /// plan's lab run is 60) with <c>OXQL_LOAD_CLIENTS</c> clients (50).
+    /// T5 (improvement plan §3.T), as far as one process can show it: clients of five users flood one
+    /// host with valid explains near the largest body, oversized ones and ones past the stage bound,
+    /// while queries run beside them.
+    /// <para>
+    /// <b>What this test asserts</b> is what holds whatever the machine does:
+    /// every explain is answered 200, 429, 413 or 400 and each kind of body gets its own refusal; a 429
+    /// carries <c>EXPLAIN_LIMIT</c> and <c>Retry-After</c>; no user is admitted more than its burst and
+    /// its rate; no explain causes more than eight owner calls, and the flood's explains have the owners
+    /// bind no more checks each than one cold explain of the request does; every query beside the flood
+    /// is answered 200; and what the hosts keep because of explains stays within its bounds (the kept
+    /// owner answers by number and bytes, the kept owner rows by number), so nothing grows with the
+    /// number of explains sent.
+    /// </para>
+    /// <para>
+    /// <b>What this test does not show</b> are the plan's latency and memory criteria: refusals p99
+    /// under 1 ms, the queries' p95 within +10 % of idle, the working set flat within 10 %. The flood's
+    /// clients run in this process on the same cores as the host, so the times measure their contention
+    /// and the memory is the test's as much as the host's. The figures are printed, not asserted; those
+    /// criteria need separate load generators against a deployed host (a lab run) and are open until one
+    /// is done. The managed-memory assertion here is a tripwire against a leak per explain, far above
+    /// what a run measures, not the plan's bound.
+    /// </para>
+    /// The flood lasts <c>OXQL_LOAD_SECONDS</c> seconds (3 by default) with <c>OXQL_LOAD_CLIENTS</c> clients (50).
     /// </summary>
     [Fact]
     public async Task T5_a_flood_of_explains_is_refused_at_the_limits_and_takes_nothing_else_down()
@@ -323,9 +355,19 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         var host = await origin.HostAsync();
         var fleet = await CorpusFleet.SharedAsync();
         var owners = new List<InMemoryRemoteClient>();
+        var engines = new List<MongoQueryEngine> { (MongoQueryEngine)host.Services.GetRequiredService<IQueryEngine>() };
 
         foreach (var service in LabService.All)
-            owners.Add((InMemoryRemoteClient)(await fleet.Fleet.HostAsync(service)).Services.GetRequiredService<IRemoteQueryClient>());
+        {
+            var owner = await fleet.Fleet.HostAsync(service);
+
+            owners.Add((InMemoryRemoteClient)owner.Services.GetRequiredService<IRemoteQueryClient>());
+            engines.Add((MongoQueryEngine)owner.Services.GetRequiredService<IQueryEngine>());
+        }
+
+        // The checks bound at owners, wherever they are sent from: this host's and the owners' own.
+        int OwnerCalls() => owners.Sum(owner => owner.ExplainCalls.Count) + remote.ExplainCalls.Count;
+        int OwnerBinds() => owners.Sum(owner => owner.ExplainCalls.Sum(call => call.Batch.Checks.Count)) + remote.ExplainCalls.Sum(call => call.Batch.Checks.Count);
 
         // A valid explain near the largest body: the reference chain with a long list in its first condition.
         var valid = Request("A5");
@@ -380,11 +422,15 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
             return times;
         }
 
-        // Precondition: the valid body is a valid explain, and the host and the queries are warm.
+        // Precondition: the valid body is a valid explain, and the host and the queries are warm. It is a
+        // cold explain (a user nothing is kept for): what it has the owners bind is the most one explain of it does.
+        var bindsBeforeProbe = OwnerBinds();
         var probe = await ExplainAsync(Guid.NewGuid(), validBody);
+        var coldBinds = OwnerBinds() - bindsBeforeProbe;
 
         probe.Status.Should().Be(HttpStatusCode.OK, probe.Body?.ToJsonString());
         probe.Body!["valid"]!.GetValue<bool>().Should().BeTrue(probe.Body.ToJsonString());
+        coldBinds.Should().BeGreaterThan(0, "the valid explain reaches owners");
         await RunAsync(CancellationToken.None, 20);
 
         var idle = await RunAsync(CancellationToken.None, 60);
@@ -399,7 +445,8 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         GC.Collect();
 
         var memoryBefore = GC.GetTotalMemory(forceFullCollection: true);
-        var ownerCallsBefore = owners.Sum(owner => owner.ExplainCalls.Count) + remote.ExplainCalls.Count;
+        var ownerCallsBefore = OwnerCalls();
+        var ownerBindsBefore = OwnerBinds();
         using var flood = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
         var beside = RunAsync(flood.Token);
 
@@ -420,7 +467,8 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         }));
 
         var busy = await beside;
-        var ownerCalls = owners.Sum(owner => owner.ExplainCalls.Count) + remote.ExplainCalls.Count - ownerCallsBefore;
+        var ownerCalls = OwnerCalls() - ownerCallsBefore;
+        var ownerBinds = OwnerBinds() - ownerBindsBefore;
         var seen = Tally.Sum(tallies);
 
         // The hosts of this suite keep every log line for the cases that read them; that is the harness's, not the engine's.
@@ -440,9 +488,10 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
 
         output.WriteLine($"T5: {clients} clients, {users.Count} users, {seconds} s: {seen.Total} explains ({seen.Total / (double)seconds:F0}/s); {string.Join(", ", seen.ByStatus.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}: {pair.Value}"))}");
         output.WriteLine($"  429 by limit: {string.Join(", ", seen.ByLimit.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}: {pair.Value}"))}");
-        output.WriteLine($"  answered 200: {seen.Answered} ({string.Join(", ", users.Select(user => tallies.Where(tally => tally.User == user).Sum(tally => tally.Answered)))} per user); owner calls caused: {ownerCalls} ({(seen.Answered == 0 ? 0 : ownerCalls / (double)seen.Answered):F2} per answered explain, at most {seen.MostOwnerCalls} by one)");
-        output.WriteLine($"  refusals: p50 {seen.Refusals.Percentile(0.5):F2} ms, p99 {seen.Refusals.Percentile(0.99):F2} ms; 413 alone: p50 {seen.Large.Percentile(0.5):F2} ms, p99 {seen.Large.Percentile(0.99):F2} ms (client to client, in process)");
-        output.WriteLine($"  queries beside the flood: {busy.Count} runs, p50 {Percentile(busy, 0.5):F2} ms, p95 {Percentile(busy, 0.95):F2} ms; idle: p50 {Percentile(idle, 0.5):F2} ms, p95 {Percentile(idle, 0.95):F2} ms");
+        output.WriteLine($"  answered 200: {seen.Answered} ({string.Join(", ", users.Select(user => tallies.Where(tally => tally.User == user).Sum(tally => tally.Answered)))} per user); owner calls caused: {ownerCalls} ({(seen.Answered == 0 ? 0 : ownerCalls / (double)seen.Answered):F2} per answered explain, at most {seen.MostOwnerCalls} by one); checks bound at owners: {ownerBinds} (a cold explain: {coldBinds})");
+        output.WriteLine($"  NOT ASSERTED (in process, the flood shares the cores): refusals p50 {seen.Refusals.Percentile(0.5):F2} ms, p99 {seen.Refusals.Percentile(0.99):F2} ms; 413 alone: p50 {seen.Large.Percentile(0.5):F2} ms, p99 {seen.Large.Percentile(0.99):F2} ms");
+        output.WriteLine($"  NOT ASSERTED: queries beside the flood: {busy.Count} runs, p50 {Percentile(busy, 0.5):F2} ms, p95 {Percentile(busy, 0.95):F2} ms; idle: p50 {Percentile(idle, 0.5):F2} ms, p95 {Percentile(idle, 0.95):F2} ms");
+        output.WriteLine($"  kept by the {engines.Count} hosts: owner answers {string.Join(", ", engines.Select(engine => $"{engine.ExplainCache.Count}/{engine.ExplainCache.Bytes / 1024} KB"))} (at most {ExplainForwardCache.MaxEntries}/{ExplainForwardCache.MaxBytes / 1024} KB each); owner rows and drops {string.Join(", ", engines.Select(engine => engine.OwnerCache.Count))}");
 
         var admitted = users.Select(user => tallies.Where(tally => tally.User == user).Sum(tally => tally.Admitted)).ToList();
 
@@ -459,16 +508,26 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         // (every kind of body takes a token: the limiter admits before the body is read).
         admitted.Should().OnlyContain(each => each <= allowance, "a user is admitted its burst and its rate, no more");
 
-        // No amplification: what the admitted explains caused at the owners.
+        // No amplification: what the admitted explains caused at the owners, in calls and in the checks the calls carry.
         seen.MostOwnerCalls.Should().BeLessThanOrEqualTo(8);
         ownerCalls.Should().BeLessThanOrEqualTo(8 * seen.Answered, "an explain causes at most eight owner calls, counted where they are sent");
+        ownerBinds.Should().BeLessThanOrEqualTo(coldBinds * seen.Answered, "an explain has the owners bind no more than a cold explain of the request does, counted where the checks are sent");
 
-        // A refusal costs nothing worth measuring, the queries keep answering, and the memory comes back.
-        // (The plan's bounds are for separate processes; here the flood's own clients share the machine.)
-        seen.Refusals.Percentile(0.5).Should().BeLessThan(20, "a refusal is answered before anything is bound");
-        Percentile(busy, 0.95).Should().BeLessThan(Math.Max(50, Percentile(idle, 0.95) * 10), "the queries beside the flood keep answering");
-        busy.Should().NotBeEmpty();
-        (memoryAfter - memoryBefore).Should().BeLessThan(32 * 1_048_576, "what a flood allocates is given back");
+        // The queries beside the flood were all answered (each run asserts its 200).
+        busy.Should().NotBeEmpty("queries ran beside the flood");
+
+        // Nothing a host keeps because of explains grows with the number of explains: each store is
+        // within its own bound after the flood, whatever was sent.
+        foreach (var engine in engines)
+        {
+            engine.ExplainCache.Count.Should().BeLessThanOrEqualTo(ExplainForwardCache.MaxEntries);
+            engine.ExplainCache.Bytes.Should().BeLessThanOrEqualTo(ExplainForwardCache.MaxBytes);
+            engine.OwnerCache.Count.Should().BeLessThanOrEqualTo(3 * Math.Max(1, new OxQL.Core.Models.OxQLOptions().Cache.OwnerFetchCacheMaxEntries), "rows, key lists and drops each within the configured entries");
+        }
+
+        // A tripwire, not the plan's bound: a leak per explain sent would show as hundreds of megabytes
+        // (the flood sends some 50 000 explains a second); what a run measures is a tenth of this.
+        (memoryAfter - memoryBefore).Should().BeLessThan(256L * 1_048_576, "nothing is kept per explain sent");
     }
 
     /// <summary>Times in buckets of a twentieth of a millisecond up to a second: enough for a percentile, and of a fixed size.</summary>

@@ -288,6 +288,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
     /// Runs <paramref name="work"/> and turns anything it throws into a coded refusal of the
     /// right outcome shape. A cancellation the caller asked for is not a fault and travels on;
     /// any other cancellation (a collaborator's own timeout) is a fault like the rest.
+    /// <para>
+    /// Once the caller has given up, whatever else the work ends in is the abort's doing as far as
+    /// anyone can tell (a connection reset under a call in flight, a stream closed under a read): it
+    /// is no fault of the engine, there is nobody to send an envelope to, and it travels on as the
+    /// cancellation it is, without an error line.
+    /// </para>
     /// </summary>
     private async Task<T> Guarded<T>(Func<Refusal, T> refused, Func<Task<T>> work, CancellationToken cancellationToken)
     {
@@ -298,6 +304,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            faultLog.LogDebug(exception, "OxQL request ended in {Exception} after its caller gave up; treated as the cancellation correlation={CorrelationId}", exception.GetType().Name, CorrelationOrTrace());
+
+            throw new OperationCanceledException("The caller gave up on the request.", exception, cancellationToken);
         }
         catch (Exception exception)
         {

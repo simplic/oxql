@@ -187,6 +187,30 @@ public class HostHardeningGuardTests
     }
 
     [Fact]
+    public async Task What_the_work_ends_in_after_the_caller_gave_up_travels_as_the_cancellation_and_is_not_logged_as_a_fault()
+    {
+        using var caller = new CancellationTokenSource();
+
+        // The abort resets the connection under a call in flight: the collaborator throws what the
+        // transport throws, not a cancellation.
+        var (service, logs) = Service(new FailingAddons(_ =>
+        {
+            caller.Cancel();
+            return new HttpRequestException("The connection was reset.");
+        }));
+
+        var request = BindHost.Parse(ReadsAddons);
+
+        (await FluentActions.Awaiting(() => service.ExecuteAsync(request, caller.Token)).Should().ThrowAsync<OperationCanceledException>())
+            .WithInnerException<HttpRequestException>();
+        await FluentActions.Awaiting(() => service.ExplainAsync(request, caller.Token)).Should().ThrowAsync<OperationCanceledException>();
+        await FluentActions.Awaiting(() => service.BatchAsync(new() { Queries = [request] }, caller.Token)).Should().ThrowAsync<OperationCanceledException>();
+        await FluentActions.Awaiting(() => service.BatchAsync(new() { Queries = [request, request] }, internalCall: true, caller.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        logs.Entries.Should().NotContain(entry => entry.Level >= LogLevel.Warning, "nobody is left to answer, and nothing of the engine's failed");
+    }
+
+    [Fact]
     public async Task A_cancellation_the_caller_did_not_ask_for_is_a_fault_like_any_other()
     {
         var (service, logs) = Service(new FailingAddons(_ => new OperationCanceledException("the definitions store timed out")));

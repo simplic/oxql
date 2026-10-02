@@ -54,11 +54,16 @@ public sealed partial class MongoQueryEngine
 
                 return await ExplainAsync(request with { Budget = left }, shared, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
                 logger.LogError(exception, "OxQL unhandled fault explaining one check of an internal explain batch; the check is left unanswered correlation={CorrelationId}", context.CorrelationId);
 
                 return (ExplainOutcome)new ExplainOutcome.Refused(Refusal.Internal("The engine could not explain this check."));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The caller gave up: what the check ended in under the abort is not a fault of its own.
+                throw new OperationCanceledException("The caller gave up on the explain.", exception, cancellationToken);
             }
         }, cancellationToken))).ConfigureAwait(false);
     }

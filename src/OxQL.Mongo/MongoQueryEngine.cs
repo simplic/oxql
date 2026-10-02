@@ -140,18 +140,36 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             if (countTask is not null)
                 countRows = await countTask.ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
             return Failed(exception);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw Aborted(exception);
+        }
 
-        // An aggregate that failed: the others are stopped and the driver's error is the refusal.
-        QueryOutcome Failed(Exception exception)
+        // The caller gave up: what an aggregate ended in under the abort (a connection it reset,
+        // say) is no fault to log or to answer; the others are stopped and the cancellation travels.
+        OperationCanceledException Aborted(Exception exception)
+        {
+            Abandon();
+
+            return new OperationCanceledException("The caller gave up on the request while its aggregates ran.", exception, cancellationToken);
+        }
+
+        void Abandon()
         {
             aggregates.Cancel();
             Observe(pageTask);
             Observe(countTask);
             probeTasks.ForEach(Observe);
+        }
+
+        // An aggregate that failed: the others are stopped and the driver's error is the refusal.
+        QueryOutcome Failed(Exception exception)
+        {
+            Abandon();
 
             var refusal = MapDriverError(exception);
 
@@ -186,9 +204,13 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             {
                 losses.AddRange(await HiddenTruncationsAsync(compiled, probeTasks, losses).ConfigureAwait(false));
             }
-            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
                 return Failed(exception);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw Aborted(exception);
             }
             finally
             {

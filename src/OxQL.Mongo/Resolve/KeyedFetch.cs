@@ -2695,7 +2695,11 @@ public sealed class KeyedFetch
             ? cap
             : Math.Max(1, options.Limits.MaxBatchQueries);
 
-    /// <summary>One call to one owner within the budget; a timeout or a transport fault is an outcome, never an exception.</summary>
+    /// <summary>
+    /// One call to one owner within the budget; a timeout or a transport fault is an outcome, never an
+    /// exception. Once the caller has given up, whatever the call ends in (a connection the abort
+    /// reset, say) travels as the caller's cancellation, not as a fault of its own.
+    /// </summary>
     private static async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -2721,6 +2725,10 @@ public sealed class KeyedFetch
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
             return new CallOutcome([], Failure.Unreachable);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OperationCanceledException("The caller gave up on the request while an owner was being asked.", exception, cancellationToken);
         }
     }
 

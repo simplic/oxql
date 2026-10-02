@@ -40,9 +40,9 @@ public class ExplainRemoteCheckTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private static MongoQueryEngine Engine(FakeRemoteClient? client = null, Action<OxQLOptions>? configure = null, ExplainForwardCache? cache = null) =>
+    private static MongoQueryEngine Engine(FakeRemoteClient? client = null, Action<OxQLOptions>? configure = null, ExplainForwardCache? cache = null, OwnerFetchCache? owner = null) =>
         new(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(configure), client,
-            explainCache: cache);
+            cache: owner, explainCache: cache);
 
     private static async Task<ExplainResult> ExplainAsync(string pipeline, FakeRemoteClient? client = null, Action<OxQLOptions>? configure = null,
         string entity = Invoice, string? envelope = null, MongoQueryEngine? engine = null, RequestContext? context = null)
@@ -561,6 +561,121 @@ public class ExplainRemoteCheckTests
         warm.OwnerOf("transport")["calls"]!.GetValue<int>().Should().Be(1);
         warm.Notes.Should().Contain(note => note.Code == Notes.SelectPathNotOnTarget && note.Path == "name", "what the target lacks is said whether it was learned now or before");
         warm.Alias("c")["type"]!.GetValue<string>().Should().Be("t:transport.carrier");
+    }
+
+    /// <summary>The transport owner of <see cref="TransportOwnerLacking"/>, which lacks <c>name</c> only while <paramref name="lacks"/> says so, and names <paramref name="revision"/>'s value as its schema revision when there is one.</summary>
+    private static FakeRemoteClient TransportOwnerThatMayLack(Func<bool> lacks, Func<string?>? revision = null)
+    {
+        var lacking = TransportOwnerLacking("name");
+        var having = TransportOwnerLacking("a path nobody asks");
+
+        return new FakeRemoteClient
+        {
+            Explains = (service, request) =>
+            {
+                var answer = (lacks() ? lacking : having).Explains!(service, request)!;
+
+                if (revision?.Invoke() is { } named)
+                    answer["revision"] = new JsonObject { ["schema"] = new JsonObject { ["transport"] = named } };
+
+                return answer;
+            },
+        };
+    }
+
+    private const string AsksName = """
+        [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
+         { "resolve": { "path": "owner.carrierId", "as": "c", "forTarget": "transport.shipment" } },
+         { "project": { "line": 1, "owner.id": 1, "owner.number": 1, "owner.name": 1, "c": 1 } }]
+        """;
+
+    /// <summary>Whether the answer says the remote target lacks <c>name</c> (the local targets of the union lack it whatever an owner says).</summary>
+    private static bool DroppedAtTransport(ExplainResult result) =>
+        result.Notes.Any(note => note.Code == Notes.SelectPathNotOnTarget && note.Path == "name" && note.Params!["target"] is string target && target.StartsWith("transport.", StringComparison.Ordinal));
+
+    private static bool AsksForName(ExplainRequest request) =>
+        request.Query.Pipeline.Last(stage => stage.Project is not null).Project!.Fields.ContainsKey("name");
+
+    [Fact]
+    public async Task A_learned_drop_is_not_renewed_by_the_explains_that_read_it_so_the_owner_is_asked_again_within_one_TTL()
+    {
+        // The owner lacks the member, one explain learns it; then the owner gains it, while an explain
+        // arrives every 40 seconds for ten minutes (the drops live 60 seconds).
+        var lacking = true;
+        var client = TransportOwnerThatMayLack(() => lacking);
+        var time = new ManualTime();
+        var options = BindHost.Options();
+        var engine = Engine(client, cache: new ExplainForwardCache(time), owner: new OwnerFetchCache(options, time));
+        var ttl = TimeSpan.FromSeconds(options.Cache.ResolveTtlSeconds);
+        var learned = time.Now;
+
+        var cold = await ExplainAsync(AsksName, engine: engine);
+
+        DroppedAtTransport(cold).Should().BeTrue();
+        client.ExplainCalls.Should().HaveCount(2);
+
+        lacking = false;
+
+        var dropped = new List<TimeSpan>();
+        DateTimeOffset? askedAgain = null;
+
+        for (var step = 0; step < 15; step++)
+        {
+            time.Now += TimeSpan.FromSeconds(40);
+
+            var calls = client.ExplainCalls.Count;
+            var again = await ExplainAsync(AsksName, engine: engine);
+
+            again.Valid.Should().BeTrue();
+
+            if (DroppedAtTransport(again))
+                dropped.Add(time.Now - learned);
+
+            if (askedAgain is null && client.ExplainCalls.Skip(calls).Any(call => AsksForName(call.Request)))
+                askedAgain = time.Now;
+        }
+
+        askedAgain.Should().NotBeNull("the owner is asked for the path again");
+        (askedAgain!.Value - learned).Should().BeLessThanOrEqualTo(ttl + TimeSpan.FromSeconds(40), "the first explain after the drop's own 60 seconds asks, however many read the drop before");
+        dropped.Should().OnlyContain(after => after < ttl, "the path is dropped only while the owner's word for it is younger than the TTL");
+        dropped.Should().HaveCount(1, "the explain 40 seconds after the drop was learned reads it; none after that");
+    }
+
+    [Fact]
+    public async Task A_learned_drop_is_retired_at_once_by_another_schema_revision_of_its_owner()
+    {
+        var lacking = true;
+        var revision = "sha256:one";
+        var client = TransportOwnerThatMayLack(() => lacking, () => revision);
+        var time = new ManualTime();
+        var engine = Engine(client, cache: new ExplainForwardCache(time), owner: new OwnerFetchCache(BindHost.Options(), time));
+        var other = AsksName.Replace("\"owner.id\": 1, ", "");
+
+        DroppedAtTransport(await ExplainAsync(AsksName, engine: engine)).Should().BeTrue();
+
+        // The owner deploys the member; its schema document has another revision.
+        lacking = false;
+        revision = "sha256:two";
+
+        // The first explain after it still plans by what was learned of the old revision (nothing here
+        // knows of the new one before an owner names it) and hears the new revision in the answer.
+        time.Now += TimeSpan.FromSeconds(5);
+
+        var calls = client.ExplainCalls.Count;
+        var hearing = await ExplainAsync(other, engine: engine);
+
+        client.ExplainCalls.Skip(calls).Should().NotContain(call => AsksForName(call.Request));
+        hearing.Revision.Schema["transport"].Should().Be("sha256:two");
+
+        // From then on the drop of the old revision is not read: the owner is asked for the path, well within the TTL.
+        time.Now += TimeSpan.FromSeconds(5);
+        calls = client.ExplainCalls.Count;
+
+        var after = await ExplainAsync(AsksName, engine: engine);
+
+        client.ExplainCalls.Skip(calls).Should().Contain(call => AsksForName(call.Request), "what was learned of another revision is not planned by");
+        DroppedAtTransport(after).Should().BeFalse("the target has the member now");
+        after.OwnerOf("transport")["calls"]!.GetValue<int>().Should().Be(1);
     }
 
     // ---- a branch of a union join whose owner does not answer ------------------------------------------

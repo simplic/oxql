@@ -139,6 +139,78 @@ public class OwnerFetchCacheTests
         select.Should().Equal("number");
     }
 
+    private sealed class ManualTime : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    [Fact]
+    public void A_dropped_path_lives_one_TTL_from_when_an_owner_said_it_whatever_is_written_or_read_meanwhile()
+    {
+        var options = BindHost.Options();
+        var time = new ManualTime();
+
+        using var cache = new OwnerFetchCache(options, time);
+        var ttl = TimeSpan.FromSeconds(options.Cache.ResolveTtlSeconds);
+        var key = OwnerFetchCache.DropsKeyOf(BindHost.Organisation, "transport", "transport.shipment#billingLines");
+
+        cache.SetDrops(key, ["name"], ["title"]);
+
+        // Later another path is learned, and the first is written again by a caller that only read it.
+        time.Now += ttl / 2;
+        cache.SetDrops(key, ["name", "colour"], []);
+        cache.TryGetDrops(key, out var select, out var parent).Should().BeTrue();
+        select.Should().BeEquivalentTo(["name", "colour"], "the paths add up");
+        parent.Should().Equal("title");
+
+        // The first paths end with their own TTL; the later one has its own.
+        time.Now += ttl / 2;
+        cache.TryGetDrops(key, out select, out parent).Should().BeTrue();
+        select.Should().Equal(["colour"], "writing a path that is kept does not give it a new TTL");
+        parent.Should().BeEmpty();
+
+        time.Now += ttl / 2;
+        cache.TryGetDrops(key, out select, out _).Should().BeFalse();
+        select.Should().BeEmpty();
+
+        // An owner that says it again after that starts a new TTL.
+        cache.SetDrops(key, ["name"], []);
+        time.Now += ttl - TimeSpan.FromSeconds(1);
+        cache.TryGetDrops(key, out select, out _).Should().BeTrue();
+        select.Should().Equal("name");
+    }
+
+    [Fact]
+    public void What_was_learned_of_one_schema_revision_of_a_service_is_not_read_under_another()
+    {
+        using var cache = new OwnerFetchCache(BindHost.Options());
+        var transport = OwnerFetchCache.DropsKeyOf(BindHost.Organisation, "transport", "transport.shipment");
+        var fleet = OwnerFetchCache.DropsKeyOf(BindHost.Organisation, "fleet", "fleet.vehicle");
+
+        cache.Revise("transport", "sha256:one");
+        cache.SetDrops(transport, ["name"], []);
+        cache.SetDrops(fleet, ["plate"], []);
+
+        cache.Revise("transport", "sha256:one");
+        cache.TryGetDrops(transport, out _, out _).Should().BeTrue("the same revision named again changes nothing");
+
+        cache.Revise("transport", "sha256:two");
+        cache.TryGetDrops(transport, out var select, out _).Should().BeFalse("the model the drop was learned of is not the owner's model any more");
+        select.Should().BeEmpty();
+        cache.TryGetDrops(fleet, out _, out _).Should().BeTrue("another service's revision is its own");
+
+        // What is learned now is learned of the new revision, and nothing of the old one comes back with it.
+        cache.SetDrops(transport, ["colour"], []);
+        cache.TryGetDrops(transport, out select, out _).Should().BeTrue();
+        select.Should().Equal("colour");
+
+        // A drop learned before any revision of its service was known is not trusted once one is.
+        cache.Revise("fleet", "sha256:f1");
+        cache.TryGetDrops(fleet, out _, out _).Should().BeFalse();
+    }
+
     [Fact]
     public void An_answer_costs_the_budget_one_unit_per_row_it_holds()
     {

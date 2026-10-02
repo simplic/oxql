@@ -58,6 +58,11 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 /// owner said one target of a union lacks are kept per organisation, service and target
 /// (<see cref="DropsKeyOf"/>), so a later request drops them before
 /// it asks and reports them from the cache too: the answer does not depend on what is cached.
+/// A path is kept for <c>Cache:ResolveTtlSeconds</c> from the moment an owner said it, and no longer:
+/// reading it, or a request that asks without it, does not renew it, so within one TTL the owner is
+/// asked for the path again and a member it has gained since is found. Where the owner's schema
+/// revision is known (<see cref="Revise"/>: an explain answer names it), what was learned of another
+/// revision is not read at all.
 /// </para>
 /// <para>
 /// Entries are keyed by organisation, not by user: the cache assumes an owner answers every user of
@@ -74,6 +79,8 @@ public sealed class OwnerFetchCache : IDisposable
     private readonly TimeSpan ttl;
     private readonly TimeSpan negativeTtl;
     private readonly TimeProvider time;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> revisions = new(StringComparer.Ordinal);
+    private readonly object dropsGate = new();
 
     /// <summary>An empty cache sized and timed by <paramref name="options"/>' <c>Cache</c> section; <paramref name="time"/> is the clock by-keys answers expire by.</summary>
     public OwnerFetchCache(OxQLOptions options, TimeProvider? time = null)
@@ -199,14 +206,21 @@ public sealed class OwnerFetchCache : IDisposable
     public static string DropsKeyOf(Guid organisation, string service, string target) =>
         string.Join('|', "Drops", organisation.ToString("D"), service, target);
 
-    /// <summary>The paths under the alias (<c>Select</c>) and under the owning row (<c>Parent</c>) an owner said the target lacks, or false.</summary>
+    /// <summary>
+    /// The paths under the alias (<c>Select</c>) and under the owning row (<c>Parent</c>) an owner said the
+    /// target lacks, or false: those whose time has not run out, learned of the revision of the owner's
+    /// schema that is known now.
+    /// </summary>
     public bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
     {
-        if (drops.TryGetValue(key, out Drops? cached) && cached is not null && time.GetUtcNow() < cached.Expires)
+        if (drops.TryGetValue(key, out Drops? cached) && cached is not null && Current(key, cached))
         {
-            select = cached.Select;
-            parent = cached.Parent;
-            return true;
+            var now = time.GetUtcNow();
+
+            select = [.. cached.Select.Where(path => now < path.Value).Select(path => path.Key)];
+            parent = [.. cached.Parent.Where(path => now < path.Value).Select(path => path.Key)];
+
+            return select.Count + parent.Count > 0;
         }
 
         select = [];
@@ -219,14 +233,66 @@ public sealed class OwnerFetchCache : IDisposable
     /// answers' size budget must never evict them while rows cached under the same plan live on,
     /// or a page served from the cache would lose its <c>SELECT_PATH_NOT_ON_TARGET</c> note.
     /// </summary>
-    /// <remarks>What earlier requests learned of the target stays: the paths add up.</remarks>
+    /// <remarks>
+    /// What earlier requests learned of the target stays: the paths add up. A path already kept keeps
+    /// the time it has left: only an owner saying it again after that time starts a new one, so a
+    /// caller passes what an owner said to it, not what it read here.
+    /// </remarks>
     public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent)
     {
-        TryGetDrops(key, out var knownSelect, out var knownParent);
+        ArgumentNullException.ThrowIfNull(select);
+        ArgumentNullException.ThrowIfNull(parent);
 
-        drops.Set(key,
-            new Drops([.. knownSelect.Union(select, StringComparer.Ordinal)], [.. knownParent.Union(parent, StringComparer.Ordinal)], time.GetUtcNow() + ttl),
-            new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ttl });
+        lock (dropsGate)
+        {
+            var now = time.GetUtcNow();
+            var known = drops.TryGetValue(key, out Drops? cached) && cached is not null && Current(key, cached) ? cached : null;
+            var kept = new Drops(Merged(known?.Select, select, now), Merged(known?.Parent, parent, now), revisions.GetValueOrDefault(ServiceOfDrops(key)));
+            var last = kept.Select.Values.Concat(kept.Parent.Values).DefaultIfEmpty(now).Max();
+
+            if (last <= now)
+            {
+                drops.Remove(key);
+                return;
+            }
+
+            drops.Set(key, kept, new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = last - now });
+        }
+    }
+
+    /// <summary>
+    /// Takes the revision of <paramref name="service"/>'s schema document as an answer of it named it.
+    /// What was learned a target of the service lacks under another revision, or before any was known,
+    /// is not read any more: the next request asks the owner for those paths again.
+    /// </summary>
+    public void Revise(string service, string revision)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(revision);
+
+        revisions[service] = revision;
+    }
+
+    /// <summary>Whether what is kept was learned of the revision of its service's schema known now (or none is known).</summary>
+    private bool Current(string key, Drops kept) =>
+        !revisions.TryGetValue(ServiceOfDrops(key), out var known) || known == kept.Revision;
+
+    /// <summary>The service of a drops key (<see cref="DropsKeyOf"/>: its third segment).</summary>
+    private static string ServiceOfDrops(string key) => key.Split('|') is { Length: >= 3 } parts ? parts[2] : "";
+
+    /// <summary>The paths known that still have time, and the new ones with a whole TTL.</summary>
+    private Dictionary<string, DateTimeOffset> Merged(IReadOnlyDictionary<string, DateTimeOffset>? known, IEnumerable<string> said, DateTimeOffset now)
+    {
+        var merged = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        foreach (var (path, expires) in known ?? new Dictionary<string, DateTimeOffset>())
+            if (now < expires)
+                merged[path] = expires;
+
+        foreach (var path in said)
+            merged.TryAdd(path, now + ttl);
+
+        return merged;
     }
 
     /// <summary>How many entries the cache holds, both modes together.</summary>
@@ -246,6 +312,6 @@ public sealed class OwnerFetchCache : IDisposable
     /// <summary>A stored answer with the instant it expires on this cache's clock.</summary>
     private sealed record Entry(OwnerAnswer Answer, DateTimeOffset Expires);
 
-    /// <summary>The paths an owner said one union target lacks, with the instant they expire.</summary>
-    private sealed record Drops(string[] Select, string[] Parent, DateTimeOffset Expires);
+    /// <summary>The paths an owner said one union target lacks, each with the instant it expires, and the revision of the owner's schema they were learned of (null: none was known).</summary>
+    private sealed record Drops(IReadOnlyDictionary<string, DateTimeOffset> Select, IReadOnlyDictionary<string, DateTimeOffset> Parent, string? Revision);
 }

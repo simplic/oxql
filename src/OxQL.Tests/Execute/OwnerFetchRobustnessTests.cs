@@ -146,6 +146,125 @@ public class OwnerFetchRobustnessTests
         (without.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
     }
 
+    private sealed class ManualTime : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    /// <summary>The owner of <see cref="TransportOwner"/>, which lacks <c>name</c> only while <paramref name="lacks"/> says so and answers it otherwise.</summary>
+    private static FakeRemoteClient.Answer TransportOwnerThatMayLack(QueryRequest query, Func<bool> lacks)
+    {
+        if (lacks())
+            return TransportOwner(query);
+
+        var asksName = query.Pipeline.Last(stage => stage.Project is not null).Project!.Fields.ContainsKey("name");
+        var keys = query.KeyedBy!.Keys!.Value.EnumerateArray().Select(key => key.GetString()!).ToList();
+
+        return new FakeRemoteClient.Answer.Rows(keys.Select(key =>
+        {
+            var row = new JsonObject { ["entity"] = "transport.shipment", ["id"] = Guid.NewGuid().ToString(), ["number"] = "S-" + key[^1], ["oxEl"] = new JsonObject { ["id"] = key } };
+
+            if (asksName)
+                row["name"] = "N-" + key[^1];
+
+            return row;
+        }).ToArray());
+    }
+
+    private static bool AsksName(BatchRequest request) =>
+        request.Queries.Any(query => query.Pipeline.Last(stage => stage.Project is not null).Project!.Fields.ContainsKey("name"));
+
+    [Fact]
+    public async Task A_learned_drop_is_not_renewed_by_the_runs_that_read_it_so_the_owner_is_asked_again_within_one_TTL()
+    {
+        // The owner lacks the member, one run learns it; then the owner gains it, while a page of another
+        // key is run every 40 seconds for ten minutes (the drops live 60 seconds).
+        var lacking = true;
+        var time = new ManualTime();
+        var runner = new FakeAggregateRunner();
+        var client = new FakeRemoteClient { Script = (_, query, _) => TransportOwnerThatMayLack(query, () => lacking) };
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options, time));
+        var ttl = TimeSpan.FromSeconds(options.Cache.ResolveTtlSeconds);
+        var learned = time.Now;
+
+        runner.PageRows = [SourceRow(Invoice1, Line1)];
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context())).Diagnostics!.Should().Contain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
+        client.Calls.Should().HaveCount(2);
+
+        lacking = false;
+
+        var dropped = new List<TimeSpan>();
+        DateTimeOffset? askedAgain = null;
+
+        for (var step = 0; step < 15; step++)
+        {
+            time.Now += TimeSpan.FromSeconds(40);
+            runner.PageRows = [SourceRow(Guid.NewGuid(), Guid.NewGuid())];
+
+            var calls = client.Calls.Count;
+            var result = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+            var saidDropped = (result.Diagnostics ?? []).Any(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
+
+            if (saidDropped)
+                dropped.Add(time.Now - learned);
+
+            // The row and the diagnostic agree: the member is there exactly when it is not said to be dropped.
+            result.Items.Single()!["owner"]!.AsObject().ContainsKey("name").Should().Be(!saidDropped);
+
+            if (askedAgain is null && client.Calls.Skip(calls).Any(call => AsksName(call.Request)))
+                askedAgain = time.Now;
+        }
+
+        askedAgain.Should().NotBeNull("the owner is asked for the path again");
+        (askedAgain!.Value - learned).Should().BeLessThanOrEqualTo(ttl + TimeSpan.FromSeconds(40), "the first run after the drop's own 60 seconds asks, however many read the drop before");
+        dropped.Should().OnlyContain(after => after < ttl, "the path is dropped only while the owner's word for it is younger than the TTL");
+        dropped.Should().HaveCount(1, "the run 40 seconds after the drop was learned reads it; none after that");
+    }
+
+    [Fact]
+    public async Task A_row_fetched_without_a_dropped_path_never_answers_a_request_that_no_longer_knows_of_the_drop()
+    {
+        var lacking = true;
+        var time = new ManualTime();
+        var runner = new FakeAggregateRunner();
+        var client = new FakeRemoteClient { Script = (_, query, _) => TransportOwnerThatMayLack(query, () => lacking) };
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options, time));
+
+        // The drop is learned at 0 s (it lives to 60 s).
+        runner.PageRows = [SourceRow(Invoice1, Line1)];
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+
+        // Another key at 40 s: its row is fetched without the path and kept to 100 s.
+        lacking = false;
+        time.Now += TimeSpan.FromSeconds(40);
+        runner.PageRows = [SourceRow(Invoice2, Line2)];
+
+        var during = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+
+        during.Diagnostics!.Should().Contain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
+        during.Items.Single()!["owner"]!.AsObject().ContainsKey("name").Should().BeFalse();
+
+        // The same key at 80 s: the drop is forgotten, the kept row was fetched without the path. It is
+        // not taken for the answer of the query that asks the path: the owner is asked, and has the member.
+        time.Now += TimeSpan.FromSeconds(40);
+
+        var calls = client.Calls.Count;
+        var after = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+
+        AsksName(client.Calls.Skip(calls).Should().ContainSingle().Which.Request).Should().BeTrue();
+        (after.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
+        after.Items.Single()!["owner"]!["name"]!.GetValue<string>().Should().Be("N-2", "a row without the member and without the note would say the record has no name");
+
+        // And while a drop is known, a row kept under it is read: nothing is asked.
+        calls = client.Calls.Count;
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, OwningRow), BindHost.Context()));
+        client.Calls.Should().HaveCount(calls, "the row kept for the query as it is sent now answers");
+    }
+
     // ---- budgets (RE-7, RS-3, PRE-4) ---------------------------------------------------------------
 
     [Fact]

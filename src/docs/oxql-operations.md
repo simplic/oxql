@@ -758,7 +758,12 @@ owning service, owners in parallel:
   dropped for that target and the query asked again, for every chunk that carried it; what was
   learned is kept in the cache per organisation, service and target, since it is a fact about the
   target: a later request that asks the path does not send it and still reports it, whatever else
-  it asks.
+  it asks. A path is kept for `Cache:ResolveTtlSeconds` from the moment an owner said it; a request
+  (a run or an explain alike) that only reads it does not renew it, so within one TTL the owner is
+  asked for the path again and a member it has gained is found. Where the owner's schema revision is
+  known (an explain answer named it), what was learned of another revision is not read at all. What a
+  branch of a union join does not reach is kept the same way, per target, branch and the stages
+  continued before it.
 - **An owner answer with `hasNextPage`** means the owner cut rows: the chunk's open keys are
   `owner_unanswered` (`RESOLVE_PARTIAL`), never `not_found`, and are not cached.
 - **Time.** See `Execution:ResolveTimeoutMs` and `ChainTimeoutMs` under *Limits*. Split batches of
@@ -779,7 +784,9 @@ owning service, owners in parallel:
 at most `Cache:OwnerFetchCacheMaxEntries` rows or ids (an answer weighs the rows it holds). A by-keys entry is keyed by target entity,
 item, target field, organisation, key and a hash of the substituted owner query without its keys
 (the paths asked, filter, continued stages, case), so requests that differ in any of these, or
-in their variables, never share an entry. The paths of the projection are hashed as a set, in ordinal
+in their variables, never share an entry. The query hashed is the one sent, so without the paths
+dropped for the target: once a drop is forgotten the query asks the path again and is another entry,
+and no row fetched without a path answers a request that no longer knows the path was dropped. The paths of the projection are hashed as a set, in ordinal
 order: two requests that name the same paths under an alias in another order share their entries. A key the owner answered as not found is kept for
 `Cache:NegativeResolveTtlSeconds` (10 s); a strict request reads past such entries. An answer that
 carried owner diagnostics for continued stages, and keys of a cut answer, are not cached. The

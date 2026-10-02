@@ -1181,6 +1181,11 @@ public sealed class RemoteExplain : IExplainOwners
 
             if (!revisions.TryGetValue(service, out var known) || known is null)
                 revisions[service] = text;
+
+            // What a run or an explain learned a target of this service lacks was learned of the model
+            // of one revision: another one retires it.
+            if (text is not null)
+                drops?.Revise(service, text);
         }
     }
 

@@ -1297,7 +1297,8 @@ public sealed class KeyedFetch
     {
         private readonly Guid organisation;
         private readonly bool strict;
-        private readonly string planHash;
+        private string? planHash;
+        private readonly HashSet<string> readBack = new(StringComparer.Ordinal);
         private readonly HashSet<string> seen = new(StringComparer.Ordinal);
         private readonly HashSet<string> lifted;
         private readonly Shape? final;
@@ -1341,9 +1342,16 @@ public sealed class KeyedFetch
             // that reports or refuses missing references needs (DESIGN §3.5.2 step 3).
             Probed = target.RemoteFilter is { ValueKind: JsonValueKind.Object } && stage.ReadsOutcomes;
 
-            // The plan: the owner query as sent, without its keys (DESIGN §3.5.6).
             planHash = OwnerFetchCache.PlanHashOf(Query([]), Probed);
         }
+
+        /// <summary>
+        /// The plan: the owner query as it is sent now, without its keys (DESIGN §3.5.6), so without the
+        /// paths dropped for the target. An answer is kept under the query that produced it: once what
+        /// was learned of the target is forgotten, the query asks those paths again and is another plan,
+        /// so no row fetched without a path answers a request that no longer knows the path was dropped.
+        /// </summary>
+        private string PlanHash => planHash ??= OwnerFetchCache.PlanHashOf(Query([]), Probed);
 
         public BoundStage.Resolve Stage { get; }
 
@@ -1404,7 +1412,7 @@ public sealed class KeyedFetch
 
         public int CacheHits { get; private set; }
 
-        public string CacheKey(string key) => OwnerFetchCache.KeyOf(Entity, Target.Declared.Item, Target.Declared.Field, organisation, key, planHash);
+        public string CacheKey(string key) => OwnerFetchCache.KeyOf(Entity, Target.Declared.Item, Target.Declared.Field, organisation, key, PlanHash);
 
         /// <summary>
         /// The owner query of some keys: the key match, the target's filter, the continued stages, the
@@ -1484,6 +1492,7 @@ public sealed class KeyedFetch
         public JsonNode? LiftedOf(JsonObject row, string alias) =>
             Emptied(alias) ? Shown(Lifted(row, alias), []) : Lifted(row, alias);
 
+        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
         public static JsonNode? Lifted(JsonObject row, string alias) =>
             row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
@@ -1492,7 +1501,6 @@ public sealed class KeyedFetch
 
         /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
         public bool Union { get; }
-        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
 
         /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query (DESIGN §3.4.1 flat paths).</summary>
         public HashSet<string> DroppedSelect { get; } = new(StringComparer.Ordinal);
@@ -1537,6 +1545,7 @@ public sealed class KeyedFetch
             var asked = HintOf(alias).Concat(final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected : []).ToList();
 
             DroppedContinued.UnionWith(paths.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal) && asked.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal)));
+            planHash = null;
         }
 
         /// <summary>The <c>select</c> hint of the union join adding <paramref name="alias"/>, as written; empty when it has none.</summary>
@@ -1669,6 +1678,12 @@ public sealed class KeyedFetch
             DroppedSelect.UnionWith(select);
             DroppedParent.UnionWith(parent);
             DroppedContinued.UnionWith(continued);
+            planHash = null;
+
+            // What the owner says now is its own word again, whatever was read before.
+            readBack.ExceptWith(select.Select(path => "s:" + path));
+            readBack.ExceptWith(parent.Select(path => "p:" + path));
+            readBack.ExceptWith(continued.Select(path => "c:" + path));
 
             return true;
         }
@@ -1710,6 +1725,7 @@ public sealed class KeyedFetch
         {
             DroppedSelect.UnionWith(select.Where(path => Target.RemoteSelect?.Contains(path, StringComparer.Ordinal) == true));
             DroppedParent.UnionWith(parent.Where(path => Target.RemoteParentSelect?.Contains(path, StringComparer.Ordinal) == true));
+            planHash = null;
         }
 
         /// <summary>
@@ -1717,14 +1733,26 @@ public sealed class KeyedFetch
         /// remote target of a union the paths under the alias and the owning row, for any target that
         /// runs a branch of a union join the paths that branch does not reach.
         /// </summary>
+        /// <remarks>
+        /// What is read here is remembered as read: <see cref="Keep"/> does not write it back, so a path
+        /// lives as long as the owner's word for it and is asked again after that, however many requests
+        /// read it in between.
+        /// </remarks>
         public void Learn(OwnerFetchCache cache)
         {
             if (Target.IsRemote && Union && cache.TryGetDrops(DropsKey, out var select, out var parent))
+            {
                 Learned(select, parent);
+                readBack.UnionWith(select.Select(path => "s:" + path));
+                readBack.UnionWith(parent.Select(path => "p:" + path));
+            }
 
             foreach (var joined in Continued.Origins.Where(origin => origin.Branches is not null).Select(origin => origin.Aliases[0]))
                 if (cache.TryGetDrops(BranchDropsKey(joined)!, out var unreached, out _))
+                {
                     LearnedContinued(joined, unreached);
+                    readBack.UnionWith(unreached.Select(path => "c:" + path));
+                }
         }
 
         /// <summary>
@@ -1761,16 +1789,23 @@ public sealed class KeyedFetch
             return at < 0 ? 2_000_000 : (parent ? 1_000_000 : 0) + at;
         }
 
-        /// <summary>Keeps what the owners said this target lacks in <paramref name="cache"/>, for the requests after this one.</summary>
+        /// <summary>
+        /// Keeps what the owners said to this request this target lacks in <paramref name="cache"/>, for
+        /// the requests after this one. What this plan only read from the cache (<see cref="Learn"/>) is
+        /// not written back: it keeps the time it has left.
+        /// </summary>
         public void Keep(OwnerFetchCache cache)
         {
-            if (DroppedSelect.Count > 0 || DroppedParent.Count > 0)
-                cache.SetDrops(DropsKey, DroppedSelect, DroppedParent);
+            var select = DroppedSelect.Where(path => !readBack.Contains("s:" + path)).ToList();
+            var parent = DroppedParent.Where(path => !readBack.Contains("p:" + path)).ToList();
+
+            if (select.Count > 0 || parent.Count > 0)
+                cache.SetDrops(DropsKey, select, parent);
 
             // What a branch of a union join does not reach is a fact of that branch: kept by its stage.
-            foreach (var group in DroppedContinued.GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
+            foreach (var group in DroppedContinued.Where(path => !readBack.Contains("c:" + path)).GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
                 if (BranchDropsKey(group.Key) is { } key)
-                    cache.SetDrops(key, group, []);
+                    cache.SetDrops(key, group.ToList(), []);
         }
 
         /// <summary>The keys the filtered query was sent and answered without a row, in chunks of <paramref name="size"/>.</summary>
@@ -2758,6 +2793,10 @@ public sealed class KeyedFetch
     public static TimeSpan OwnerFactsSlice(TimeSpan remaining) =>
         TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 10, 1, 250));
 
+    /// <summary>
+    /// An owner row without the member the host projected and keys by. The host asked for that member,
+    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
+    /// </summary>
     private static Refusal WithoutKey(string targetEntity, string field, int? stage)
     {
         var message = $"The owner of '{targetEntity}' answered a row without the projected member '{field}'.";
@@ -2793,10 +2832,6 @@ public sealed class KeyedFetch
         BoundCondition.And and => and.Conditions.Any(inner => Contains(inner, leaf)),
         BoundCondition.Or or => or.Conditions.Any(inner => Contains(inner, leaf)),
         BoundCondition.Not not => Contains(not.Condition, leaf),
-    /// <summary>
-    /// An owner row without the member the host projected and keys by. The host asked for that member,
-    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
-    /// </summary>
         BoundCondition.Any any => Contains(any.Inner, leaf),
         _ => ReferenceEquals(condition, leaf),
     };

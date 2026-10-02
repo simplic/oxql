@@ -14,6 +14,13 @@ namespace OxQL.Mongo.Resolve;
 /// batch's <c>maxTimeMs</c> as its ceiling, and answers in the batch's wire form, exactly as a
 /// remote owner's internal batch route does. The local-owner case so adds no second fetch path.
 /// <para>
+/// The queries of a batch run side by side, at most <c>Execution:BatchConcurrency</c> at once, and
+/// answer in the order they were asked. The batch's <c>maxTimeMs</c> is one deadline for all of
+/// them: each runs under what is left of it when it starts. The host's addon definitions are read
+/// one at a time (<see cref="SerialAddonSource"/>), and an owner query two of them would send is
+/// sent once (<see cref="BatchFlights"/>).
+/// </para>
+/// <para>
 /// An owner query holds only the key match, the target's filter and projection (and, later, the
 /// stages continued under the alias), never the resolve that produced it, so a query this host
 /// sends itself carries strictly fewer join stages than the one it came from and recursion ends by
@@ -30,22 +37,30 @@ public sealed class SelfOwner(IQueryEngine engine, RequestContext context) : IRe
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var owner = context with { Internal = true, Contract = 2, MaxTimeMs = MinPositive(context.MaxTimeMs, request.MaxTimeMs) };
-        var results = new List<JsonNode?>(request.Queries.Count);
-
-        foreach (var query in request.Queries)
+        var owner = context with
         {
-            var outcome = await engine.ExecuteAsync(query, owner, cancellationToken).ConfigureAwait(false);
+            Internal = true,
+            Contract = 2,
+            AddonSource = SerialAddonSource.Of(context.AddonSource),
+            BatchShare = context.BatchShare ?? (request.Queries.Count > 1 ? new BatchFlights() : null),
+        };
+        var deadline = request.MaxTimeMs is { } ceiling and > 0 ? DateTime.UtcNow.AddMilliseconds(ceiling) : (DateTime?)null;
 
-            results.Add(outcome switch
+        var results = await BatchRun.RunAsync(request.Queries, context.Options.Execution.EffectiveBatchConcurrency, async (query, token) =>
+        {
+            // One deadline for the batch: a query that starts later has less of it, never a budget of its own.
+            var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
+            var outcome = await engine.ExecuteAsync(query, owner with { MaxTimeMs = MinPositive(context.MaxTimeMs, left) }, token).ConfigureAwait(false);
+
+            return outcome switch
             {
                 QueryOutcome.Success success => JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire),
                 QueryOutcome.Refused refused => JsonSerializer.SerializeToNode(refused.Refusal, OxQLJson.Wire),
                 _ => null,
-            });
-        }
+            };
+        }, cancellationToken).ConfigureAwait(false);
 
-        return new BatchResponse { Results = results };
+        return new BatchResponse { Results = [.. results] };
     }
 
     /// <summary>This host always knows itself.</summary>

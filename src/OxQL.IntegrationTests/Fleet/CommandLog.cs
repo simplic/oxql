@@ -145,19 +145,23 @@ public sealed record CommandBatch(IReadOnlyList<CommandSeen> All)
     /// <summary>The <see cref="Depth"/> per database, by the database's name.</summary>
     public IReadOnlyDictionary<string, int> DepthByDatabase => Engine.GroupBy(command => command.Database).ToDictionary(group => group.Key, DepthOf);
 
-    private static int DepthOf(IEnumerable<CommandSeen> commands)
+    private static int DepthOf(IEnumerable<CommandSeen> commands) =>
+        DepthOf(commands.Where(command => command.Ended != 0).Select(command => (command.Started, command.Ended)));
+
+    /// <summary>The most of <paramref name="spans"/> that ran one after another: each started after the one before it had ended.</summary>
+    public static int DepthOf(IEnumerable<(long Started, long Ended)> spans)
     {
         var depth = 0;
         var free = long.MinValue;
 
-        // The most commands that do not overlap pairwise: take them by their end.
-        foreach (var command in commands.Where(command => command.Ended != 0).OrderBy(command => command.Ended))
+        // The most spans that do not overlap pairwise: take them by their end.
+        foreach (var (started, ended) in spans.OrderBy(span => span.Ended))
         {
-            if (command.Started < free)
+            if (started < free)
                 continue;
 
             depth++;
-            free = command.Ended;
+            free = ended;
         }
 
         return depth;

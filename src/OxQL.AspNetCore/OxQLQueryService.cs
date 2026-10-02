@@ -71,9 +71,12 @@ public sealed class OxQLQueryService : IOxQLQueryService
         ExecuteAsync(request, maxTimeMs, internalCall: false, cancellationToken);
 
     private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken) =>
-        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, internalCall, cancellationToken), cancellationToken);
+        ExecuteAsync(request, maxTimeMs, internalCall, null, cancellationToken);
 
-    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken)
+    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken) =>
+        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, internalCall, shared, cancellationToken), cancellationToken);
+
+    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken)
     {
         // A null query is a caller error, not a fault: the batch route can carry one
         // ({"queries":[null]}) and the body of the query route can be the literal `null`.
@@ -84,7 +87,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
-        var context = await ContextAsync(maxTimeMs, internalCall, cancellationToken);
+        // The queries of a batch that run side by side share the context their batch read once.
+        var context = shared is null ? await ContextAsync(maxTimeMs, internalCall, cancellationToken) : shared with { MaxTimeMs = maxTimeMs };
 
         if (context.Contract == 1)
         {
@@ -132,27 +136,43 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
             }]));
 
-        var results = new List<System.Text.Json.Nodes.JsonNode?>(batch.Queries.Count);
-
-        // A batch's maxTimeMs bounds the whole batch, not each query: the queries run one after
-        // another, each under what is left, so an owner answers within the time its caller waits.
+        // A batch's maxTimeMs bounds the whole batch, not each query: it is one deadline, and each
+        // query runs under what is left of it when it starts, so an owner answers within the time
+        // its caller waits.
         var deadline = batch.MaxTimeMs is { } ceiling ? DateTime.UtcNow.AddMilliseconds(ceiling) : (DateTime?)null;
 
-        // Sequential per host: the parallelism of a batch is across services, not within one.
-        foreach (var query in batch.Queries)
+        // The queries of an internal batch (a caller's keyed fetch) run side by side, a few at once:
+        // what the caller waits for is then a round trip or two to the database, not one per query.
+        // A batch on the public route runs one query after another, as it always has.
+        var degree = internalCall && batch.Queries.Count > 1 ? options.Execution.EffectiveBatchConcurrency : 1;
+        RequestContext? shared = null;
+        Refusal? unscoped = null;
+
+        // The scope provider and the addon source are the host's and live per request, so queries
+        // that run side by side never call them concurrently: the scope is read once for the batch
+        // and the addon definitions one at a time. An owner query two of them would send is sent once.
+        if (degree > 1)
+            (shared, unscoped) = await Guarded<(RequestContext?, Refusal?)>(
+                refusal => (null, refusal),
+                async () => ((await ContextAsync(null, internalCall, cancellationToken)) with { AddonSource = SerialAddonSource.Of(addons), BatchShare = new BatchFlights() }, null),
+                cancellationToken).ConfigureAwait(false);
+
+        var results = await BatchRun.RunAsync(batch.Queries, degree, async (query, token) =>
         {
             var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
-            var outcome = await ExecuteAsync(query, left, internalCall, cancellationToken);
+            var outcome = unscoped is not null && query is not null
+                ? QueryOutcome.Of(unscoped)
+                : await ExecuteAsync(query!, left, internalCall, shared, token).ConfigureAwait(false);
 
-            results.Add(outcome switch
+            return outcome switch
             {
                 QueryOutcome.Success success => System.Text.Json.JsonSerializer.SerializeToNode(success.Result, OxQLJson.Wire),
                 QueryOutcome.Refused refused => System.Text.Json.JsonSerializer.SerializeToNode(refused.Refusal, OxQLJson.Wire),
                 _ => null,
-            });
-        }
+            };
+        }, cancellationToken).ConfigureAwait(false);
 
-        return new BatchOutcome.Success(new BatchResponse { Results = results });
+        return new BatchOutcome.Success(new BatchResponse { Results = [.. results] });
     }
 
     /// <inheritdoc/>

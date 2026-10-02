@@ -866,7 +866,7 @@ public sealed class KeyedFetch
             var sent = group.ToList();
             var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
 
-            return new OwnerCall(group.Key, sent, await CallInBatchesAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), deadline, sent.Any(entry => entry.Target.Chain), cancellationToken).ConfigureAwait(false));
+            return new OwnerCall(group.Key, sent, await CallSharedAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), deadline, sent.Any(entry => entry.Target.Chain), context, cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -2550,6 +2550,128 @@ public sealed class KeyedFetch
         }
 
         return new CallOutcome(results, null) { Calls = calls };
+    }
+
+    /// <summary>One owner query of a batch's queries in flight (<see cref="BatchFlights"/>): what came of it, for the queries of the batch that would have sent the same.</summary>
+    private sealed class Flight
+    {
+        private readonly object gate = new();
+        private JsonNode? answer;
+
+        /// <summary>Ends when the query is answered (null) or the call that carried it failed (its outcome).</summary>
+        public TaskCompletionSource<CallOutcome?> Landed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Keeps a copy of the owner's answer before the one who asked reads it: a node has one parent, and one reader at a time.</summary>
+        public void Answer(JsonNode? result)
+        {
+            lock (gate)
+                answer = result?.DeepClone();
+
+            Landed.TrySetResult(null);
+        }
+
+        /// <summary>The owner's answer, a copy per reader.</summary>
+        public JsonNode? Copy()
+        {
+            lock (gate)
+                return answer?.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// The queries for one owner as <see cref="CallInBatchesAsync"/> sends them, except that a query
+    /// another query of the same batch has already sent that owner is not sent again
+    /// (<see cref="RequestContext.BatchShare"/>): its answer is waited for and copied. Run one after
+    /// another the second would have read the first one's rows from the owner cache; side by side the
+    /// cache is not filled yet, and without this both would ask. A call that failed is the failure of
+    /// those waiting for it too, and is forgotten, so a later query asks for itself.
+    /// </summary>
+    private async Task<CallOutcome> CallSharedAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, RequestContext context, CancellationToken cancellationToken)
+    {
+        if (context.BatchShare is not { } flights || context.Organisation is not { } organisation)
+            return await CallInBatchesAsync(owner, service, queries, deadline, chain, cancellationToken).ConfigureAwait(false);
+
+        var entries = new (string Key, Flight Flight, bool Leads)[queries.Count];
+
+        for (var index = 0; index < queries.Count; index++)
+        {
+            var key = service + "|" + OwnerFetchCache.KeyOf(organisation, queries[index]);
+            var mine = new Flight();
+            var flight = flights.Join(key, mine);
+
+            entries[index] = (key, flight, ReferenceEquals(flight, mine));
+        }
+
+        var leading = Enumerable.Range(0, queries.Count).Where(index => entries[index].Leads).ToList();
+        CallOutcome? sent = null;
+
+        try
+        {
+            sent = leading.Count == 0
+                ? new CallOutcome([], null) { Calls = 0 }
+                : await CallInBatchesAsync(owner, service, leading.Select(index => queries[index]).ToList(), deadline, chain, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            for (var position = 0; position < leading.Count; position++)
+            {
+                var (key, flight, _) = entries[leading[position]];
+
+                if (sent is null)
+                {
+                    flights.Leave(key, flight);
+                    flight.Landed.TrySetCanceled(CancellationToken.None);
+                }
+                else if (sent.Failure is not null)
+                {
+                    flights.Leave(key, flight);
+                    flight.Landed.TrySetResult(sent);
+                }
+                else
+                {
+                    flight.Answer(position < sent.Results.Count ? sent.Results[position] : null);
+                }
+            }
+        }
+
+        if (sent.Failure is not null)
+            return sent;
+
+        var results = new JsonNode?[queries.Count];
+
+        for (var position = 0; position < leading.Count; position++)
+            results[leading[position]] = position < sent.Results.Count ? sent.Results[position] : null;
+
+        for (var index = 0; index < queries.Count; index++)
+        {
+            if (entries[index].Leads)
+                continue;
+
+            var left = deadline - DateTime.UtcNow;
+            var budget = chain ? ChainBudget(left) : Budget(left);
+            CallOutcome? failed;
+
+            try
+            {
+                failed = await entries[index].Flight.Landed.Task.WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return new CallOutcome([], Failure.Timeout) { Budget = budget, Calls = sent.Calls };
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The one that asked was stopped and this one was not: the owner did not answer it.
+                return new CallOutcome([], Failure.Unreachable) { Budget = budget, Calls = sent.Calls };
+            }
+
+            if (failed is not null)
+                return failed with { Calls = sent.Calls };
+
+            results[index] = entries[index].Flight.Copy();
+        }
+
+        return new CallOutcome(results, null) { Calls = sent.Calls };
     }
 
     /// <summary>

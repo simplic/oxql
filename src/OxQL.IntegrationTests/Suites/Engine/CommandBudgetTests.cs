@@ -27,9 +27,9 @@ namespace OxQL.IntegrationTests.Suites.Engine;
 [Trait("Category", "Integration")]
 public partial class CommandBudgetTests
 {
-    private const string ReportVariable = "OXQL_COMMAND_REPORT";
+    internal const string ReportVariable = "OXQL_COMMAND_REPORT";
 
-    private static readonly object ReportGate = new();
+    internal static readonly object ReportGate = new();
 
     private static string Id(Guid id) => id.ToString("D");
 
@@ -64,7 +64,10 @@ public partial class CommandBudgetTests
             .GroupBy(command => command.Database)
             .Select(group => $"{Service(group.Key)}={group.Count()}/depth {batch.DepthByDatabase[group.Key]}")
             .OrderBy(text => text, StringComparer.Ordinal);
-        var line = $"{label} | {run} | engine={batch.Engine.Count} | aggregate={batch.Count("aggregate")} getMore={batch.Count("getMore")} listIndexes={batch.Count("listIndexes")} | depth={batch.Depth} | {string.Join(", ", perDatabase)}";
+        var origin = batch.Engine.Count == 0 ? 0 : batch.Engine.Min(command => command.Started);
+        var timeline = batch.Engine.Select(command =>
+            $"{Service(command.Database)}.{command.Collection} {System.Diagnostics.Stopwatch.GetElapsedTime(origin, command.Started).TotalMilliseconds:F1}-{System.Diagnostics.Stopwatch.GetElapsedTime(origin, command.Ended).TotalMilliseconds:F1}");
+        var line = $"{label} | {run} | engine={batch.Engine.Count} | aggregate={batch.Count("aggregate")} getMore={batch.Count("getMore")} listIndexes={batch.Count("listIndexes")} | depth={batch.Depth} | {string.Join(", ", perDatabase)} | ms: {string.Join("; ", timeline)}";
 
         lock (ReportGate)
             File.AppendAllText(file, line + Environment.NewLine);
@@ -73,6 +76,65 @@ public partial class CommandBudgetTests
     /// <summary>The service a fleet database belongs to: its name ends in the service key and a sequence number.</summary>
     private static string Service(string database) =>
         LabService.All.Select(service => service.Key).FirstOrDefault(key => database.Contains($"_{key}_", StringComparison.Ordinal)) ?? database;
+
+    // ---- the requests the cases and the depth cases share ------------------------------------
+
+    internal static string Lines(string stages, string project) => $$"""
+        {
+          "entityType": "ledger.transaction",
+          "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
+          "pipeline": [
+            { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+            { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+            { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
+            { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent" } },
+            {{stages}},
+            { "project": { {{project}} } },
+            { "sort": [ { "position": "asc" } ] }
+          ]
+        }
+        """;
+
+    internal static readonly string InvoiceReport = $$"""
+        {
+          "entityType": "ledger.transaction",
+          "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
+          "strict": true,
+          "pipeline": [
+            { "match": { "id": { "eq": { "$var": "transactionId" } } } },
+            { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact",
+                           "select": ["primaryEmailAddress.email", "primaryPhoneNumber.number", "address.companyName"] } },
+            { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null",
+                           "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
+            { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
+            { "match": { "item": { "is": "BillingLineTransactionItem" } } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+            { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
+                           "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
+                           "parentAs": "sourceParent" } },
+            { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "transport.shipment",
+                          "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
+            { "resolve": { "path": "item.references.referenceId", "as": "lineShipment", "elements": "first", "target": "transport.shipment",
+                           "select": ["shipmentNumber", "referenceNumber", "loadAddress", "deliveryAddress", "effectiveDeliveryEnd",
+                                      "deliveryNoteNumber", "items.weightNotes.number", "items.weightNotes.quantity"] } },
+            { "resolve": { "path": "lineShipment.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["number"] } },
+            { "resolve": { "path": "deliveringTour.resource.id", "as": "tourVehicle", "target": "fleet.vehicle", "onMissing": "null",
+                           "select": ["registrationPlate.registrationIdentifier", "matchCode"] } },
+            { "resolve": { "path": "deliveringTour.attachedResources.resource.id", "as": "driver", "elements": "first", "target": "staff.employee",
+                           "onMissing": "null", "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
+            { "resolve": { "path": "item.references.referenceId", "as": "lineTour", "elements": "first", "target": "transport.tour",
+                           "select": ["number", "startDateTime", "endDateTime", "actions"] } },
+            { "project": { "number": 1, "date": 1, "dueDate": 1, "invoiceRecipient": 1, "termsOfPayment.formattedText": 1,
+                           "totalPriceNet": 1, "totalPriceGross": 1, "taxKeyTotalPrices": 1, "recipientContact": 1, "clerk": 1,
+                           "position": 1, "item.text": 1, "item.quantity": 1, "item.totalPriceNet": 1, "erpLine": 1,
+                           "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1, "lastAttempt": 1, "lineShipment": 1, "deliveringTour": 1,
+                           "tourVehicle": 1, "driver": 1, "lineTour": 1 } },
+            { "sort": [ { "position": "asc" } ] },
+            { "page": { "limit": 5000 } }
+          ]
+        }
+        """;
 
     /// <summary>
     /// A page above the driver's default first batch (101 documents) arrives in the one reply of its

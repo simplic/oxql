@@ -51,4 +51,10 @@ public sealed record RequestContext
     /// batch, and for an explain it runs at this host for another. A host never sets it.
     /// </summary>
     public object? ExplainOwners { get; init; }
+
+    /// <summary>
+    /// What the queries of one batch that run side by side share (<see cref="Engine.BatchFlights"/>);
+    /// null for a request that is none of them. The batch that runs them sets it. A host never sets it.
+    /// </summary>
+    public Engine.BatchFlights? BatchShare { get; init; }
 }

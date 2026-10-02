@@ -412,6 +412,21 @@ public sealed class ExecutionOptions
     /// </summary>
     public int SlowQueryMs { get; set; } = 1_000;
 
+    /// <summary>The ceiling <see cref="BatchConcurrency"/> is clamped to.</summary>
+    public const int MaxBatchConcurrency = 16;
+
+    /// <summary>
+    /// How many queries of one internal batch run at once: the owner queries a caller's keyed fetch
+    /// sends this host over the internal batch route, and the ones this host sends itself for its own
+    /// targets. They answer in the order they were asked and share the batch's one <c>maxTimeMs</c>;
+    /// each holds a connection while it runs. 1 runs them one after another. A batch on the public
+    /// route always runs one query after another.
+    /// </summary>
+    public int BatchConcurrency { get; set; } = 4;
+
+    /// <summary>The effective batch concurrency: the configured value between 1 and <see cref="MaxBatchConcurrency"/>.</summary>
+    public int EffectiveBatchConcurrency => Math.Clamp(BatchConcurrency, 1, MaxBatchConcurrency);
+
     /// <summary>The effective <c>maxTimeMS</c>: the configured value under the ceiling.</summary>
     public int EffectiveMaxTimeMs => Math.Clamp(MaxTimeMs, 1, MaxTimeCeilingMs);
 

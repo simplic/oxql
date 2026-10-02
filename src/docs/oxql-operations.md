@@ -140,9 +140,12 @@ stage's effective `onMissing`:
 the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a framework
 response (a body without a `queries` array is a 400 ProblemDetails). An entry is either a success body (it has `items`)
 or a refusal envelope (it has `type`); an entry carries no status of its own, so a caller derives
-it from `type` with the table above. Queries run one after another on the host; `maxTimeMs` bounds
-the whole batch: each query runs under what is left of it (never above the host's own ceiling), so
-the batch ends within it. A member the batch does not have (a batch-level `strict`, say) is a 400
+it from `type` with the table above. Queries of a public batch run one after another on the host;
+`maxTimeMs` bounds the whole batch: it is one deadline, and each query runs under what is left of it
+when it starts (never above the host's own ceiling), so the batch ends within it. The queries of an
+internal batch (a caller's keyed fetch, and the ones a host sends itself for its own targets) run
+side by side, `Execution:BatchConcurrency` at once, under the same one deadline and answered in the
+order asked. A member the batch does not have (a batch-level `strict`, say) is a 400
 `UNKNOWN_REQUEST_MEMBER` under contract 2.
 
 ## Limits
@@ -185,6 +188,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate; a batch's `maxTimeMs` only lowers it | 504 `QUERY_TIMEOUT` | no | the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
 | `Execution:ChainTimeoutMs` | 6 000, never above `MaxTimeMs` | keyed fetch: one owner call carrying continued stages or a typed, item, converted or element-wise resolve; the time left less 50 ms, at most this | `RESOLVE_TIMEOUT` | no | the owner budgets its own owner calls from what is left of it, so time bounds the whole chain |
+| `Execution:BatchConcurrency` | 4, clamped to 1–16 | how many queries of one internal batch run at once, at the owner and at a host answering its own targets; `1` runs them one after another | — | no | each query in flight holds a connection (two with a count); a public batch always runs one query after another |
 | `Execution:AllowDiskUse` | `true` | aggregate option | 422 `QUERY_TOO_EXPENSIVE` when `false` | no | — |
 | `Execution:SlowQueryMs` | 1 000 (`0` off) | warning log line for a slower request | — | no | — |
 | `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | the owner-fetch cache: resolved rows (remote and in-process targets) and semi-join ids, per organisation; the budget holds per mode (rows, ids) | — | no | an owner's change is seen by callers within the TTL; the former key `ResolveCacheMaxEntries` still binds for one release |
@@ -767,7 +771,10 @@ owning service, owners in parallel:
 - **An owner answer with `hasNextPage`** means the owner cut rows: the chunk's open keys are
   `owner_unanswered` (`RESOLVE_PARTIAL`), never `not_found`, and are not cached.
 - **Time.** See `Execution:ResolveTimeoutMs` and `ChainTimeoutMs` under *Limits*. Split batches of
-  one owner share the request's deadline, each under what is left. The batch's `maxTimeMs` is the
+  one owner share the request's deadline, each under what is left. The owner runs the queries of a
+  batch side by side (`Execution:BatchConcurrency` at once), so a batch waits for about
+  `ceil(queries / concurrency)` database round trips, not one per query; two queries of one batch
+  that would send a further owner the very same query send it once. The batch's `maxTimeMs` is the
   call's budget less a tenth (at most 250 ms), so the owner stops and answers before the caller
   stops waiting; the owner applies it to the whole batch. A `RESOLVE_TIMEOUT` names the time the
   failing call had.

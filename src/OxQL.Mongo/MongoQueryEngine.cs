@@ -90,7 +90,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
-        var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse, compiled.Collation);
+        var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse, compiled.Collation) { Comment = context.CorrelationId };
         var resolveCalls = 0;
         var cacheHits = 0;
 

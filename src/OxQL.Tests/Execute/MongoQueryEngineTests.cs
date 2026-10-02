@@ -170,6 +170,18 @@ public class MongoQueryEngineTests
     }
 
     [Fact]
+    public async Task Every_aggregate_of_a_request_carries_its_correlation_id_as_the_comment()
+    {
+        var (engine, runner) = Host();
+
+        await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { CorrelationId = "corr-41" });
+        await Success(engine, "[]");
+
+        runner.Calls.Take(2).Select(call => call.Options.Comment).Should().Equal("corr-41", "corr-41");
+        runner.Calls[2].Options.Comment.Should().BeNull("a request without a correlation id sends no comment");
+    }
+
+    [Fact]
     public async Task Driver_errors_map_to_the_refusal_classes()
     {
         var connection = new ConnectionId(new ServerId(new ClusterId(1), new DnsEndPoint("localhost", 27017)));

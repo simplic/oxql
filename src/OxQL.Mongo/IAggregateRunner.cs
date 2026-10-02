@@ -15,6 +15,14 @@ public sealed record AggregateRunOptions(int MaxTimeMs, bool? AllowDiskUse, Bson
     /// batch asks for, and the rest then costs a <c>getMore</c>.
     /// </summary>
     public int? BatchSize { get; init; }
+
+    /// <summary>
+    /// The command's <c>comment</c>: the request's correlation id, so an aggregate seen in the
+    /// database's profiler, its slow-query log or <c>currentOp</c> is found from the request that
+    /// sent it, and from the log lines of every service the request passed. It is not part of the
+    /// query's shape, so it changes neither the plan nor what the plan cache keeps. Null sends none.
+    /// </summary>
+    public string? Comment { get; init; }
 }
 
 /// <summary>Runs one aggregate against an entity's collection. The executor's only contact with the database, so tests replace it with fixture rows.</summary>
@@ -32,6 +40,9 @@ public sealed class MongoAggregateRunner : IAggregateRunner
     /// names: twice the default report page. A larger result comes in several replies, as it would have.
     /// </summary>
     public const int MaxBatchSize = 10_000;
+
+    /// <summary>The longest <see cref="AggregateRunOptions.Comment"/> sent; a longer one is cut.</summary>
+    public const int MaxCommentLength = 128;
 
     private readonly IMongoClient client;
     private readonly string? defaultDatabase;
@@ -63,6 +74,9 @@ public sealed class MongoAggregateRunner : IAggregateRunner
 
         if (options.Collation is { } collation)
             aggregateOptions.Collation = Collation.FromBsonDocument(collation);
+
+        if (options.Comment is { Length: > 0 } comment)
+            aggregateOptions.Comment = comment.Length > MaxCommentLength ? comment[..MaxCommentLength] : comment;
 
         // A batch of 0 would ask for an empty first reply and a getMore for every row.
         if (options.BatchSize is { } batchSize and > 0)

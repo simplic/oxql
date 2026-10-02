@@ -25,7 +25,10 @@ namespace OxQL.IntegrationTests.Suites.Explain;
 ///   <c>RESOLVE_UNAVAILABLE</c>) is a request explain calls not valid, and a request explain refuses
 ///   for what this host binds is a run that is refused. Where explain is not valid only for what an
 ///   owner refused, the run is refused once its page reaches that owner; a page that holds no row
-///   for that owner asks it nothing, so the run answers (counted, and each such error must name its owner).</item>
+///   for that owner asks it nothing, so the run answers. That excuse is checked, not taken
+///   (<see cref="ExcuseAsync"/>): the run's rows must hold no record of the refusing target under the
+///   alias the refused stage continues from, and the owner, asked the refused stage directly as a
+///   request of its own, must refuse it with the same code. Such requests are counted and bounded.</item>
 ///   <item>The entity an owning row names (<c>parentAs.entity</c>) on every row is one of the entities
 ///   explain lists for that alias.</item>
 /// </list>
@@ -158,8 +161,87 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
         run.Status == HttpStatusCode.BadRequest
         || (run.StatusCode == 422 && run.ErrorCodes.FirstOrDefault() is "RESOLVE_REFUSED" or "RESOLVE_UNAVAILABLE");
 
-    /// <summary>What one request's explain and run say of each other; null when they agree.</summary>
-    private static string? Disagreement(string name, WireAnswer explained, WireAnswer run, ref int unreached)
+    /// <summary>A request explain calls not valid only for what an owner refuses, while its run answers: to be excused, or not.</summary>
+    private sealed record Unreached(string Name, JsonObject Request, WireAnswer Explained, WireAnswer Run);
+
+    /// <summary>
+    /// Whether a run that answers although explain is not valid is excused: explain's errors all come
+    /// from owners, and for each of them
+    /// <list type="number">
+    ///   <item>the page asked that owner nothing for the refused stage: no row of the run holds a record
+    ///   of the refusing target under the alias the stage continues from (a row that did would have sent
+    ///   the stage to the owner, and the run would be refused);</item>
+    ///   <item>the owner really refuses the stage: explained at the owner's own host as a request over
+    ///   the refusing entity, the stage is not valid there, with the code explain passed on.</item>
+    /// </list>
+    /// Null when excused; else what does not hold. An error this check cannot take apart (no stage, no
+    /// alias to continue from, a stage that cannot be asked directly) is not excused: the differential
+    /// must then be taught the new form instead of passing it.
+    /// </summary>
+    private static async Task<string?> ExcuseAsync(Unreached unreached)
+    {
+        var (name, request, explained, run) = unreached;
+        var body = explained.Body!;
+        var aliases = body["aliases"]!.AsObject();
+
+        foreach (var error in body["errors"]!.AsArray().OfType<JsonObject>())
+        {
+            var owner = error["params"]!["owner"]!.AsObject();
+            var said = $"{error["code"]}@{error["stage"]} {error["path"]}";
+
+            if (error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage)
+                || owner["entity"]?.GetValue<string>() is not { } entity || owner["target"]?.GetValue<string>() is not { } target)
+                return $"{name}: the owner error {said} names no stage or no target, so it cannot be checked";
+
+            // The aliases whose rows are the refusing target's and under which the refused stage continues.
+            var anchors = aliases
+                .Where(alias => alias.Value?["targets"] is JsonArray targets && targets.OfType<JsonObject>().Any(each =>
+                    each["target"]?.GetValue<string>() == target && each["continued"] is JsonArray continued && continued.Any(index => index!.GetValue<int>() == stage)))
+                .Select(alias => alias.Key)
+                .ToList();
+
+            if (anchors.Count != 1)
+                return $"{name}: the owner error {said} continues from {anchors.Count} aliases of target '{target}', so it cannot be checked";
+
+            var anchor = anchors[0];
+            var owning = aliases.FirstOrDefault(alias => alias.Value?["parentOf"]?.GetValue<string>() == anchor).Key;
+            var several = aliases[anchor]!["targets"]!.AsArray().Count > 1;
+
+            // 1. The page reached no record of the refusing target.
+            foreach (var row in run.Items.OfType<JsonObject>())
+            {
+                if (row[anchor] is null or JsonArray { Count: 0 })
+                    continue;
+
+                // Which target a row of a union came from is the owning row's to say; without one, any record counts.
+                if (several && owning is not null && row[owning]?["entity"]?.GetValue<string>() is { } from && from != entity)
+                    continue;
+
+                return $"{name}: explain says '{owner["service"]}' refuses stage {stage} for '{target}' ({said}); a row of the run holds such a record under '{anchor}', yet the run answered {run.StatusCode}";
+            }
+
+            // 2. The owner refuses the stage when it is asked directly.
+            if (request["pipeline"]![stage]?["resolve"] is not JsonObject written || written["path"]?.GetValue<string>() is not { } path
+                || target.Contains('#', StringComparison.Ordinal) || !path.StartsWith(anchor + ".", StringComparison.Ordinal))
+                return $"{name}: the stage of the owner error {said} cannot be asked of '{entity}' directly (an item target, a union join or a path under another alias); teach the differential this form";
+
+            var direct = (JsonObject)written.DeepClone();
+
+            direct["path"] = path[(anchor.Length + 1)..];
+            direct.Remove("forTarget");
+
+            var asked = await (await Lab.ClientAsync(LabService.Of(entity.Split('.')[0]), Org.R)).ExplainHereAsync(Request(entity, new JsonObject { ["resolve"] = direct }));
+
+            if (asked.StatusCode != 200 || asked.Body!["valid"]!.GetValue<bool>()
+                || !asked.Body["errors"]!.AsArray().OfType<JsonObject>().Any(refusal => refusal["code"]?.GetValue<string>() == error["code"]?.GetValue<string>()))
+                return $"{name}: explain says '{owner["service"]}' refuses stage {stage} for '{target}' ({said}), but '{entity}' asked the stage directly answers {asked}";
+        }
+
+        return null;
+    }
+
+    /// <summary>What one request's explain and run say of each other; null when they agree, or when only an owner's refusal the page may not have reached stands between them (added to <paramref name="unreached"/>, to be checked).</summary>
+    private static string? Disagreement(string name, JsonObject request, WireAnswer explained, WireAnswer run, List<Unreached> unreached)
     {
         if (explained.StatusCode != 200)
             return run.StatusCode == explained.StatusCode ? null : $"{name}: explain answered {explained.StatusCode}, the run {run.StatusCode}";
@@ -173,10 +255,10 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
 
         if (!valid && !refused)
         {
-            // What only an owner refuses, a page that asks that owner nothing does not meet.
+            // What only an owner refuses, a page that asks that owner nothing does not meet: checked by the caller.
             if (errors.Count > 0 && errors.All(error => error["params"]?["owner"] is JsonObject))
             {
-                unreached++;
+                unreached.Add(new Unreached(name, request, explained, run));
                 return null;
             }
 
@@ -207,19 +289,20 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
     public async Task T1_explain_and_the_run_agree_on_the_reference_set()
     {
         var disagreements = new List<string>();
-        var unreached = 0;
+        var unreached = new List<Unreached>();
 
         foreach (var (id, build) in ExplainGolden.Cases)
         {
             var request = build();
             var client = await Report.ReportScenarios.ClientAsync(request);
 
-            if (Disagreement(id, await client.ExplainHereAsync(request), await client.QueryAsync(request), ref unreached) is { } disagreement)
+            if (Disagreement(id, request, await client.ExplainHereAsync(request), await client.QueryAsync(request), unreached) is { } disagreement)
                 disagreements.Add(disagreement);
         }
 
-        output.WriteLine($"{ExplainGolden.Cases.Count} requests of the reference set; {unreached} not valid only for what an owner refuses");
+        output.WriteLine($"{ExplainGolden.Cases.Count} requests of the reference set; {unreached.Count} not valid only for what an owner refuses that the page did not reach");
         disagreements.Should().BeEmpty();
+        unreached.Should().BeEmpty("the reference set's pages reach every owner its requests continue at: what an owner refuses there, the run is refused for");
     }
 
     [Fact]
@@ -229,7 +312,7 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
         var disagreements = new List<string>();
         var valid = 0;
         var refused = 0;
-        var unreached = 0;
+        var unreached = new List<Unreached>();
         var owning = 0;
 
         foreach (var (name, request) in routes)
@@ -247,11 +330,16 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
             if (explained.StatusCode == 200 && explained.Body!["aliases"]!.AsObject().Any(alias => alias.Value?["parentOf"] is not null))
                 owning++;
 
-            if (Disagreement(name, explained, run, ref unreached) is { } disagreement)
+            if (Disagreement(name, request, explained, run, unreached) is { } disagreement)
                 disagreements.Add(disagreement);
         }
 
-        output.WriteLine($"{routes.Count} routes from {Sources.Length} source entities: {valid} valid, {refused} refused by a run for how they bind, {unreached} not valid only for what an owner refuses that the page did not reach, {owning} with an owning row");
+        // The excuse of each such route is checked: the page reached no record of the refusing target, and the owner refuses the stage.
+        foreach (var each in unreached)
+            if (await ExcuseAsync(each) is { } unexcused)
+                disagreements.Add(unexcused);
+
+        output.WriteLine($"{routes.Count} routes from {Sources.Length} source entities: {valid} valid, {refused} refused by a run for how they bind, {unreached.Count} not valid only for what an owner refuses that the page did not reach (each checked at its owner), {owning} with an owning row");
 
         foreach (var group in routes.GroupBy(route => route.Name.Split(':')[0]))
             output.WriteLine($"  {group.Key}: {group.Count()}");
@@ -260,5 +348,6 @@ public class ExplainRunDifferentialTests(ITestOutputHelper output)
         valid.Should().BeGreaterThan(routes.Count / 2, "the routes a route finder writes bind");
         (routes.Count - valid).Should().BeGreaterThan(10, "and the ones it never writes do not, at explain and at the run alike");
         disagreements.Should().BeEmpty();
+        unreached.Count.Should().BeLessThanOrEqualTo(routes.Count / 8, "the routes whose run cannot confirm explain stay the exception: a differential that excuses most of what it compares shows nothing");
     }
 }

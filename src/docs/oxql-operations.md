@@ -168,6 +168,14 @@ Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `de
   1 KB, with `Vary: Accept-Encoding` either way; a refusal is not coded. A page of 100 rows with
   14 columns (51 KB) is 7.7 KB in Brotli and costs 0.06 ms to code. The body and its coded form are
   held in pooled segments, never in one array.
+- **Text.** The body of a `query`, `batch` and `explain` answer is UTF-8 and escapes only what JSON
+  requires: the quote, the backslash and the control characters. `"Köln"` is those characters, not
+  `"K\u00F6ln"`, and `<`, `>`, `&`, `'` and `+` are written as they are (as the framework's JSON
+  formatter writes an answer of a host whose JSON options name no encoder; a host that names one
+  keeps it). The answers are `application/json; charset=utf-8` with
+  `X-Content-Type-Options: nosniff`, never part of an HTML page; a client that writes a value into
+  one escapes it there. The schema document is the base package's and keeps its own spelling (its
+  revision is the hash of its bytes).
 
 ### Batch
 

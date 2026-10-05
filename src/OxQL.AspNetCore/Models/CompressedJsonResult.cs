@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -89,22 +91,52 @@ public static class WireCompression
         await response.Body.WriteAsync(body, response.HttpContext.RequestAborted).ConfigureAwait(false);
     }
 
+    /// <summary>The options an answer is written with, per options a host serialises with: its own, with the wire's escaping where it names none.</summary>
+    private static readonly ConditionalWeakTable<JsonSerializerOptions, JsonSerializerOptions> Unescaping = new();
+
+    /// <summary>
+    /// The options an answer body is written with: <paramref name="options"/> itself when it names an
+    /// encoder, else a copy that escapes only what JSON requires (the quote, the backslash and the
+    /// control characters), so text reaches the caller as UTF-8 and not as <c>\uXXXX</c>. It is what
+    /// the framework's own JSON formatter does with options that name no encoder, and so what every
+    /// answer of the host looked like before the engine wrote its bodies itself. The body is
+    /// <c>application/json</c> and is sent with <c>X-Content-Type-Options: nosniff</c>; it is never
+    /// part of an HTML page, which is what the default encoder's escaping of <c>&lt; &gt; &amp; ' +</c>
+    /// and of every non-ASCII character protects.
+    /// </summary>
+    public static JsonSerializerOptions Unescaped(JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return options.Encoder is not null
+            ? options
+            : Unescaping.GetValue(options, static named => new JsonSerializerOptions(named) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    }
+
     /// <summary>
     /// Serialises <paramref name="value"/> and writes it to <paramref name="response"/> as
     /// <see cref="WriteJsonAsync(HttpResponse, byte[], Func{string, byte[]}?)"/> writes a finished body:
     /// in the coding the caller accepts, with <c>Vary</c> and the length. The body and its coded form
     /// are held in pooled segments, never in one array: a page of rows is often larger than what the
     /// runtime keeps out of its large object heap, and an answer must not cost a collection of it.
+    /// Text is written as UTF-8, escaped only where JSON requires it (<see cref="Unescaped"/>).
     /// </summary>
     public static async Task WriteJsonAsync(HttpResponse response, object value, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(value);
 
+        ArgumentNullException.ThrowIfNull(options);
+
+        options = Unescaped(options);
+
         using var body = new PooledBody();
 
         await using (var writer = new Utf8JsonWriter(body, new JsonWriterOptions { Encoder = options.Encoder, Indented = options.WriteIndented, SkipValidation = true }))
             JsonSerializer.Serialize(writer, value, value.GetType(), options);
+
+        // The body is JSON whatever a client would guess from its text.
+        response.Headers.XContentTypeOptions = "nosniff";
 
         var encoding = EncodingFor(response.HttpContext.Request, checked((int)Math.Min(body.Length, int.MaxValue)));
 

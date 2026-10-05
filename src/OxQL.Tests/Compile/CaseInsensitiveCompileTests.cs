@@ -63,8 +63,8 @@ public class CaseInsensitiveCompileTests
                 { Number: { $nin: ['a'] } },
                 { Number: { $gt: 'a' } },
                 { Number: { $gte: 'a.b', $lt: 'a.b￿' } },
-                { Number: /[aÀÁÂÃÄÅàáâãäåĀāĂăĄą]/i },
-                { Number: /[aÀÁÂÃÄÅàáâãäåĀāĂăĄą]$/i } ] } }
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i } ] } }
             """));
         compiled.CountStages![1].ShouldBeBson(compiled.PageStages[1], "the count reads the same filter");
         compiled.Collation.Should().NotBeNull();

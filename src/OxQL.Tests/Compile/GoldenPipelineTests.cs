@@ -134,9 +134,9 @@ public class GoldenPipelineTests
                 { Number: 'a.b' },
                 { Number: { $ne: 'a' } },
                 { Number: { $in: [ 'a', 'b' ] } },
-                { Number: /[aÀÁÂÃÄÅàáâãäåĀāĂăĄą]/i },
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
                 { Number: { $gte: 'a', $lt: 'a￿' } },
-                { Number: /[aÀÁÂÃÄÅàáâãäåĀāĂăĄą]$/i },
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i },
                 { Number: { $gte: 'a', $lt: 'a￿' } },
                 { Number: /^a/ } ] } }
             """));

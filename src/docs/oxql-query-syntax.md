@@ -150,10 +150,16 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
   configured otherwise), `eq neq in nin gt gte lt lte` compare under it, `startsWith` is a
   range under it, and `contains` and `endsWith` are patterns that fold case and accents the same
   way: each letter of the operand stands for every letter of its primary weight (`u` for
-  `u ù ú û ü …`, `ss` and `ß` for each other), so `ull` finds `MÜLLER` and `ÜLL` finds `Muller`.
+  `u ù ú û ü …`), and a letter the collation weighs as two or three stands for them and they for
+  it (`ß` and `ss`, `æ` and `ae`, `œ` and `oe`, `ĳ` and `ij`, the ligatures `ﬁ ﬀ ﬃ ﬆ ǆ ǉ ǌ`), so
+  `ull` finds `MÜLLER`, `ÜLL` finds `Muller` and `strasse` finds `Straße`: a pattern finds a
+  spelling exactly when `eq` calls it equal. The rule is read from the collation, not listed: what
+  the collation tells apart stays apart (`þ` is not `th`, `ä` is not `ae`, `ð` is not `d`).
+  Sequences pair from the left (`sss` is `ß` then `s`), and one letter alone does not match inside
+  a character that stands for two (`s` does not find the `ß` of `Straße`; `ss` and `ß` do).
   A pattern is not served by an index: `contains` and `endsWith` read every candidate row, while
   `eq` and `startsWith` are bounded by an index of the same collation. An operand whose pattern
-  outgrows the server's 32 KB limit is `INVALID_OPERAND` (some 800 letters).
+  outgrows the server's 32 KB limit is `INVALID_OPERAND` (some 500 letters of the widest class).
   A request that compares, sorts and groups no string runs without a collation.
 - `options.caseSensitive: true` compares exactly. It applies to `eq neq in nin contains
   startsWith endsWith` on `string` members (`OPTION_NOT_APPLICABLE` elsewhere: an ordered

@@ -15,7 +15,8 @@ namespace OxQL.IntegrationTests.Perf;
 /// (<see cref="PerfVolume"/>), each measured for its wall time, the commands it costs the database
 /// and the time those commands took as the driver saw them. It runs only when asked:
 /// <list type="bullet">
-/// <item><c>OXQL_PERF=&lt;file&gt;</c> runs it and appends one Markdown table row per request to that file;</item>
+/// <item><c>OXQL_PERF=&lt;file&gt;</c> runs it and appends one Markdown table row per request to that file, and to
+/// <c>&lt;file&gt;.coding.md</c> what the content coding of each answer costs and saves;</item>
 /// <item><c>OXQL_PERF_LABEL</c> names the run in the table (a commit, "before", "after");</item>
 /// <item><c>OXQL_PERF_ROWS</c> is the number of shipments (25 000);</item>
 /// <item><c>OXQL_PERF_RUNS</c> is the number of measured runs per request (15, after 3 warm ones);</item>
@@ -56,6 +57,10 @@ public class PerfBench(ITestOutputHelper output)
         var client = fleet.Client(LabService.Transport, Org.C);
         var cases = await CasesAsync(client, rows);
         var text = new StringBuilder();
+        var coding = new StringBuilder();
+
+        if (!File.Exists(file + ".coding.md"))
+            coding.AppendLine("| run | request | body bytes | br bytes | br ms | gzip bytes | gzip ms |").AppendLine("|---|---|---|---|---|---|---|");
 
         if (!File.Exists(file))
             text.AppendLine("| run | request | wall p50 ms | wall p95 ms | db p50 ms | ours p50 ms | aggregates | getMores | rows | body bytes |").AppendLine("|---|---|---|---|---|---|---|---|---|---|");
@@ -99,9 +104,32 @@ public class PerfBench(ITestOutputHelper output)
 
             output.WriteLine(line);
             text.AppendLine(line);
+            coding.AppendLine(Coding(label, each.Name, Encoding.UTF8.GetBytes(answer.Text)));
         }
 
         await File.AppendAllTextAsync(file, text.ToString());
+        await File.AppendAllTextAsync(file + ".coding.md", coding.ToString());
+    }
+
+    /// <summary>What coding an answer costs this process and saves on the wire: the body at the level the host codes at, timed over many runs.</summary>
+    private static string Coding(string label, string name, byte[] body)
+    {
+        (int Bytes, double Ms) Timed(string encoding)
+        {
+            var coded = OxQL.AspNetCore.Models.WireCompression.Compress(body, encoding);
+            const int Runs = 200;
+            var started = Stopwatch.GetTimestamp();
+
+            for (var run = 0; run < Runs; run++)
+                OxQL.AspNetCore.Models.WireCompression.Compress(body, encoding);
+
+            return (coded.Length, Stopwatch.GetElapsedTime(started).TotalMilliseconds / Runs);
+        }
+
+        var brotli = Timed(OxQL.AspNetCore.Models.WireCompression.Brotli);
+        var gzip = Timed(OxQL.AspNetCore.Models.WireCompression.Gzip);
+
+        return string.Create(CultureInfo.InvariantCulture, $"| {label} | {name} | {body.Length} | {brotli.Bytes} | {brotli.Ms:F3} | {gzip.Bytes} | {gzip.Ms:F3} |");
     }
 
     /// <summary>The requests, with the cursors the deeper blocks continue from walked to once.</summary>

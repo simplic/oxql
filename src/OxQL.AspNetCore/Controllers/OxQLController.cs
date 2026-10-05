@@ -29,7 +29,12 @@ public class OxQLController : ControllerBase
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    /// <summary>Executes one query.</summary>
+    /// <summary>
+    /// Executes one query. The rows are written in the content coding the caller accepts
+    /// (<c>Accept-Encoding</c>: Brotli, else gzip) when the body is at least
+    /// <see cref="WireCompression.MinBytes"/>, with <c>Vary: Accept-Encoding</c> either way: a page of
+    /// rows repeats its member names in every row and shrinks to about a tenth. A refusal is not coded.
+    /// </summary>
     [HttpPost("query")]
     [ProducesResponseType(typeof(QueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
@@ -43,7 +48,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            QueryOutcome.Success success => Ok(success.Result),
+            QueryOutcome.Success success => new CompressedJsonResult(success.Result),
             QueryOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -52,6 +57,7 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// Executes several queries in order under one time ceiling; always 200, each entry carries
     /// its own outcome. More queries than <c>Limits:MaxBatchQueries</c> is <c>BATCH_TOO_LARGE</c>.
+    /// The answer is content-coded as a query's is.
     /// </summary>
     [HttpPost("batch")]
     [ProducesResponseType(typeof(BatchResponse), StatusCodes.Status200OK)]
@@ -63,7 +69,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            BatchOutcome.Success success => Ok(success.Response),
+            BatchOutcome.Success success => new CompressedJsonResult(success.Response),
             BatchOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };

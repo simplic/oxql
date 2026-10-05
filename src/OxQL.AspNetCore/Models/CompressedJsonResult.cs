@@ -10,10 +10,10 @@ namespace OxQL.AspNetCore.Models;
 
 /// <summary>
 /// The content coding of an answer a caller reads often and that compresses well (an explain answer, a
-/// schema document): chosen from the request's <c>Accept-Encoding</c>, applied to the finished body.
-/// It is done here, per answer, and not by a middleware: the host decides nothing, no other route
-/// changes, and the cost is known (the fastest level; an explain answer of 40 KB is a fraction of a
-/// millisecond). A caller that names no coding gets the body as it is.
+/// schema document, a page of rows): chosen from the request's <c>Accept-Encoding</c>, applied to the
+/// finished body. It is done here, per answer, and not by a middleware: the host decides nothing, no
+/// other route changes, and the cost is known (the fastest level; a page of 100 rows, 46 KB, is coded
+/// to about 5 KB in about 0.1 ms). A caller that names no coding gets the body as it is.
 /// </summary>
 public static class WireCompression
 {

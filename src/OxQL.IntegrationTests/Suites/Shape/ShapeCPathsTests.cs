@@ -291,7 +291,7 @@ public class ShapeCPathsTests
         var answer = await Send(Corpus.Shipment, """[ { "group": { "by": [ { "path": "status.name", "as": "status" } ], "fields": { "n": { "count": true } } } }, { "sort": [ { "status": "asc" } ] }, { "page": { "limit": 50 } } ]""");
 
         answer.ShouldBeOk("the alias reuses a root member name of the pre-group shape");
-        answer.Items.Select(row => (row!["status"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(buckets);
+        answer.Items.Select(row => (row!["status"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(buckets);
 
         // …and the alias is addressable after the group, on the grouped shape.
         var afterGroup = await Send(Corpus.Shipment, """[ { "group": { "by": [ { "path": "status.name", "as": "status" } ], "fields": { "n": { "count": true } } } }, { "match": { "status": { "eq": "Open" } } }, { "page": { "limit": 50 } } ]""");

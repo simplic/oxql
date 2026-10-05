@@ -3504,9 +3504,12 @@ public sealed class Binder
                     continue;
                 }
 
+                // What the engine counts is a number of rows: an integer far inside what a JSON number holds
+                // exactly, so under contract 2 it is an int and travels as a JSON number. Contract 1 keeps its
+                // long, which travels as a string.
                 if (function == "count")
                 {
-                    fields.Add(new Aggregate(alias, function, null, Kind.Unknown, Kind.Long, null));
+                    fields.Add(new Aggregate(alias, function, null, Kind.Unknown, contract2 ? Kind.Int : Kind.Long, null));
                     continue;
                 }
 
@@ -3532,7 +3535,7 @@ public sealed class Binder
                 // spells a long, so no digit is lost on either side.
                 var (outputKind, outputShape) = function switch
                 {
-                    "countDistinct" => (Kind.Long, null),
+                    "countDistinct" => (contract2 ? Kind.Int : Kind.Long, null),
                     "avg" => (kind is Kind.Decimal or Kind.Long ? Kind.Decimal : Kind.Double, null),
                     "push" => (Kind.Array, argumentShape),
                     _ => (kind, argumentShape),

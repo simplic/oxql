@@ -432,7 +432,7 @@ public class StageRulesTests
         group.Keys.Should().HaveCount(2);
         group.Keys[1].Trunc!.WeekStart.Should().Be("monday");
         group.Keys[1].Trunc.Timezone.Should().Be("Europe/Berlin");
-        group.Fields.Select(field => field.OutputKind).Should().Equal(Kind.Long, Kind.Decimal, Kind.Double, Kind.Long, Kind.Double);
+        group.Fields.Select(field => field.OutputKind).Should().Equal(Kind.Int, Kind.Decimal, Kind.Double, Kind.Int, Kind.Double);
         bound.FinalShape.Grouped.Should().BeTrue();
         bound.PagingMode.Should().Be(PagingMode.Offset);
 

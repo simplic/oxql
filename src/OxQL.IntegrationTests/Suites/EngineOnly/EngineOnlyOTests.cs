@@ -166,7 +166,7 @@ public class EngineOnlyOTests
     {
         var expected = Corpus.Rows(Corpus.Shipment).GroupBy(row => Corpus.Text(row, "status.name")!)
             .OrderBy(group => group.Key, Comparer<string>.Create(Order.CompareCollated))
-            .Select(group => new JsonObject { ["s"] = group.Key, ["c"] = group.Count().ToString() }).ToList();
+            .Select(group => new JsonObject { ["s"] = group.Key, ["c"] = group.Count() }).ToList();
 
         var falsey = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": false } } } }, { "sort": [ { "s": "asc" } ] }, { "page": { "limit": 10 } } ]""");
         var truthy = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": true } } } }, { "sort": [ { "s": "asc" } ] }, { "page": { "limit": 10 } } ]""");
@@ -195,7 +195,7 @@ public class EngineOnlyOTests
             """);
 
         answer.ShouldBeOk();
-        answer.Items.ToJsonString().Should().Be(new JsonArray(new JsonObject { ["s"] = "Planned", ["c"] = planned.ToString() }).ToJsonString());
+        answer.Items.ToJsonString().Should().Be(new JsonArray(new JsonObject { ["s"] = "Planned", ["c"] = planned }).ToJsonString());
 
         // The post-group match addresses the alias, not the source path.
         var wrong = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": true } } } }, { "match": { "status.name": { "eq": "Planned" } } }, { "page": { "limit": 10 } } ]""");

@@ -345,7 +345,7 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB19_aggregate_outputs_are_typed_by_the_source_kind_counts_and_decimal_sums_as_strings()
+    public async Task AB19_aggregate_outputs_are_typed_by_the_source_kind_counts_as_numbers_and_decimal_sums_as_strings()
     {
         var buckets = Corpus.Rows(Corpus.Vehicle).GroupBy(row => Corpus.ValueAt(row, "isDeleted")!.AsBoolean).OrderBy(group => group.Key).ToList();
         buckets.Should().HaveCount(2);
@@ -367,8 +367,10 @@ public partial class RowsABTests
         foreach (var (bucket, rows) in answer.Items.Zip(buckets))
         {
             bucket!["k"]!.GetValue<bool>().Should().Be(rows.Key);
-            bucket["c"]!.GetValue<string>().Should().Be(rows.Count().ToString(CultureInfo.InvariantCulture), "a count travels as a string of digits");
-            bucket["cd"]!.GetValue<string>().Should().Be(rows.Count().ToString(CultureInfo.InvariantCulture));
+            bucket["c"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "a count travels as a JSON number");
+            bucket["c"]!.GetValue<long>().Should().Be(rows.Count());
+            bucket["cd"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "and so does a count of distinct values");
+            bucket["cd"]!.GetValue<long>().Should().Be(rows.Count());
 
             // sum and avg over a decimal are decimal strings; over an int, JSON numbers.
             bucket["sumDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);

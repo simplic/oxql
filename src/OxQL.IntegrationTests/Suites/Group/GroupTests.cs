@@ -159,7 +159,7 @@ public class GroupTests
     // ── N11–N25 · the nine aggregate functions ───────────────────────────────────────────
 
     [Fact]
-    public async Task N11_N12_count_answers_a_per_group_count_as_a_string_and_count_false_counts_too()
+    public async Task N11_N12_count_answers_a_per_group_count_as_a_number_and_count_false_counts_too()
     {
         var expected = ShipmentStatuses().Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)).ToList();
         var client = await Transport();
@@ -399,11 +399,11 @@ public class GroupTests
 
         var literal = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "literal": 2 } } """));
         literal.ShouldBeOk();
-        CountTexts(literal, "s").Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)));
+        literal.Values("s").Select(value => value!.GetValue<string>()).Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)));
 
         var variable = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "$var": "w" } } """), new { w = 3 });
         variable.ShouldBeOk();
-        CountTexts(variable, "s").Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)));
+        variable.Values("s").Select(value => value!.GetValue<string>()).Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)));
 
         var unbound = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { "s": { "sum": { "$var": "nope" } } } } }, { "page": { "limit": 5 } }]""");
         ShouldRefuseOnly(unbound, "UNBOUND_VARIABLE");

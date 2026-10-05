@@ -386,7 +386,7 @@ public class MongoQueryEngineTests
         var outputs = (await Success(engine2, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true }, "total": { "sum": "amount" } } } }]""")).Items.Single()!.AsObject();
 
         outputs["st"]!.GetValue<int>().Should().Be(1);
-        outputs["n"]!.GetValue<string>().Should().Be("4", "a count is a long, and longs are strings on the wire");
+        outputs["n"]!.ToJsonString().Should().Be("4", "a count is an int: a JSON number on the wire, never a string");
         outputs["total"]!.GetValue<string>().Should().Be("9.5");
     }
 

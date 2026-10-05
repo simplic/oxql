@@ -414,7 +414,7 @@ public class ShapeKUnwindTests
             """);
 
         answer.ShouldHaveTotal(expected.Count);
-        answer.Items.Select(row => (row!["number"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(expected);
+        answer.Items.Select(row => (row!["number"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(expected);
     }
 
     [Fact]
@@ -451,7 +451,7 @@ public class ShapeKUnwindTests
 
         // v1 answered a post-group match with nothing unless a match {} led the pipeline (VAL G4/G5).
         answer.ShouldHaveTotal(expected.Count);
-        answer.Items.Select(row => (row!["article"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(expected);
+        answer.Items.Select(row => (row!["article"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(expected);
     }
 
     [Fact]

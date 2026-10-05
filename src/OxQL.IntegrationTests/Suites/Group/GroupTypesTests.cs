@@ -37,7 +37,7 @@ public class GroupTypesTests
     private static string Iso(DateTime utc) => utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
     [Fact]
-    public async Task GT1_count_and_count_distinct_count_exactly_whatever_the_counted_kind_and_count_travels_as_a_string()
+    public async Task GT1_count_and_count_distinct_count_exactly_whatever_the_counted_kind_and_a_count_travels_as_a_number()
     {
         var statuses = ShipmentStatuses();
 
@@ -53,7 +53,7 @@ public class GroupTypesTests
 
         answer.ShouldHaveTotal(statuses.Count);
         answer.Strings("status").Should().Equal(statuses.Select(entry => entry.Status));
-        CountTexts(answer, "total").Should().Equal(statuses.Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)), "a count is a long, and a long travels as a string");
+        CountTexts(answer, "total").Should().Equal(statuses.Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)), "a count is an int: a JSON number, never a string");
 
         foreach (var (alias, path) in new[] { ("distinctString", "shipmentNumber"), ("distinctGuid", "id"), ("distinctDate", "loadStart"), ("distinctEnum", "loadingTimeType"), ("distinctBool", "isDeleted"), ("distinctDouble", "actualWeight.value") })
             Numbers(answer, alias).Should().Equal(statuses.Select(entry => (decimal?)Distinct(Corpus.ShipmentsWithStatus(entry.Status), path)), alias);

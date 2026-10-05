@@ -89,8 +89,11 @@ that representation. Where a fleet's data is not uniform, the options under
   by value, so a `long` member written as Int32 on older rows matches and orders correctly.
   Text never compares with a number.
 - **`long` above 2^53.** Contract 2 writes every `long` as a string, in rows, in `group` outputs
-  (`count`, `countDistinct`, `sum` and `avg` over a `long`) and inside pushed arrays, so no
-  digit is lost in a JavaScript caller. An operand may be a JSON number or a digit string and
+  (`sum` and `avg` over a `long`, a `min`, `max`, `first` or `last` of one) and inside pushed
+  arrays, so no digit is lost in a JavaScript caller. **A count is not a `long`**: `count` and
+  `countDistinct` are an `int` and travel as a JSON number, as `pageInfo.count.value` and every
+  count in a diagnostic do (a number of rows is far inside what a JSON number holds exactly;
+  contract 1 keeps its `long` and its string). An operand may be a JSON number or a digit string and
   is read exactly either way; a JavaScript caller sends a string, since its own numbers are not
   exact above 2^53. Cursor legs carry the value in extended JSON and are exact. Contract 1 rows
   are rendered by the v1 converter, which writes an Int64 as a JSON number: a v1 client reads
@@ -436,7 +439,7 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 |---|---|---|
 | key over a path | the member's kind | as the member (`long` as a string, `date` as `YYYY-MM-DD`, enum as its number) |
 | key over `dateTrunc` | `dateTime` | ISO-8601 UTC instant |
-| `count`, `countDistinct` | `long` | string of digits (`"12"`) |
+| `count`, `countDistinct` | `int` | a JSON number (`12`); a `sum`, `min` or `max` over such an alias in a later `group` is an `int` and a number too |
 | `sum` | the argument's kind | `int` and `double` a number, `long` and `decimal` a string; arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
 | `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal` | a number, or a decimal string |
 | `min`, `max`, `first`, `last` | the argument's kind | as the member; an object by its members |

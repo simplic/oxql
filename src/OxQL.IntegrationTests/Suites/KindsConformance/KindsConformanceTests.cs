@@ -545,7 +545,7 @@ public class KindsConformanceTests
     {
         var kind = Kinds[name];
         var expected = Mine.GroupBy(row => WireOrNull(kind, At(row, kind.Twin)))
-            .Select(group => $"{{\"k\":{group.Key},\"n\":\"{group.Count()}\"}}").Order(StringComparer.Ordinal).ToList();
+            .Select(group => $"{{\"k\":{group.Key},\"n\":{group.Count()}}}").Order(StringComparer.Ordinal).ToList();
         expected.Should().Contain(bucket => bucket.StartsWith("{\"k\":null", StringComparison.Ordinal));
 
         var answer = await Send($$"""[{ "group": { "by": [{ "path": "{{kind.Twin}}", "as": "k" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 10 } }]""");
@@ -563,7 +563,7 @@ public class KindsConformanceTests
         var twins = Mine.Select(row => At(row, kind.Twin)).OfType<BsonValue>().Order(Comparer<BsonValue>.Create((a, b) => kind.Compare(a, b))).ToList();
         var expected = "{" + string.Join(",", new (string Key, string Value)[]
         {
-            ("distinct", $"\"{Mine.Select(row => At(row, kind.Member)!).Distinct().Count()}\""),
+            ("distinct", $"{Mine.Select(row => At(row, kind.Member)!).Distinct().Count()}"),
             ("head", kind.Wire(At(Mine[0], kind.Member)!)),
             ("hi", kind.Wire(At(byValue[^1], kind.Member)!)),
             ("lo", kind.Wire(At(byValue[0], kind.Member)!)),

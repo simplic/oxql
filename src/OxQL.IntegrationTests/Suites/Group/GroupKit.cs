@@ -22,9 +22,12 @@ internal static class GroupKit
     /// <summary>The numbers of a status-keyed tally, in its order.</summary>
     public static IReadOnlyList<int> Counts(IEnumerable<(string Status, int Count)> tally) => tally.Select(entry => entry.Count).ToList();
 
-    /// <summary>A grouped count as the wire carries it: a JSON string holding the number.</summary>
+    /// <summary>
+    /// The counts under <paramref name="alias"/>, each as its digits: a count is a JSON number on the
+    /// wire (DG2: what the engine counts is an int, never a string), so anything else reads as null.
+    /// </summary>
     public static IReadOnlyList<string?> CountTexts(WireAnswer answer, string alias) =>
-        answer.Values(alias).Select(value => value is JsonValue json && json.GetValueKind() == JsonValueKind.String ? json.GetValue<string>() : null).ToList();
+        answer.Values(alias).Select(value => value is JsonValue json && json.GetValueKind() == JsonValueKind.Number ? json.ToJsonString() : null).ToList();
 
     /// <summary>A grouped value as a number, whether the wire spelled it as a number or as a numeric string.</summary>
     public static decimal? Number(JsonNode? value) => value switch

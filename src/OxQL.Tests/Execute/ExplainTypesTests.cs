@@ -250,7 +250,7 @@ public class ExplainTypesTests
         var result = await ExplainAsync("""[{ "group": { "by": [{ "path": "number", "as": "n" }], "fields": { "count": { "count": true } } } }]""");
 
         result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
-        result.ShapeAt(0).Roots.ToJsonString().Should().Be("""{"n":"k:string","count":"k:long"}""");
+        result.ShapeAt(0).Roots.ToJsonString().Should().Be("""{"n":"k:string","count":"k:int"}""");
         result.ShapeAt(0).Grouped.Should().BeTrue();
         result.FlagsAt(0, "n", "")!.Operators().Should().Contain("eq");
         result.Alias("n")["node"]!.GetValue<string>().Should().Be("group");

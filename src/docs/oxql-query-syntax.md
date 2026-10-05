@@ -12,6 +12,7 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 {
   "entityType": "logistics.shipment",         // the entity id, exactly as the schema publishes it
   "variables": { "from": "2026-01-01T00:00:00Z" },   // optional, bound by { "$var": "from" }
+  "filter": [ { "id": "open", "where": { … } } ],    // optional: conditions the engine places
   "strict": true,                              // optional: refuse instead of losing data
   "pipeline": [                                // stages, executed as written
     { "match": { … } },
@@ -20,8 +21,9 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 }
 ```
 
-- A request carries `entityType`, `variables`, `pipeline` and `strict`. Any other top-level member
-  is `UNKNOWN_REQUEST_MEMBER` under contract 2. The member `keyedBy`
+- A request carries `entityType`, `variables`, `filter`, `pipeline` and `strict`. Any other top-level member
+  is `UNKNOWN_REQUEST_MEMBER` under contract 2. `filter` is described under
+  [The request's `filter`](#the-requests-filter). The member `keyedBy`
   exists only on the internal route an owner is called through (see
   [`oxql-operations.md`](oxql-operations.md#keyed-fetch-and-remote-continuation)); on the public
   routes it is `UNKNOWN_REQUEST_MEMBER` like any other.
@@ -39,6 +41,57 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
   and it does not count toward `MaxPipelineStages`. A request whose context has no
   organisation is refused with 403 `ACCESS_DENIED` before binding.
 
+## The request's `filter`
+
+```jsonc
+{ "entityType": "logistics.shipment",
+  "filter": [
+    { "id": "removeDeleted", "where": { "isDeleted": { "neq": true } } },
+    { "id": "preset:heavy",  "where": { "items": { "any": { "quantity.value": { "gt": 5000 } } } } },
+    { "id": "col:c9",        "where": { "item.article.name": { "contains": "palette" } } },
+    { "id": "col:total",     "where": { "total": { "gt": 1000 } } } ],
+  "pipeline": [ { "unwind": { "path": "items", "as": "item" } }, … ] }
+```
+
+`filter` is a list of entries, all of which a row must meet. `where` is a condition object as a
+`match` stage takes it. `id` is optional: a string of 1 to 64 characters, unique in the list; it
+decides no row, and errors, diagnostics, notes and explain name the entry by it.
+
+The engine places the conditions. **A condition is about the thing its path names, and runs at
+the first point of the pipeline where that thing is in the row:**
+
+| path in a condition | is in the row | meaning |
+|---|---|---|
+| an entity member | from the entry | the row's own value |
+| `items.quantity` (a collection) | until its unwind | the row has some element with … |
+| `items: { any: { … } }` | until its unwind | one element meets all of … |
+| `item.quantity` (an unwind's alias), its `includeIndex` | after the unwind | this row's element has … |
+| a member of a join's alias | after the join | (under another service's alias: a semi-join, as in a `match`) |
+| a group key or an aggregate | after the group | which groups (HAVING) |
+
+- The top-level conjuncts of one `where` (its paths, its operators, and the members of an `and`)
+  are placed one by one. An `or`, a `not` and an `any` are each placed as a whole, at the first
+  point where every path they read is in the row.
+- A group key over a path of the same name (`by: [{ path: "status", as: "status" }]`) is in the
+  row from the entry, so a condition on it runs before the group: which rows feed the buckets is
+  which buckets there are. A name a group gives to another thing (an aggregate, a key over
+  another path) while a member of that name exists earlier binds at the earlier one; explain
+  notes it (`FILTER_BINDS_EARLIER`). A `match` stage after the group filters the group's.
+- A condition whose paths are never in the row together (a collection's path OR-ed with its
+  unwind's alias; a member a group removed OR-ed with an aggregate) is `FILTER_NOT_PLACEABLE`
+  (`params.paths`, and `params.births`: per path the point it is first in the row at,
+  `{ "path", "before": 0 }` for the entry or `{ "path", "after": i }` for after stage `i`). A
+  path that is never in the row is the error it would be in a `match` at the end of the pipeline.
+- An error of an entry carries `filter` (its `id`, or its index in the list when it has none) and
+  no `stage`; so does a diagnostic. A malformed `filter` is `INVALID_FILTER` with `params.reason`:
+  `notAnArray`, `notAnObject`, `unknownMember`, `whereRequired`, `invalidId`, `duplicateId`,
+  `malformedWhere`.
+- The conditions count toward `MaxConditions`, and they are part of the cursor fingerprint: a
+  cursor continues the same filter only. A filter written as `match` stages at the points the
+  engine places it at is the same query and shares its cursors.
+- The `match` stage stays for a condition that must run at a point of the caller's choosing.
+- Contract 1 never had the member and ignores it.
+
 ## Paths
 
 Dot-separated wire names, camelCase, `id` at every depth: `number`, `department.name`,
@@ -48,9 +101,12 @@ not store is `NOT_STORED`; an `unknown` member is projectable but `NOT_FILTERABL
 `NOT_SORTABLE`.
 
 - A path through a collection in `match` means "some element" (`items.quantity eq 5` matches a
-  document with any such item); it is refused in `sort` (`NOT_SORTABLE`). After an `unwind`
-  the path means the element. An inner collection needs its outer one unwound first
-  (`UNWIND_ORDER`).
+  document with any such item); it is refused in `sort` (`NOT_SORTABLE`). An `unwind` takes the
+  collection out of the row and puts one element under its alias: after
+  `unwind { path: "items", as: "item" }` the element is `item.quantity`, and `items.quantity` is
+  `UNKNOWN_PATH`. So a path names one thing along the whole pipeline: the collection before the
+  unwind, the alias after it. An inner collection needs its outer one unwound first
+  (`UNWIND_ORDER`) and is then reached through the alias (`item.stops`).
 - A member only some variants of a polymorphic value carry (`items.billingLineId` when only the
   billing-line item has it) is a path of the base type like any other; it is nullable and may be
   absent on rows of other variants. `is` tests the variant (see *Operators*).
@@ -85,9 +141,10 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
   levels deep, `any` included (`MAX_CONDITIONS_EXCEEDED` beyond).
   An empty group is `EMPTY_LOGICAL_GROUP`.
 - `any` evaluates the nested condition against one element of a collection of objects, inner
-  paths relative to the element (compiled to `$elemMatch`). It is refused on a collection already
-  unwound, on a collection reached through another collection, and on collections of scalars,
-  where the default "some element" form applies (`ANY_NOT_APPLICABLE`).
+  paths relative to the element (compiled to `$elemMatch`). It is refused on an unwind's alias (one
+  element, not a collection), on a collection reached through another collection, and on
+  collections of scalars, where the default "some element" form applies (`ANY_NOT_APPLICABLE`);
+  on a collection an unwind took out of the row it is `UNKNOWN_PATH` like any path under it.
 - A comparison on a `string` member folds case and accents: `muller` matches `Müller` and
   `MÜLLER`. The request then runs under the host's collation (German, primary strength, unless
   configured otherwise), `eq neq in nin gt gte lt lte` compare under it, `startsWith` is a
@@ -96,10 +153,10 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 - `options.caseSensitive: true` compares exactly. It applies to `eq neq in nin contains
   startsWith endsWith` on `string` members (`OPTION_NOT_APPLICABLE` elsewhere: an ordered
   comparison orders under the collation of the whole request and cannot leave it, a `regex` is
-  the caller's own pattern, and a member without text has nothing to fold). `options.ignoreCase`
-  is accepted for one release as the alias with the opposite sense — `ignoreCase: false` is
-  `caseSensitive: true`, `ignoreCase: true` restates the default — and the two must not
-  disagree. On a member holding a single character, published as `string` and stored as its
+  the caller's own pattern, and a member without text has nothing to fold). `caseSensitive` is
+  the one option: `options.ignoreCase` is contract 1's and is `OPTION_NOT_APPLICABLE` under
+  contract 2, whatever it says (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`).
+  On a member holding a single character, published as `string` and stored as its
   code point, `eq neq in nin` fold the operand's case by code point instead; the three text
   operators have no text to match there and are refused with `INVALID_OPERAND`.
 
@@ -161,7 +218,10 @@ storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 
 `{ "$var": "name" }` is the only wrapper: the value comes from `variables` in the same
 encoding and is checked at the place of use (`UNBOUND_VARIABLE` when missing;
-`INVALID_VARIABLE` when it holds an object). The v1 type hints (`$date`, `$uuid`, `$decimal`,
+`INVALID_VARIABLE` when it holds an object). A variable name that starts with `$` is reserved
+for the engine: a request that supplies one in `variables` is refused with `INVALID_VARIABLE`
+(no `stage`; `params` `name`, `reason: "reserved"`), used or not, and a `$var` that names one is
+`UNBOUND_VARIABLE`, since no request can bind it. The v1 type hints (`$date`, `$uuid`, `$decimal`,
 …) are contract 1 only.
 
 A defined addon key coerces the same way and always matches tolerantly across the
@@ -292,7 +352,7 @@ on a member of the alias is a semi-join (the owner supplies the matching ids; mo
 `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`), a `match` on the alias itself (`{ "veh": { "eq":
 null } }`, `{ "veh": { "exists": true } }`) is refused before the owner is called
 (`RESOLVE_NOT_FILTERABLE`), and a `sort` is refused (`RESOLVE_NOT_SORTABLE`). The owner binds a
-semi-join condition under its own default; `caseSensitive` or `ignoreCase` travel to it as written.
+semi-join condition under its own default; `caseSensitive` travels to it as written.
 A typed, item, converted, element-wise or continued remote alias takes no semi-join
 (`RESOLVE_NOT_FILTERABLE`).
 
@@ -441,22 +501,21 @@ target, each a branch.
 { "unwind": { "path": "items", "as": "item", "includeIndex": "itemIndex", "preserveNull": true } }
 ```
 
-`path` must be a collection at the current shape (`NOT_A_COLLECTION`). Afterwards `path`
-means the element, `as` is a copy of it and `includeIndex` an `int`. `preserveNull` keeps
-documents whose collection is empty or absent.
+`path` must be a collection at the current shape (`NOT_A_COLLECTION`): a collection member, or
+the alias of a `lookup`. `as` is required (`INVALID_ALIAS`, `params` `stage: "unwind"`,
+`member: "as"`, `reason: "required"`): each row holds one element under that name, and the
+collection leaves the row. The row carries `item` and no `items`, and a later path under `items`
+is `UNKNOWN_PATH` (`params` `reason: "unwound"`, `collection`, `alias`) naming the alias to read
+instead. The same holds for a lookup's alias: after `unwind { path: "orders", as: "order" }` the
+child is `order`, and `orders` is not in the row. `includeIndex` is an `int`, the element's
+position in the stored collection. `preserveNull` keeps documents whose collection is empty or
+absent, once, with the alias and the index null.
 
-```jsonc
-{ "unwind": { "path": "items", "as": "item", "keepPath": false } }
-```
-
-`keepPath` (default `true`) set to `false` takes the unwound collection out of the row once
-its element is under `as`: the row carries `item` and no `items`, and a later path under `items` is
-`UNKNOWN_PATH` naming the alias to read instead. It needs `as` and a member collection (a join alias
-unwound without `as` is already replaced by its element); otherwise `OPTION_NOT_APPLICABLE`. It is
-also `OPTION_NOT_APPLICABLE` when a join of an earlier stage reads its keys from the collection (a
-resolve through `items.*`): join after the unwind through the alias instead. A value other than
-`true` or `false` is `INVALID_OPERAND`. Refused under contract 1 (`LEGACY_STAGE_UNSUPPORTED`).
-Leaving it out keeps the collection in the row.
+There is nothing to choose: `keepPath` is not a member (`UNKNOWN_STAGE_MEMBER`, `params`
+`stage: "unwind"`, `member: "keepPath"`, `reason: "removed"`). An unwind of a collection that a
+join of an earlier stage reads its keys from (a resolve through `items.*`) is `UNWIND_ORDER`
+(`params` `reason: "joinReadsCollection"`, `join`, `alias`): join after the unwind, through the
+alias. Contract 1 unwinds as it always has: in place without `as`, beside the alias with it.
 
 ```jsonc
 { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }
@@ -469,7 +528,7 @@ collection, down to `MaxFlattenDepth` levels (5; the collection itself is level 
 deeper are left out and the page carries `UNWIND_DEPTH_TRUNCATED` (`params` `path`, `depth`, `rows`);
 under `strict` that refuses. A `flatten` that names a member which is not such a collection, or a
 `path` that is not a collection of objects, is `FLATTEN_NOT_RECURSIVE`; an unknown member is
-`UNKNOWN_PATH`. It counts toward `MaxUnwindStages`, pages by offset, and is refused under contract 1
+`UNKNOWN_PATH`. It counts toward `MaxUnwindStages` and is refused under contract 1
 (`LEGACY_STAGE_UNSUPPORTED`).
 
 ## Stage: `group`
@@ -510,8 +569,8 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
   same way.
 - After `group` the shape is only the `by` and `fields` aliases (unique among each other, at
-  most `MaxGroupFields`); rows carry those names only. Paging after `group` is by offset
-  behind the cursor.
+  most `MaxGroupFields`); rows carry those names only. A page after `group` continues from its
+  cursor like any other.
 
 ## Stage: `project`
 
@@ -557,28 +616,84 @@ exact too; when another comparison, sort or group key of the request folds, it i
 ## Stage: `page`
 
 ```jsonc
-{ "page": { "limit": 50, "includeTotalCount": true } }        // first page, counted up to the host's CountCap
-{ "page": { "limit": 50, "includeTotalCount": 10000 } }       // first page, counted up to 10 000
-{ "page": { "limit": 50, "cursor": "<nextCursor>" } }           // next page
-{ "page": { "limit": 50, "offset": 200 } }                      // a jump, up to Limits:MaxOffset
+{ "page": { "limit": 50 } }                                      // first page
+{ "page": { "limit": 50, "count": true } }                       // first page, with one bounded count step beside it
+{ "page": { "limit": 50, "count": { "upTo": 10000 } } }          // …that needs to count no further than 10 000
+{ "page": { "limit": 50, "cursor": "<nextCursor>" } }            // next page
+{ "page": { "limit": 0, "count": { "budgetMs": 800 } } }         // the count alone, refined within 800 ms
+{ "page": { "limit": 0, "count": { "budgetMs": 800, "upTo": 50000 } } }
 ```
 
-Once and last (`STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`). `limit` between 1 and
-`MaxPageSize` (`INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`); without a limit, or without a page
-stage at all, `DefaultPageSize`. `offset` above `MaxOffset` is `MAX_OFFSET_EXCEEDED`.
+Once and last (`STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`). A page carries `limit`, `cursor` and
+`count`. `limit` between 1 and `MaxPageSize` (`INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`); without
+a limit, or without a page stage at all, `DefaultPageSize`.
 
-Cursors are opaque, signed, and bound to the query: a cursor from another pipeline, another
-sort or a tampered one is `CURSOR_INVALID`. Keyset paging is null-aware on the root shape;
-after `group` the cursor carries an offset. A member enters the cursor fingerprint only when a
-request sets it, so a cursor of a request that does not use it stays valid; `strict` and
-`onMissing` never enter it.
+A page is addressed by its cursor and by nothing else: `offset` is not a member
+(`UNKNOWN_STAGE_MEMBER`, `params` `stage: "page"`, `member: "offset"`, `reason: "removed"`,
+`use: "cursor"`). Cursors are opaque, signed, and bound to the query: a cursor from another
+filter, another sort or a tampered one is `CURSOR_INVALID`. A cursor is bound to what decides
+which rows there are and in which order: the entity, the organisation, `filter`, every `match`,
+`unwind`, `group` and `sort`, and every join a condition, a sort, an unwind, a group or another
+join reads. What only shapes the row is outside it: the trailing `project` (every projection
+that only sorts, display-only joins and the page follow), a `lookup` or `resolve` nothing but the
+row's display reads (its `filter`, `limit`, `sort`, `outcomeAs` and `onMissing` with it), `limit`,
+`count` and `strict`. So showing or hiding a column, with the join that feeds it, keeps a cursor
+valid; changing a filter or the sort does not. `limit` may differ from page to page.
 
-`includeTotalCount` is `true`, `false` (the default) or a positive integer. `true` runs a count
-concurrently with the page, up to the host's `CountCap`; a positive integer is the request's own
-cap, clamped to the host's (`0`, a negative number or a fraction is `INVALID_PAGE_LIMIT`).
-Above the cap in force the count is that cap and `totalCountCapped` is true with a
-`TOTAL_COUNT_CAPPED` diagnostic whose `params.cap` names it. The count pipeline carries a
-`lookup` or a local `resolve` only when a later `match`, `unwind`, `group` or `resolve` reads its
+### Counts
+
+`count` is `true`, `false` (the default) or `{ "upTo": n, "budgetMs": ms }` (both optional
+positive integers; anything else is `INVALID_PAGE_LIMIT`, an unknown member of the object
+`UNKNOWN_STAGE_MEMBER`). `includeTotalCount` is contract 1's and is `UNKNOWN_STAGE_MEMBER` under
+contract 2 (`params` `member: "includeTotalCount"`, `reason: "removed"`, `use: "count"`).
+
+Every answer says what the engine knows of the number of matching rows under `pageInfo.count`:
+
+```jsonc
+{ "state": "exact",   "value": 412 }
+{ "state": "atLeast", "value": 1000, "stoppedBy": "budget", "ms": 3 }
+{ "state": "unknown", "reason": "timeout", "ms": 500 }
+```
+
+| member | meaning |
+|---|---|
+| `state: "exact"` | every matching row was counted, or the list was walked to its end; `value` is the count |
+| `state: "atLeast"` | a proven lower bound: `value` rows were found and more exist or may exist |
+| `stoppedBy` (with `atLeast`) | `page`: only the rows the pages served, and the one that told a next page exists, are known. `cap`: the request's `upTo` or the host's `CountCap` was reached; counting on would go no further. `budget`: the next step did not fit the time (beside a page the count is one step). `time`: a step ran out of time; the bound is what the step before it proved |
+| `state: "unknown"` | the count that was asked for did not finish; `reason` is `timeout` or `failed` |
+| `ms` | the time spent counting, when a count step was waited for |
+
+What is known without counting, on every page, asked or not:
+
+- A page without a next one ends the list: `exact`, the rows served so far. On a first page that
+  holds every row this is the total, and a count step that was started is not waited for.
+- Any other page: `atLeast` the rows served so far plus one, `stoppedBy: "page"`. The cursor
+  carries the rows served, so the number grows with the walk and the last page turns it exact.
+
+`count: true` on a page (`limit` 1 or more) adds one count step that runs beside the page: it
+counts up to `Count:StepRows` rows (1 000), lowered by `upTo` and by the host's `CountCap`
+(100 000), within `Count:BudgetMs` (500; `budgetMs` sets the request's own, at most
+`Count:MaxBudgetMs` 5 000). Up to its bound the step is `exact`; above it the answer is `atLeast`
+the bound, stopped by `cap` when the bound is the request's `upTo` or the host's cap and by
+`budget` otherwise. The step never fails the rows and holds them back no longer than its
+budget: a step that times out or fails leaves `unknown`, and the rows are answered as they are.
+A bound below what the pages already served gives way to the rows served plus one. No diagnostic
+repeats any of this (`TOTAL_COUNT_CAPPED` is contract 1's).
+
+`limit: 0` with `count` is the count alone: no page is read, `items` is empty, `hasNextPage` is
+false and there is no cursor (the answer says nothing of pages). It takes no `cursor`, and
+`limit: 0` without `count` is `INVALID_PAGE_LIMIT` (`params` `limit: 0`, `needs: "count"`). The
+count climbs a ladder within its budget: step *k* counts up to `StepRows × 10^k` rows, up to
+`upTo` or the host's `CountCap`; a step that finds no more rows than its bound is `exact` and
+ends the ladder. The next step runs only when its predicted time (the last step's, times the
+growth of the bound) fits what is left of the budget; otherwise the answer is `atLeast` the last
+bound, `stoppedBy: "budget"`. Each step's own time limit is what is left of the budget; a step
+that runs out leaves the bound before it, `stoppedBy: "time"`, and a first step that does leaves
+`unknown`. A list shows its first page at once and asks for the count alone beside it.
+
+After `unwind` a count counts element rows, after `group` groups. The count pipeline carries the
+filters and never the sort or the cursor; it carries a `lookup` or a local `resolve` only when a
+later `match`, `unwind`, `group` or `resolve` reads its
 alias. A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or
 `resolve` reads, that no `group` follows and whose alias every later `project` passes whole runs
 after the page is taken, on the page's rows alone; a `project` in between keeps the join's
@@ -599,10 +714,10 @@ diagnostic it would otherwise have answered, as its error (see *Refusal*):
 | `LOOKUP_TRUNCATED`, `RESOLVE_TRUNCATED`, `UNWIND_DEPTH_TRUNCATED` | children, targets or nested items cut at a limit |
 | `PAGE_INCOMPLETE` | more rows match than the one page holds (below) |
 
-A strict request whose `page` has neither `cursor` nor `offset` is a report page: it may ask for a
+A strict request whose `page` has no `cursor` is a report page: it may ask for a
 `limit` up to `MaxReportPageSize` (5 000; `MaxPageSize` when that is larger), and when more rows
 match than it holds it is refused with `PAGE_INCOMPLETE` (`params` `limit`, `max`): "narrow the root
-or raise the page limit". `offset: 0` counts as paging. Losses visible on the page itself
+or raise the page limit". Losses visible on the page itself
 (`PAGE_INCOMPLETE`, the truncations, a missing inline reference) refuse before any owner is called;
 the others after the owners answered, all of them listed. `strict` travels in the query sent to an
 owner that runs continued stages, and a strict request never reads a cached "not found".
@@ -612,7 +727,7 @@ owner that runs continued stages, and a strict request never reads a cached "not
 ```jsonc
 {
   "items": [ … ],
-  "pageInfo": { "hasNextPage": true, "nextCursor": "…", "totalCount": 1234, "totalCountCapped": false },
+  "pageInfo": { "hasNextPage": true, "nextCursor": "…", "count": { "state": "atLeast", "value": 51, "stoppedBy": "page" } },
   "diagnostics": [ { "code": "ENTITY_ID_RETIRED", "message": "…", "stage": null, "path": null, "params": { "currentId": "logistics.shipment" } } ]
 }
 ```
@@ -620,10 +735,12 @@ owner that runs continued stages, and a strict request never reads a cached "not
 Rows are in the wire encoding at every depth: `id`, camelCase, `long` and `decimal` as
 strings, `dateTime` ISO UTC, `guid` string, enum as number, `date` as `YYYY-MM-DD`,
 `timeSpan` as an ISO duration, binary as base64. Grouped rows carry the aliases only; unwound
-rows the element under the path plus alias and index; resolved rows the object or `null`
+rows the element under the alias plus the index, and not the unwound collection; resolved rows the object or `null`
 under the alias; looked-up rows the array (`first`: the object or `null`); a `parentAs` alias
-`{ "entity": "<entity id>", … }`; an `elements: "all"` alias an array. `totalCount` and
-`totalCountCapped` appear only when a count was requested; `diagnostics` only when there are any.
+`{ "entity": "<entity id>", … }`; an `elements: "all"` alias an array. `pageInfo.count` is on
+every answer (see *Counts*); `nextCursor` only when a page follows; `diagnostics` only when there
+are any. A diagnostic or an error that belongs to an entry of the request's `filter` carries
+`filter` (the entry's `id`, or its index in the list when it has none) and no `stage`.
 
 A diagnostic about references names the rows it met, by their index in `items`, at most
 `MaxReportedRows` (50) of them:
@@ -646,6 +763,10 @@ A diagnostic about references names the rows it met, by their index in `items`, 
 { "type": "validation_error", "title": "The request could not be bound.",
   "errors": [ { "code": "UNKNOWN_PATH", "message": "…", "stage": 2, "path": "items.quantity" } ] }
 ```
+
+An error belongs to a caller stage (`stage`), to an entry of the request's `filter` (`filter`: the
+entry's `id`, or its index in the list when it has none; no `stage`), or to the request as a whole
+(neither).
 
 | `type` | HTTP | when |
 |---|---|---|
@@ -696,7 +817,7 @@ Under `strict` (or a stage's `onMissing: "refuse"`) the data-loss diagnostics be
 
 Never a refusal outside `strict`; carried in `diagnostics` with machine-readable `params` where
 useful. 13 codes (contract 2 has the five marked †):
-`ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`),
+`ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`; contract 1 and internal calls only, a contract 2 count says where it stopped under `pageInfo.count`),
 `RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`, `RESOLVE_PARTIAL` (keys an owner was not asked for or did
 not answer in full), `SORT_ON_ADDON`, `REGEX_UNANCHORED`, `DECIMAL_TEXT_EXCLUDED` (an ordered
 comparison on a decimal covered the Decimal128 rows only), `RESOLVE_MISSING`† (references that
@@ -713,7 +834,7 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 
 ```jsonc
 {
-  "query": { "entityType": "…", "variables": { … }, "strict": true, "pipeline": [ … ] },   // page.cursor is ignored
+  "query": { "entityType": "…", "variables": { … }, "filter": [ … ], "strict": true, "pipeline": [ … ] },   // page.cursor is ignored
   "include": ["shape", "notes"],   // default; also "types", "docs", "plan", "indexes"
   "shape": { "depth": 2 },         // with "types": levels of member rows below each root, 1 to 3
   "remote": "check",               // "check" (default) or "cached"
@@ -781,9 +902,15 @@ and sort directions are read case-insensitively, a string comparison is exact un
 are exact, a sort entry's direction is a string (the object form is `INVALID_SORT_DIRECTION`),
 and rows come back in the v1 encoding. The v1 `lookup` (`localPath`/`foreignPath`) and `resolve`
 stages are refused with `LEGACY_STAGE_UNSUPPORTED`, and so is the number form of
-`page.includeTotalCount`: contract 1 keeps the boolean. What only contract 2 has is not read under contract 1:
-`strict` and the new stage members are `LEGACY_STAGE_UNSUPPORTED`, `is` is `UNKNOWN_OPERATOR`, a
-continued stage is `NOT_CONTINUABLE`, and unknown top-level members are ignored as before. Each
+`page.includeTotalCount`: contract 1 keeps the boolean. Contract 1 also keeps what contract 2 gave
+up: `page.offset` (up to `MaxOffset`, `MAX_OFFSET_EXCEEDED` above it; a page continues from a
+cursor or jumps by an offset, not both), `page.includeTotalCount` answered as `totalCount` and
+`totalCountCapped` with the `TOTAL_COUNT_CAPPED` diagnostic, an `unwind` without `as` (the element
+replaces the collection in place) or with it (the element beside the collection), a cursor
+bound to the whole pipeline including its projection, and any variable name. What only contract 2
+has is not read under contract 1: `strict` and the new stage members (`page.count` among them) are
+`LEGACY_STAGE_UNSUPPORTED`, `is` is `UNKNOWN_OPERATOR`, a continued stage is `NOT_CONTINUABLE`, and
+unknown top-level members, `filter` among them, are ignored as before. Each
 such refusal says the request was read as contract 1 for want of the header (see *Refusal*). Every
 contract 1 request is logged under `OxQL.Compat`. When compatibility is switched off, every request
 is contract 2.

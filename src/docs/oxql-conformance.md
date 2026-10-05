@@ -84,7 +84,7 @@ organisations A and B.
 | | `fleet.department` | `department` | 3 / 1 | the target of the vehicle and shipment departments |
 | | `fleet.status` | `status` | 4 / 1 | a small lookup table with a null name |
 | `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department`; its `billingLines[]` are the item target of typed references, and `tours[].tourId` references `transport.tour` beside a polymorphic `tours[].resource` |
-| | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling; duplicate, null and missing names at scale; a remote reference onto vehicles |
+| | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling of contract 1 and above one count step (1 000); duplicate, null and missing names at scale; a remote reference onto vehicles |
 | | `transport.tour` | `tour` | — | billing lines (the shipment's item type), a polymorphic `resource`, `attachedResources[]`, and `actions`, an interface-typed collection of seven variants |
 | | `transport.delivery_attempt` | `deliveryAttempt` | — | `shipmentId` onto the shipment, `dateTime`, `status { displayName }`, `text`: "the latest attempt" |
 | | `transport.resource` | `resource` | — | an abstract entity of seven variants; the host-side declaration makes a driver's id an employee and a vehicle-like resource's id a vehicle; a carrier references nothing |
@@ -182,7 +182,7 @@ public class ShipmentTests
         var answer = await transport.SendAsync(Corpus.Shipment, """
             [ { "match": { "status.name": { "eq": "Planned" } } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -208,12 +208,16 @@ public class ShipmentTests
 | `ExplainAsync(body)` | `POST OxQL/explain` (a plain query or the envelope); explain is on by default, the explain variant only sets it explicitly |
 | `HealthAsync(shallow)`, `GetAsync`, `PostAsync` | health, and raw requests for malformed bodies |
 | `As(Org.B)`, `As(guid)`, `Anonymous()`, `Contract(1)`, `Contract(null)`, `WithHeader` | who the request is sent as; contract 2 is the default, `null` sends no contract header |
-| `MatchIdsAsync`, `MatchCountAsync`, `PullAsync` | a condition's ids or count; every row as the engine renders it |
-| `WalkAsync`, `OffsetWalkAsync` | a cursor or offset walk to the end, every row in arrival order |
+| `MatchIdsAsync`, `MatchCountAsync`, `PullAsync` | a condition's ids or count (the count through a count-only request); every row as the engine renders it |
+| `CountOnlyAsync(entity, stages, budgetMs, upTo?)` | the count-only request over the stages: `page { limit: 0, count: { budgetMs, upTo } }` |
+| `WalkAsync` | a cursor walk to the end, every row in arrival order (a contract 2 page has no offset) |
 | `HostAsync()` | the host, for its captured log lines (`Logs`) |
 
 **The answer** (`WireAnswer`): `Status`, `Body`, `Text`, `Items`, `Ids()`, `Strings(path)`,
-`Values(path)`, `PageInfo`, `HasNextPage`, `NextCursor`, `TotalCount`, `TotalCountCapped`,
+`Values(path)`, `PageInfo`, `HasNextPage`, `NextCursor`, `Count` and `CountState` (contract 2's
+`pageInfo.count`), `TotalCount` and `TotalCountCapped` (contract 1's members, or the value and
+whether it is a lower bound of a contract 2 count), `ShouldCount(state, value?, stoppedBy?, reason?)`
+(the count without its `ms`),
 `Diagnostics`, `DiagnosticCodes`, `Errors`, `ErrorCodes`, `Type`, `IsProblemDetails`, `Results`
 (batch entries); assertions `ShouldBeOk`, `ShouldRefuse("CODE", status?)`, `ShouldHaveIds`,
 `ShouldHaveIdsInAnyOrder`, `ShouldHaveTotal`, `ShouldHaveDiagnostic`, `ShouldHaveNoDiagnostics`.

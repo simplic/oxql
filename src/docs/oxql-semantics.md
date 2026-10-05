@@ -167,7 +167,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 | `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored |
 | a single character (Int32 storage) | `eq neq in nin` match both cases of the character; never collated |
 | a join key (`lookup`, local `resolve`) | compared byte for byte even inside a collated request; ids never fold |
-| a condition under a remote alias | bound by the owner under its own default; `caseSensitive` or `ignoreCase` travel as written |
+| a condition under a remote alias | bound by the owner under its own default; `caseSensitive` travels as written |
 | `eq null`, `in []` | compare no text and add no collation |
 | every other kind | compares by value; unaffected |
 
@@ -199,16 +199,16 @@ with no index but `_id`. What changes with the collation is which indexes the se
 
 | shape at the page | caller wrote no sort | caller's sort | paging |
 |---|---|---|---|
-| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker | keyset cursor |
-| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id`, then every unwind's position | offset behind the cursor |
-| after `group` | the group keys, ascending, string keys folded | the caller's fields, then every group key it did not name, ascending | offset behind the cursor |
+| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker | cursor: the last row's sort values and key |
+| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id`, then every unwind's position | cursor: a position in that order |
+| after `group` | the group keys, ascending, string keys folded | the caller's fields, then every group key it did not name, ascending | cursor: a position in that order |
 | `group` with no key | one row, no order | | |
 
 - The default sort of a grouped or unwound shape is bound like a written one: it appears in
   explain and in the cursor's fingerprint.
 - **After `group`, the sort is total.** The group keys are unique per group, so the engine
   appends every key the caller's sort does not name, ascending and in the group's key order:
-  `[ { "count": "desc" } ]` pages as `[ { "count": "desc" }, { "status": "asc" } ]`, and offset
+  `[ { "count": "desc" } ]` pages as `[ { "count": "desc" }, { "status": "asc" } ]`, and
   paging over equal values neither repeats nor skips a group. A key the caller sorts on keeps
   its place and direction. A string key folded into its group under the collation, and the same
   collation orders it, so keys that differ only by case are one group, never two tied rows. The
@@ -233,26 +233,49 @@ with no index but `_id`. What changes with the collation is which indexes the se
   `flatten` cut at its depth.
 - A join loads what is read under its alias (see *What a join loads*): every member of its target can
   be filtered, sorted, grouped, projected or joined on, whatever the join's `select` names.
+- **Where a condition of the request's `filter` runs.** The binder places each condition at the
+  earliest boundary between two stages at which every path it reads is in the row, as a `match`
+  of its own there: an entity member at the entry, an unwind's alias after the unwind, a join's
+  alias after the join, an aggregate after its group. An unwind takes its collection out of the
+  row, so a path never means two things: `items.quantity` is "some element" and exists until the
+  unwind, `item.quantity` is "this element" and exists after it. The top-level conjuncts of a
+  `where` are placed one by one, an `or`, `not` or `any` as a whole. The placed conditions are
+  ordinary stages of the bound pipeline: they are in the cursor fingerprint, in the count
+  pipeline and in explain's plan, and a filter written as `match` stages at those points is the
+  same bound pipeline.
 - `strict` and `onMissing` change what is refused, never what binds: an inline resolve with a
   `filter` stays inline, and the aggregate tells a record the filter excluded from a missing one. An
   inline resolve onto a target field that is not the key joins two records when its outcomes are
   read, so a key two records hold is `ambiguous` (the first by record key is taken).
 
-**Cursors.** A cursor is signed with a key derived from `Cursor:SigningKey` and bound to a
-fingerprint of the bound pipeline: the entity, the organisation, every stage with its storage
-paths and typed operands, and the paging mode. The page stage is not part of it, so a follow-up
-page may ask for another `limit` or for a count. A cursor from another pipeline, another
-organisation, another signing key or a tampered one is `CURSOR_INVALID`; a cursor together with
-an `offset` is `INVALID_PAGE_LIMIT`. Every replica of a service needs the same signing key, or a
-page served by one replica cannot be continued on another.
+**Cursors.** A page is addressed by its cursor and by nothing else (contract 1 keeps `offset`).
+A cursor is signed with a key derived from `Cursor:SigningKey` and bound to a fingerprint of what
+decides which rows there are and in which order:
 
-- A keyset cursor carries the last row's value of every sort field and its `id`, typed, so a
-  `long` above 2^53, a decimal or a GUID continue exactly. The engine keeps the sort fields and
-  the key in storage through any projection so the cursor can read them; the row leaves out what
-  the projection did not ask for.
-- An offset cursor (after `group` or `unwind`) carries the next offset. `Limits:MaxOffset` bounds
-  the `offset` a caller writes, not the one a cursor carries, so such a result can be walked past
-  it.
+| inside the fingerprint | outside it |
+|---|---|
+| the entity and the organisation | the page stage: `limit`, `count`, the cursor itself |
+| the request's `filter` and every `match`, with storage paths and typed operands | the trailing `project`: every projection that only sorts, display-only joins and the page follow |
+| every `unwind` and `group`, and the sort (the default and the appended keys included) | a `lookup` or `resolve` whose alias, owning row and outcome no stage reads but a projection, with its `filter`, `limit`, `sort` and `outcomeAs` |
+| every join a condition, a sort, an unwind, a group or another join reads, with its `filter` | every join's `select`; `onMissing`; `strict` |
+| a projection a later `match`, `unwind`, `group` or read join follows; a stage continued at an owner | |
+
+So a follow-up page may ask for another `limit` or for a count, and showing or hiding a column,
+with the join that feeds it, keeps the cursor: the same walk goes on. A cursor of another filter,
+another sort, another organisation, another signing key or a tampered one is `CURSOR_INVALID`.
+Every replica of a service needs the same signing key, or a page served by one replica cannot be
+continued on another. Contract 1 binds a cursor to the whole bound pipeline, its projection
+included, as it always has; a cursor of one contract is never one of the other.
+
+- On the entity's rows the cursor carries the last row's value of every sort field and its `id`,
+  typed, so a `long` above 2^53, a decimal or a GUID continue exactly. The engine keeps the sort
+  fields and the key in storage through any projection so the cursor can read them; the row
+  leaves out what the projection did not ask for.
+- After `group` or `unwind` the cursor carries a position in the total order of the table above.
+  It is not bounded by `Limits:MaxOffset`. A row inserted or deleted before the position between
+  two pages shifts the page (a row may repeat or be skipped); the entity's rows do not have that.
+- A contract 2 cursor carries the number of rows the pages up to it served. It is what a later
+  page's count is known by without counting (below).
 - **Sorting on a local join alias.** A keyset cursor's condition is merged into the leading
   scope match, except when the sort names a path under a local `resolve` alias
   (`vehicle.matchCode`): the alias does not exist before the join, so the condition is evaluated
@@ -260,11 +283,33 @@ page served by one replica cannot be continued on another.
   first stage no longer narrows the scan by the cursor. (A sort under a `lookup` alias is
   `NOT_SORTABLE`; one under a remote alias is `RESOLVE_NOT_SORTABLE`.)
 
-**Counts.** `includeTotalCount` runs a second aggregate, concurrently with the page, over the
-same stages up to the page, joins included only where a later `match`, `unwind`, `group` or
-`resolve` reads their alias; sorts and joins only the rows' display reads are left out. It
-stops at the cap in force (the host's `CountCap`, or the request's own below it). After a
-`group` it counts groups.
+**Counts.** Every contract 2 answer says what is known under `pageInfo.count`: `exact`, a proven
+lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
+
+- Without counting: a page without a next one is the end of the list, so the rows served so far
+  (the cursor's number plus this page's) are the exact count; any other page proves the rows
+  served plus one (`stoppedBy: "page"`).
+- `count: true` beside a page sends one more aggregate at the same moment as the page: the same
+  stages up to the page, joins included only where a later `match`, `unwind`, `group` or
+  `resolve` reads their alias, sorts and display-only joins left out, then `$limit bound + 1`,
+  `$count`. The bound is `Count:StepRows` (1 000) under the request's `upTo` and the host's
+  `CountCap`. The step has its own time limit (`Count:BudgetMs`, or the request's `budgetMs`) and
+  its own cancellation: the page never waits for it longer than that limit, counted from when
+  both were sent, and its timeout or failure is `state: "unknown"`, never a refusal. A page that
+  ends the list does not wait for it at all. When the request ends, however it ends, the step is
+  stopped.
+- `limit: 0` with `count` runs no page. Steps of `StepRows × 10^k` rows run one after another,
+  each under what is left of the budget; a step that finds no more than its bound is exact. A
+  further step runs only when the time of the last one, times the growth of the bound, fits what
+  is left. Work is at most 1.11 times the last step.
+- After `unwind` a count counts element rows, after `group` groups.
+- A count is as expensive as the rows it has to find: cheap where matches are dense, a scan of
+  the organisation's rows where they are sparse. That is why the count beside a page is one
+  bounded step, and why a list asks for the count alone, in parallel, when it wants more.
+
+Contract 1 and an internal call keep `includeTotalCount`: a second aggregate the answer waits for,
+stopping at the cap in force (the host's `CountCap`, or the request's own below it), answered as
+`totalCount` and `totalCountCapped`.
 
 ## Projections
 
@@ -422,8 +467,7 @@ into one row per item at any level down to `MaxFlattenDepth`:
   usual, so a group row and a billing-line row can be told apart with `is`.
 - Items below the depth are not in the rows; the page names the path, the depth and how many rows
   lost items (`UNWIND_DEPTH_TRUNCATED`). Under `strict` the request refuses instead.
-- `preserveNull` keeps a document with no items once, as for a plain unwind. The rows page by
-  offset.
+- `preserveNull` keeps a document with no items once, as for a plain unwind.
 
 ## References
 
@@ -551,7 +595,7 @@ outcome (`outcomeAs`): the outcome is then read, so it is told.
 `strict: true` says: these rows go into a document, so answer them all or refuse. Every data-loss
 outcome and truncation above refuses with 422, carrying the diagnostic it would have answered as its
 error; the plain `null` of `reference_null`, `excluded` and `not_applicable` does not. A report page
-(no `cursor`, no `offset`) may hold up to `MaxReportPageSize` rows and refuses with
+(no `cursor`) may hold up to `MaxReportPageSize` rows and refuses with
 `PAGE_INCOMPLETE` when more match. The request's `strict` is carried in the query sent to an owner
 that runs continued stages, and a strict request reads no cached "not found". Without `strict`
 nothing about the rows changes: `strict` and `onMissing` refuse or report, they never alter a row,

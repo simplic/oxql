@@ -56,20 +56,22 @@ the listed status.
 | `NOT_FILTERABLE` | 400 | a condition or group key on an object, collection, dictionary or `unknown` member, or on an addon key that is undefined, retired or of kind `object` |
 | `NOT_SORTABLE` | 400 | a sort on a path under a collection (a lookup alias included), or on a non-scalar or `unknown` member |
 | `NOT_A_COLLECTION` | 400 | `unwind` of a member that is not a collection, or after a group |
-| `UNWIND_ORDER` | 400 | an inner collection unwound before its outer one |
+| `UNWIND_ORDER` | 400 | an inner collection unwound before its outer one; under contract 2 an unwind of a collection a join of an earlier stage reads its keys from (`params` `reason: "joinReadsCollection"`, `join`, `alias`: join after the unwind) |
 | `ALIAS_COLLISION` | 400 | an alias equal to a member's wire or storage name or an earlier alias; two group outputs of one name; an unwind's `as` equal to its `includeIndex` |
-| `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr` |
+| `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr`; a contract 2 `unwind` without `as` (`params` `stage: "unwind"`, `member: "as"`, `reason: "required"`) |
 | `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names |
 | `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes) |
 | `OPERAND_NOT_ARRAY` | 400 | `in` or `nin` without an array |
 | `DECIMAL_TEXT_NOT_ORDERABLE` | 400 | `gt gte lt lte` on a decimal member whose declared storage is text |
 | `UNBOUND_VARIABLE` | 400 | `{ "$var": … }` names a variable the request does not bind |
-| `INVALID_VARIABLE` | 400 | a variable holds an object, or an array where an element is expected |
+| `INVALID_VARIABLE` | 400 | a variable holds an object, or an array where an element is expected; under contract 2 a name in `variables` that starts with `$`, which is reserved for the engine (`params` `name`, `reason: "reserved"`) |
+| `INVALID_FILTER` | 400 | contract 2: the request's `filter` is malformed; `params.reason` is `notAnArray`, `notAnObject`, `unknownMember`, `whereRequired`, `invalidId`, `duplicateId` or `malformedWhere`; `filter` names the entry |
+| `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `pipeline`, `strict`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
-| `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
+| `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
@@ -96,10 +98,10 @@ the listed status.
 | `RESOLVE_NOT_FILTERABLE` | 400 | a condition on a remote resolve alias itself (`{"veh":{"eq":null}}`, `{"veh":{"exists":true}}`); the owner is not called. A condition on a member of a plain remote alias (`veh.matchCode`) is a semi-join; under a keyed, typed, item, converted, element-wise or continued alias any condition is refused, since the alias is joined after the page |
 | `RESOLVE_NOT_SORTABLE` | 400 | a sort on a path under a remote or keyed alias; a sort on a join's outcome (`outcomeAs`), wherever the join runs |
 | `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*) |
-| `INVALID_PAGE_LIMIT` | 400 | `limit` below 1, a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
+| `INVALID_PAGE_LIMIT` | 400 | `limit` below 1 (contract 2: `limit: 0` without `count` or with a cursor, `params` `limit: 0`, `needs: "count"`); a `count` that is not `true`, `false` or an object, or whose `upTo` or `budgetMs` is not a positive integer; contract 1 and internal calls: a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
 | `PAGE_SIZE_EXCEEDED` | 400 | `limit` above `MaxPageSize` |
 | `LOOKUP_LIMIT_EXCEEDED` | 400 | a lookup `limit` below 1 or above `MaxLookupLimit` |
-| `MAX_OFFSET_EXCEEDED` | 400 | `offset` above `MaxOffset` |
+| `MAX_OFFSET_EXCEEDED` | 400 | contract 1 and internal calls: `offset` above `MaxOffset`. A contract 2 page has no `offset` (`UNKNOWN_STAGE_MEMBER`) |
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
 | `EXPLAIN_LIMIT` | 400, or 429 | 400: an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound. 429 (`rate_limited`, with `Retry-After`): more explains than a caller may send or have in flight, refused before the body is read; `params` `limit`, `max`, `retryAfter`. As an explain note: a cost limit was hit mid-way and a part was left out |
@@ -107,7 +109,7 @@ the listed status.
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
 | `RESOLVE_REFUSED` | 422 | the owner refused its part (its own codes follow in `errors`, for a continued stage mapped to the caller's `stage` and `path` with `params.owner`), or answered a row without the key it was asked for |
-| `PAGE_INCOMPLETE` | 422 | a `strict` request without `cursor` or `offset` matches more rows than its page holds; `params` `limit`, `max` |
+| `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
 | `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs` or the batch's `maxTimeMs` |
@@ -121,7 +123,7 @@ stage's effective `onMissing`:
 | code | `params` | when |
 |---|---|---|
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
-| `TOTAL_COUNT_CAPPED` | `cap` | more rows match than the count cap in force; `totalCount` is the cap |
+| `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
 | `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases` | an owner did not answer within its budget; the aliases are `null` on this page |
 | `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases` | an owner was not reached, or answered with an HTTP error (the message names the status) |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
@@ -173,8 +175,8 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias, else its `select` hint) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
-| `Limits:MaxOffset` | 5 000 | binder, `page.offset`; not an offset cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
-| `Limits:CountCap` | 100 000 | compiler: the count stops at the cap | diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
+| `Limits:MaxOffset` | 5 000 | binder, `page.offset` of contract 1 and of an internal call (a contract 2 page has none); not a cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
+| `Limits:CountCap` | 100 000 | binder and compiler: the ceiling of every count. A contract 2 count never counts further (`pageInfo.count.stoppedBy: "cap"`); a contract 1 count stops at it | contract 1: diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
 | `Limits:MaxSemiJoinIds` | 5 000, never above `MaxOffset` | remote resolver | 422 `SEMI_JOIN_TOO_LARGE` | no | refused after the first owner page when the owner's count already exceeds it |
 | `Limits:ResolveKeyChunk` | 500, never above `MaxPageSize` | keyed fetch: keys per owner query; a grouped query (`keyedBy`, two rows per key) carries at most `MaxPageSize / 2` keys | — | no | the owner's `MaxPageSize` and `MaxRequestBytes` bound it |
 | `Limits:MaxResolveKeys` | 10 000 | keyed fetch: keys asked of owners per request, over every keyed stage and target in stage order; keys the cache answers are free | diagnostic `RESOLVE_PARTIAL`; refused under `strict` | no | each owner applies its own to what it forwards further |
@@ -183,7 +185,9 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:RegexMaxLength` | 200 | binder | `REGEX_TOO_LONG` | yes | a `regex` under a remote alias is checked by the owner |
 | `Limits:MaxLookupLimit` | 100 | binder: the largest lookup `limit` and the default when none is given; the most targets an `elements: "all"` alias holds | `LOOKUP_LIMIT_EXCEEDED`; diagnostics `LOOKUP_TRUNCATED`, `RESOLVE_TRUNCATED` | yes | — |
 | `Limits:MaxFlattenDepth` | 5, clamped to 1–12 | compiler: the levels an `unwind` with `flatten` descends | diagnostic `UNWIND_DEPTH_TRUNCATED` | yes | — |
-| `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without `cursor` or `offset` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
+| `Count:StepRows` | 1 000 | binder: the rows the count step beside a contract 2 page counts (`page.count`), and the first step of a count-only request, each ten times the one before | above it the answer is a lower bound (`stoppedBy: "budget"`) | no | — |
+| `Count:BudgetMs` / `Count:MaxBudgetMs` | 500 / 5 000 | the time a contract 2 count has when the request names none, and the most a request may name with `page.count.budgetMs` (a larger one is clamped): the count step's own `maxTimeMS`, the longest an answer waits for it, and the budget of a count-only ladder | `pageInfo.count` `unknown` / `timeout`, or a lower bound `stoppedBy: "budget"` / `"time"`; never a refusal | no | — |
+| `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without a `cursor` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate, and of a `strict` request's truncation checks, which are sent with them and so end within the same limit; a batch's `maxTimeMs` only lowers it | 504 `QUERY_TIMEOUT` | no | the server ends a command at its next interrupt check after the limit, so a command that finishes within milliseconds of it is still answered (a page that comes in one reply has no later check to fail at); the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
@@ -191,7 +195,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Execution:BatchConcurrency` | 4, clamped to 1–16 | how many queries of one internal batch run at once, at the owner and at a host answering its own targets; `1` runs them one after another | — | no | each query in flight holds a connection (two with a count); a public batch always runs one query after another |
 | `Execution:AllowDiskUse` | `true` | aggregate option | 422 `QUERY_TOO_EXPENSIVE` when `false` | no | — |
 | `Execution:SlowQueryMs` | 1 000 (`0` off) | warning log line for a slower request | — | no | every aggregate of a request carries the request's correlation id as its `comment` (cut at 128 characters), at every owner the request reaches, so a command in the database's profiler or slow-query log is found from the log line and back; the page's cursor batch is its limit plus one (at most 10 000), so a page arrives without a `getMore` unless it exceeds 16 MB |
-| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | the owner-fetch cache: resolved rows (remote and in-process targets) and semi-join ids, per organisation; the budget holds per mode (rows, ids) | — | no | an owner's change is seen by callers within the TTL; the former key `ResolveCacheMaxEntries` still binds for one release |
+| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | the owner-fetch cache: resolved rows (remote and in-process targets) and semi-join ids, per organisation; the budget holds per mode (rows, ids) | — | no | an owner's change is seen by callers within the TTL |
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
@@ -232,8 +236,7 @@ Anonymous, always 200, and never waits for another service:
   "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
-  "capabilities": ["batch", "group.page", "page.offset", "any", "unwind.keepPath",
-                   "resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
+  "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
     "maxUnwindStages": 5, "maxResolveStages": 8, "maxGroupFields": 20, "maxProjectionFields": 500,
@@ -258,9 +261,9 @@ Anonymous, always 200, and never waits for another service:
   per feature.
 - `engine.version` is the version of the `OxQL.Core` assembly the host runs, which is the package
   version.
-- `capabilities`: `batch`, `group.page`, `page.offset`, `any` and `unwind.keepPath` always
-  (`unwind.keepPath`: an unwind may take its collection out of the row; a caller gates on it before
-  sending `keepPath`, which an engine without it refuses as an unknown member);
+- `capabilities` lists only what depends on the host; what every contract 2 engine has is said by
+  `engine.contract` and is not listed (`batch`, `group.page`, `page.offset`, `any` and
+  `unwind.keepPath` are gone from the list):
   `resolve.remote`, `semiJoin`, `resolve.chain` and `lookup.remote` (a `lookup` whose `from` is another
   service's entity) when the host installed a remote query client;
   `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`.
@@ -302,7 +305,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
 ```jsonc
 {
   "valid": true, "contract": 2,
-  "engine": { "version": "2.1.0.0", "contract": 2, "capabilities": ["batch", "…", "explain"] },
+  "engine": { "version": "2.1.0.0", "contract": 2, "capabilities": ["resolve.remote", "…", "explain"] },
   "etag": "W/\"x3:4575645a135436d89b17f6ade5f1f30d\"",
   "revision": { "schema": { "fleet": "sha256:…", "ledger": "sha256:…", "transport": "sha256:…" }, "addons": null },
   "cache": { "maxAge": 30, "dependsOn": ["fleet", "transport"], "complete": true },
@@ -316,7 +319,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     { "index": 1, "kind": "unwind", "status": "ok",
       "reads": [ { "path": "items", "use": "unwind" } ],
       "creates": ["item", "position"],
-      "shape": { "paging": "offset", "grouped": false, "unwound": ["items"],
+      "shape": { "paging": "cursor", "grouped": false, "unwound": ["items"], "removed": ["items"],
                  "roots": { "": "t:ledger.transaction", "item": "t:ledger.transaction#items", "position": "k:int" },
                  "rules": { "": "r:1", "item": "r:2", "position": "r:3" } } },
     { "index": 4, "kind": "resolve", "status": "ok",
@@ -356,7 +359,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     "r:3": { "self": "588ff" },                      // a scalar
     "r:5": { "self": "40000", "under": "owner" }     // an owner's rows, joined after the page
   },
-  "result": { "paging": "offset",
+  "result": { "paging": "cursor",
               "columns": [ { "path": "number", "kind": "string", "nullable": false, "root": "", "present": "always" } ] },
   "owners": [ { "service": "transport", "remote": true, "route": { "apiName": "transport-api" },
                 "answered": true, "calls": 2, "cached": false, "ms": 18,
@@ -403,6 +406,22 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   its owner in `owners`); `creates`, the names of the aliases it adds; `shape`, the row after the
   stage; `reads`, what the stage reads off the row (below). The row before stage `i`
   is `stages[i-1].shape`, and `entry.shape` before the first.
+- **`filter`**, one entry per entry of the request's top-level `filter`, in the request's order;
+  absent when the request carries none. `id` (when the entry has one), `status` (`ok`, or `error`
+  when a condition of the entry did not bind; the errors carry `filter`), and `placed`: where its
+  conditions run, in pipeline order, one element per point: `{ "before": 0, "paths": [...] }` at
+  the entry (before the first caller stage) or `{ "after": i, "paths": [...] }` right after caller
+  stage `i`, with `"having": true` when that point lies after a group. `paths` are the paths the
+  conditions placed there read, as written. The placed conditions are no caller stages: `stages`
+  has one entry per stage the caller wrote, and with `include: ["plan"]` the emitted `$match`
+  stands at the named point. A note or an error about a placed condition carries `filter` (the
+  entry's `id`, or its index) and no `stage`.
+
+  ```jsonc
+  "filter": [
+    { "id": "rows", "status": "ok", "placed": [ { "before": 0, "paths": ["isDeleted"] }, { "after": 0, "paths": ["item.quantity.value"] } ] },
+    { "status": "ok", "placed": [ { "after": 1, "paths": ["total"], "having": true } ] } ]
+  ```
 - **`reads`**, per stage, is the binder's read ledger: `{ path, use, alias? }` each, in the order
   bound. `path` is the path as the row has it (an `any`'s inner path under its collection). `use` is
   one of `match`, `sort`, `project`, `unwind`, `groupKey`, `aggregate`, `resolveKey` (the reference a
@@ -414,10 +433,12 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   are no reads of the row, and neither is a path an exclusion names. A stage continued at an owner
   carries the reads its owner answered, in this host's paths, since only the owner binds it.
   "Why is this member loaded" is every read whose `alias` is the join's.
-- **`shape`**: `paging` (`cursor` while every row is one entity row, `offset` after an unwind or
-  group), `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection; absent
+- **`shape`**: `paging` (`cursor` at every stage under contract 2: a page is addressed by its
+  cursor whatever the shape; a contract 1 explain still says `offset` after an unwind or group),
+  `grouped`, `unwound`, `projection` (the kept paths of an inclusion projection; absent
   while none ran), `removed` (the paths an exclusion projection removed and the collections an
-  unwind with `keepPath: false` took out; absent when there is none), `roots` (each root the row
+  unwind took out of the row, which under contract 2 is every unwound collection and lookup
+  alias; absent when there is none), `roots` (each root the row
   carries, `""` the entity itself, pointing to its type: `t:<entity>[#item]`, `u:<alias>`,
   `k:<kind>` for a scalar or a group output, `null` for an alias whose owner did not answer), and
   `rules` (per root, the rule that says where its members stand here; a root without one has its
@@ -566,7 +587,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   the engine will do that a reader of the query might not expect: `TEXT_FOLDS`,
   `PATTERN_FOLDS_CASE_ONLY`, `EXACT_FORCES_EXACT`, `SOME_ELEMENT`, `NEQ_MATCHES_ABSENT`,
   `ONLY_FOR_VARIANTS`, `SNAPSHOT_COPY`, `JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
-  `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP`, `LOOKUP_LIMIT`, `OFFSET_PAGING`,
+  `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP` and `OFFSET_PAGING` (contract 1 and
+  internal calls only: a contract 2 request has neither a count cap to hit silently nor an offset),
+  `LOOKUP_LIMIT`, `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path
+  first exists, and a later group gives the name to another thing; `params` `path`, `alias`),
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),
@@ -822,8 +846,8 @@ query request sends `X-OxQL-Contract: 2`.
 3. `POST {api}/oxql/query` with `{ "entityType": "{entity}", "pipeline": [ { "page": { "limit": 1 } } ] }`
    and no token → 401 when the host requires authorization; with the token → 200.
 4. A filtered, sorted, counted page:
-   `[ { "match": { "{member}": { "startsWith": "a" } } }, { "sort": [ { "{member}": "asc" } ] }, { "page": { "limit": 20, "includeTotalCount": true } } ]`
-   → 200, rows starting with `a` or `A` (accents folded), `totalCount` present.
+   `[ { "match": { "{member}": { "startsWith": "a" } } }, { "sort": [ { "{member}": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]`
+   → 200, rows starting with `a` or `A` (accents folded), `pageInfo.count` with `state` `exact` or `atLeast`.
 5. The next page: repeat 4 with `"cursor": "<nextCursor>"` and no count, several times → no row
    repeats; with more than one replica this also proves the replicas share the signing key.
 6. A refusal: `{ "match": { "noSuchMember": { "eq": 1 } } }` → 400 `validation_error` with

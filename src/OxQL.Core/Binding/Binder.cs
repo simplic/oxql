@@ -388,8 +388,8 @@ public sealed class Binder
         /// <summary>
         /// What each join loads, once every stage is bound: its key, what later stages read under its
         /// alias, and its output set. The output set is what the final row shows under the alias: the
-        /// paths the projection names under it, or, kept whole, the <c>select</c> hint with the key, else
-        /// key and display. A join in the aggregate loads all three and the row is cut to the output set
+        /// paths the projection names under it, or, kept whole, its key and display member (a contract 2
+        /// join has no <c>select</c>). A join in the aggregate loads all three and the row is cut to the output set
         /// (the final shape carries it), so what is only read never shows. A join after the page (keyed
         /// or remote) is read by nothing but the projection, so it asks its owner for the output set
         /// alone: the paths, or nothing for the owner's own key and display.
@@ -410,7 +410,7 @@ public sealed class Binder
                         var loaded = LoadedBy(final, lookup.As, lookup.From.Key?.Wire, whole[lookup.As]);
 
                         stages[position] = lookup with { Select = BindLoads(loaded, Shape.ForEntity(lookup.From, addons)) };
-                        loads[lookup.As] = new JoinLoad(loaded, ShownUnder(final, lookup.As, whole[lookup.As]), lookup.Hint);
+                        loads[lookup.As] = new JoinLoad(loaded, ShownUnder(final, lookup.As, whole[lookup.As]));
                         break;
                     }
 
@@ -422,7 +422,7 @@ public sealed class Binder
                         var select = BindLoads(loaded, Shape.ForEntity(target.Entity, addons));
 
                         stages[position] = resolve with { Select = select, Cases = [only with { Targets = [target with { Select = select }] }] };
-                        loads[resolve.As] = new JoinLoad(loaded, ShownUnder(final, resolve.As, whole[resolve.As]), resolve.Hint);
+                        loads[resolve.As] = new JoinLoad(loaded, ShownUnder(final, resolve.As, whole[resolve.As]));
                         break;
                     }
 
@@ -497,7 +497,7 @@ public sealed class Binder
 
         /// <summary>
         /// A keyed or remote resolve with what its owners are asked for (see <see cref="InferLoads"/>): per
-        /// alias the paths the projection names under it; kept whole, the hint; else nothing, which the
+        /// alias the paths the projection names under it; kept whole, nothing, which the
         /// owner query spells as the owner's own key and display. A local target binds the paths it has
         /// and drops the others for itself; a remote one is sent them, and its owner says what it lacks.
         /// </summary>
@@ -508,17 +508,17 @@ public sealed class Binder
             // An alias the row does not carry shows nothing: its owner is asked for the key alone, which is
             // all this host needs of it to lift what the stages continued under it add (an anchor).
             IReadOnlyList<string>? sent = !own.Carried ? []
-                : own.Whole ? resolve.Hint is { } hint ? RootOutput.Written(hint) : null
+                : own.Whole ? null
                 : RootOutput.Cover(own.Projected);
             // The owning row's 'entity' is this host's to write, not a member of the owner's row.
             IReadOnlyList<string>? parentSent = parent is { Carried: true, Whole: false }
                 ? RootOutput.Cover(parent.Projected.Where(path => path != ParentEntity && !path.StartsWith(ParentEntity + ".", StringComparison.Ordinal)))
                 : parent is { Carried: false } ? [] : null;
 
-            loads[resolve.As] = new JoinLoad(WithAnchorReads(sent, resolve.As), own.Carried ? sent : [], resolve.Hint);
+            loads[resolve.As] = new JoinLoad(WithAnchorReads(sent, resolve.As), own.Carried ? sent : []);
 
             if (resolve.ParentAs is not null)
-                loads[resolve.ParentAs] = new JoinLoad(WithAnchorReads(parentSent, resolve.ParentAs), parent!.Carried ? parent.Whole ? null : RootOutput.Cover(parent.Projected) : [], null);
+                loads[resolve.ParentAs] = new JoinLoad(WithAnchorReads(parentSent, resolve.ParentAs), parent!.Carried ? parent.Whole ? null : RootOutput.Cover(parent.Projected) : []);
 
             var cases = (resolve.Cases ?? []).Select(bound => bound with
             {
@@ -1732,10 +1732,13 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? "from, path, as, select, filter, limit, sort, first, on, forTarget, parentAs" : "from, path, as, select, filter, limit")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? LookupMembers : "from, path, as, select, filter, limit")}."
                     + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
                 return;
             }
+
+            if (lookup.Select is not null && RefuseSelect("lookup", LookupMembers, lookup.As, index))
+                return;
 
             if (lookup.Malformed.Count > 0)
             {
@@ -1909,7 +1912,7 @@ public sealed class Binder
             var parentKeyStorage = parentPrefix.Length == 0 ? parentKey.Storage! : parentPrefix + "." + parentKey.Storage;
 
             stages.Add(new BoundStage.Lookup(child, childPath, alias, select, filter, limit, childScope, parentKeyStorage, childPath.Storage!,
-                sortFields, first, lookup.On, index) { Hint = lookup.Select is { Count: > 0 } hint ? hint : null });
+                sortFields, first, lookup.On, index));
 
             // Under contract 2 every member of the child can be read under the alias, and the join loads
             // what is read (InferLoads); under contract 1 the alias holds the select and nothing else.
@@ -2124,7 +2127,7 @@ public sealed class Binder
             var reference = new ReferenceDef { Targets = [declared], DeclaredBy = ReferenceSource.Declaration };
             var stage = new BoundStage.Resolve(parentKey, alias, entityId, childPath, IsRemote: true,
                 null, null, null, null, null, written, filter,
-                ResolveExecutor.Keyed, [new BoundResolveCase(reference, null, [target])], null, null, null, parentAs, null, ResolveOnMissing.Null, index, spec) { Hint = written };
+                ResolveExecutor.Keyed, [new BoundResolveCase(reference, null, [target])], null, null, null, parentAs, null, ResolveOnMissing.Null, index, spec);
 
             stages.Add(stage);
 
@@ -2195,10 +2198,13 @@ public sealed class Binder
             if (unknown.Count > 0)
             {
                 errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? "path, as, select, filter, elements, target, parentAs, onMissing, forTarget, byTarget, outcomeAs" : "path, as, select, filter")}."
+                    $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? ResolveMembers : "path, as, select, filter")}."
                     + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
                 return;
             }
+
+            if (resolve.Select is not null && RefuseSelect("resolve", ResolveMembers, resolve.As, index))
+                return;
 
             if (resolve.Malformed.Count > 0)
             {
@@ -2410,7 +2416,6 @@ public sealed class Binder
                 first.IsRemote ? resolve.Select : null, first.IsRemote ? sentFilter : null,
                 inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index)
             {
-                Hint = resolve.Select is { Count: > 0 } hint ? hint : null,
                 OutcomeAs = outcomeAs,
             };
 
@@ -3168,6 +3173,38 @@ public sealed class Binder
 
                 errors.Add(Error(failure.Code ?? Codes.UnknownPath, failure.Message ?? $"'{wire}' is not a path of '{first.Declared}'.", index, wire));
             }
+        }
+
+        // ---- select (DG2) ----------------------------------------------------------------------
+
+        /// <summary>The members of a contract 2 lookup: a join has no <c>select</c> there.</summary>
+        private const string LookupMembers = "from, path, as, filter, limit, sort, first, on, forTarget, parentAs";
+
+        /// <summary>The members of a contract 2 resolve; see <see cref="LookupMembers"/>.</summary>
+        private const string ResolveMembers = "path, as, filter, elements, target, parentAs, onMissing, forTarget, byTarget, outcomeAs";
+
+        /// <summary>
+        /// A contract 2 join has no <c>select</c>: what it loads is inferred from what is read under its
+        /// alias, and what it shows is what the projection names under it (without one, its key and
+        /// display member). The member is refused by name, with the stage that replaces it, on the public
+        /// route and on an internal call alike: an owner query carries what the origin needs of an alias
+        /// as its own <c>project</c> stage, and a stage continued at an owner travels as the caller
+        /// wrote it, so nothing the engine sends writes one. Contract 1 keeps its <c>select</c>.
+        /// </summary>
+        private bool RefuseSelect(string stage, string members, string? alias, int index)
+        {
+            if (!contract2)
+                return false;
+
+            errors.Add(new QueryValidationError
+            {
+                Code = Codes.UnknownStageMember,
+                Message = $"'select' is not a member of {stage}; a {stage} carries {members}. A join loads what later stages read under its alias and shows what a project stage names under it ({{ \"project\": {{ \"{alias ?? "alias"}.<path>\": 1 }} }}); without a projection it shows its key and display member.",
+                Stage = index,
+                Params = new Dictionary<string, object?> { ["stage"] = stage, ["member"] = "select", ["reason"] = "removed", ["use"] = "project" },
+            });
+
+            return true;
         }
 
         // ---- unwind --------------------------------------------------------------------------

@@ -32,8 +32,8 @@ public class JoinsKeyedFetchTests
     {
         var answer = await (await LedgerClient()).SendAsync(ReportSeed.Transaction, $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.TransactionId)}}" } } },
-              { "resolve": { "path": "items.billingLineId", "as": "lines", "elements": "all", "select": ["text"] } },
-              { "project": { "id": 1, "lines": 1 } } ]
+              { "resolve": { "path": "items.billingLineId", "as": "lines", "elements": "all" } },
+              { "project": { "id": 1, "lines.id": 1, "lines.text": 1 } } ]
             """);
 
         answer.ShouldBeOk();

@@ -81,8 +81,8 @@ public class ContinuationExecutionTests
     private static Refusal RefusedWith(QueryOutcome outcome) => outcome.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
 
     private const string ContactChain = """
-        [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-         { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } },
+        [{ "resolve": { "path": "contactId", "as": "r" } },
+         { "resolve": { "path": "r.companyId", "as": "co" } },
          { "page": { "limit": 10 } }]
         """;
 
@@ -135,7 +135,7 @@ public class ContinuationExecutionTests
         sent.Pipeline.Select(stage => stage.Kind).Should().Equal("match", "resolve", "project", "page");
         sent.Pipeline[1].Resolve!.Path.Should().Be("companyId", "'r.' is the owner's row");
         sent.Pipeline[1].Resolve!.As.Should().Be("co");
-        sent.Pipeline[2].Project!.Fields.Keys.Should().BeEquivalentTo(["name", "id", "co"], "the continued alias is projected beside the select and the key");
+        sent.Pipeline[2].Project!.Fields.Keys.Should().BeEquivalentTo(["$default", "id", "co"], "the continued alias is projected beside what the alias kept whole asks for (the owner's key and display) and the key");
         sent.Strict.Should().BeTrue("strict travels in the body of a query that carries a chain");
         sent.Variables.Should().BeNull("an owner never receives variables");
 
@@ -151,7 +151,7 @@ public class ContinuationExecutionTests
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice")));
 
-        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "page": { "limit": 10 } }]""", strict: true));
+        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r" } }, { "page": { "limit": 10 } }]""", strict: true));
 
         var (_, request, budget) = client.Calls.Should().ContainSingle().Subject;
         request.Queries.Single().Strict.Should().BeNull("without a chain the owner has nothing strict would change");
@@ -178,7 +178,8 @@ public class ContinuationExecutionTests
 
     private const string ForAlpha = """
         [{ "resolve": { "path": "source.id", "as": "src" } },
-         { "lookup": { "from": "ct.note", "path": "alphaId", "on": "src", "forTarget": "ct.alpha", "as": "note", "first": true, "select": ["text"] } },
+         { "lookup": { "from": "ct.note", "path": "alphaId", "on": "src", "forTarget": "ct.alpha", "as": "note", "first": true } },
+         { "project": { "number": 1, "src": 1, "note.text": 1 } },
          { "sort": [{ "number": "asc" }] }]
         """;
 
@@ -235,9 +236,9 @@ public class ContinuationExecutionTests
     // ---- byTarget: the union join ----------------------------------------------------------------------
 
     /// <summary>The memo of whatever the source is: the alpha's note, the beta's gamma; a gamma has none.</summary>
-    private static string Memo(string project, string hint = "") => $$"""
+    private static string Memo(string project) => $$"""
         [{ "resolve": { "path": "source.id", "as": "src" } },
-         { "resolve": { "as": "memo", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.memoId" }{{hint}} } },
+         { "resolve": { "as": "memo", "byTarget": { "ct.alpha": "src.noteId", "ct.beta": "src.memoId" } } },
          {{project}}
          { "sort": [{ "number": "asc" }] }]
         """;
@@ -386,37 +387,6 @@ public class ContinuationExecutionTests
 
         explained.Valid.Should().BeTrue(string.Join("; ", explained.Errors.Select(error => error.Message)));
         explained.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Path, note.Params!["branch"])).Should().Equal(("text", (object?)"ct.beta"));
-    }
-
-    [Fact]
-    public async Task A_path_of_the_select_hint_one_branch_does_not_reach_is_dropped_for_that_branch_too()
-    {
-        var host = ChainHost.Start();
-        SeedMemos(host);
-
-        var result = Succeeded(await host.RunAsync(Memo("", hint: """, "select": ["text", "colour"]""")));
-
-        result.Items[0]!["memo"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "text"], "the hint as far as a note has it, with the key");
-        result.Items[1]!["memo"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "colour"]);
-        result.Diagnostics!.Where(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget)
-            .Select(diagnostic => (diagnostic.Stage, diagnostic.Path, diagnostic.Params!["branch"])).Should().BeEquivalentTo(new (int?, string?, object?)[] { (1, "colour", "ct.alpha"), (1, "text", "ct.beta") });
-
-        var refusal = RefusedWith(await host.RunAsync(Memo("", hint: """, "select": ["nope"]""")));
-
-        refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.ResolveRefused, Codes.UnknownPath);
-        refusal.Errors![1].Should().Match<QueryValidationError>(error => error.Stage == 1 && error.Path == "nope", "a hint path no branch reaches is the stage's own");
-
-        var explained = await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("", hint: """, "select": ["text", "colour"]""")), BindHost.Context());
-        var answer = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-
-        answer.Valid.Should().BeTrue(string.Join("; ", answer.Errors.Select(error => error.Message)));
-        answer.Notes.Where(note => note.Code == Notes.SelectPathNotOnTarget).Select(note => (note.Stage, note.Path, note.Params!["branch"]))
-            .Should().BeEquivalentTo(new (int?, string?, object?)[] { (1, "colour", "ct.alpha"), (1, "text", "ct.beta") });
-
-        var unknown = (await host.Engine.ExplainAsync(BindHost.Request(ChainModel.Invoice, Memo("", hint: """, "select": ["nope"]""")), BindHost.Context())).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
-
-        unknown.Valid.Should().BeFalse();
-        unknown.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.UnknownPath && error.Stage == 1 && error.Path == "nope");
     }
 
     [Fact]
@@ -742,7 +712,7 @@ public class ContinuationExecutionTests
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.UnknownPath, "no", Stage: 1, Path: "nope");
 
-        RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["nope"] } }]""")).Errors![0].Code.Should().Be(Codes.ResolveRefused);
+        RefusedWith(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r" } }]""")).Errors![0].Code.Should().Be(Codes.ResolveRefused);
         client.Calls.Should().ContainSingle("a target that is the only one has the path or the request is wrong");
     }
 
@@ -755,14 +725,14 @@ public class ContinuationExecutionTests
         runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice")));
 
-        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "code", "address"] } }, { "project": { "number": 1, "r.name": 1, "r.address.city": 1 } }]"""));
+        var result = Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "number": 1, "r.name": 1, "r.address.city": 1 } }]"""));
 
         client.Calls.Single().Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
             .Should().BeEquivalentTo(["name", "address.city", "id"], "only what the projection keeps of the alias, and the key");
         result.Items[0]!["r"]!["name"]!.GetValue<string>().Should().Be("Alice");
 
         client.Calls.Clear();
-        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "code"] } }, { "project": { "number": 1, "r": 1 } }]"""));
+        Succeeded(await RunAsync(engine, """[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "number": 1, "r.name": 1, "r.code": 1 } }]"""));
         client.Calls.Single().Request.Queries[0].Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
             .Should().BeEquivalentTo(["name", "code", "id"], "a projection of the whole alias keeps the select");
     }
@@ -782,9 +752,9 @@ public class ContinuationExecutionTests
         host.Runner.Rows[ChainModel.Invoice] = [ChainModel.InvoiceRow(ChainModel.Invoice1, "RE-1", row => row["NextKey"] = ChainModel.Invoice1.ToString())];
 
         var result = Succeeded(await host.RunAsync("""
-            [{ "resolve": { "path": "nextKey", "as": "n1", "select": ["number"] } },
-             { "resolve": { "path": "n1.nextKey", "as": "n2", "select": ["number"] } },
-             { "resolve": { "path": "n2.nextKey", "as": "n3", "select": ["number"] } }]
+            [{ "resolve": { "path": "nextKey", "as": "n1" } },
+             { "resolve": { "path": "n1.nextKey", "as": "n2" } },
+             { "resolve": { "path": "n2.nextKey", "as": "n3" } }]
             """));
 
         host.Runner.Calls.Should().HaveCount(4, "the origin, then one owner level per keyed stage along the chain, and no more although the data cycles");

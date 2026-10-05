@@ -32,8 +32,8 @@ public class JoinsLookupMembersTests
         var answer = await (await TransportClient()).SendAsync(ReportSeed.Shipment, $$"""
             [ { "match": { "id": { "in": ["{{Id(ReportSeed.ShipmentId)}}", "{{Id(ReportSeed.ShipmentWithoutAttemptsId)}}"] } } },
               { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "lastAttempt",
-                            "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["id", "dateTime", "status", "text"] } },
-              { "project": { "id": 1, "lastAttempt": 1 } },
+                            "first": true, "sort": [ { "dateTime": "desc" } ] } },
+              { "project": { "id": 1, "lastAttempt.id": 1, "lastAttempt.dateTime": 1, "lastAttempt.status": 1, "lastAttempt.text": 1 } },
               { "sort": [ { "id": "asc" } ] } ]
             """);
 
@@ -53,13 +53,14 @@ public class JoinsLookupMembersTests
         var client = await TransportClient();
         var sorted = await client.SendAsync(ReportSeed.Shipment, $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.ShipmentId)}}" } } },
-              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "sort": [ { "dateTime": "desc" } ], "select": ["text"] } } ]
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "sort": [ { "dateTime": "desc" } ] } },
+              { "project": { "id": 1, "attempts.text": 1 } } ]
             """);
 
         TextsIn(sorted.ShouldBeOk().Items[0]!["attempts"]).Should().Equal("Delivered to gate 3", "Gate closed", "Recipient absent");
 
         var delivered = await client.SendAsync(ReportSeed.Shipment, """
-            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["status"] } },
+            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ] } },
               { "match": { "lastAttempt.status.displayName": { "eq": "delivered" } } },
               { "project": { "id": 1 } } ]
             """);
@@ -73,8 +74,8 @@ public class JoinsLookupMembersTests
         var client = await TransportClient();
         var pipeline = $$"""
             [ { "match": { "id": { "in": ["{{Id(ReportSeed.ShipmentId)}}", "{{Id(ReportSeed.ShipmentWithDuplicateLineId)}}"] } } },
-              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": LIMIT, "sort": [ { "dateTime": "desc" } ], "select": ["text"] } },
-              { "project": { "id": 1, "attempts": 1 } },
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": LIMIT, "sort": [ { "dateTime": "desc" } ] } },
+              { "project": { "id": 1, "attempts.id": 1, "attempts.text": 1 } },
               { "sort": [ { "id": "asc" } ] } ]
             """;
 
@@ -99,7 +100,7 @@ public class JoinsLookupMembersTests
     public async Task A_truncated_lookup_under_a_group_is_still_reported()
     {
         var answer = await (await TransportClient()).SendAsync(ReportSeed.Shipment, """
-            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 1, "select": ["status.displayName"] } },
+            [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 1 } },
               { "unwind": { "path": "attempts", "as": "attempt" } },
               { "group": { "by": [ { "path": "attempt.status.displayName", "as": "status" } ], "fields": { "n": { "count": true } } } } ]
             """);
@@ -112,10 +113,10 @@ public class JoinsLookupMembersTests
     {
         var answer = await (await TransportClient()).SendAsync(ReportSeed.DeliveryAttempt, $$"""
             [ { "match": { "text": { "in": ["Recipient absent", "Delivered"] } } },
-              { "resolve": { "path": "shipmentId", "as": "ship", "select": ["id", "shipmentNumber"] } },
+              { "resolve": { "path": "shipmentId", "as": "ship" } },
               { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "ship", "as": "latest",
-                            "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["text"] } },
-              { "project": { "text": 1, "latest": 1 } } ]
+                            "first": true, "sort": [ { "dateTime": "desc" } ] } },
+              { "project": { "text": 1, "latest.id": 1, "latest.text": 1 } } ]
             """);
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
@@ -135,8 +136,8 @@ public class JoinsLookupMembersTests
         var answer = await (await TransportClient()).SendAsync(ReportSeed.DeliveryAttempt, """
             [ { "match": { "text": { "eq": "Recipient absent" } } },
               { "resolve": { "path": "shipmentId", "as": "ship", "filter": { "shipmentNumber": { "eq": "no such shipment" } } } },
-              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "ship", "as": "siblings", "select": ["text"] } },
-              { "project": { "text": 1, "ship": 1, "siblings": 1 } } ]
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "ship", "as": "siblings" } },
+              { "project": { "text": 1, "ship": 1, "siblings.id": 1, "siblings.text": 1 } } ]
             """);
 
         var row = answer.ShouldBeOk().Items.Should().ContainSingle().Which!;

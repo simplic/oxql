@@ -29,7 +29,7 @@ public class ExplainTypesTests
         [{ "unwind": { "path": "lines", "as": "line" } },
          { "resolve": { "path": "customerId", "as": "c" } },
          { "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "sh" } },
-         { "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } }]
+         { "resolve": { "path": "contactId", "as": "ct" } }]
         """;
 
     private static MongoQueryEngine Engine(FakeRemoteClient? client = null, Action<OxQLOptions>? configure = null, EntityModel? model = null) =>
@@ -223,7 +223,7 @@ public class ExplainTypesTests
     public async Task A_projection_takes_members_out_of_the_row_and_a_joins_hint_takes_none()
     {
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },
+            [{ "resolve": { "path": "customerId", "as": "c" } },
              { "project": { "number": 1, "lines.id": 1, "c.name": 1 } },
              { "sort": [{ "number": "asc" }] }]
             """);
@@ -428,8 +428,8 @@ public class ExplainTypesTests
     public async Task A_continued_alias_points_to_the_type_its_owner_bound_it_to()
     {
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
+            [{ "resolve": { "path": "contactId", "as": "r" } },
+             { "resolve": { "path": "r.companyId", "as": "co" } }]
             """, client: OwnerFleet.Client());
 
         result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
@@ -480,8 +480,8 @@ public class ExplainTypesTests
     public async Task A_continued_alias_no_owner_answered_for_has_no_entity_and_no_type_rather_than_the_anchors()
     {
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
+            [{ "resolve": { "path": "contactId", "as": "r" } },
+             { "resolve": { "path": "r.companyId", "as": "co" } }]
             """, client: new FakeRemoteClient());
 
         result.Alias("co")["node"]!.GetValue<string>().Should().Be("remote");
@@ -496,7 +496,7 @@ public class ExplainTypesTests
     {
         var client = OwnerFleet.Client();
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "ct" } },
              { "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
              { "match": { "nothing": { "eq": 1 } } }]
             """, client: client);

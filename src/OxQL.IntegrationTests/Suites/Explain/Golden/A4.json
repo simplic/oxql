@@ -19,8 +19,7 @@
         "resolve": {
           "path": "createUserId",
           "as": "clerk",
-          "onMissing": "null",
-          "select": ["address.firstName","address.lastName","primaryEmailAddress.email"]
+          "onMissing": "null"
         }
       },
       {
@@ -43,16 +42,14 @@
           "path": "item.references.referenceId",
           "as": "lineShipment",
           "elements": "first",
-          "target": "transport.shipment",
-          "select": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"]
+          "target": "transport.shipment"
         }
       },
       {
         "resolve": {
           "path": "lineShipment.tours.tourId",
           "as": "deliveringTour",
-          "elements": "first",
-          "select": ["number"]
+          "elements": "first"
         }
       },
       {
@@ -60,8 +57,7 @@
           "path": "deliveringTour.resource.id",
           "as": "tourVehicle",
           "target": "fleet.vehicle",
-          "onMissing": "null",
-          "select": ["registrationPlate.registrationIdentifier","matchCode"]
+          "onMissing": "null"
         }
       },
       {
@@ -70,8 +66,7 @@
           "as": "driver",
           "elements": "first",
           "target": "staff.employee",
-          "onMissing": "null",
-          "select": ["address.firstName","address.lastName","primaryEmailAddress.email"]
+          "onMissing": "null"
         }
       },
       {
@@ -79,8 +74,7 @@
           "path": "item.references.referenceId",
           "as": "lineTour",
           "elements": "first",
-          "target": "transport.tour",
-          "select": ["number","startDateTime","endDateTime","actions"]
+          "target": "transport.tour"
         }
       },
       {
@@ -93,16 +87,38 @@
           "totalPriceNet": 1,
           "totalPriceGross": 1,
           "taxKeyTotalPrices": 1,
-          "clerk": 1,
+          "clerk.id": 1,
+          "clerk.address.firstName": 1,
+          "clerk.address.lastName": 1,
+          "clerk.primaryEmailAddress.email": 1,
+          "clerk.userId": 1,
           "position": 1,
           "item.text": 1,
           "item.quantity": 1,
           "item.totalPriceNet": 1,
-          "lineShipment": 1,
-          "deliveringTour": 1,
-          "tourVehicle": 1,
-          "driver": 1,
-          "lineTour": 1
+          "lineShipment.id": 1,
+          "lineShipment.shipmentNumber": 1,
+          "lineShipment.referenceNumber": 1,
+          "lineShipment.loadAddress": 1,
+          "lineShipment.deliveryAddress": 1,
+          "lineShipment.effectiveDeliveryEnd": 1,
+          "lineShipment.deliveryNoteNumber": 1,
+          "lineShipment.items.weightNotes.number": 1,
+          "lineShipment.items.weightNotes.quantity": 1,
+          "deliveringTour.id": 1,
+          "deliveringTour.number": 1,
+          "tourVehicle.id": 1,
+          "tourVehicle.registrationPlate.registrationIdentifier": 1,
+          "tourVehicle.matchCode": 1,
+          "driver.id": 1,
+          "driver.address.firstName": 1,
+          "driver.address.lastName": 1,
+          "driver.primaryEmailAddress.email": 1,
+          "lineTour.id": 1,
+          "lineTour.number": 1,
+          "lineTour.startDateTime": 1,
+          "lineTour.endDateTime": 1,
+          "lineTour.actions": 1
         }
       },
       {
@@ -135,10 +151,10 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":1,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'clerk' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"createUserId","params":{"alias":"clerk","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'clerk' is joined after the page is taken, for the page's rows only.","stage":1,"path":"clerk","params":{"alias":"clerk","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'lineShipment' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'lineShipment' is joined after the page is taken, for the page's rows only.","stage":4,"path":"lineShipment","params":{"alias":"lineShipment","kind":"resolve"}},
       {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":5,"path":"lineShipment.tours.tourId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
@@ -147,7 +163,7 @@
       {"code":"MISSING_POLICY","message":"A reference of 'tourVehicle' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"tourVehicle","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'driver' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"driver","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"OWNER_BINDS","message":"'lineTour' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","services":["transport"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'lineTour' comes from another service; its owner binds the filter and every path under the alias.","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'lineTour' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'lineTour' is joined after the page is taken, for the page's rows only.","stage":8,"path":"lineTour","params":{"alias":"lineTour","kind":"resolve"}},
       {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":9,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]}},
@@ -477,23 +493,45 @@
           {"path":"totalPriceNet","use":"project"},
           {"path":"totalPriceGross","use":"project"},
           {"path":"taxKeyTotalPrices","use":"project"},
-          {"path":"clerk","use":"project","alias":"clerk"},
+          {"path":"clerk.id","use":"project","alias":"clerk"},
+          {"path":"clerk.address.firstName","use":"project","alias":"clerk"},
+          {"path":"clerk.address.lastName","use":"project","alias":"clerk"},
+          {"path":"clerk.primaryEmailAddress.email","use":"project","alias":"clerk"},
+          {"path":"clerk.userId","use":"project","alias":"clerk"},
           {"path":"position","use":"project"},
           {"path":"item.text","use":"project"},
           {"path":"item.quantity","use":"project"},
           {"path":"item.totalPriceNet","use":"project"},
-          {"path":"lineShipment","use":"project","alias":"lineShipment"},
-          {"path":"deliveringTour","use":"project","alias":"deliveringTour"},
-          {"path":"tourVehicle","use":"project","alias":"tourVehicle"},
-          {"path":"driver","use":"project","alias":"driver"},
-          {"path":"lineTour","use":"project","alias":"lineTour"}
+          {"path":"lineShipment.id","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.shipmentNumber","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.referenceNumber","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.loadAddress","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.deliveryAddress","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.effectiveDeliveryEnd","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.deliveryNoteNumber","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.items.weightNotes.number","use":"project","alias":"lineShipment"},
+          {"path":"lineShipment.items.weightNotes.quantity","use":"project","alias":"lineShipment"},
+          {"path":"deliveringTour.id","use":"project","alias":"deliveringTour"},
+          {"path":"deliveringTour.number","use":"project","alias":"deliveringTour"},
+          {"path":"tourVehicle.id","use":"project","alias":"tourVehicle"},
+          {"path":"tourVehicle.registrationPlate.registrationIdentifier","use":"project","alias":"tourVehicle"},
+          {"path":"tourVehicle.matchCode","use":"project","alias":"tourVehicle"},
+          {"path":"driver.id","use":"project","alias":"driver"},
+          {"path":"driver.address.firstName","use":"project","alias":"driver"},
+          {"path":"driver.address.lastName","use":"project","alias":"driver"},
+          {"path":"driver.primaryEmailAddress.email","use":"project","alias":"driver"},
+          {"path":"lineTour.id","use":"project","alias":"lineTour"},
+          {"path":"lineTour.number","use":"project","alias":"lineTour"},
+          {"path":"lineTour.startDateTime","use":"project","alias":"lineTour"},
+          {"path":"lineTour.endDateTime","use":"project","alias":"lineTour"},
+          {"path":"lineTour.actions","use":"project","alias":"lineTour"}
         ],
         "creates": [],
         "shape": {
           "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment","lineTour","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
           "roots": {
             "": "t:ledger.transaction",
             "clerk": "t:staff.employee",
@@ -531,7 +569,7 @@
           "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment","lineTour","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
           "roots": {
             "": "t:ledger.transaction",
             "clerk": "t:staff.employee",
@@ -567,7 +605,7 @@
           "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
-          "projection": ["clerk","date","deliveringTour","driver","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment","lineTour","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle"],
+          "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
           "roots": {
             "": "t:ledger.transaction",
             "clerk": "t:staff.employee",
@@ -620,9 +658,8 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
-        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
-        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "loads": ["address.firstName","address.lastName","id","primaryEmailAddress.email","userId"],
+        "shows": ["address.firstName","address.lastName","id","primaryEmailAddress.email","userId"],
         "targets": [
           {
             "target": "staff.employee",
@@ -688,9 +725,8 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity","tours.tourId"],
-        "shows": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
-        "hint": ["shipmentNumber","referenceNumber","loadAddress","deliveryAddress","effectiveDeliveryEnd","deliveryNoteNumber","items.weightNotes.number","items.weightNotes.quantity"],
+        "loads": ["deliveryAddress","deliveryNoteNumber","effectiveDeliveryEnd","id","items.weightNotes.number","items.weightNotes.quantity","loadAddress","referenceNumber","shipmentNumber","tours.tourId"],
+        "shows": ["deliveryAddress","deliveryNoteNumber","effectiveDeliveryEnd","id","items.weightNotes.number","items.weightNotes.quantity","loadAddress","referenceNumber","shipmentNumber"],
         "targets": [
           {
             "target": "transport.shipment",
@@ -715,9 +751,8 @@
         "continuedFrom": {
           "alias": "lineShipment"
         },
-        "loads": ["number","attachedResources.resource.id","resource.id"],
-        "shows": ["number"],
-        "hint": ["number"],
+        "loads": ["id","number","attachedResources.resource.id","resource.id"],
+        "shows": ["id","number"],
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -733,9 +768,8 @@
         "continuedFrom": {
           "alias": "deliveringTour"
         },
-        "loads": ["registrationPlate.registrationIdentifier","matchCode"],
-        "shows": ["registrationPlate.registrationIdentifier","matchCode"],
-        "hint": ["registrationPlate.registrationIdentifier","matchCode"],
+        "loads": ["id","matchCode","registrationPlate.registrationIdentifier"],
+        "shows": ["id","matchCode","registrationPlate.registrationIdentifier"],
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -751,9 +785,8 @@
         "continuedFrom": {
           "alias": "deliveringTour"
         },
-        "loads": ["address.firstName","address.lastName","primaryEmailAddress.email"],
-        "shows": ["address.firstName","address.lastName","primaryEmailAddress.email"],
-        "hint": ["address.firstName","address.lastName","primaryEmailAddress.email"],
+        "loads": ["address.firstName","address.lastName","id","primaryEmailAddress.email"],
+        "shows": ["address.firstName","address.lastName","id","primaryEmailAddress.email"],
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -791,9 +824,8 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["number","startDateTime","endDateTime","actions"],
-        "shows": ["number","startDateTime","endDateTime","actions"],
-        "hint": ["number","startDateTime","endDateTime","actions"],
+        "loads": ["actions","endDateTime","id","number","startDateTime"],
+        "shows": ["actions","endDateTime","id","number","startDateTime"],
         "targets": [
           {
             "target": "transport.tour",
@@ -877,29 +909,36 @@
         {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always"},
         {"path":"clerk.address.firstName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
         {"path":"clerk.address.lastName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
+        {"path":"clerk.id","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
         {"path":"clerk.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
+        {"path":"clerk.userId","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
         {"path":"item.text","kind":"string","nullable":true,"stage":2,"root":"item","present":"ifStored"},
         {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":2,"root":"item","present":"ifVariant"},
         {"path":"item.quantity","kind":"object","nullable":true,"stage":2,"root":"item","present":"ifVariant"},
         {"path":"position","kind":"int","nullable":false,"stage":2,"root":"","present":"always"},
-        {"path":"lineShipment.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.loadAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
         {"path":"lineShipment.deliveryAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.effectiveDeliveryEnd","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
         {"path":"lineShipment.deliveryNoteNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"lineShipment.effectiveDeliveryEnd","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"lineShipment.id","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
         {"path":"lineShipment.items.weightNotes.number","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
         {"path":"lineShipment.items.weightNotes.quantity","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"lineShipment.loadAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"lineShipment.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"lineShipment.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
+        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
         {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
+        {"path":"tourVehicle.id","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
         {"path":"tourVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
+        {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
         {"path":"driver.address.firstName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
         {"path":"driver.address.lastName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
+        {"path":"driver.id","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
         {"path":"driver.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
-        {"path":"lineTour.number","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.startDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
+        {"path":"lineTour.actions","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
         {"path":"lineTour.endDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.actions","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"}
+        {"path":"lineTour.id","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
+        {"path":"lineTour.number","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
+        {"path":"lineTour.startDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"}
       ]
     },
     "owners": [

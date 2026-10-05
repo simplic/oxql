@@ -335,7 +335,7 @@ public static class MongoCompiler
                 // JoinsAfterPage decides the phase of a join, which explain reports (JOIN_BEFORE_PAGE /
                 // JOIN_AFTER_PAGE); a join a later lookup's 'on' reads stays before the page unless
                 // that lookup joins after the page as well (see JoinsAfterPage).
-                case BoundStage.Lookup lookup when JoinsAfterPage(bound.Stages, index, lookup.As):
+                case BoundStage.Lookup lookup when JoinsAfterPage(bound, index, lookup.As):
                     lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags), options.KeepDiscriminators));
                     lateJoinKeys.Add(lookup.ParentKeyStorage);
                     break;
@@ -362,7 +362,7 @@ public static class MongoCompiler
                     keyed.Add(keyedResolve);
                     break;
 
-                case BoundStage.Resolve resolve when JoinsAfterPage(bound.Stages, index, resolve):
+                case BoundStage.Resolve resolve when JoinsAfterPage(bound, index, resolve):
                     lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
                     break;
@@ -1811,12 +1811,25 @@ public static class MongoCompiler
     /// <summary>
     /// Whether a join can run after the page is taken. It can when no later stage filters,
     /// orders, unwinds, groups or resolves through its alias, no group replaces the row, and
-    /// every later projection passes the alias whole: the page then holds the same rows, and
+    /// every later projection passes the alias on: the page then holds the same rows, and
     /// the join adds the same value to each of them, whether it runs before the sort or
     /// after the limit. Explain reads it for a join step's phase (DESIGN §4.3).
+    /// <para>
+    /// A projection passes the alias on when it keeps it whole, and, for a join whose loads the
+    /// binder inferred (contract 2), also when it names paths under it: the join then loads those
+    /// paths with its key, and the row shows them alone (<see cref="BoundPipeline.Loads"/>, the
+    /// output set of the final shape), so what the projection would cut is never loaded and the
+    /// join need not stand before it. Without this a contract 2 join, which has no <c>select</c>,
+    /// could show chosen members only by running for every candidate row.
+    /// </para>
     /// </summary>
-    public static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, string alias)
+    public static bool JoinsAfterPage(BoundPipeline bound, int index, string alias)
     {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        var stages = bound.Stages;
+        var inferred = bound.Loads.ContainsKey(alias);
+
         for (var later = index + 1; later < stages.Count; later++)
         {
             switch (stages[later])
@@ -1825,13 +1838,13 @@ public static class MongoCompiler
                     return false;
 
                 case BoundStage.Project project:
-                    if (!PassesWhole(project, alias))
+                    if (!PassesWhole(project, alias) && !(inferred && NamesUnder(project, alias)))
                         return false;
                     break;
 
                 // A lookup on the alias reads the joined parent, which is there after the page
                 // too when that lookup also joins after the page: the late joins run in stage order.
-                case BoundStage.Lookup lookup when lookup.On == alias && JoinsAfterPage(stages, later, lookup.As):
+                case BoundStage.Lookup lookup when lookup.On == alias && JoinsAfterPage(bound, later, lookup.As):
                     break;
 
                 case var stage when Reads(stage, alias):
@@ -1843,18 +1856,23 @@ public static class MongoCompiler
     }
 
     /// <summary>
-    /// <see cref="JoinsAfterPage(IReadOnlyList{BoundStage}, int, string)"/> for an inline resolve: its
+    /// <see cref="JoinsAfterPage(BoundPipeline, int, string)"/> for an inline resolve: its
     /// alias can be joined after the page, and no later stage reads the outcome it names
     /// (<c>outcomeAs</c>): a condition or a group over the outcome needs it on every candidate row. A
     /// projection only passes the outcome on or drops it.
     /// </summary>
-    public static bool JoinsAfterPage(IReadOnlyList<BoundStage> stages, int index, BoundStage.Resolve resolve)
+    public static bool JoinsAfterPage(BoundPipeline bound, int index, BoundStage.Resolve resolve)
     {
+        ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(resolve);
 
-        return JoinsAfterPage(stages, index, resolve.As)
-            && !(resolve.OutcomeAs is { } outcomeAs && stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs)));
+        return JoinsAfterPage(bound, index, resolve.As)
+            && !(resolve.OutcomeAs is { } outcomeAs && bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs)));
     }
+
+    /// <summary>Whether an inclusion keeps the alias by naming it or paths under it: what a join with inferred loads is cut to on the way out.</summary>
+    private static bool NamesUnder(BoundStage.Project project, string alias) =>
+        project.Inclusion && project.Paths.Any(path => RootIs(path, alias));
 
     /// <summary>
     /// Whether a projection leaves the alias as the join produces it: an inclusion that names

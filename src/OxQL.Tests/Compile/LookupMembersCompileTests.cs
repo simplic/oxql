@@ -41,7 +41,7 @@ public class LookupMembersCompileTests
     public async Task A_sorted_lookup_orders_the_children_by_the_caller_then_the_key_and_fetches_one_over_the_limit()
     {
         var compiled = await Compile("""
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"], "limit": 2, "sort": [{ "when": "desc" }] } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": 2, "sort": [{ "when": "desc" }] } },
              { "match": { "orders.number": { "eq": "x" } } }]
             """, Customer);
 
@@ -66,7 +66,7 @@ public class LookupMembersCompileTests
     public async Task First_takes_one_child_out_of_the_array_and_carries_no_flag()
     {
         var compiled = await Compile("""
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true, "sort": [{ "when": "desc" }], "select": ["number"] } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true, "sort": [{ "when": "desc" }] } },
              { "match": { "latest.number": { "eq": "x" } } }]
             """, Customer);
 
@@ -85,7 +85,7 @@ public class LookupMembersCompileTests
     {
         var compiled = await Compile($$"""
             [{{CustomerResolve}},
-             { "lookup": { "from": "probe.order", "path": "customerId", "on": "cust", "as": "siblings", "select": ["number"] } },
+             { "lookup": { "from": "probe.order", "path": "customerId", "on": "cust", "as": "siblings" } },
              { "match": { "siblings.number": { "eq": "x" } } }]
             """, Order);
 

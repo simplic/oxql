@@ -41,8 +41,8 @@ public class ExplainStagesTests
     [Fact]
     public async Task An_inline_join_runs_before_the_page_when_a_later_stage_reads_it_and_after_the_page_otherwise()
     {
-        var read = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } }, { "match": { "c.name": { "eq": "Alice" } } }]""");
-        var shown = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } }]""");
+        var read = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "match": { "c.name": { "eq": "Alice" } } }]""");
+        var shown = await ExplainAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }]""");
 
         read.Stage(0).Placement.Should().Match<ExplainPlacement>(placed => placed.Executor == "inline" && placed.Phase == "beforePage" && placed.Host == "rc" && placed.Owner == null);
         read.Stage(1).Placement.Should().BeNull("a match is no join");
@@ -95,7 +95,7 @@ public class ExplainStagesTests
     [Fact]
     public async Task A_remote_resolve_names_its_owner_and_the_plain_key_match_it_is_sent()
     {
-        var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""");
+        var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r" } }]""");
         var placement = explain.Stage(0).Placement!;
 
         placement.Executor.Should().Be("keyed-remote");
@@ -114,7 +114,7 @@ public class ExplainStagesTests
     public async Task The_owner_queries_come_with_the_plan_only()
     {
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), new FakeRemoteClient());
-        var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context());
+        var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]"""), BindHost.Context());
         var plain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         plain.Owners.Should().ContainSingle().Which.AsObject().ContainsKey("queries").Should().BeFalse("an owner query is part of the plan");
@@ -126,8 +126,8 @@ public class ExplainStagesTests
     public async Task A_stage_continued_at_the_owner_is_placed_there_and_listed_under_its_target()
     {
         var explain = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
+            [{ "resolve": { "path": "contactId", "as": "r" } },
+             { "resolve": { "path": "r.companyId", "as": "co" } }]
             """);
 
         explain.Valid.Should().BeTrue();
@@ -250,7 +250,7 @@ public class ExplainStagesTests
     {
         var explain = await ExplainAsync("""
             [{ "resolve": { "path": "customerId", "as": "c" } },
-             { "resolve": { "path": "contactId", "as": "r", "select": ["name"], "onMissing": "report" } }]
+             { "resolve": { "path": "contactId", "as": "r", "onMissing": "report" } }]
             """);
 
         explain.Alias("c")["outcome"]!.ToJsonString().Should().Be("""{"values":["not_found"]}""");
@@ -276,17 +276,17 @@ public class ExplainStagesTests
     };
 
     [Fact]
-    public async Task A_projected_or_selected_path_the_remote_target_lacks_is_an_error_where_the_caller_wrote_it()
+    public async Task A_projected_path_the_remote_target_lacks_is_an_error_where_the_caller_wrote_it()
     {
         var client = Owner("statuz", "nope");
         var explain = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "nope"] } },
+            [{ "resolve": { "path": "contactId", "as": "r" } },
              { "project": { "number": 1, "r.name": 1, "r.statuz": 1 } }]
             """, client: client);
 
         explain.Valid.Should().BeFalse();
         explain.Errors.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal([(Codes.UnknownPath, (int?)1, "r.statuz")],
-            "the projection narrows the select to what it keeps, so 'nope' is never sent");
+            "the owner is asked for what the projection names, so 'nope' is never sent");
 
         var error = explain.Errors.Single(error => error.Path == "r.statuz");
         var owner = (IReadOnlyDictionary<string, object?>)error.Params!["owner"]!;
@@ -298,12 +298,9 @@ public class ExplainStagesTests
         explain.Stage(1).Status.Should().Be("error");
 
         client.ExplainCalls.Should().ContainSingle().Which.Request.Query.Pipeline.Single(stage => stage.Project is not null).Project!.Fields.Keys
-            .Should().Contain(["name", "statuz"], "the projected path is asked of the owner beside the select");
+            .Should().Contain(["name", "statuz"], "the projected paths are what the owner is asked for");
 
-        (await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "project": { "r.name": 1 } }]""", client: Owner("statuz"))).Valid.Should().BeTrue();
-
-        var selected = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name", "nope"] } }]""", client: Owner("nope"));
-        selected.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Stage == 0 && error.Path == "r.nope", "a select path is the resolve stage's");
+        (await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "r.name": 1 } }]""", client: Owner("statuz"))).Valid.Should().BeTrue();
     }
 
     [Fact]
@@ -366,10 +363,10 @@ public class ExplainStagesTests
         // The silent owner of 'c' spends the budget; the stages continued under the local 'r' are
         // still bound at this host, and the owner the nested explain would ask for 'ic' is not asked.
         var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """
-            [{ "resolve": { "path": "contactId", "as": "c", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "c" } },
              { "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
-             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice", "select": ["contactId"] } },
-             { "resolve": { "path": "invoice.contactId", "as": "ic", "select": ["name"] } }]
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice" } },
+             { "resolve": { "path": "invoice.contactId", "as": "ic" } }]
             """), BindHost.Context(options));
 
         var result = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
@@ -393,10 +390,10 @@ public class ExplainStagesTests
         var options = BindHost.Options();
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client);
         var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """
-            [{ "resolve": { "path": "contactId", "as": "c", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "c" } },
              { "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
-             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice", "select": ["contactId"] } },
-             { "resolve": { "path": "invoice.contactId", "as": "ic", "select": ["name"] } }]
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice" } },
+             { "resolve": { "path": "invoice.contactId", "as": "ic" } }]
             """), BindHost.Context(options));
 
         var result = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
@@ -416,7 +413,7 @@ public class ExplainStagesTests
         var options = BindHost.Options(options => options.Explain.RemoteTimeoutMs = 100);
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client);
         var outcome = await engine.ExplainAsync(BindHost.Request(Invoice, """
-            [{ "resolve": { "path": "contactId", "as": "c", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "c" } },
              { "resolve": { "path": "customerIds", "as": "r", "elements": "first" } },
              { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "r", "first": true, "as": "invoice" } },
              { "resolve": { "path": "invoice.number", "as": "ic" } }]
@@ -430,7 +427,7 @@ public class ExplainStagesTests
     [Fact]
     public async Task A_remote_target_whose_owner_does_not_answer_is_noted_unchecked_and_its_alias_is_not_complete()
     {
-        var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""");
+        var explain = await ExplainAsync("""[{ "resolve": { "path": "contactId", "as": "r" } }]""");
 
         explain.Valid.Should().BeTrue();
         explain.Notes.Should().ContainSingle(note => note.Code == Notes.RemoteUnchecked).Which.Stage.Should().Be(0);
@@ -446,13 +443,13 @@ public class ExplainStagesTests
     public async Task The_columns_are_the_visible_members_under_their_root_and_each_join_under_its_alias()
     {
         var columns = (await ExplainAsync("""
-            [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },
-             { "resolve": { "path": "contactId", "as": "r", "select": ["name", "email"] } },
-             { "project": { "number": 1, "c": 1, "r": 1 } }]
+            [{ "resolve": { "path": "customerId", "as": "c" } },
+             { "resolve": { "path": "contactId", "as": "r" } },
+             { "project": { "number": 1, "c": 1, "r.name": 1, "r.email": 1 } }]
             """)).Result!.Columns;
 
-        columns.Select(column => (column.Path, column.Root)).Should().Equal([("id", ""), ("number", ""), ("c.id", "c"), ("c.name", "c"), ("r.name", "r"), ("r.email", "r")],
-            "kept whole, a local alias shows its hint with its key; a remote one what its owner is asked for, the hint");
+        columns.Select(column => (column.Path, column.Root)).Should().Equal([("id", ""), ("number", ""), ("c.id", "c"), ("c.name", "c"), ("r.email", "r"), ("r.name", "r")],
+            "kept whole, a local alias shows its key and display member; a remote one under a projection what its owner is asked for, the projected paths");
         columns.Single(column => column.Path == "number").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == null && !column.Nullable);
         columns.Single(column => column.Path == "c.name").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == 0 && column.Nullable);
         columns.Single(column => column.Path == "r.email").Should().Match<ExplainColumn>(column => column.Kind == "unknown" && column.Stage == 1, "the owner knows a remote member's kind");
@@ -484,10 +481,10 @@ public class ExplainStagesTests
     public async Task A_column_says_when_a_row_carries_its_key()
     {
         var columns = (await ExplainAsync("""
-            [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },
-             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "c", "as": "others", "select": ["number"] } },
+            [{ "resolve": { "path": "customerId", "as": "c" } },
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "c", "as": "others" } },
              { "unwind": { "path": "lines", "as": "line", "includeIndex": "at" } },
-             { "project": { "number": 1, "customerCode": 1, "slot": 1, "c": 1, "others": 1, "line.id": 1, "at": 1 } }]
+             { "project": { "number": 1, "customerCode": 1, "slot": 1, "c.name": 1, "others.number": 1, "line.id": 1, "at": 1 } }]
             """)).Result!.Columns.ToDictionary(column => column.Path, column => column.Present);
 
         columns["id"].Should().Be(ExplainColumn.Always);

@@ -29,8 +29,8 @@ public class ExplainRemoteCheckTests
 
     /// <summary>A stage continued at the remote owner of <c>r</c>.</summary>
     private const string Continued = """
-        [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-         { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }]
+        [{ "resolve": { "path": "contactId", "as": "r" } },
+         { "resolve": { "path": "r.companyId", "as": "co" } }]
         """;
 
     private sealed class ManualTime : TimeProvider
@@ -181,7 +181,7 @@ public class ExplainRemoteCheckTests
         cached.Etag.Should().Be(checkedAnswer.Etag, "a complete cached answer is the answer a check gives, so a client that holds it is told so (304)");
 
         // Another query: nothing is kept for it, so the cached tier says so and still asks nobody.
-        var other = await ExplainAsync(Continued.Replace("\"title\"", "\"name\""), engine: engine, envelope: """ "remote": "cached" """);
+        var other = await ExplainAsync(Continued.Replace("\"co\"", "\"company\""), engine: engine, envelope: """ "remote": "cached" """);
 
         client.ExplainCalls.Should().ContainSingle();
         other.Cache.Complete.Should().BeFalse();
@@ -331,7 +331,7 @@ public class ExplainRemoteCheckTests
             },
         };
         var engine = Engine(client);
-        var other = Continued.Replace("\"title\"", "\"name\"");
+        var other = Continued.Replace("\"co\"", "\"company\"");
 
         await ExplainAsync(Continued, engine: engine);
         await ExplainAsync(Continued, engine: engine);
@@ -786,7 +786,7 @@ public class ExplainRemoteCheckTests
         client.ExplainCalls.Should().HaveCount(1, "the second explain is answered from the cache");
         second.OwnerOf("crm").Should().Match<JsonObject>(owner => owner["calls"]!.GetValue<int>() == 0 && owner["cached"]!.GetValue<bool>() && owner["answered"]!.GetValue<bool>());
 
-        await ExplainAsync(Continued.Replace("\"title\"", "\"name\""), engine: engine);
+        await ExplainAsync(Continued.Replace("\"co\"", "\"company\""), engine: engine);
         client.ExplainCalls.Should().HaveCount(2, "another body is another entry");
 
         time.Now += ExplainForwardCache.Ttl;
@@ -1040,9 +1040,9 @@ public class ExplainRemoteCheckTests
 
     /// <summary>Three remote resolves into one owner, each with a continued stage: three checks, one service, one round.</summary>
     private const string ThreeChecks = """
-        [{ "resolve": { "path": "contactId", "as": "a", "select": ["name"] } },
-         { "resolve": { "path": "contactId", "as": "b", "select": ["email"] } },
-         { "resolve": { "path": "contactId", "as": "c", "select": ["name", "email"] } }]
+        [{ "resolve": { "path": "contactId", "as": "a" } },
+         { "resolve": { "path": "contactId", "as": "b" } },
+         { "resolve": { "path": "contactId", "as": "c" } }]
         """;
 
     [Fact]
@@ -1063,7 +1063,7 @@ public class ExplainRemoteCheckTests
     {
         var client = OwnerFleet.Client();
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "ct" } },
              { "resolve": { "path": "source.id", "as": "line" } }]
             """, client, options => options.Explain.MaxOwnerServices = 1);
 
@@ -1087,7 +1087,7 @@ public class ExplainRemoteCheckTests
     {
         var client = OwnerFleet.Client();
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "ct" } },
              { "resolve": { "path": "source.id", "as": "line" } }]
             """, client, options => options.Explain.MaxOwnerCalls = 1);
 
@@ -1130,8 +1130,8 @@ public class ExplainRemoteCheckTests
 
         // crm continues a stage and so does transport: one round, two calls.
         await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } },
+            [{ "resolve": { "path": "contactId", "as": "r" } },
+             { "resolve": { "path": "r.companyId", "as": "co" } },
              { "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
              { "resolve": { "path": "owner.carrierId", "as": "c", "forTarget": "transport.shipment" } }]
             """, client, options => options.Explain.MaxOwnerCalls = 7);
@@ -1150,7 +1150,7 @@ public class ExplainRemoteCheckTests
         var further = OwnerFleet.Client();
         var owner = OwnerFleet.Engine(ResolveModel.Model, client: further);
         var check = ExplainAnswer.Envelope("""
-            { "query": { "entityType": "rc.shipment", "pipeline": [{ "resolve": { "path": "driverId", "as": "d", "select": ["name"] } }] }, "budget": { "ms": 1000, "calls": 0 } }
+            { "query": { "entityType": "rc.shipment", "pipeline": [{ "resolve": { "path": "driverId", "as": "d" } }] }, "budget": { "ms": 1000, "calls": 0 } }
             """);
 
         var spent = OwnerFleet.Answer(owner, check)!;
@@ -1181,7 +1181,7 @@ public class ExplainRemoteCheckTests
         // The wall time is below the owners' own budget, so it is what runs out. The check of the
         // resolve is the first round; the lookup of the transport entity comes after it.
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } }]
+            [{ "resolve": { "path": "contactId", "as": "ct" } }]
             """, client, options => { options.Explain.TimeoutMs = 150; options.Explain.RemoteTimeoutMs = 1_500; },
             envelope: """ "catalog": [{ "id": "t", "entity": "transport.shipment" }] """);
 
@@ -1201,7 +1201,7 @@ public class ExplainRemoteCheckTests
         client.Silent.Add("crm");
 
         var result = await ExplainAsync("""
-            [{ "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "ct" } },
              { "resolve": { "path": "source.id", "as": "line" } }]
             """, client, options => options.Explain.RemoteTimeoutMs = 150);
 

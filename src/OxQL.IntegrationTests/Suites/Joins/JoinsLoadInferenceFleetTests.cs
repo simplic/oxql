@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using OxQL.Core.Binding;
@@ -8,20 +7,19 @@ using OxQL.IntegrationTests.Harness;
 using OxQL.IntegrationTests.Suites.Explain;
 using OxQL.IntegrationTests.Suites.Report;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// Select inference on the fleet (improvement plan §3.S): a join loads what later stages read, its
-/// key and its output set, and the row shows the output set alone. The report scenarios and the
-/// EXAMPLE-CASE chain without any <c>select</c> answer the rows of their select-bearing versions,
-/// within the run budget (T4); a member a stage only reads is loaded and not shown; the paths
-/// projected under a union's alias drop per target; what a stage continued at an owner reads, its
-/// owner infers.
+/// Load inference on the fleet (improvement plan §3.S): a join loads what later stages read, its
+/// key and its output set, and the row shows the output set alone. A contract 2 join has no
+/// <c>select</c>: the member is refused by name, and the report scenarios and the EXAMPLE-CASE chain
+/// choose what an alias shows with their projection. A member a stage only reads is loaded and not
+/// shown; the paths projected under a union's alias drop per target; what a stage continued at an
+/// owner reads, its owner infers.
 /// </summary>
 [Trait("Category", "Integration")]
-public class JoinsSelectInferenceTests
+public class JoinsLoadInferenceFleetTests
 {
     public static TheoryData<string> Queries => ["A1", "A2", "A2b", "A3", "A4", "A5", "EX1-source-chain"];
 
@@ -33,31 +31,38 @@ public class JoinsSelectInferenceTests
 
     private static string? Text(JsonNode? node, string path) => Json.At(node, path) is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    // ---- the same rows without any select ---------------------------------------------------------------
+    // ---- a join has no select ---------------------------------------------------------------------------
 
     [Theory]
-    [MemberData(nameof(Queries))]
-    public async Task S01_a_query_without_any_select_answers_the_rows_of_its_select_bearing_version(string id)
+    [InlineData("resolve", """{ "resolve": { "path": "invoiceRecipient.id", "as": "recipient", "select": ["name"] } }""")]
+    [InlineData("resolve", """{ "resolve": { "path": "invoiceRecipient.id", "as": "recipient", "select": [] } }""")]
+    [InlineData("lookup", """{ "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "select": ["shipmentNumber"] } }""")]
+    [InlineData("resolve", """{ "resolve": { "as": "vehicle", "byTarget": { "transport.shipment": "a.b", "transport.tour": "a.c" }, "select": ["matchCode"] } }""")]
+    public async Task S01_a_select_on_a_join_is_refused_by_name_in_the_run_and_in_explain_with_the_stage_that_replaces_it(string kind, string stage)
     {
-        var bearing = Request(id);
-        var inferred = ReportScenarios.WithoutSelects(bearing);
-        var client = await ReportScenarios.ClientAsync(bearing);
+        var ledger = await LedgerClient();
+        var request = $$"""{ "entityType": "ledger.transaction", "pipeline": [ { "match": { "number": { "exists": true } } }, {{stage}} ] }""";
 
-        inferred.ToJsonString().Should().NotContain("\"select\"", "the version under test writes no select at all");
+        var refused = (await ledger.QueryAsync(request)).ShouldRefuse(Codes.UnknownStageMember, 400);
 
-        var expected = (await client.QueryAsync(bearing)).ShouldBeOk();
-        var answer = (await client.QueryAsync(inferred)).ShouldBeOk();
+        Text(refused, "message").Should().StartWith($"'select' is not a member of {kind}; a {kind} carries ").And.Contain("project");
+        refused["stage"]!.GetValue<int>().Should().Be(1);
+        refused["params"]!.ToJsonString().Should().Be($$"""{"stage":"{{kind}}","member":"select","reason":"removed","use":"project"}""");
 
-        answer.Items.ToJsonString().Should().Be(expected.Items.ToJsonString(), $"{id}: the projection names what the selects showed, and the joins load what is read");
-        answer.DiagnosticCodes.Should().Equal(expected.DiagnosticCodes, $"{id}: what is reported does not depend on who named the paths");
-        answer.Items.Should().NotBeEmpty();
+        var explained = await ledger.ExplainHereAsync(request);
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse(explained.Text);
+        explained.Body["errors"]!.AsArray().Select(error => error!.ToJsonString()).Should().Equal([refused.ToJsonString()], "explain answers the error the run refuses with");
     }
 
     [Theory]
     [MemberData(nameof(Queries))]
-    public async Task S02_explain_and_the_run_agree_on_the_query_without_selects(string id)
+    public async Task S02_explain_and_the_run_agree_on_the_reference_queries_and_every_alias_shows_what_the_projection_names(string id)
     {
-        var inferred = ReportScenarios.WithoutSelects(Request(id));
+        var inferred = Request(id);
+
+        inferred.ToJsonString().Should().NotContain("\"select\"", "a reference query chooses what an alias shows with its projection");
+
         var client = await ReportScenarios.ClientAsync(inferred);
         var explained = await client.ExplainHereAsync(inferred);
 
@@ -112,18 +117,18 @@ public class JoinsSelectInferenceTests
     }
 
     [Fact]
-    public async Task S04_a_projection_under_an_alias_alone_decides_what_the_alias_shows_whatever_its_hint_names()
+    public async Task S04_a_projection_under_an_alias_alone_decides_what_the_alias_shows()
     {
         var ledger = await LedgerClient();
         var answer = (await ledger.QueryAsync(Lines("""
-            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.id"] } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
             { "match": { "erpLine.sourceBillingLineReference.type": { "exists": true } } },
             { "project": { "position": 1, "erpLine.text": 1 } }
             """))).ShouldBeOk();
 
         answer.Items.Should().NotBeEmpty();
         answer.Items.OfType<JsonObject>().Should().OnlyContain(row => row["erpLine"]!.AsObject().Select(member => member.Key).SequenceEqual(new[] { "text" }),
-            "the hint says what a whole alias shows; under a projection the row carries the projected path only, neither the hint nor the key nor what the match read");
+            "under a projection the row carries the projected path only: neither the key, nor the display member a whole alias shows, nor what the match read");
     }
 
     // ---- a union: the paths under its alias are flat -----------------------------------------------------
@@ -215,7 +220,6 @@ public class JoinsSelectInferenceTests
         explained.Body["aliases"]!["deliveringTour"]!["shows"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("number");
         explained.Body["aliases"]!["sourceParent"]!["loads"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal(["id", "tours.tourId"],
             "what the projection names under the owning row, and what the stage continued under it reads");
-        explained.Body["aliases"]!["sourceParent"]!["hint"].Should().BeNull();
     }
 
     // ---- an alias a later join only continues from is loaded, and not shown --------------------------------
@@ -327,67 +331,4 @@ public class JoinsSelectInferenceTests
 
         Text(error, "message").Should().StartWith("'parentSelect' is not a member of resolve");
     }
-}
-
-/// <summary>T4, the run budget of select inference (improvement plan §3.T), measured without other tests running.</summary>
-[Trait("Category", "Integration")]
-[Collection(TimedCollection.Name)]
-public class JoinsSelectInferenceBudgetTests(ITestOutputHelper output)
-{
-    public static TheoryData<string> Queries => JoinsSelectInferenceTests.Queries;
-
-    private static JsonObject Request(string id) => ExplainGolden.Cases[id]();
-
-    /// <summary>
-    /// T4 (improvement plan §3.T): without selects a query answers the same row bytes, and as fast,
-    /// within +10 %, as its select-bearing version. The time is the median of interleaved warm runs;
-    /// a millisecond and a half of slack absorbs what a shared test machine adds to queries this short.
-    /// </summary>
-    [Theory]
-    [MemberData(nameof(Queries))]
-    public async Task T4_without_selects_the_row_bytes_and_the_latency_stay_within_a_tenth_of_the_select_bearing_version(string id)
-    {
-        const int Runs = 15;
-
-        var bearing = Request(id);
-        var inferred = ReportScenarios.WithoutSelects(bearing);
-        var client = await ReportScenarios.ClientAsync(bearing);
-
-        // Warm: the owners' answers of both plans are cached, as they are for every page after the first.
-        for (var warmup = 0; warmup < 3; warmup++)
-        {
-            (await client.QueryAsync(bearing)).ShouldBeOk();
-            (await client.QueryAsync(inferred)).ShouldBeOk();
-        }
-
-        var bearingMs = new List<double>();
-        var inferredMs = new List<double>();
-        var bearingBytes = 0;
-        var inferredBytes = 0;
-
-        for (var run = 0; run < Runs; run++)
-        {
-            var timer = Stopwatch.StartNew();
-            var first = await client.QueryAsync(bearing);
-
-            bearingMs.Add(timer.Elapsed.TotalMilliseconds);
-            timer.Restart();
-
-            var second = await client.QueryAsync(inferred);
-
-            inferredMs.Add(timer.Elapsed.TotalMilliseconds);
-            bearingBytes = first.Items.ToJsonString().Length;
-            inferredBytes = second.Items.ToJsonString().Length;
-        }
-
-        var before = bearingMs.Order().ElementAt(Runs / 2);
-        var after = inferredMs.Order().ElementAt(Runs / 2);
-
-        output.WriteLine($"{id}: rows {bearingBytes} B with selects, {inferredBytes} B without ({Percent(inferredBytes, bearingBytes)}); warm median {before:F2} ms with selects, {after:F2} ms without ({Percent(after, before)})");
-
-        inferredBytes.Should().BeLessThanOrEqualTo((int)(bearingBytes * 1.1), "T4: the row bytes stay within +10 %");
-        after.Should().BeLessThanOrEqualTo(before * 1.1 + 1.5, "T4: the latency stays within +10 %");
-    }
-
-    private static string Percent(double value, double of) => of == 0 ? "n/a" : $"{(value - of) / of * 100:+0.0;-0.0;0.0} %";
 }

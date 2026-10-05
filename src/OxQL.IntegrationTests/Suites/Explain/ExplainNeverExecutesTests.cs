@@ -25,7 +25,7 @@ public class ExplainNeverExecutesTests
 {
     private static readonly string LookupAndCount = """
         [ { "match": { "id": { "neq": null } } },
-          { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "equipment", "select": ["name"] } },
+          { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "equipment" } },
           { "sort": [ { "id": "asc" } ] },
           { "page": { "limit": 5, "count": true } } ]
         """;

@@ -1,14 +1,11 @@
 {
-  "description": "A local resolve with select and filter, sorted by the resolved member.",
+  "description": "A local resolve with a filter, sorted by the resolved member.",
   "entity": "probe.order",
   "pipeline": [
     {
       "resolve": {
         "path": "customerId",
         "as": "cust",
-        "select": [
-          "name"
-        ],
         "filter": {
           "matchCode": {
             "eq": "m"

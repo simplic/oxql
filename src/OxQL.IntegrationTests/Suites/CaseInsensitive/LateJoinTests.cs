@@ -58,7 +58,7 @@ public class LateJoinTests
         total.Should().BeGreaterThan(2);
 
         var (moved, stayed) = await Twins(await Conformance(),
-            """{ "lookup": { "from": "conformance.child", "path": "parentId", "as": "kids", "select": ["name"] } }""",
+            """{ "lookup": { "from": "conformance.child", "path": "parentId", "as": "kids" } }""",
             """{ "sort": [ { "name": "asc" } ] }, { "page": { "limit": 2, "count": true } }""");
 
         moved.ShouldHaveIds(expected).ShouldHaveTotal(total);
@@ -115,7 +115,7 @@ public class LateJoinTests
         parents.Should().ContainSingle();
 
         var answer = await (await Conformance()).SendAsync(Corpus.Conformance, """
-            [ { "lookup": { "from": "conformance.child", "path": "parentId", "as": "kids", "select": ["name"] } },
+            [ { "lookup": { "from": "conformance.child", "path": "parentId", "as": "kids" } },
               { "match": { "kids.name": { "eq": "CHILD ONE" } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },

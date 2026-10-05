@@ -101,7 +101,7 @@
     "notes": [
       {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); not_found lose data.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"report","strict":false,"dataLoss":["not_found"]}},
       {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null and is reported (RESOLVE_MISSING) (onMissing report); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"report","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
       {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true}},
@@ -467,7 +467,6 @@
         },
         "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
         "shows": ["text"],
-        "hint": null,
         "targets": [
           {
             "target": "ledger.billing_line",
@@ -516,7 +515,6 @@
         },
         "loads": ["totalPrice"],
         "shows": ["totalPrice"],
-        "hint": null,
         "targets": [
           {
             "target": "transport.shipment#billingLines",
@@ -550,7 +548,6 @@
         "lookupOn": true,
         "loads": ["number","shipmentNumber","resource.id","tours.tourId"],
         "shows": ["number","shipmentNumber"],
-        "hint": null,
         "parentOf": "sourceLine",
         "targets": [
           {
@@ -584,7 +581,6 @@
         },
         "loads": ["resource.id"],
         "shows": [],
-        "hint": null,
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -620,7 +616,6 @@
         ],
         "loads": ["matchCode","registrationPlate.registrationIdentifier"],
         "shows": ["matchCode","registrationPlate.registrationIdentifier"],
-        "hint": null,
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },

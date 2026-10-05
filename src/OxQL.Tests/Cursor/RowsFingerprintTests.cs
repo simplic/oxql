@@ -33,7 +33,7 @@ public class RowsFingerprintTests
             ["a projection before the sort"] = $$"""[{ "project": { "number": 1 } }, {{Sort}}]""",
             ["a page"] = $$"""[{{Sort}}, { "page": { "limit": 7, "count": true } }]""",
             ["a display-only join"] = $$"""[{{Join}}, {{Sort}}]""",
-            ["a display-only join with a select"] = $$"""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, {{Sort}}]""",
+            ["a display-only join with a select"] = $$"""[{ "resolve": { "path": "customerId", "as": "cust" } }, {{Sort}}]""",
             ["a display-only join that names its outcome"] = $$"""[{ "resolve": { "path": "customerId", "as": "cust", "outcomeAs": "custOutcome" } }, {{Sort}}]""",
             ["a display-only join under a projection"] = $$"""[{{Join}}, {{Sort}}, { "project": { "number": 1, "cust.name": 1 } }]""",
             ["a display-only join after the sort"] = $$"""[{{Sort}}, {{Join}}, { "project": { "cust.name": 1 } }]""",
@@ -75,7 +75,7 @@ public class RowsFingerprintTests
         const string Read = """{ "match": { "cust.name": { "eq": "x" } } }""";
         var read = await Fingerprint($"[{Join}, {Read}, {Sort}]");
 
-        (await Fingerprint($$"""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, {{Read}}, {{Sort}}]""")).Should().Be(read, "what a join loads decides no row");
+        (await Fingerprint($$"""[{ "resolve": { "path": "customerId", "as": "cust" } }, {{Read}}, {{Sort}}]""")).Should().Be(read, "what a join loads decides no row");
         (await Fingerprint($$"""[{ "resolve": { "path": "customerId", "as": "cust", "filter": { "name": { "exists": true } } } }, {{Read}}, {{Sort}}]""")).Should().NotBe(read, "a join's filter decides what a condition on its alias matches");
     }
 

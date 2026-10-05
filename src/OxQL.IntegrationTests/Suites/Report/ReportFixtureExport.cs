@@ -74,7 +74,11 @@ internal static class ReportFixtureExport
     public static JsonObject InvalidRequest(JsonObject a2b)
     {
         var request = a2b.DeepClone().AsObject();
-        request["pipeline"]![ReportScenarios.IndexOf(request, "lastAttempt")]!["lookup"]!["select"] = new JsonArray("dateTime", "statuz");
+        var project = request["pipeline"]!.AsArray().OfType<JsonObject>().Single(stage => stage["project"] is JsonObject)["project"]!.AsObject();
+
+        // A join has no select: the path is written where the alias is projected.
+        project.Remove("lastAttempt.status");
+        project["lastAttempt.statuz"] = 1;
         return request;
     }
 
@@ -136,7 +140,7 @@ internal static class ReportFixtureExport
         var ambiguous = ReportScenarios.WithVariable(a1, "transactionId", ReportSeed.AmbiguousSourceTransactionId);
 
         files.Add(Write(directory, "explain-invalid.json", Case(
-            "A2b with a select path the delivery attempt lacks (statuz) in the lookup continued at transport: explain answers valid:false with the owner's UNKNOWN_PATH mapped to the caller's stage",
+            "A2b with a projected path the delivery attempt lacks (lastAttempt.statuz) under the lookup continued at transport: explain answers valid:false with the owner's UNKNOWN_PATH mapped to the caller's stage, the projection",
             invalid, contract: 2, Normalised(Answer(await ReportExplain.ExplainAsync(ledger, invalid), 200)))));
         files.Add(Write(directory, "strict-missing.json", Case(
             "A1 on the invoice whose ERP line points at a deleted source line: strict refuses with RESOLVE_MISSING (not_found)",

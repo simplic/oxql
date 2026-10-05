@@ -106,7 +106,7 @@ public class AbortIsNotAFaultTests
         var (engine, logs) = Host(new ResetRunner(caller, reset: false), new ResetClient(caller));
 
         var run = () => engine.ExecuteAsync(
-            BindHost.Request(Order, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]"""),
+            BindHost.Request(Order, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 10 } }]"""),
             BindHost.Context(),
             caller.Token);
 

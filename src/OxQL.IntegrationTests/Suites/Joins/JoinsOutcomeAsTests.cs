@@ -27,7 +27,7 @@ public class JoinsOutcomeAsTests
 
     // ---- a private database: an inline, a keyed and an element-wise resolve ------------------------------
 
-    private const string Customer = """{ "resolve": { "path": "customerId", "as": "customer", "select": ["name"], "outcomeAs": "customerOutcome"MORE } }""";
+    private const string Customer = """{ "resolve": { "path": "customerId", "as": "customer", "outcomeAs": "customerOutcome"MORE } }""";
 
     private static string Orders(string stages) => $$"""[ { "sort": [ { "number": "asc" } ] }, {{stages}} ]""";
 
@@ -101,7 +101,7 @@ public class JoinsOutcomeAsTests
         var (owned, host) = await JoinsOutcomesTests.StartAsync("o_inline_ambiguous");
         await using var _ = owned;
         await using var __ = host;
-        const string ByName = """{ "resolve": { "path": "customerName", "as": "namesake", "select": ["name"]MORE } }""";
+        const string ByName = """{ "resolve": { "path": "customerName", "as": "namesake"MORE } }""";
 
         var silent = await host.SendAsync("oc.order", Orders(ByName.Replace("MORE", "")));
 
@@ -122,7 +122,7 @@ public class JoinsOutcomeAsTests
         await using var __ = host;
 
         var answer = await host.SendAsync("oc.order", Orders("""
-            { "resolve": { "path": "lineId", "as": "line", "select": ["code"], "outcomeAs": "lineOutcome" } },
+            { "resolve": { "path": "lineId", "as": "line", "outcomeAs": "lineOutcome" } },
             { "resolve": { "path": "customerIds", "as": "customers", "elements": "all", "outcomeAs": "customersOutcome" } },
             { "resolve": { "path": "customerIds", "as": "firstCustomer", "elements": "first", "outcomeAs": "firstOutcome" } }
             """));

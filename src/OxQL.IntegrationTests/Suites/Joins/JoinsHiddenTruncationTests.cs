@@ -36,7 +36,7 @@ public class JoinsHiddenTruncationTests
         var client = await Lab.ClientAsync(LabService.Transport, Org.R);
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.ShipmentId)}}" } } },
-              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 2, "sort": [ { "dateTime": "asc" } ], "select": ["text"] } },
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 2, "sort": [ { "dateTime": "asc" } ] } },
               { "match": { "attempts.text": { "eq": "Delivered to gate 3" } } },
               { "project": { "id": 1 } } ]
             """;
@@ -64,7 +64,7 @@ public class JoinsHiddenTruncationTests
         var client = await Lab.ClientAsync(LabService.Transport, Org.R);
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.ShipmentId)}}" } } },
-              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 2, "sort": [ { "dateTime": "asc" } ], "select": ["text"] } },
+              { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 2, "sort": [ { "dateTime": "asc" } ] } },
               { "unwind": { "path": "attempts", "as": "attempt" } },
               { "match": { "attempt.text": { "eq": "Delivered to gate 3" } } },
               { "project": { "id": 1 } } ]

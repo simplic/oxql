@@ -44,7 +44,7 @@ public class ResolveBindTests
     {
         var unknown = await ErrorAsync("""[{ "resolve": { "path": "customerId", "as": "c", "source": "x" } }]""", Codes.UnknownStageMember);
 
-        unknown.Message.Should().Contain("path, as, select, filter, elements, target, parentAs, onMissing, forTarget");
+        unknown.Message.Should().Contain("path, as, filter, elements, target, parentAs, onMissing, forTarget").And.NotContain("select");
 
         var legacy = await ErrorAsync("""[{ "resolve": { "path": "customerId", "as": "c", "elements": "first" } }]""", Codes.LegacyStageUnsupported, BindHost.Context(contract: 1));
 
@@ -94,7 +94,7 @@ public class ResolveBindTests
     public async Task A_path_through_a_lookup_array_is_RESOLVE_ON_COLLECTION_which_used_to_join_silently()
     {
         var error = await BindHost.ErrorAsync(BindHost.Probe, "probe.customer", """
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["customerId"] } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } },
              { "resolve": { "path": "orders.customerId", "as": "again" } }]
             """, Codes.ResolveOnCollection);
 
@@ -199,10 +199,10 @@ public class ResolveBindTests
         bound.FinalShape.Roots["bl"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item!.Wire.Should().Be("billingLines");
         bound.FinalShape.Roots["ship"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item.Should().BeNull();
 
-        // Kept whole, the element shows its select hint with the matched member, the owning row its key and display.
-        var selected = await ResolveAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "select": ["code", "amount"], "parentAs": "ship" } }]""");
+        // The element shows what the projection names under it, with the matched member; the owning row kept whole, its key and display.
+        var selected = await ResolveAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "ship" } }, { "project": { "bl.code": 1, "bl.amount": 1, "ship": 1 } }]""");
 
-        selected.Cases![0].Targets[0].Select!.Select(path => path.Storage).Should().Equal("_id", "Code", "Amount");
+        selected.Cases![0].Targets[0].Select!.Select(path => path.Storage).Should().Equal(["_id", "Amount", "Code"], "the matched member, then the projected paths in ordinal order");
         selected.Cases[0].Targets[0].ParentSelect!.Select(path => path.Storage).Should().Equal("_id", "Number");
     }
 
@@ -271,7 +271,7 @@ public class ResolveBindTests
     [Fact]
     public async Task A_case_with_a_remote_target_is_remote_and_not_a_semi_join()
     {
-        var bound = await BoundAsync("""[{ "resolve": { "path": "source.id", "as": "src", "select": ["code"] } }]""");
+        var bound = await BoundAsync("""[{ "resolve": { "path": "source.id", "as": "src" } }, { "project": { "src.code": 1 } }]""");
         var resolve = bound.Stages.OfType<BoundStage.Resolve>().Single();
 
         resolve.IsRemote.Should().BeTrue();
@@ -285,17 +285,17 @@ public class ResolveBindTests
     }
 
     [Fact]
-    public async Task A_select_path_one_target_of_a_union_lacks_is_dropped_for_it_and_one_no_target_has_is_refused()
+    public async Task A_projected_path_one_target_of_a_union_lacks_is_dropped_for_it_and_one_no_target_has_is_refused()
     {
-        var resolve = await ResolveAsync("""[{ "resolve": { "path": "localSource.id", "as": "src", "select": ["code", "name"] } }]""");
+        var resolve = await ResolveAsync("""[{ "resolve": { "path": "localSource.id", "as": "src" } }, { "project": { "src.code": 1, "src.name": 1 } }]""");
 
         resolve.Cases![0].Targets[0].Select!.Select(path => path.Storage).Should().Equal("_id", "Code");
         resolve.Cases[0].Targets[0].DroppedSelect.Should().Equal("name");
         resolve.Cases[1].Targets[0].Select!.Select(path => path.Storage).Should().Equal("_id", "Code", "Name");
 
-        var error = await ErrorAsync("""[{ "resolve": { "path": "localSource.id", "as": "src", "select": ["nope"] } }]""", Codes.UnknownPath);
+        var error = await ErrorAsync("""[{ "resolve": { "path": "localSource.id", "as": "src" } }, { "project": { "src.nope": 1 } }]""", Codes.UnknownPath);
 
-        error.Path.Should().Be("nope");
+        error.Path.Should().Be("src.nope");
     }
 
     // ---- step 5: the executor ---------------------------------------------------------------------
@@ -435,7 +435,7 @@ public class ResolveBindTests
         target["field"]!.GetValue<string>().Should().Be("_id");
         target["parentSelect"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("_id", "Number");
 
-        var remote = RenderedResolve(await BoundAsync("""[{ "resolve": { "path": "source.id", "as": "src", "select": ["code"] } }]"""));
+        var remote = RenderedResolve(await BoundAsync("""[{ "resolve": { "path": "source.id", "as": "src" } }, { "project": { "src.code": 1 } }]"""));
 
         remote["cases"]![1]!["targets"]![0]!["remote"]!.GetValue<bool>().Should().BeTrue();
         remote["cases"]![1]!["targets"]![0]!["select"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("code");

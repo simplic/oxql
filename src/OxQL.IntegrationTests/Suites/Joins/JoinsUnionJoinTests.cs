@@ -55,15 +55,15 @@ public class JoinsUnionJoinTests
     /// <summary>The same as one stage and one alias.</summary>
     private static string VehicleUnion => Vehicle(""" "position": 1, "sourceParent.id": 1, "vehicle.matchCode": 1, "vehicle.registrationPlate.registrationIdentifier": 1 """);
 
-    private static string Vehicle(string project, string select = "") => Lines($$"""
+    private static string Vehicle(string project) => Lines($$"""
         {{DeliveringTour}},
-        { "resolve": { "as": "vehicle", "target": "fleet.vehicle", "onMissing": "report"{{select}},
+        { "resolve": { "as": "vehicle", "target": "fleet.vehicle", "onMissing": "report",
                        "byTarget": { "{{ReportSeed.Shipment}}": "deliveringTour.resource.id", "{{ReportSeed.Tour}}": "sourceParent.resource.id" } } }
         """, project);
 
     /// <summary>Whatever comes next after the line's owning row: the shipment's first tour, the tour's resource.</summary>
-    private static string Next(string project, string select = "") => Lines($$"""
-        { "resolve": { "as": "next"{{select}},
+    private static string Next(string project) => Lines($$"""
+        { "resolve": { "as": "next",
                        "byTarget": { "{{ReportSeed.Shipment}}": { "path": "sourceParent.tours.tourId", "elements": "first" }, "{{ReportSeed.Tour}}": "sourceParent.resource.id" } } }
         """, project);
 
@@ -190,40 +190,6 @@ public class JoinsUnionJoinTests
 
         refused.ShouldRefuse("RESOLVE_REFUSED", 422)["stage"]!.GetValue<int>().Should().Be(6, "the union join's stage");
         refused.Errors.Should().Contain(error => error["code"]!.GetValue<string>() == "UNKNOWN_PATH" && error["path"]!.GetValue<string>() == "vehicle.nope");
-    }
-
-    [Fact]
-    public async Task A_hint_path_one_branch_does_not_reach_is_dropped_for_that_branch_and_one_no_branch_reaches_is_the_stages_error()
-    {
-        var ledger = await LedgerClient();
-        var request = Next(""" "position": 1, "sourceParent.id": 1, "next": 1 """, select: """, "select": ["number", "matchCode"]""");
-        var answer = await ledger.QueryAsync(request);
-        var rows = Rows(answer);
-
-        rows.Where(row => IsShipmentRow(row) && row["next"] is JsonObject).Should().NotBeEmpty().And.OnlyContain(row => row["next"]!.AsObject().ContainsKey("number") && !row["next"]!.AsObject().ContainsKey("matchCode"));
-        rows.Where(row => IsTourRow(row) && row["next"] is JsonObject).Should().NotBeEmpty().And.OnlyContain(row => !row["next"]!.AsObject().ContainsKey("number"));
-        answer.Diagnostics.Should().Contain(diagnostic => diagnostic["code"]!.GetValue<string>() == "SELECT_PATH_NOT_ON_TARGET" && diagnostic["stage"]!.GetValue<int>() == 5
-            && diagnostic["path"]!.GetValue<string>() == "matchCode" && diagnostic["params"]!["branch"]!.GetValue<string>() == ReportSeed.Shipment);
-
-        var explained = await ledger.ExplainHereAsync(request);
-
-        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
-        explained.Body!["notes"]!.AsArray().Where(note => note!["code"]!.GetValue<string>() == "SELECT_PATH_NOT_ON_TARGET" && note["params"]!["branch"] is not null)
-            .Select(note => (note!["stage"]!.GetValue<int>(), note["path"]!.GetValue<string>(), note["params"]!["branch"]!.GetValue<string>()))
-            .Should().BeEquivalentTo([(5, "matchCode", ReportSeed.Shipment), (5, "number", ReportSeed.Tour)]);
-
-        // Both branches reach a vehicle, which has no such member: the hint path is unknown at the stage that wrote it.
-        var unknown = Vehicle(""" "position": 1, "vehicle": 1 """, select: """, "select": ["nope"]""");
-        var invalid = await ledger.ExplainHereAsync(unknown);
-
-        invalid.Body!["valid"]!.GetValue<bool>().Should().BeFalse(invalid.Text);
-        invalid.Body!["errors"]!.AsArray().OfType<JsonObject>().Should().ContainSingle()
-            .Which.Should().Match<JsonObject>(error => error["code"]!.GetValue<string>() == "UNKNOWN_PATH" && error["path"]!.GetValue<string>() == "nope" && error["stage"]!.GetValue<int>() == 6);
-
-        var refused = await ledger.QueryAsync(unknown);
-
-        refused.ShouldRefuse("RESOLVE_REFUSED", 422);
-        refused.Errors.Should().Contain(error => error["code"]!.GetValue<string>() == "UNKNOWN_PATH" && error["path"]!.GetValue<string>() == "nope" && error["stage"]!.GetValue<int>() == 6);
     }
 
     // ---- refusals ---------------------------------------------------------------------------------------
@@ -360,8 +326,6 @@ public class JoinsUnionJoinTests
         Next(""" "position": 1, "next.number": 1, "next.matchCode": 1 """),
         Next(""" "position": 1, "next": 1 """),
         Vehicle(""" "position": 1, "vehicle.nope": 1 """),
-        Vehicle(""" "position": 1, "vehicle": 1 """, select: """, "select": ["nope"]"""),
-        Vehicle(""" "position": 1, "vehicle": 1 """, select: """, "select": ["matchCode"]"""),
         Next(""" "position": 1 """),
         Nested,
     };

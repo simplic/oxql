@@ -101,7 +101,7 @@
     "notes": [
       {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data. 'erpLineOutcome' carries the outcome of every row.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"null","strict":false,"dataLoss":["not_found"],"outcomeAs":"erpLineOutcome"}},
       {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS). 'sourceLineOutcome' carries the outcome of every row.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"],"outcomeAs":"sourceLineOutcome"}},
       {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
       {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"}},
@@ -491,7 +491,6 @@
         },
         "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type"],
         "shows": [],
-        "hint": null,
         "targets": [
           {
             "target": "ledger.billing_line",
@@ -553,7 +552,6 @@
         },
         "loads": [],
         "shows": [],
-        "hint": null,
         "targets": [
           {
             "target": "transport.shipment#billingLines",
@@ -587,7 +585,6 @@
         "lookupOn": true,
         "loads": ["id","resource.id","tours.tourId"],
         "shows": ["id"],
-        "hint": null,
         "parentOf": "sourceLine",
         "targets": [
           {
@@ -632,7 +629,6 @@
         },
         "loads": ["resource.id"],
         "shows": [],
-        "hint": null,
         "outcome": {
           "as": "deliveringTourOutcome",
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
@@ -680,7 +676,6 @@
         ],
         "loads": ["matchCode"],
         "shows": ["matchCode"],
-        "hint": null,
         "outcome": {
           "as": "vehicleOutcome",
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]

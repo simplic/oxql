@@ -114,12 +114,12 @@ public sealed record PathRead(int Stage, string Path, ReadUse Use, string? Alias
 /// What a join loads and shows under one alias (improvement plan §3.S): <paramref name="Loads"/> the
 /// paths fetched, relative to the alias, in ordinal order (its key, what later stages read, its output
 /// set); <paramref name="Shows"/> the output set, the paths the row carries under the alias (what the
-/// projection names under it; kept whole, the <c>select</c> hint with the key, else key and display);
-/// <paramref name="Hint"/> the <c>select</c> as written, or null. <see cref="Loads"/> and
+/// projection names under it; kept whole, its key and display member). <see cref="Loads"/> and
 /// <see cref="Shows"/> are null where only the owner knows them: an alias of another host's rows kept
-/// whole without a hint shows its owner's key and display members (<c>$default</c>).
+/// whole shows its owner's key and display members (<c>$default</c>). A contract 2 join has no
+/// <c>select</c>, so nothing but the projection chooses what an alias shows.
 /// </summary>
-public sealed record JoinLoad(IReadOnlyList<string>? Loads, IReadOnlyList<string>? Shows, IReadOnlyList<string>? Hint);
+public sealed record JoinLoad(IReadOnlyList<string>? Loads, IReadOnlyList<string>? Shows);
 
 /// <summary>What the final row carries of one root: whether it carries it at all, whole, or only the paths a projection names under it.</summary>
 public sealed record RootOutput(bool Carried, bool Whole, IReadOnlyList<string> Projected)

@@ -272,8 +272,8 @@ public class ChaosOwnerTests
         var mark = fleet.Owner.Mark();
 
         var answer = await client.SendAsync(Corpus.Conformance, """
-            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } },
-              { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "w": 1 } } ]
+            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
+              { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "w.id": 1, "w.name": 1 } } ]
             """);
 
         answer.ShouldHaveIds(Corpus.AllIds(Corpus.Conformance));
@@ -295,7 +295,7 @@ public class ChaosOwnerTests
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, """
             [ { "match": { "name": { "eq": "Alpha" } } },
-              { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } } ]
+              { "resolve": { "path": "widgetCodeExplicit", "as": "w" } } ]
             """);
 
         answer.ShouldHaveIds([Corpus.IdOf(Corpus.Conformance, "c-alpha")]);

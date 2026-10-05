@@ -43,12 +43,12 @@ public sealed class OwnerFleet : IAsyncLifetime
             : Fleet.Variant(LabService.Conformance, variant, configuration ?? new Dictionary<string, string?>(), org);
 
     /// <summary>The resolve stage of a case: widgetCodeExplicit onto the owner, with a filter that matches every widget and is the case's own cache key.</summary>
-    public static string ResolveStage(string caseId, string select = """["name"]""") =>
-        $$"""{ "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": {{select}}, "filter": { "name": { "neq": "{{caseId}}" } } } }""";
+    public static string ResolveStage(string caseId) =>
+        $$"""{ "resolve": { "path": "widgetCodeExplicit", "as": "w", "filter": { "name": { "neq": "{{caseId}}" } } } }""";
 
-    /// <summary>A resolve page of organisation A's three rows, id-ordered, each with its <c>w</c> alias.</summary>
-    public static string Resolve(string caseId, string select = """["name"]""") =>
-        $$"""[ {{ResolveStage(caseId, select)}}, { "project": { "id": 1, "widgetCodeExplicit": 1, "w": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]""";
+    /// <summary>A resolve page of organisation A's three rows, id-ordered, each with what <paramref name="shown"/> projects of its <c>w</c> alias: its name by default.</summary>
+    public static string Resolve(string caseId, string shown = """ "w.name": 1 """) =>
+        $$"""[ {{ResolveStage(caseId)}}, { "project": { "id": 1, "widgetCodeExplicit": 1, {{shown}} } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]""";
 
     /// <summary>
     /// A semi-join: the owner decides which rows exist. The operand carries the case id so the
@@ -59,7 +59,7 @@ public sealed class OwnerFleet : IAsyncLifetime
         $$"""
         [ {{ResolveStage(caseId)}},
           { "match": { "w.name": { "in": ["Widget One", "{{caseId}}"] } } },
-          { "project": { "id": 1, "widgetCodeExplicit": 1, "w": 1 } },
+          { "project": { "id": 1, "widgetCodeExplicit": 1, "w.name": 1 } },
           { "sort": [ { "id": "asc" } ] },
           { "page": {{page}} } ]
         """;

@@ -53,8 +53,8 @@ public class ReviewTestGapTests
 
     [Theory]
     [InlineData("""[{ "resolve": { "path": "customerIds", "as": "c", "elements": "first" } }]""")]
-    [InlineData("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""")]
-    [InlineData("""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "resolve": { "path": "r.companyId", "as": "co" } }]""")]
+    [InlineData("""[{ "resolve": { "path": "contactId", "as": "r" } }]""")]
+    [InlineData("""[{ "resolve": { "path": "contactId", "as": "r" } }, { "resolve": { "path": "r.companyId", "as": "co" } }]""")]
     public async Task Explain_sends_no_owner_batch_and_runs_no_aggregate(string pipeline)
     {
         var runner = new EntityRunner();
@@ -77,7 +77,7 @@ public class ReviewTestGapTests
         var client = new FakeRemoteClient { Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", ContactA.ToString(), ("name", "Alice"))) };
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: cache);
         var other = Guid.Parse("b0b0b0b0-0000-0000-0000-000000000001");
-        const string Pipeline = """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""";
+        const string Pipeline = """[{ "resolve": { "path": "contactId", "as": "r" } }]""";
 
         runner.Rows[Invoice] = [ContactRow(ContactA)];
         await engine.ExecuteAsync(BindHost.Request(Invoice, Pipeline), BindHost.Context());
@@ -103,7 +103,7 @@ public class ReviewTestGapTests
             Script = (_, query, _) => new FakeRemoteClient.Answer.Rows(KeysOf(query).Select(key => FakeRemoteClient.Row("id", key, ("name", key))).ToArray()),
         };
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
-        const string Pipeline = """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""";
+        const string Pipeline = """[{ "resolve": { "path": "contactId", "as": "r" } }]""";
 
         runner.Rows[Invoice] = [ContactRow(ContactA), ContactRow(ContactB)];
 

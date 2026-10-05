@@ -386,7 +386,7 @@ public class OwnerFetchRobustnessTests
         client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 10, MaxPageSize: 2);
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
 
-        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context()));
+        Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]"""), BindHost.Context()));
 
         client.Calls.Single().Request.Queries.Select(query => query.Pipeline.Single(stage => stage.Page is not null).Page!.Limit)
             .Should().Equal([2, 1], "the owner answers pages of two, so no query asks for more");
@@ -438,18 +438,18 @@ public class OwnerFetchRobustnessTests
         client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 1);
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Counted(0, false, false);
 
-        var keyed = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), new CompileOptions(5_000, null, 10_000));
+        var keyed = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]"""), new CompileOptions(5_000, null, 10_000));
         var resolved = await fetch.ByKeysAsync(keyed, [ContactRow(ContactA), ContactRow(ContactB), ContactRow(ContactC)], BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
 
         resolved.Calls.Should().Be(3, "three parts of one owner's batch are three calls");
 
         var filtered = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
-            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
+            """[{ "resolve": { "path": "contactId", "as": "r" } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
 
         (await fetch.ByConditionCountedAsync(filtered, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None)).Calls.Should().Be(1);
 
         var again = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
-            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
+            """[{ "resolve": { "path": "contactId", "as": "r" } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
 
         (await fetch.ByConditionCountedAsync(again, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None)).Calls.Should().Be(0, "the cache answered");
     }

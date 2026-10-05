@@ -122,7 +122,7 @@ public class RefusalsServerTests
         Staff("V32", "INVALID_SORT_DIRECTION", "an upper-case direction under contract 2", $$"""[{ "sort": [{ "id": "ASC" }] }, {{Page1}}]"""),
         Staff("V33", "LOOKUP_NOT_DECLARED", "a lookup along a child member that declares no reference back", $$"""[{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "x" } }, {{Page1}}]"""),
         Shipment("V34", "RESOLVE_NOT_DECLARED", "a resolve on a member with no declared reference", $$"""[{ "resolve": { "path": "createUserId", "as": "u" } }, {{Page1}}]"""),
-        Template("V36", "RESOLVE_NOT_SORTABLE", "a sort on a remote resolve alias", $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } }, { "sort": [{ "veh.matchCode": "asc" }] }, {{Page1}}]"""),
+        Template("V36", "RESOLVE_NOT_SORTABLE", "a sort on a remote resolve alias", $$"""[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "sort": [{ "veh.matchCode": "asc" }] }, {{Page1}}]"""),
 
         // limits
         Staff("V37", "MAX_PIPELINE_STAGES_EXCEEDED", "21 stages, one over maxPipelineStages", $$"""[{{Repeat(20, _ => """{ "match": { "id": { "neq": null } } }""")}}, {{Page1}}]"""),
@@ -149,7 +149,7 @@ public class RefusalsServerTests
         new("V52", "ACCESS_DENIED", 403, "access_denied", "a request that carries no organisation at all (legacy: a token without the OId claim)",
             LabService.Staff, Corpus.Employee, $"[{Page1}]", Anonymous: true),
         new("V54", "RESOLVE_REFUSED", 422, "not_executable", "a remote resolve whose filter the owner refuses", LabService.Transport, Corpus.Template,
-            $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"], "filter": { "nosuchpath": { "eq": 1 } } } }, {{Page1}}]""", Contains: true),
+            $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "filter": { "nosuchpath": { "eq": 1 } } } }, {{Page1}}]""", Contains: true),
         Staff("V59", "LEGACY_STAGE_UNSUPPORTED", "a lookup stage under contract 1, where the compat binder has no equivalent",
             $$"""[{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "x" } }, {{Page1}}]""") with { ContractOne = true },
         Staff("V59.no-header", "LEGACY_STAGE_UNSUPPORTED", "the same stage with no contract header at all: the compat leg treats it as contract 1",
@@ -215,7 +215,7 @@ public class RefusalsServerTests
         expected.Should().NotBeEmpty().And.HaveCountLessThan(20);
 
         var answer = await (await Lab.ClientAsync(LabService.Transport)).SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "VEH-002" } } },
               { "project": { "id": 1, "templateName": 1, "veh.matchCode": 1 } },
               { "sort": [{ "id": "asc" }] },

@@ -48,8 +48,8 @@ public class ReportInvalidKeyTests : IAsyncLifetime
         var body = Json.Request(ReportSeed.BillingLine, JsonNode.Parse($$"""
             [ { "match": { "id": { "in": ["{{ReportSeed.ErpLineIds[0]:D}}", "{{BadKeyLineId:D}}"] } } },
               { "sort": [ { "text": "asc" } ] },
-              { "resolve": { "path": "references.referenceId", "as": "source", "elements": "first", "select": ["id"]{{onMissing}} } },
-              { "project": { "text": 1, "source": 1 } } ]
+              { "resolve": { "path": "references.referenceId", "as": "source", "elements": "first"{{onMissing}} } },
+              { "project": { "text": 1, "source.id": 1 } } ]
             """)!);
 
         if (strict)

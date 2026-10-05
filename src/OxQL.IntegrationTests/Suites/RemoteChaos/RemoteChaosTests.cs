@@ -196,7 +196,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     {
         Owner.Set(ChaosMode.DuplicateKeys);
 
-        var answer = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("A-17", """["name", "code"]"""));
+        var answer = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("A-17", """ "w.name": 1, "w.code": 1 """));
 
         answer.ShouldHaveIds(RowIds());
 

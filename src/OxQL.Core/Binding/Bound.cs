@@ -337,11 +337,7 @@ public abstract record BoundStage
     /// it is bound-only and never rendered.
     /// </summary>
     public sealed record Lookup(EntityDef From, ResolvedPath ChildReference, string As, IReadOnlyList<ResolvedPath> Select, BoundCondition? Filter, int Limit, Scope ChildScope, string ParentKeyStorage, string ChildKeyStorage,
-        IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage
-    {
-        /// <summary>The <c>select</c> as the caller wrote it: the hint of what the alias shows kept whole; null when none was written. Bound-only, never rendered.</summary>
-        public IReadOnlyList<string>? Hint { get; init; }
-    }
+        IReadOnlyList<BoundSortField>? ChildSort = null, bool First = false, string? On = null, int Stage = -1) : BoundStage;
 
     /// <summary>
     /// A resolve. The members up to <paramref name="RemoteFilter"/> describe the first target of
@@ -384,9 +380,6 @@ public abstract record BoundStage
         /// than a plain remote one, which is asked with a plain key match.
         /// </summary>
         public bool NeedsKeyedFetch => Executor == ResolveExecutor.Keyed && !(IsRemote && IsPlain);
-
-        /// <summary>The <c>select</c> as the caller wrote it: the hint of what the alias shows kept whole; null when none was written. Bound-only, never rendered.</summary>
-        public IReadOnlyList<string>? Hint { get; init; }
 
         /// <summary>
         /// The root that carries the join's outcome on every row (<c>outcomeAs</c>); null when the stage

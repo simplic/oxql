@@ -20,7 +20,7 @@ public class RemoteFilterOptionTests
     public async Task A_remote_resolve_filter_with_an_option_the_wire_cannot_carry_is_refused(string options, string named)
     {
         var error = await BindHost.ErrorAsync(ResolveModel.Model, Invoice,
-            $$"""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"], "filter": { "name": { "eq": "x", "options": {{options}} } } } }]""", Codes.OptionNotApplicable);
+            $$"""[{ "resolve": { "path": "contactId", "as": "r", "filter": { "name": { "eq": "x", "options": {{options}} } } } }]""", Codes.OptionNotApplicable);
 
         error.Stage.Should().Be(0);
         error.Path.Should().Be("name");
@@ -28,12 +28,12 @@ public class RemoteFilterOptionTests
     }
 
     [Theory]
-    [InlineData("resolve", """{ "resolve": { "path": "r.companyId", "as": "co", "select": ["title"], "filter": { "or": [{ "title": { "eq": "x", "options": { "casesensitive": true } } }] } } }""")]
+    [InlineData("resolve", """{ "resolve": { "path": "r.companyId", "as": "co", "filter": { "or": [{ "title": { "eq": "x", "options": { "casesensitive": true } } }] } } }""")]
     [InlineData("lookup", """{ "lookup": { "from": "crm.person", "path": "contactId", "on": "r", "as": "people", "filter": { "name": { "eq": "x", "options": { "ignoreCase": 1 } } } } }""")]
     public async Task A_continued_stage_filter_with_an_option_the_wire_cannot_carry_is_refused(string kind, string stage)
     {
         var error = await BindHost.ErrorAsync(ResolveModel.Model, Invoice,
-            $$"""[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, {{stage}}]""", Codes.OptionNotApplicable);
+            $$"""[{ "resolve": { "path": "contactId", "as": "r" } }, {{stage}}]""", Codes.OptionNotApplicable);
 
         error.Stage.Should().Be(1, kind);
     }
@@ -42,8 +42,8 @@ public class RemoteFilterOptionTests
     public async Task Known_options_travel_to_the_owner()
     {
         await BindHost.BoundAsync(ResolveModel.Model, Invoice, """
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"], "filter": { "name": { "eq": "x", "options": { "caseSensitive": true } } } } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"], "filter": { "title": { "eq": "x", "options": { "caseSensitive": false } } } } }]
+            [{ "resolve": { "path": "contactId", "as": "r", "filter": { "name": { "eq": "x", "options": { "caseSensitive": true } } } } },
+             { "resolve": { "path": "r.companyId", "as": "co", "filter": { "title": { "eq": "x", "options": { "caseSensitive": false } } } } }]
             """);
     }
 }

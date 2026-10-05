@@ -48,51 +48,6 @@ internal static class ReportScenarios
         return copy;
     }
 
-    /// <summary>The member a scenario alias's reference matches at its owner when it is not the key: the clerk is an employee found by its user.</summary>
-    private static readonly IReadOnlyDictionary<string, string> Matched = new Dictionary<string, string>(StringComparer.Ordinal) { ["clerk"] = "userId" };
-
-    /// <summary>
-    /// The request without any <c>select</c> (improvement plan §3.S): every join's hint is removed, and
-    /// where the projection kept the join's alias whole it names instead the paths the hint showed, with
-    /// the key a whole alias carries beside its hint. The joins then load what the projection and the
-    /// later stages read, and the rows are those of the request with the selects. A whole alias of
-    /// another service's rows also carries the member its reference matches, where that is not the key
-    /// (<see cref="Matched"/>).
-    /// </summary>
-    public static JsonObject WithoutSelects(JsonObject request)
-    {
-        var copy = request.DeepClone().AsObject();
-        var shown = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        foreach (var stage in copy["pipeline"]!.AsArray().OfType<JsonObject>())
-            if ((stage["resolve"] ?? stage["lookup"]) is JsonObject join && join["select"] is JsonArray select && join["as"]?.GetValue<string>() is { } alias)
-            {
-                shown[alias] = ["id", .. select.Select(path => path!.GetValue<string>()).Where(path => path != "id"), .. Matched.TryGetValue(alias, out var member) ? [member] : Array.Empty<string>()];
-                join.Remove("select");
-            }
-
-        foreach (var stage in copy["pipeline"]!.AsArray().OfType<JsonObject>().Where(stage => stage["project"] is JsonObject))
-        {
-            var fields = new JsonObject();
-
-            foreach (var (name, value) in stage["project"]!.AsObject())
-            {
-                if (!shown.TryGetValue(name, out var paths))
-                {
-                    fields[name] = value!.DeepClone();
-                    continue;
-                }
-
-                foreach (var path in paths)
-                    fields[name + "." + path] = 1;
-            }
-
-            stage["project"] = fields;
-        }
-
-        return copy;
-    }
-
     /// <summary>The index of the stage creating <paramref name="alias"/> (a resolve's or lookup's <c>as</c>).</summary>
     public static int IndexOf(JsonObject request, string alias) =>
         request["pipeline"]!.AsArray().Select((stage, index) => (stage, index))
@@ -109,13 +64,11 @@ internal static class ReportScenarios
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
             { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-            { "resolve": { "path": "item.billingLineId", "as": "erpLine",
-                           "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
-                           "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
                            "parentAs": "sourceParent" } },
             { "project": { "number": 1, "date": 1, "position": 1, "item.text": 1, "item.quantity": 1,
-                           "item.totalPriceNet": 1, "erpLine": 1, "sourceLine": 1,
+                           "item.totalPriceNet": 1, "erpLine.id": 1, "erpLine.text": 1, "erpLine.sourceBillingLineReference.type": 1, "erpLine.sourceBillingLineReference.id": 1, "sourceLine.id": 1, "sourceLine.type": 1, "sourceLine.status": 1, "sourceLine.singlePrice": 1, "sourceLine.totalPrice": 1, "sourceLine.quantity.value": 1, "sourceLine.quantity.quantityUnit": 1,
                            "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1 } },
             { "sort": [ { "position": "asc" } ] },
             { "page": { "limit": 5000 } }
@@ -130,8 +83,8 @@ internal static class ReportScenarios
           "pipeline": [
             { "match": { "id": { "eq": { "$var": "shipmentId" } } } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "lastAttempt",
-                          "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["id", "dateTime", "status", "text"] } },
-            { "project": { "shipmentNumber": 1, "lastAttempt": 1 } }
+                          "first": true, "sort": [ { "dateTime": "desc" } ] } },
+            { "project": { "shipmentNumber": 1, "lastAttempt.id": 1, "lastAttempt.dateTime": 1, "lastAttempt.status": 1, "lastAttempt.text": 1 } }
           ]
         }
         """;
@@ -140,7 +93,7 @@ internal static class ReportScenarios
     public const string DesignA2bStage = """
         { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent",
                       "forTarget": "transport.shipment", "as": "lastAttempt",
-                      "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } }
+                      "first": true, "sort": [ { "dateTime": "desc" } ] } }
         """;
 
     public const string DesignA3 = """
@@ -150,9 +103,8 @@ internal static class ReportScenarios
           "strict": true,
           "pipeline": [
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
-            { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact",
-                           "select": ["primaryEmailAddress.email", "primaryPhoneNumber.number", "address.companyName"] } },
-            { "project": { "number": 1, "invoiceRecipient": 1, "recipientContact": 1 } }
+            { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
+            { "project": { "number": 1, "invoiceRecipient": 1, "recipientContact.id": 1, "recipientContact.primaryEmailAddress.email": 1, "recipientContact.primaryPhoneNumber.number": 1, "recipientContact.address.companyName": 1 } }
           ]
         }
         """;
@@ -164,34 +116,27 @@ internal static class ReportScenarios
           "strict": true,
           "pipeline": [
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
-            { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact",
-                           "select": ["primaryEmailAddress.email", "primaryPhoneNumber.number", "address.companyName"] } },
-            { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null",
-                           "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
+            { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
+            { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null" } },
             { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
-                           "select": ["id", "type", "status", "singlePrice", "totalPrice", "quantity.value", "quantity.quantityUnit"],
                            "parentAs": "sourceParent" } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "transport.shipment",
-                          "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
-            { "resolve": { "path": "item.references.referenceId", "as": "lineShipment", "elements": "first", "target": "transport.shipment",
-                           "select": ["shipmentNumber", "referenceNumber", "loadAddress", "deliveryAddress", "effectiveDeliveryEnd",
-                                      "deliveryNoteNumber", "items.weightNotes.number", "items.weightNotes.quantity"] } },
-            { "resolve": { "path": "lineShipment.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["number"] } },
-            { "resolve": { "path": "deliveringTour.resource.id", "as": "tourVehicle", "target": "fleet.vehicle", "onMissing": "null",
-                           "select": ["registrationPlate.registrationIdentifier", "matchCode"] } },
+                          "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ] } },
+            { "resolve": { "path": "item.references.referenceId", "as": "lineShipment", "elements": "first", "target": "transport.shipment" } },
+            { "resolve": { "path": "lineShipment.tours.tourId", "as": "deliveringTour", "elements": "first" } },
+            { "resolve": { "path": "deliveringTour.resource.id", "as": "tourVehicle", "target": "fleet.vehicle", "onMissing": "null" } },
             { "resolve": { "path": "deliveringTour.attachedResources.resource.id", "as": "driver", "elements": "first", "target": "staff.employee",
-                           "onMissing": "null", "select": ["address.firstName", "address.lastName", "primaryEmailAddress.email"] } },
-            { "resolve": { "path": "item.references.referenceId", "as": "lineTour", "elements": "first", "target": "transport.tour",
-                           "select": ["number", "startDateTime", "endDateTime", "actions"] } },
+                           "onMissing": "null" } },
+            { "resolve": { "path": "item.references.referenceId", "as": "lineTour", "elements": "first", "target": "transport.tour" } },
             { "project": { "number": 1, "date": 1, "dueDate": 1, "invoiceRecipient": 1, "termsOfPayment.formattedText": 1,
-                           "totalPriceNet": 1, "totalPriceGross": 1, "taxKeyTotalPrices": 1, "recipientContact": 1, "clerk": 1,
-                           "position": 1, "item.text": 1, "item.quantity": 1, "item.totalPriceNet": 1, "erpLine": 1,
-                           "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1,
-                           "lastAttempt": 1, "lineShipment": 1, "deliveringTour": 1,
-                           "tourVehicle": 1, "driver": 1, "lineTour": 1 } },
+                           "totalPriceNet": 1, "totalPriceGross": 1, "taxKeyTotalPrices": 1, "recipientContact.id": 1, "recipientContact.primaryEmailAddress.email": 1, "recipientContact.primaryPhoneNumber.number": 1, "recipientContact.address.companyName": 1, "clerk.id": 1, "clerk.address.firstName": 1, "clerk.address.lastName": 1, "clerk.primaryEmailAddress.email": 1, "clerk.userId": 1,
+                           "position": 1, "item.text": 1, "item.quantity": 1, "item.totalPriceNet": 1, "erpLine.id": 1, "erpLine.text": 1, "erpLine.sourceBillingLineReference.type": 1, "erpLine.sourceBillingLineReference.id": 1,
+                           "sourceLine.id": 1, "sourceLine.type": 1, "sourceLine.status": 1, "sourceLine.singlePrice": 1, "sourceLine.totalPrice": 1, "sourceLine.quantity.value": 1, "sourceLine.quantity.quantityUnit": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.referenceNumber": 1, "sourceParent.number": 1,
+                           "lastAttempt.id": 1, "lastAttempt.dateTime": 1, "lastAttempt.status": 1, "lineShipment.id": 1, "lineShipment.shipmentNumber": 1, "lineShipment.referenceNumber": 1, "lineShipment.loadAddress": 1, "lineShipment.deliveryAddress": 1, "lineShipment.effectiveDeliveryEnd": 1, "lineShipment.deliveryNoteNumber": 1, "lineShipment.items.weightNotes.number": 1, "lineShipment.items.weightNotes.quantity": 1, "deliveringTour.id": 1, "deliveringTour.number": 1,
+                           "tourVehicle.id": 1, "tourVehicle.registrationPlate.registrationIdentifier": 1, "tourVehicle.matchCode": 1, "driver.id": 1, "driver.address.firstName": 1, "driver.address.lastName": 1, "driver.primaryEmailAddress.email": 1, "lineTour.id": 1, "lineTour.number": 1, "lineTour.startDateTime": 1, "lineTour.endDateTime": 1, "lineTour.actions": 1 } },
             { "sort": [ { "position": "asc" } ] },
             { "page": { "limit": 5000 } }
           ]

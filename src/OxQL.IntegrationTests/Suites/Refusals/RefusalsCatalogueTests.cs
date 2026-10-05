@@ -190,7 +190,7 @@ public class RefusalsCatalogueTests
 
         foreach (var pipeline in new[]
         {
-            """[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "page": { "limit": 5 } }]""",
             """[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "VEH-002" } } }, { "page": { "limit": 5 } }]""",
         })
         {
@@ -236,7 +236,7 @@ public class RefusalsCatalogueTests
         var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-semijoin-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxSemiJoinIds"] = "2" });
 
         var over = await capped.SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "startsWith": "VEH" } } },
               { "page": { "limit": 5 } } ]
             """);
@@ -247,7 +247,7 @@ public class RefusalsCatalogueTests
         over.Errors[0]["stage"]!.GetValue<int>().Should().Be(1);
 
         var under = await capped.SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "VEH-002" } } },
               { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50 } } ]
             """);

@@ -41,7 +41,7 @@ public class ExplainByReferenceTests
             [{ "unwind": { "path": "lines", "as": "line" } },
              { "resolve": { "path": "customerId", "as": "c" } },
              { "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "sh" } },
-             { "resolve": { "path": "contactId", "as": "ct", "select": ["name"] } }]
+             { "resolve": { "path": "contactId", "as": "ct" } }]
             """, 2 },
         { "lookup", Customer, """[{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoices" } }]""", 2 },
         { "lookup unwound", Customer, """
@@ -67,10 +67,10 @@ public class ExplainByReferenceTests
              { "resolve": { "path": "part.customerId", "as": "pc" } }]
             """, 2 },
         { "an inclusion", Invoice, """
-            [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },
-             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "c", "as": "others", "select": ["number"] } },
+            [{ "resolve": { "path": "customerId", "as": "c" } },
+             { "lookup": { "from": "rc.invoice", "path": "customerId", "on": "c", "as": "others" } },
              { "unwind": { "path": "lines", "as": "line", "includeIndex": "at" } },
-             { "project": { "number": 1, "customerCode": 1, "slot": 1, "c": 1, "others": 1, "line.id": 1, "at": 1 } },
+             { "project": { "number": 1, "customerCode": 1, "slot": 1, "c.name": 1, "others.number": 1, "line.id": 1, "at": 1 } },
              { "sort": [{ "number": "asc" }] }]
             """, 2 },
         { "an exclusion", Invoice, """

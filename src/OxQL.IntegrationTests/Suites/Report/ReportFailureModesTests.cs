@@ -50,8 +50,8 @@ public class ReportFailureModesTests
         var pipeline = $$"""
             [ { "match": { "id": { "in": ["{{Id(ReportSeed.ErpLineIds[0])}}", "{{Id(ReportSeed.ErpLineIds[1])}}", "{{Id(ReportSeed.ErpLineIds[2])}}", "{{Id(ReportSeed.ErpLineIds[4])}}"] } } },
               { "sort": [ { "text": "asc" } ] },
-              { "resolve": { "path": "sourceBillingLineReference.id", "as": "sourceLine", "select": ["id", "type"], "onMissing": "report" } },
-              { "project": { "text": 1, "sourceLine": 1 } } ]
+              { "resolve": { "path": "sourceBillingLineReference.id", "as": "sourceLine", "onMissing": "report" } },
+              { "project": { "text": 1, "sourceLine.id": 1, "sourceLine.type": 1 } } ]
             """;
 
         var answer = await client.QueryAsync(Request(ReportSeed.BillingLine, pipeline));
@@ -76,8 +76,8 @@ public class ReportFailureModesTests
         var client = await LedgerClient();
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.AmbiguousClerkTransactionId)}}" } } },
-              { "resolve": { "path": "createUserId", "as": "clerk", "select": ["address.firstName", "SELECT"] } },
-              { "project": { "number": 1, "clerk": 1 } } ]
+              { "resolve": { "path": "createUserId", "as": "clerk" } },
+              { "project": { "number": 1, "clerk.id": 1, "clerk.address.firstName": 1, "clerk.SELECT": 1 } } ]
             """;
 
         var answer = await client.QueryAsync(Request(ReportSeed.Transaction, pipeline.Replace("SELECT", "address.city")));
@@ -98,8 +98,8 @@ public class ReportFailureModesTests
         var client = await LedgerClient();
         var pipeline = $$"""
             [ { "match": { "id": { "in": [IDS] } } },
-              { "resolve": { "path": "createUserId", "as": "clerk", "select": ["address.lastName", "SELECT"], "onMissing": "report" } },
-              { "project": { "number": 1, "clerk": 1 } }, { "sort": [ { "number": "asc" } ] } ]
+              { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "report" } },
+              { "project": { "number": 1, "clerk.id": 1, "clerk.address.lastName": 1, "clerk.SELECT": 1 } }, { "sort": [ { "number": "asc" } ] } ]
             """;
         string Ids(params Guid[] ids) => string.Join(", ", ids.Select(id => $"\"{Id(id)}\""));
 
@@ -142,9 +142,8 @@ public class ReportFailureModesTests
         var pipeline = $$"""
             [ { "match": { "id": { "in": ["{{Id(ReportSeed.ErpLineIds[0])}}", "{{Id(ReportSeed.ErpLineIds[1])}}"] } } },
               { "sort": [ { "text": "asc" } ] },
-              { "resolve": { "path": "references.referenceId", "as": "shipment", "elements": "first", "target": "transport.shipment",
-                             "select": ["shipmentNumber"], "filter": { "shipmentNumber": { "OP": "SN-2026-0001" } }ONMISSING } },
-              { "project": { "text": 1, "shipment": 1 } } ]
+              { "resolve": { "path": "references.referenceId", "as": "shipment", "elements": "first", "target": "transport.shipment", "filter": { "shipmentNumber": { "OP": "SN-2026-0001" } }ONMISSING } },
+              { "project": { "text": 1, "shipment.id": 1, "shipment.shipmentNumber": 1 } } ]
             """;
 
         var excluded = await client.QueryAsync(Request(ReportSeed.BillingLine, pipeline.Replace("OP", "neq").Replace("ONMISSING", """, "onMissing": "report" """)));

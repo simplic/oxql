@@ -271,7 +271,7 @@ public class OutcomePolicyTests
         client.Unreachable.Add("crm");
 
         var result = await SuccessAsync(engine, """
-            [{ "resolve": { "path": "contactId", "as": "contact", "select": ["name"], "outcomeAs": "contactOutcome" } },
+            [{ "resolve": { "path": "contactId", "as": "contact", "outcomeAs": "contactOutcome" } },
              { "project": { "number": 1, "contact.name": 1, "contactOutcome": 1 } }]
             """);
 
@@ -285,7 +285,7 @@ public class OutcomePolicyTests
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
 
         var missing = await SuccessAsync(engine, """
-            [{ "resolve": { "path": "contactId", "as": "contact", "select": ["name"], "outcomeAs": "contactOutcome" } },
+            [{ "resolve": { "path": "contactId", "as": "contact", "outcomeAs": "contactOutcome" } },
              { "project": { "number": 1, "contactOutcome": 1 } }]
             """);
 
@@ -309,7 +309,7 @@ public class OutcomePolicyTests
         runner.Rows[Invoice] = [InvoiceRow(row => row["LocalSource"] = new BsonDocument { ["Type"] = "logistics", ["_id"] = Id(Line1) })];
         runner.Rows["rc.shipment"] = [ItemRow(Shipment1, "SN-1", Line1, "S1")];
         runner.Rows["rc.tour"] = [ItemRow(Tour1, "Tour 1", Line1, "T1", display: "Name")];
-        const string pipeline = """[{ "resolve": { "path": "localSource.id", "as": "line", "select": ["code"] } }]""";
+        const string pipeline = """[{ "resolve": { "path": "localSource.id", "as": "line" } }]""";
 
         var result = await SuccessAsync(engine, pipeline);
 
@@ -379,9 +379,9 @@ public class OutcomePolicyTests
     public async Task An_inline_resolve_that_reports_keeps_its_reference_against_a_projection_and_one_that_does_not_is_compiled_as_before()
     {
         var reporting = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
-            """[{ "resolve": { "path": "customerId", "as": "customer", "onMissing": "report" } }, { "project": { "number": 1, "customer.name": 1 } }]"""), new CompileOptions(5_000, null, 10_000));
+            """[{ "resolve": { "path": "customerId", "as": "customer", "onMissing": "report" } }, { "sort": [{ "customer.name": "asc" }] }, { "project": { "number": 1, "customer.name": 1 } }]"""), new CompileOptions(5_000, null, 10_000));
         var plain = MongoCompiler.Compile(await BindHost.BoundAsync(ResolveModel.Model, Invoice,
-            """[{ "resolve": { "path": "customerId", "as": "customer" } }, { "project": { "number": 1, "customer.name": 1 } }]"""), new CompileOptions(5_000, null, 10_000));
+            """[{ "resolve": { "path": "customerId", "as": "customer" } }, { "sort": [{ "customer.name": "asc" }] }, { "project": { "number": 1, "customer.name": 1 } }]"""), new CompileOptions(5_000, null, 10_000));
 
         reporting.InlineProbes.Should().ContainSingle().Which.ReferenceStorage.Should().Be("CustomerId");
         reporting.PageStages.Single(stage => stage.Contains("$project"))["$project"].AsBsonDocument.Contains("CustomerId").Should().BeTrue();

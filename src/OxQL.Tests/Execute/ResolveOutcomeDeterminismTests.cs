@@ -206,7 +206,7 @@ public class ResolveOutcomeDeterminismTests
             FakeRemoteClient.Row("number", "c1", ("name", "Second")),
             FakeRemoteClient.Row("number", "c2", ("name", "Other")));
 
-        var pipeline = $$"""[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"]{{onMissing}} } }, { "page": { "limit": 10 } }]""";
+        var pipeline = $$"""[{ "resolve": { "path": "contactNumber", "as": "contact"{{onMissing}} } }, { "page": { "limit": 10 } }]""";
 
         async Task<QueryOutcome> Run() => await engine.ExecuteAsync(BindHost.Request("probe.order", pipeline) with { Strict = strict ? true : null }, BindHost.Context());
 
@@ -244,7 +244,7 @@ public class ResolveOutcomeDeterminismTests
 
         client.Owners["crm"] = new RemoteOwnerInfo(version, 2, null);
 
-        await engine.ExecuteAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "onMissing": "report" } }]"""), BindHost.Context());
+        await engine.ExecuteAsync(BindHost.Request("probe.order", """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]"""), BindHost.Context());
 
         client.Calls.Single().Request.Queries.Single().KeyedBy.Should().NotBeNull("the ambiguity of a key must not depend on what the owner's page happens to hold");
 

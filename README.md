@@ -103,10 +103,10 @@ X-OxQL-Contract: 2
   "variables": { "from": "2026-01-01T00:00:00Z" },
   "pipeline": [
     { "match": { "isDeleted": { "eq": false }, "createdAt": { "gte": { "$var": "from" } } } },
-    { "resolve": { "path": "vehicleId", "as": "vehicle", "select": ["id", "matchCode"] } },
-    { "project": { "id": 1, "number": 1, "vehicle": 1 } },
+    { "resolve": { "path": "vehicleId", "as": "vehicle" } },
+    { "project": { "id": 1, "number": 1, "vehicle.id": 1, "vehicle.matchCode": 1 } },
     { "sort": [{ "number": "asc" }] },
-    { "page": { "limit": 50, "includeTotalCount": true } }
+    { "page": { "limit": 50, "count": true } }
   ]
 }
 ```
@@ -337,14 +337,15 @@ operator notice:
   `lookup.remote`); `unwind.keepPath: false` takes the unwound collection out of the row (capability
   `unwind.keepPath`). A caller gates on the capability before sending either.
 
-- **Joins load what the query reads.** `select` on a `lookup` or `resolve` is a hint, never a bound:
-  it says what the alias shows when the row keeps it whole (with the key; without it, key and
-  display). Every member of the target can be read under the alias, and the join loads its key, what
-  later stages read and what the row shows; what is only read is not in the row. A projection that
-  names paths under an alias decides alone what the alias shows, the key included. There is no
-  `parentSelect` (`UNKNOWN_STAGE_MEMBER`): project the paths under `parentAs`. Explain answers what
-  each stage reads (`stages[].reads`) and what each join loads and shows (`aliases.X.loads`,
-  `shows`, `hint`). Contract 1 is unchanged: a join fetches its `select`.
+- **Joins load what the query reads.** A contract 2 `lookup` or `resolve` has no `select`
+  (`UNKNOWN_STAGE_MEMBER`, `params.use: "project"`). Every member of the target can be read under
+  the alias, and the join loads its key, what later stages read and what the row shows; what is only
+  read is not in the row. A projection that names paths under an alias decides alone what the alias
+  shows, the key included; an alias kept whole shows the target's key and display member. A join
+  nothing but the projection reads runs after the page, for the page's rows only. There is no
+  `parentSelect` either: project the paths under `parentAs`. Explain answers what each stage reads
+  (`stages[].reads`) and what each join loads and shows (`aliases.X.loads`, `shows`). Contract 1 is
+  unchanged: a join fetches its `select`.
 - **Explain.** `OxQL:Explain:Enabled` defaults to `true`; set it to `false` to keep the route off.
   Explain never executes a query, a query that does not bind is answered 200 with `valid: false` and every error
   instead of a 400 refusal, and the answer is the bind trace: `stages`, `aliases`, `types`,

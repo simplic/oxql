@@ -689,7 +689,7 @@ public sealed class RemoteExplain : IExplainOwners
                     continue;
 
                 if (!aliasLoads.ContainsKey(alias) && described.ContainsKey("loads"))
-                    aliasLoads[alias] = new JsonObject { ["loads"] = described["loads"]?.DeepClone(), ["shows"] = described["shows"]?.DeepClone(), ["hint"] = described["hint"]?.DeepClone() };
+                    aliasLoads[alias] = new JsonObject { ["loads"] = described["loads"]?.DeepClone(), ["shows"] = described["shows"]?.DeepClone() };
 
                 if (!reached.TryGetValue(alias, out var list))
                     reached[alias] = list = [];
@@ -745,11 +745,9 @@ public sealed class RemoteExplain : IExplainOwners
             || error["path"]?.ToString() is not { Length: > 0 } path)
             return null;
 
-        // A path of a union join's select hint that this target's branch does not reach: the owner says it at the branch's stage.
+        // Only the projection asks paths a target may lack: a contract 2 join has no select.
         if (stage != check.ProjectAt)
-            return check.OriginOf(stage) is { Branches: not null } union
-                ? new Miss(check, path.StartsWith(union.Aliases[0] + ".", StringComparison.Ordinal) ? path : union.Aliases[0] + "." + path, Parent: false, path)
-                : null;
+            return null;
 
         var element = BoundKeyedBy.Element + ".";
 
@@ -766,7 +764,7 @@ public sealed class RemoteExplain : IExplainOwners
     /// What the owners' misses mean for one resolve (DESIGN §3.4.1 flat paths, §4.3): a path some
     /// target has is dropped for those that lack it (<c>SELECT_PATH_NOT_ON_TARGET</c>, as a run drops
     /// it); a path no target has is this request's <c>UNKNOWN_PATH</c> where the caller wrote it (the
-    /// resolve's select hint, or the projection after it), with <c>params.owner</c> where the owner saw it.
+    /// projection after the resolve), with <c>params.owner</c> where the owner saw it.
     /// A local target has what its entity (or item) has; a remote target nobody asked has every path.
     /// A path under an alias a continued stage added is that stage's join's to have: its owner binds
     /// it, and one it lacks is <c>UNKNOWN_PATH</c> at the projection, as a run is refused for it.
@@ -782,21 +780,15 @@ public sealed class RemoteExplain : IExplainOwners
             var (path, parent) = group.Key;
             var lacking = group.Select(miss => miss.Check).ToList();
             var first = group.First();
-            // The hint is written at the resolve; every other path asked of the owner is the projection's.
-            var written = parent ? null : resolve.Hint;
-            var stage = written?.Contains(path, StringComparer.Ordinal) == true ? first.Check.Stage : first.Check.ProjectStage ?? first.Check.Stage;
+            // Every path asked of the owner is the projection's.
+            var stage = first.Check.ProjectStage ?? first.Check.Stage;
             var alias = parent ? resolve.ParentAs ?? resolve.As : resolve.As;
 
             if (!parent && first.Check.ContinuedAliases.Contains(path.Split('.')[0], StringComparer.Ordinal))
             {
                 var continued = path.Split('.')[0];
-                var hinted = first.Check.Continued.FirstOrDefault(stage => stage.Branches is not null && stage.Aliases.Contains(continued, StringComparer.Ordinal)) is { } hinting
-                    && hinting.Stage.Resolve?.Select?.Contains(path[(continued.Length + 1)..], StringComparer.Ordinal) == true ? hinting : null;
-                // The hint is written at the union join; every other path asked under its alias is the projection's.
-                var at = hinted?.OriginIndex ?? first.Check.ProjectStage ?? first.Check.Stage;
-
-                if (hinted is not null)
-                    path = path[(continued.Length + 1)..];
+                // Every path asked under a union join's alias is the projection's.
+                var at = first.Check.ProjectStage ?? first.Check.Stage;
 
                 // Under a union join's alias the path is dropped for the branches that do not reach it, as
                 // a run drops it; only one no branch reaches is unknown. A branch whose owner did not
@@ -805,7 +797,7 @@ public sealed class RemoteExplain : IExplainOwners
                     && checks.Where(check => check.Continued.Contains(union)).Any(check => !answered.Contains(check) || !lacking.Contains(check)))
                 {
                     foreach (var check in lacking.DistinctBy(check => check.Bound?.Declared.Entity ?? check.Target))
-                        notes.Add(Notes.BranchPathDropped(union.OriginIndex, continued, check.Bound?.Declared.Entity ?? check.Target, hinted is null ? path[(continued.Length + 1)..] : path));
+                        notes.Add(Notes.BranchPathDropped(union.OriginIndex, continued, check.Bound?.Declared.Entity ?? check.Target, path[(continued.Length + 1)..]));
 
                     continue;
                 }
@@ -1253,7 +1245,7 @@ public sealed class RemoteExplain : IExplainOwners
             ? $"What '{check.Service}' binds for '{check.Target}' was not asked of its owner: this explain answers from the owner answers already kept (remote \"cached\"), and none is kept for it. Explain with remote \"check\" to ask the owner."
             : check.Service.Length == 0
             ? $"The stages continued under '{check.Target}' at this host were not checked ({reason}); this host binds them when the query runs."
-            : $"What '{check.Service}' binds for '{check.Target}' (its select, the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
+            : $"What '{check.Service}' binds for '{check.Target}' (the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
         Stage = check.FirstContinued,
         Params = new Dictionary<string, object?> { ["service"] = check.Service.Length == 0 ? null : check.Service, ["target"] = check.Target, ["reason"] = reason },
     };

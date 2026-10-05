@@ -234,7 +234,7 @@ with no index but `_id`. What changes with the collation is which indexes the se
   second read of the rows up to the lookup, `params.filtered: true`); the same holds for a
   `flatten` cut at its depth.
 - A join loads what is read under its alias (see *What a join loads*): every member of its target can
-  be filtered, sorted, grouped, projected or joined on, whatever the join's `select` names.
+  be filtered, sorted, grouped, projected or joined on; a contract 2 join has no `select`.
 - **Where a condition of the request's `filter` runs.** The binder places each condition at the
   earliest boundary between two stages at which every path it reads is in the row, as a `match`
   of its own there: an entity member at the entry, an unwind's alias after the unwind, a join's
@@ -259,7 +259,7 @@ decides which rows there are and in which order:
 | the entity and the organisation | the page stage: `limit`, `count`, the cursor itself |
 | the request's `filter` and every `match`, with storage paths and typed operands | the trailing `project`: every projection that only sorts, display-only joins and the page follow |
 | every `unwind` and `group`, and the sort (the default and the appended keys included) | a `lookup` or `resolve` whose alias, owning row and outcome no stage reads but a projection, with its `filter`, `limit`, `sort` and `outcomeAs` |
-| every join a condition, a sort, an unwind, a group or another join reads, with its `filter` | every join's `select`; `onMissing`; `strict` |
+| every join a condition, a sort, an unwind, a group or another join reads, with its `filter` | what a join loads; `onMissing`; `strict` |
 | a projection a later `match`, `unwind`, `group` or read join follows; a stage continued at an owner | |
 
 So a follow-up page may ask for another `limit` or for a count, and showing or hiding a column,
@@ -338,13 +338,18 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
   every projection in storage and are dropped from the row when not asked for, so projecting
   them away never changes the rows, the cursor or the join.
 - **Late joins.** A `lookup` or local `resolve` that no later `match`, `sort`, `unwind`, `group`
-  or `resolve` reads, that no `group` follows, and whose alias every later `project` passes whole
-  runs after the page is taken, on the page's rows alone. A projection that narrows the alias
-  keeps the join where it was written; one that drops it drops the join (see above). The rows are the same either way; explain shows the
-  order the server runs.
+  or `resolve` reads, that no `group` follows, and whose alias every later `project` passes on
+  runs after the page is taken, on the page's rows alone. A projection passes the alias on when it
+  keeps it whole (`"vehicle": 1`, or an exclusion that names nothing under it) or, under contract 2,
+  names paths under it (`"vehicle.matchCode": 1`): the join then loads exactly those paths with its
+  key and the row shows them alone, so choosing what an alias shows never moves its join before the
+  page. An exclusion that names a path under the alias keeps the join where it was written (and so
+  does, under contract 1, an inclusion that narrows the alias); a projection that drops the alias
+  drops the join (see above). The rows are the same either way; explain shows the order the server
+  runs (`JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`).
 - The reserved key `$default` in an inclusion projection stands for the entity's key and display
-  members, the pair a whole alias of a `resolve` without `select` shows; it is `UNKNOWN_PATH` after a
-  `group` or an `unwind`. A remote `resolve` kept whole without `select` sends it to the owner, so a
+  members, the pair a whole alias of a `resolve` shows; it is `UNKNOWN_PATH` after a
+  `group` or an `unwind`. A remote `resolve` kept whole sends it to the owner, so a
   remote default is the same pair.
 - Every value in a projection that is not the number `0` includes the path; a nested object is
   read as dotted paths (`{ "address": { "city": 1 } }` is `address.city`).
@@ -357,9 +362,14 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 **load set = its key + what later stages read under its alias + its output set.**
 
 - **The output set** is what the row shows under the alias. Where the last projection names paths
-  under the alias, it is exactly those paths. Where the row keeps the alias whole (no projection, or
-  the projection names the alias itself), it is the `select` hint with the key, or without a hint
-  the target's key and display members. An alias the row does not carry shows nothing.
+  under the alias, it is exactly those paths (the key only when it is named). Where the row keeps
+  the alias whole (no projection, or the projection names the alias itself), it is the default
+  output: for an entity target the entity's key and its display member (whichever of the two the
+  entity declares), for an item target of a `resolve` the member the reference matches, for the
+  elements a remote `lookup` of `entity#item` finds the whole element, and for an owning row
+  (`parentAs`) `entity` with the owner's key and display member. An alias of another service's rows
+  kept whole shows what its owner answers to `$default`, the same pair read from the owner's model
+  (explain says `loads: null`, `shows: null` there). An alias the row does not carry shows nothing.
 - **What is only read is not shown.** A `match`, `sort`, `group` key or aggregate under the alias, the
   key of a later `resolve`, the member a `lookup` joins `on`, the sibling or variant that picks a
   reference's case: each is loaded for the stage that reads it and cut from the row. The row's shape
@@ -380,12 +390,17 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   Explain lists the read at the continued stage (`resolveKey`, `lookupOn`), the path in the alias's
   `loads`, and an empty `shows`. Only when the row shows none of a keyed stage's aliases, nor any
   alias continued under them, is its owner not called.
-- **`select` is a hint.** It shapes a whole alias and nothing else: it bounds no read, and under a
-  projection that names paths below the alias it is neither shown nor loaded. A hint path the target
-  does not have is `UNKNOWN_PATH`, since it is a typo and not a load.
-- **At an owner.** A stage continued at an owner travels as written, without an inferred `select`;
-  the owner binds it and infers its join the same way, the case member included. The paths the
-  caller projects under a continued alias travel as paths, never as the alias itself.
+- **There is no `select`.** A contract 2 `lookup` or `resolve` (a union join included) that writes
+  one is refused: `UNKNOWN_STAGE_MEMBER`, `params { stage, member: "select", reason: "removed",
+  use: "project" }`. To show other members of a join than its default output, name them in a
+  `project` stage (`"vehicle.matchCode": 1`); a path the target does not have is `UNKNOWN_PATH` at
+  that projection, also under a remote `lookup`'s alias.
+- **At an owner.** An owner query carries what the origin needs of an alias as its own `project`
+  stage (the output set, or `$default`), never as a `select`; a stage continued at an owner travels
+  as the caller wrote it, and the owner binds it and infers its join the same way, the case member
+  included. So the internal wire has no `select` either, and an internal call that writes one is
+  refused like a public one. The paths the caller projects under a continued alias travel as paths,
+  never as the alias itself.
 - **Unions.** The paths under an alias with several targets are flat. Each target's owner is asked
   for them; a path a target lacks is dropped for it (`SELECT_PATH_NOT_ON_TARGET`; for a remote
   target after its owner said so, once, kept per target) and the member is absent on its rows. Only

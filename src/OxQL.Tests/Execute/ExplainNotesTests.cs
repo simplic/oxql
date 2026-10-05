@@ -104,7 +104,7 @@ public class ExplainNotesTests
     [Fact]
     public async Task Every_join_says_where_it_runs()
     {
-        var before = await NotesAsync("""[{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } }, { "match": { "c.name": { "eq": "x" } } }]""");
+        var before = await NotesAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "match": { "c.name": { "eq": "x" } } }]""");
         Single(before, Notes.JoinBeforePage).Should().Match<Diagnostic>(note => note.Stage == 0 && note.Path == "c");
 
         var after = await NotesAsync("""[{ "resolve": { "path": "billingLineId", "as": "r" } }]""");
@@ -115,7 +115,7 @@ public class ExplainNotesTests
     public async Task What_an_owner_binds_is_said_for_a_remote_resolve_and_every_continued_stage()
     {
         var notes = await NotesAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "r" } },
              { "resolve": { "path": "r.companyId", "as": "co" } }]
             """);
 
@@ -133,7 +133,7 @@ public class ExplainNotesTests
     public async Task A_continued_resolve_says_its_missing_policy_as_its_owner_binds_it(string? onMissing, bool strict, string effective)
     {
         var notes = await NotesAsync($$"""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "r" } },
              { "resolve": { "path": "r.companyId", "as": "co"{{(onMissing is null ? "" : $", \"onMissing\": \"{onMissing}\"")}} } }]
             """, strict: strict);
 
@@ -152,7 +152,7 @@ public class ExplainNotesTests
     public async Task A_continued_lookup_says_no_missing_policy()
     {
         var notes = await NotesAsync("""
-            [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } },
+            [{ "resolve": { "path": "contactId", "as": "r" } },
              { "lookup": { "from": "crm.note", "path": "contactId", "on": "r", "as": "notes" } }]
             """);
 

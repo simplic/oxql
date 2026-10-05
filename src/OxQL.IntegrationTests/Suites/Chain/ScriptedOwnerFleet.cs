@@ -59,9 +59,9 @@ public sealed class ScriptedOwnerFleet : IAsyncLifetime
     public static JsonObject Resolve(string caseId, bool strict = false, string extra = "", string after = "")
     {
         var body = Json.Request(Corpus.Conformance, JsonNode.Parse($$"""
-            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"], "filter": { "name": { "neq": "{{caseId}}" } }{{extra}} } },
+            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w", "filter": { "name": { "neq": "{{caseId}}" } }{{extra}} } },
               {{after}}
-              { "project": { "id": 1, "widgetCodeExplicit": 1, "w": 1 } },
+              { "project": { "id": 1, "widgetCodeExplicit": 1, "w.name": 1 } },
               { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]
             """)!);
 

@@ -31,9 +31,9 @@ public partial class CommandBudgetTests
         "S3",
         fleet => fleet.Client(LabService.Ledger, Org.R).SendAsync(ReportSeed.Transaction,
             """
-            [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact", "select": ["address.companyName"] } },
-              { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null", "select": ["address.lastName"] } },
-              { "project": { "number": 1, "date": 1, "recipientContact": 1, "clerk": 1 } },
+            [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
+              { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null" } },
+              { "project": { "number": 1, "date": 1, "recipientContact.id": 1, "recipientContact.address.companyName": 1, "clerk.id": 1, "clerk.address.lastName": 1 } },
               { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]
             """),
         cold: 4,
@@ -47,9 +47,9 @@ public partial class CommandBudgetTests
 
         var answer = await fleet.Client(LabService.Ledger, Org.R).WithHeader(LabIdentity.CorrelationHeader, "corr-s3").SendAsync(ReportSeed.Transaction,
             """
-            [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact", "select": ["address.companyName"] } },
-              { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null", "select": ["address.lastName"] } },
-              { "project": { "number": 1, "recipientContact": 1, "clerk": 1 } },
+            [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
+              { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null" } },
+              { "project": { "number": 1, "recipientContact.id": 1, "recipientContact.address.companyName": 1, "clerk.id": 1, "clerk.address.lastName": 1 } },
               { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]
             """);
         var commands = capture.Drain().Engine;
@@ -79,10 +79,10 @@ public partial class CommandBudgetTests
               "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
               "pipeline": [
                 { "match": { "id": { "eq": { "$var": "transactionId" } } } },
-                { "resolve": { "path": "items.billingLineId", "as": "billingLine", "elements": "first", "select": ["id"] } },
-                { "resolve": { "path": "billingLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"] } },
-                { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "forTarget": "{{ReportSeed.Shipment}}", "select": ["id", "number"] } },
-                { "project": { "number": 1, "billingLine": 1, "sourceLine": 1, "sourceParent.id": 1, "deliveringTour": 1 } }
+                { "resolve": { "path": "items.billingLineId", "as": "billingLine", "elements": "first" } },
+                { "resolve": { "path": "billingLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent" } },
+                { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "forTarget": "{{ReportSeed.Shipment}}" } },
+                { "project": { "number": 1, "billingLine.id": 1, "sourceLine.id": 1, "sourceParent.id": 1, "deliveringTour.id": 1, "deliveringTour.number": 1 } }
               ]
             }
             """),

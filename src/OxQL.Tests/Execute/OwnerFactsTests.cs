@@ -50,7 +50,7 @@ public class OwnerFactsTests
         runner.PageRows = [ContactRow(Guid.NewGuid(), Guid.NewGuid()), ContactRow(Guid.NewGuid(), Guid.NewGuid())];
         client.Script = (_, query, _) => new FakeRemoteClient.Answer.Rows();
 
-        await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context());
+        await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]"""), BindHost.Context());
 
         client.Probed.Should().Equal("crm");
         client.Calls.Select(call => call.Request.Queries.Count).Should().Equal([1, 1], "the owner's cap of one was known before the first batch");
@@ -70,7 +70,7 @@ public class OwnerFactsTests
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
-        var outcome = await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]""") with { Strict = true }, BindHost.Context());
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]""") with { Strict = true }, BindHost.Context());
 
         watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(1_500), "the facts read is cut at a slice of the 2 s phase, not the owner's health time");
         outcome.Should().BeOfType<QueryOutcome.Success>("the batch goes out under this host's caps and the owner answers in time")
@@ -85,7 +85,7 @@ public class OwnerFactsTests
         var client = new FakeRemoteClient { ApiVersions = { ["crm"] = "v2" } };
         var engine = new MongoQueryEngine(new RevisionedModels(ResolveModel.Model, "sha256:abc"), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), client);
 
-        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }]"""), BindHost.Context());
+        var explained = await engine.ExplainAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]"""), BindHost.Context());
 
         var result = explained.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
         var owner = result.Owner(0)!;

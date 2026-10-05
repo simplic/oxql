@@ -1,5 +1,5 @@
 {
-  "description": "A lookup with select, filter and limit, read by a later match, with a counted page.",
+  "description": "A lookup with filter and limit, read by a later match, with a counted page.",
   "entity": "probe.customer",
   "pipeline": [
     {
@@ -7,9 +7,6 @@
         "from": "probe.order",
         "path": "customerId",
         "as": "orders",
-        "select": [
-          "number"
-        ],
         "filter": {
           "flag": {
             "eq": true

@@ -149,8 +149,8 @@ public class OrganisationTests
             expected.SelectMany(children => children).Should().NotBeEmpty($"organisation {org} joins children, or the case is vacuous");
 
             var answer = await (await Client(Corpus.Vehicle, org)).SendAsync(Corpus.Vehicle, """
-                [ { "lookup": { "path": "vehicle.id", "from": "fleet.equipment", "as": "eq", "select": ["name"] } },
-                  { "project": { "id": 1, "eq": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 500 } } ]
+                [ { "lookup": { "path": "vehicle.id", "from": "fleet.equipment", "as": "eq" } },
+                  { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 500 } } ]
                 """);
 
             answer.ShouldHaveIds(vehicles.Select(vehicle => vehicle.Id));
@@ -184,7 +184,7 @@ public class OrganisationTests
             expected.Should().Contain(id => id != null);
 
             var answer = await (await Client(Corpus.Vehicle, org)).SendAsync(Corpus.Vehicle, """
-                [ { "resolve": { "path": "department.id", "as": "dep", "select": ["name"] } },
+                [ { "resolve": { "path": "department.id", "as": "dep" } },
                   { "project": { "id": 1, "dep.id": 1, "dep.name": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 500 } } ]
                 """);
 
@@ -222,7 +222,7 @@ public class OrganisationTests
         answer.Items.Select(item => (Guid.Parse(item!["id"]!.GetValue<string>()), Json.At(item, "veh.id") is JsonValue id ? Guid.Parse(id.GetValue<string>()) : (Guid?)null)).ToList();
 
     private const string RemotePipeline = """
-        [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+        [ { "resolve": { "path": "createUserId", "as": "veh" } },
           { "project": { "id": 1, "createUserId": 1, "veh.id": 1, "veh.matchCode": 1 } },
           { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
         """;
@@ -249,7 +249,7 @@ public class OrganisationTests
             var expected = rows.Select(row => Corpus.GuidAt(row, "employeeId") is { } id && employees.Contains(id) ? id : (Guid?)null).ToList();
 
             var answer = await (await Client(Corpus.Conformance, org)).SendAsync(Corpus.Conformance, """
-                [ { "resolve": { "path": "employeeId", "as": "emp", "select": ["matchCode"] } }, { "project": { "id": 1, "emp.id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
+                [ { "resolve": { "path": "employeeId", "as": "emp" } }, { "project": { "id": 1, "emp.id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
                 """);
 
             answer.ShouldHaveIds(rows.Select(row => row.Id));
@@ -261,7 +261,7 @@ public class OrganisationTests
     public async Task X15_the_resolve_cache_never_serves_another_organisations_row_however_the_calls_interleave()
     {
         var pipeline = """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "project": { "id": 1, "veh.id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 4 } } ]
             """;
         var expected = new Dictionary<Org, List<(Guid, Guid?)>> { [Org.A] = TemplateTargets(Org.A, 4), [Org.B] = TemplateTargets(Org.B, 4) };
@@ -279,7 +279,7 @@ public class OrganisationTests
     public async Task X16_the_semi_join_id_cache_is_keyed_by_organisation()
     {
         var pipeline = """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "VEH-002" } } },
               { "project": { "id": 1, "templateName": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50 } } ]
             """;

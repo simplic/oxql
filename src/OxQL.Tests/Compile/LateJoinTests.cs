@@ -25,8 +25,8 @@ public class LateJoinTests
     private static readonly Guid Id1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid Id2 = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    private const string OrdersLookup = """{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"] } }""";
-    private const string CustomerResolve = """{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }""";
+    private const string OrdersLookup = """{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }""";
+    private const string CustomerResolve = """{ "resolve": { "path": "customerId", "as": "cust" } }""";
 
     private static string OrgJson => $"{{ OrganizationId: {Org.ToJson()} }}";
 
@@ -114,7 +114,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_join_written_before_another_join_that_a_match_reads_runs_after_it()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "resolve": { "path": "customerId", "as": "buyer", "select": ["name"] } }, { "match": { "buyer.name": { "eq": "x" } } }, { "page": { "limit": 5 } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "resolve": { "path": "customerId", "as": "buyer" } }, { "match": { "buyer.name": { "eq": "x" } } }, { "page": { "limit": 5 } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$match", "$sort", "$limit", "$lookup", "$set", "$unset");
         compiled.PageStages[1]["$lookup"]["as"].AsString.Should().Be("buyer__arr");
@@ -149,7 +149,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_keyset_cursor_on_a_resolve_alias_is_evaluated_after_the_join_and_before_the_sort()
     {
-        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 2 } }]""";
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 2 } }]""";
         var first = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
         var id = new BsonBinaryData(Id1, GuidRepresentation.Standard);
         var cursor = BindHost.Cursors.Encode(new CursorPayload(first.Fingerprint, PagingMode.Keyset, [new CursorValue("cust.name", true, new BsonString("abc")), new CursorValue("_id", true, id)], 0));
@@ -170,7 +170,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_resolve_alias_sorted_on_and_dropped_by_the_projection_stays_in_storage_and_out_of_the_row()
     {
-        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2 } }]""";
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "sort": [{ "cust.name": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2 } }]""";
         var bound = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
@@ -247,8 +247,8 @@ public class LateJoinTests
         // A resolve through the lookup's array needs 'elements' (RESOLVE_ON_COLLECTION); through
         // its first child it reads one row, as the plain form of this case means.
         var compiled = await Compile("""
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number", "customerId"], "first": true } },
-             { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "first": true } },
+             { "resolve": { "path": "orders.customerId", "as": "again" } }, { "page": { "limit": 5 } }]
             """, Customer);
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$sort", "$limit", "$lookup", "$set", "$unset");
@@ -257,11 +257,26 @@ public class LateJoinTests
     }
 
     [Fact]
-    public async Task A_join_stays_before_a_projection_that_narrows_or_drops_its_alias()
+    public async Task A_join_runs_after_a_projection_that_names_paths_under_its_alias_and_stays_before_one_that_cuts_it_or_a_stage_that_reads_it()
     {
+        // A contract 2 join has no select: the projection names what the alias shows, the join loads
+        // those paths with its key, and it still runs for the page's rows only.
         var narrowed = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(narrowed.PageStages).Should().Equal("$match", "$lookup", "$set", "$project", "$sort", "$limit");
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
+        narrowed.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the late join loads what the projection names, and its key");
+
+        // An exclusion under the alias cuts what the join produced: the join stays before it.
+        var cut = await Compile($$"""[{{OrdersLookup}}, { "project": { "orders.number": 0 } }, { "page": { "limit": 5 } }]""", Customer);
+
+        Kinds(cut.PageStages).Should().StartWith(["$match", "$lookup"]);
+
+        // Contract 1 keeps its rule: its join fetches the select as written, and a projection that narrows the alias cuts it.
+        var legacy = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Customer,
+            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"] } }, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""",
+            BindHost.Context(contract: 1)), Options);
+
+        Kinds(legacy.PageStages).Should().StartWith(["$match", "$lookup"]);
 
         var read = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "n-1" } } }, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 

@@ -35,7 +35,7 @@ public class RemoteLookupTests
     private static RequestContext Reaching(Func<string, bool>? reachable = null) =>
         BindHost.Context() with { RemoteService = reachable ?? (service => service is "tr" or "crm") };
 
-    private const string Shipments = """{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "select": ["number"] } }""";
+    private const string Shipments = """{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments" } }""";
 
     private static async Task<BoundPipeline> BoundAsync(string pipeline, RequestContext? context = null) =>
         await BindHost.BoundAsync(ResolveModel.Model, Invoice, pipeline, context ?? Reaching());
@@ -254,7 +254,8 @@ public class RemoteLookupTests
         };
 
         var outcome = await RunAsync(client, """
-            [{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "select": ["number"], "limit": 2, "sort": [ { "date": "desc" } ] } }]
+            [{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "limit": 2, "sort": [ { "date": "desc" } ] } },
+             { "project": { "id": 1, "shipments.number": 1 } }]
             """);
         var result = outcome.Should().BeOfType<QueryOutcome.Success>().Subject.Result;
 
@@ -348,7 +349,7 @@ public class RemoteLookupTests
         var client = new FakeRemoteClient { Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.UnknownPath, "'oxEl.txt' is not a path.", Stage: 0, Path: "oxEl.txt") };
 
         var outcome = await RunAsync(client, """
-            [{ "match": { "number": { "neq": "x" } } }, { "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "line", "select": ["txt"] } }]
+            [{ "match": { "number": { "neq": "x" } } }, { "lookup": { "from": "tr.shipment#lines", "path": "invoiceId", "as": "line" } }]
             """);
         var errors = outcome.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal.Errors!;
 

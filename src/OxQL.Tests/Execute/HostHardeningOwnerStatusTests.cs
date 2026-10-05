@@ -18,7 +18,7 @@ namespace OxQL.Tests.Execute;
 /// </summary>
 public class HostHardeningOwnerStatusTests
 {
-    private const string Resolve = """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]""";
+    private const string Resolve = """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 10 } }]""";
     private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1" } } }, { "page": { "limit": 10 } }]""";
 
     /// <summary>An owner that answers every batch with one HTTP status, as the host's client reports it.</summary>

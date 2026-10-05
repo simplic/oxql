@@ -133,7 +133,7 @@ public class CaseInsensitiveServerTests
         await folders.InsertManyAsync([Folder(1, "abc"), Folder(2, "ABC")]);
         await documents.InsertManyAsync([Document(1, "abc"), Document(2, "ABC"), Document(3, "äbc")]);
 
-        var resolved = await Joins.CompileAsync(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder", "select": ["code"] } }, { "match": { "title": { "eq": "T" } } }, { "sort": [{ "id": "asc" }] }]""");
+        var resolved = await Joins.CompileAsync(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }, { "match": { "title": { "eq": "T" } } }, { "project": { "title": 1, "folder.code": 1 } }, { "sort": [{ "id": "asc" }] }]""");
 
         resolved.Collation.Should().NotBeNull();
 
@@ -144,7 +144,7 @@ public class CaseInsensitiveServerTests
         rows[1]["folder"]["Code"].AsString.Should().Be("ABC");
         rows[2].Contains("folder").Should().BeFalse("no folder is spelled äbc");
 
-        var looked = await EngineDirect.RunAsync(owned.Database, CaseInsensitiveJoinModel.FolderCollection, await Joins.CompileAsync(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs", "select": ["folderCode"] } }, { "match": { "name": { "eq": "X" } } }, { "sort": [{ "id": "asc" }] }]"""));
+        var looked = await EngineDirect.RunAsync(owned.Database, CaseInsensitiveJoinModel.FolderCollection, await Joins.CompileAsync(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs" } }, { "match": { "name": { "eq": "X" } } }, { "project": { "name": 1, "docs.folderCode": 1 } }, { "sort": [{ "id": "asc" }] }]"""));
 
         looked.Should().HaveCount(2);
         looked[0]["docs"].AsBsonArray.Select(document => document["FolderCode"].AsString).Should().Equal("abc");

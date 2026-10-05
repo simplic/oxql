@@ -34,12 +34,11 @@ public class JoinsRouteChainTests
           "variables": { "transactionId": "{{Id(ReportSeed.TransactionId)}}" },
           "pipeline": [
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
-            { "resolve": { "path": "items.billingLineId", "as": "billingLine", "elements": "first", "select": ["id"] } },
+            { "resolve": { "path": "items.billingLineId", "as": "billingLine", "elements": "first" } },
             { "resolve": { "path": "billingLine.sourceBillingLineReference.id", "as": "sourceLine"{{(target is null ? "" : $", \"target\": \"{target}\"")}},
-                           "parentAs": "sourceParent", "select": ["id"] } },
-            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first"{{(forTarget is null ? "" : $", \"forTarget\": \"{forTarget}\"")}},
-                           "select": ["id", "number"] } },
-            { "project": { "number": 1, "billingLine": 1, "sourceLine": 1, "sourceParent.id": 1, "deliveringTour": 1 } }
+                           "parentAs": "sourceParent" } },
+            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first"{{(forTarget is null ? "" : $", \"forTarget\": \"{forTarget}\"")}} } },
+            { "project": { "number": 1, "billingLine.id": 1, "sourceLine.id": 1, "sourceParent.id": 1, "deliveringTour.id": 1, "deliveringTour.number": 1 } }
           ]
         }
         """;
@@ -117,11 +116,11 @@ public class JoinsRouteChainTests
                 { "match": { "id": { "eq": { "$var": "transactionId" } } } },
                 { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
                 { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-                { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+                { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
                 { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "target": "{{ReportSeed.Shipment}}",
-                               "parentAs": "sourceParent", "select": ["id"] } },
-                { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["id", "number"] } },
-                { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.tours.tourId": 1, "deliveringTour": 1 } },
+                               "parentAs": "sourceParent" } },
+                { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first" } },
+                { "project": { "position": 1, "sourceLine.id": 1, "sourceParent.id": 1, "sourceParent.tours.tourId": 1, "deliveringTour.id": 1, "deliveringTour.number": 1 } },
                 { "sort": [ { "position": "asc" } ] }
               ]
             }
@@ -158,9 +157,9 @@ public class JoinsRouteChainTests
               { "match": { "id": { "eq": { "$var": "transactionId" } } } },
               { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
               { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-              { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
-              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"] } },
-              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number"] } },
+              { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent" } },
+              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first" } },
               { "resolve": { "path": "sourceParent.resource.id", "as": "tourResource", "forTarget": "{{ReportSeed.Tour}}" } }
             ]
           }
@@ -230,12 +229,12 @@ public class JoinsRouteChainTests
               { "match": { "id": { "eq": { "$var": "transactionId" } } } },
               { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
               { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-              { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
-              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent", "select": ["id"] } },
-              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first", "select": ["id", "number", "resource.id"] } },
+              { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
+              { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "parentAs": "sourceParent" } },
+              { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first" } },
               { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "onMissing": "report" } },
               { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "{{ReportSeed.Tour}}", "onMissing": "report" } },
-              { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1, "shipmentVehicle": 1, "tourVehicle": 1 } }
+              { "project": { "position": 1, "sourceLine.id": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour.id": 1, "deliveringTour.number": 1, "deliveringTour.resource.id": 1, "shipmentVehicle": 1, "tourVehicle": 1 } }
             ]
           }
         }

@@ -100,8 +100,8 @@ public class InlineOutcomeServerTests
         var (owned, engine) = await SeedAsync();
         await using var _ = owned;
         const string Pipeline = """
-            [ { "resolve": { "path": "customerCode", "as": "c", "select": ["name"], "onMissing": "report" } },
-              { "project": { "number": 1, "c": 1 } },
+            [ { "resolve": { "path": "customerCode", "as": "c", "onMissing": "report" } },
+              { "project": { "number": 1, "c.id": 1, "c.name": 1 } },
               { "sort": [ { "number": "asc" } ] } ]
             """;
 
@@ -126,8 +126,8 @@ public class InlineOutcomeServerTests
         var (owned, engine) = await SeedAsync();
         await using var _ = owned;
         const string Pipeline = """
-            [ { "resolve": { "path": "customerId", "as": "c", "select": ["name"], "filter": { "name": { "eq": "Acme first" } }ONMISSING } },
-              { "project": { "number": 1, "c": 1 } },
+            [ { "resolve": { "path": "customerId", "as": "c", "filter": { "name": { "eq": "Acme first" } }ONMISSING } },
+              { "project": { "number": 1, "c.id": 1, "c.name": 1 } },
               { "sort": [ { "c.name": "asc" }, { "number": "asc" } ] } ]
             """;
 

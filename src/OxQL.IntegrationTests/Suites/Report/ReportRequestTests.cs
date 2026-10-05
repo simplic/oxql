@@ -31,7 +31,10 @@ public class ReportRequestTests
         var pipeline = expected["pipeline"]!.AsArray();
 
         pipeline.Insert(ReportScenarios.IndexOf(expected, "sourceLine") + 1, JsonNode.Parse(ReportScenarios.DesignA2bStage));
-        pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!["lastAttempt"] = 1;
+
+        // The alias shows what the projection names under it: a join has no select.
+        foreach (var member in new[] { "id", "dateTime", "status" })
+            pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!["lastAttempt." + member] = 1;
 
         ShouldEqual(ReportScenarios.Request("A2b"), expected);
     }
@@ -51,7 +54,7 @@ public class ReportRequestTests
 
         var project = pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!.AsObject();
 
-        foreach (var member in project.Select(pair => pair.Key).Where(member => dropped.Contains(member) || member.StartsWith("sourceParent.", StringComparison.Ordinal)).ToList())
+        foreach (var member in project.Select(pair => pair.Key).Where(member => dropped.Append("sourceParent").Any(alias => member.StartsWith(alias + ".", StringComparison.Ordinal))).ToList())
             project.Remove(member);
 
         ShouldEqual(ReportScenarios.Request("A4"), expected);

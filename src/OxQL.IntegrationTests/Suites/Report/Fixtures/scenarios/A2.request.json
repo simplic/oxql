@@ -23,19 +23,16 @@
           {
             "dateTime": "desc"
           }
-        ],
-        "select": [
-          "id",
-          "dateTime",
-          "status",
-          "text"
         ]
       }
     },
     {
       "project": {
         "shipmentNumber": 1,
-        "lastAttempt": 1
+        "lastAttempt.id": 1,
+        "lastAttempt.dateTime": 1,
+        "lastAttempt.status": 1,
+        "lastAttempt.text": 1
       }
     }
   ]

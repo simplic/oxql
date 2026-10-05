@@ -269,7 +269,7 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Lookup lookup:
                 {
-                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, lookup.As);
+                    var after = MongoCompiler.JoinsAfterPage(bound, position, lookup.As);
 
                     draft.Placements[index] = ("inline", after ? "afterPage" : "beforePage", host, null, false);
                     draft.Notes.Add(Notes.Join(index, lookup.As, "lookup", after));
@@ -294,7 +294,7 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Resolve resolve:
                 {
-                    var after = MongoCompiler.JoinsAfterPage(bound.Stages, position, resolve);
+                    var after = MongoCompiler.JoinsAfterPage(bound, position, resolve);
 
                     draft.Placements[index] = ("inline", after ? "afterPage" : "beforePage", host, null, false);
                     draft.Notes.Add(Notes.Join(index, resolve.As, "resolve", after));
@@ -503,7 +503,11 @@ public sealed partial class MongoQueryEngine
         return reads;
     }
 
-    /// <summary>What a join loads and shows under an alias, as the binder inferred it: <c>loads</c>, <c>shows</c> and <c>hint</c>, each a list of paths or null.</summary>
+    /// <summary>
+    /// What a join loads and shows under an alias, as the binder inferred it: <c>loads</c> and
+    /// <c>shows</c>, each a list of paths or null. A join carries no <c>select</c> under contract 2,
+    /// so there is no hint to report.
+    /// </summary>
     private static void Loads(JsonObject entry, JoinLoad? load)
     {
         if (load is null)
@@ -511,7 +515,6 @@ public sealed partial class MongoQueryEngine
 
         entry["loads"] = load.Loads is null ? null : new JsonArray(load.Loads.Select(path => (JsonNode)path).ToArray());
         entry["shows"] = load.Shows is null ? null : new JsonArray(load.Shows.Select(path => (JsonNode)path).ToArray());
-        entry["hint"] = load.Hint is null ? null : new JsonArray(load.Hint.Select(path => (JsonNode)path).ToArray());
     }
 
     /// <summary>The notes that say what the answer itself lacks; they are answered also without <c>include: "notes"</c>.</summary>

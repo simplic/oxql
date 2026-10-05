@@ -18,12 +18,7 @@
       "resolve": {
         "path": "createUserId",
         "as": "clerk",
-        "onMissing": "null",
-        "select": [
-          "address.firstName",
-          "address.lastName",
-          "primaryEmailAddress.email"
-        ]
+        "onMissing": "null"
       }
     },
     {
@@ -46,27 +41,14 @@
         "path": "item.references.referenceId",
         "as": "lineShipment",
         "elements": "first",
-        "target": "transport.shipment",
-        "select": [
-          "shipmentNumber",
-          "referenceNumber",
-          "loadAddress",
-          "deliveryAddress",
-          "effectiveDeliveryEnd",
-          "deliveryNoteNumber",
-          "items.weightNotes.number",
-          "items.weightNotes.quantity"
-        ]
+        "target": "transport.shipment"
       }
     },
     {
       "resolve": {
         "path": "lineShipment.tours.tourId",
         "as": "deliveringTour",
-        "elements": "first",
-        "select": [
-          "number"
-        ]
+        "elements": "first"
       }
     },
     {
@@ -74,11 +56,7 @@
         "path": "deliveringTour.resource.id",
         "as": "tourVehicle",
         "target": "fleet.vehicle",
-        "onMissing": "null",
-        "select": [
-          "registrationPlate.registrationIdentifier",
-          "matchCode"
-        ]
+        "onMissing": "null"
       }
     },
     {
@@ -87,12 +65,7 @@
         "as": "driver",
         "elements": "first",
         "target": "staff.employee",
-        "onMissing": "null",
-        "select": [
-          "address.firstName",
-          "address.lastName",
-          "primaryEmailAddress.email"
-        ]
+        "onMissing": "null"
       }
     },
     {
@@ -100,13 +73,7 @@
         "path": "item.references.referenceId",
         "as": "lineTour",
         "elements": "first",
-        "target": "transport.tour",
-        "select": [
-          "number",
-          "startDateTime",
-          "endDateTime",
-          "actions"
-        ]
+        "target": "transport.tour"
       }
     },
     {
@@ -119,16 +86,38 @@
         "totalPriceNet": 1,
         "totalPriceGross": 1,
         "taxKeyTotalPrices": 1,
-        "clerk": 1,
+        "clerk.id": 1,
+        "clerk.address.firstName": 1,
+        "clerk.address.lastName": 1,
+        "clerk.primaryEmailAddress.email": 1,
+        "clerk.userId": 1,
         "position": 1,
         "item.text": 1,
         "item.quantity": 1,
         "item.totalPriceNet": 1,
-        "lineShipment": 1,
-        "deliveringTour": 1,
-        "tourVehicle": 1,
-        "driver": 1,
-        "lineTour": 1
+        "lineShipment.id": 1,
+        "lineShipment.shipmentNumber": 1,
+        "lineShipment.referenceNumber": 1,
+        "lineShipment.loadAddress": 1,
+        "lineShipment.deliveryAddress": 1,
+        "lineShipment.effectiveDeliveryEnd": 1,
+        "lineShipment.deliveryNoteNumber": 1,
+        "lineShipment.items.weightNotes.number": 1,
+        "lineShipment.items.weightNotes.quantity": 1,
+        "deliveringTour.id": 1,
+        "deliveringTour.number": 1,
+        "tourVehicle.id": 1,
+        "tourVehicle.registrationPlate.registrationIdentifier": 1,
+        "tourVehicle.matchCode": 1,
+        "driver.id": 1,
+        "driver.address.firstName": 1,
+        "driver.address.lastName": 1,
+        "driver.primaryEmailAddress.email": 1,
+        "lineTour.id": 1,
+        "lineTour.number": 1,
+        "lineTour.startDateTime": 1,
+        "lineTour.endDateTime": 1,
+        "lineTour.actions": 1
       }
     },
     {

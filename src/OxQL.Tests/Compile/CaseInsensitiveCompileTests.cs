@@ -186,7 +186,7 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task A_join_on_a_guid_key_is_unchanged_inside_a_collated_aggregate()
     {
-        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"], "filter": { "matchCode": { "eq": "m" } } } }]""");
+        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "filter": { "matchCode": { "eq": "m" } } } }]""");
 
         compiled.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }

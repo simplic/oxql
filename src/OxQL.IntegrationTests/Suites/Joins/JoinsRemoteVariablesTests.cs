@@ -17,8 +17,8 @@ public class JoinsRemoteVariablesTests
 {
     private const string ByVariable = """
         [ { "match": { "templateName": { "lte": "T-000024" } } },
-          { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"], "filter": { "matchCode": { "eq": { "$var": "code" } } } } },
-          { "project": { "id": 1, "veh": 1 } },
+          { "resolve": { "path": "createUserId", "as": "veh", "filter": { "matchCode": { "eq": { "$var": "code" } } } } },
+          { "project": { "id": 1, "veh.id": 1, "veh.matchCode": 1 } },
           { "sort": [ { "id": "asc" } ] },
           { "page": { "limit": 50 } } ]
         """;

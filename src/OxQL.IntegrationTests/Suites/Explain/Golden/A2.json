@@ -24,14 +24,16 @@
             {
               "dateTime": "desc"
             }
-          ],
-          "select": ["id","dateTime","status","text"]
+          ]
         }
       },
       {
         "project": {
           "shipmentNumber": 1,
-          "lastAttempt": 1
+          "lastAttempt.id": 1,
+          "lastAttempt.dateTime": 1,
+          "lastAttempt.status": 1,
+          "lastAttempt.text": 1
         }
       }
     ]
@@ -116,14 +118,17 @@
         "status": "ok",
         "reads": [
           {"path":"shipmentNumber","use":"project"},
-          {"path":"lastAttempt","use":"project","alias":"lastAttempt"}
+          {"path":"lastAttempt.id","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.dateTime","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.status","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.text","use":"project","alias":"lastAttempt"}
         ],
         "creates": [],
         "shape": {
           "paging": "cursor",
           "grouped": false,
           "unwound": [],
-          "projection": ["id","lastAttempt","shipmentNumber"],
+          "projection": ["id","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","lastAttempt.text","shipmentNumber"],
           "roots": {
             "": "t:transport.shipment",
             "lastAttempt": "t:transport.delivery_attempt"
@@ -151,8 +156,7 @@
           }
         ],
         "loads": ["dateTime","id","status","text"],
-        "shows": ["id","dateTime","status","text"],
-        "hint": ["id","dateTime","status","text"],
+        "shows": ["dateTime","id","status","text"],
         "type": "t:transport.delivery_attempt"
       }
     },
@@ -176,8 +180,8 @@
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
         {"path":"shipmentNumber","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"lastAttempt.id","kind":"guid","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
         {"path":"lastAttempt.dateTime","kind":"dateTime","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
+        {"path":"lastAttempt.id","kind":"guid","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
         {"path":"lastAttempt.status","kind":"object","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
         {"path":"lastAttempt.text","kind":"string","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"}
       ]

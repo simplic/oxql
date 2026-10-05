@@ -34,8 +34,7 @@
           "resolve": {
             "path": "item.billingLineId",
             "as": "erpLine",
-            "onMissing": "report",
-            "select": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"]
+            "onMissing": "report"
           }
         },
         {
@@ -43,7 +42,6 @@
             "path": "erpLine.sourceBillingLineReference.id",
             "as": "sourceLine",
             "onMissing": "report",
-            "select": ["id","totalPrice"],
             "parentAs": "sourceParent"
           }
         },
@@ -52,8 +50,7 @@
             "path": "sourceParent.tours.tourId",
             "as": "deliveringTour",
             "forTarget": "transport.shipment",
-            "elements": "first",
-            "select": ["id","number","resource.id"]
+            "elements": "first"
           }
         },
         {
@@ -61,8 +58,7 @@
             "path": "deliveringTour.resource.id",
             "as": "shipmentVehicle",
             "target": "fleet.vehicle",
-            "onMissing": "report",
-            "select": ["matchCode","registrationPlate.registrationIdentifier"]
+            "onMissing": "report"
           }
         }
       ]
@@ -370,9 +366,8 @@
         "outcome": {
           "values": ["not_found"]
         },
-        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
-        "shows": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
-        "hint": ["id","text","sourceBillingLineReference.type","sourceBillingLineReference.id"],
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type"],
+        "shows": ["id"],
         "targets": [
           {
             "target": "ledger.billing_line",
@@ -419,9 +414,8 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["id","totalPrice"],
-        "shows": ["id","totalPrice"],
-        "hint": ["id","totalPrice"],
+        "loads": null,
+        "shows": null,
         "targets": [
           {
             "target": "transport.shipment#billingLines",
@@ -455,7 +449,6 @@
         "lookupOn": true,
         "loads": null,
         "shows": null,
-        "hint": null,
         "parentOf": "sourceLine",
         "targets": [
           {
@@ -486,9 +479,8 @@
           "alias": "sourceParent",
           "target": "transport.shipment"
         },
-        "loads": ["id","number","resource.id"],
-        "shows": ["id","number","resource.id"],
-        "hint": ["id","number","resource.id"],
+        "loads": null,
+        "shows": null,
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -505,9 +497,8 @@
           "alias": "deliveringTour",
           "target": "transport.shipment"
         },
-        "loads": ["matchCode","registrationPlate.registrationIdentifier"],
-        "shows": ["matchCode","registrationPlate.registrationIdentifier"],
-        "hint": ["matchCode","registrationPlate.registrationIdentifier"],
+        "loads": null,
+        "shows": null,
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
@@ -757,17 +748,10 @@
         {"path":"item.items","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
         {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
         {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
+        {"path":"sourceLine","kind":"object","nullable":true,"stage":4,"root":"sourceLine","present":"always"},
         {"path":"sourceParent","kind":"object","nullable":true,"stage":4,"root":"sourceParent","present":"always"},
-        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"deliveringTour.resource.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"shipmentVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"},
-        {"path":"shipmentVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"shipmentVehicle","present":"ifJoined"}
+        {"path":"deliveringTour","kind":"object","nullable":true,"stage":5,"root":"deliveringTour","present":"always"},
+        {"path":"shipmentVehicle","kind":"object","nullable":true,"stage":6,"root":"shipmentVehicle","present":"always"}
       ]
     },
     "owners": [

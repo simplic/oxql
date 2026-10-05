@@ -98,37 +98,37 @@ internal static class LateJoinCases
         {
             "an inclusion that keeps the alias and not the key",
             Child,
-            """[{ "resolve": { "path": "parentId", "as": "p", "select": ["name"] } }, { "project": { "id": 1, "p": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "parentId", "as": "p" } }, { "project": { "id": 1, "p.id": 1, "p.name": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"id":"{{{WireId(11)}}}","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","p":null}]"""
         },
         {
             "an exclusion of the key",
             Child,
-            """[{ "resolve": { "path": "parentId", "as": "p", "select": ["name"] } }, { "project": { "parentId": 0, "parentCode": 0, "holder": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "parentId", "as": "p" } }, { "project": { "parentId": 0, "parentCode": 0, "holder": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"id":"{{{WireId(11)}}}","organizationId":"{{{Organisation}}}","title":"Child one","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","organizationId":"{{{Organisation}}}","title":"Child two","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","organizationId":"{{{Organisation}}}","title":"Child three","p":null}]"""
         },
         {
             "a string key an inclusion drops",
             Child,
-            """[{ "resolve": { "path": "parentCode", "as": "p", "select": ["name"] } }, { "project": { "id": 1, "title": 1, "p": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "parentCode", "as": "p" } }, { "project": { "id": 1, "title": 1, "p.id": 1, "p.name": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"id":"{{{WireId(11)}}}","title":"Child one","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","title":"Child two","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","title":"Child three","p":null}]"""
         },
         {
             "a nested key an inclusion drops with its parent member",
             Child,
-            """[{ "resolve": { "path": "holder.id", "as": "p", "select": ["name"] } }, { "project": { "id": 1, "p": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "holder.id", "as": "p" } }, { "project": { "id": 1, "p.id": 1, "p.name": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"id":"{{{WireId(11)}}}","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","p":null}]"""
         },
         {
             "a lookup whose parent key an unsorted unwound page excludes",
             Parent,
-            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children": 1 } }, { "page": { "limit": 5 } }]""",
+            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "page": { "limit": 5 } }]""",
             $$$"""[{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"}]"""
         },
         {
             "a lookup whose parent key a sorted unwound page excludes",
             Parent,
-            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5 } }]""",
+            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"}]"""
         },
     };

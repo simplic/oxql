@@ -19,7 +19,7 @@ public class RemoteAliasFilterTests
 {
     private const string Order = "probe.order";
 
-    private const string Resolve = """{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }""";
+    private const string Resolve = """{ "resolve": { "path": "contactNumber", "as": "contact" } }""";
 
     public static TheoryData<string> OnTheAlias => new()
     {

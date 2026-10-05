@@ -18,15 +18,17 @@
       {
         "resolve": {
           "path": "invoiceRecipient.address.id",
-          "as": "recipientContact",
-          "select": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"]
+          "as": "recipientContact"
         }
       },
       {
         "project": {
           "number": 1,
           "invoiceRecipient": 1,
-          "recipientContact": 1
+          "recipientContact.id": 1,
+          "recipientContact.primaryEmailAddress.email": 1,
+          "recipientContact.primaryPhoneNumber.number": 1,
+          "recipientContact.address.companyName": 1
         }
       }
     ]
@@ -47,7 +49,7 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null}},
+      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"}},
       {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000}}
@@ -116,14 +118,17 @@
         "reads": [
           {"path":"number","use":"project"},
           {"path":"invoiceRecipient","use":"project"},
-          {"path":"recipientContact","use":"project","alias":"recipientContact"}
+          {"path":"recipientContact.id","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.primaryEmailAddress.email","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.primaryPhoneNumber.number","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.address.companyName","use":"project","alias":"recipientContact"}
         ],
         "creates": [],
         "shape": {
           "paging": "cursor",
           "grouped": false,
           "unwound": [],
-          "projection": ["id","invoiceRecipient","number","recipientContact"],
+          "projection": ["id","invoiceRecipient","number","recipientContact.address.companyName","recipientContact.id","recipientContact.primaryEmailAddress.email","recipientContact.primaryPhoneNumber.number"],
           "roots": {
             "": "t:ledger.transaction",
             "recipientContact": "t:directory.contact"
@@ -160,9 +165,8 @@
         "outcome": {
           "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
         },
-        "loads": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
-        "shows": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
-        "hint": ["primaryEmailAddress.email","primaryPhoneNumber.number","address.companyName"],
+        "loads": ["address.companyName","id","primaryEmailAddress.email","primaryPhoneNumber.number"],
+        "shows": ["address.companyName","id","primaryEmailAddress.email","primaryPhoneNumber.number"],
         "targets": [
           {
             "target": "directory.contact",
@@ -208,9 +212,10 @@
         {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
         {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
         {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
+        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
+        {"path":"recipientContact.id","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
         {"path":"recipientContact.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
-        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
-        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"}
+        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"}
       ]
     },
     "owners": [

@@ -69,7 +69,7 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
-    public async Task F_ENT_002_M25_a_repeat_of_one_remote_stage_is_answered_from_the_cache_and_a_different_select_asks_again()
+    public async Task F_ENT_002_M25_a_repeat_of_one_remote_stage_is_answered_from_the_cache_and_a_different_projection_under_the_alias_asks_again()
     {
         var mark = Owner.Mark();
         var expected = OwnerFleet.WidgetNames();
@@ -81,9 +81,9 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
         second.ShouldHaveIds(RowIds()).Strings("w.name").Should().Equal(expected, "the cached repeat answers the same rows");
         Owner.BatchesSince(mark).Should().ContainSingle("the cache answered the repeat");
 
-        var other = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-25", """["name", "id"]"""));
+        var other = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-25", """ "w.name": 1, "w.id": 1 """));
         other.ShouldHaveIds(RowIds()).Strings("w.name").Should().Equal(expected);
-        Owner.BatchesSince(mark).Should().HaveCount(2, "a different select is a different cache entry");
+        Owner.BatchesSince(mark).Should().HaveCount(2, "a different set of projected paths is a different cache entry");
         other.Strings("w.id").Should().Equal(OwnerFleet.Rows().Select(row => ChaosOwner.Widgets.First(widget => widget.Code == Corpus.Text(row, "widgetCodeExplicit")).Id), "the decoy member is read, not joined on");
     }
 
@@ -137,9 +137,9 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
         employees.Should().Contain(id => id != null);
 
         var answer = await Conformance().SendAsync(Corpus.Conformance, $$"""
-            [ { "resolve": { "path": "employeeId", "as": "e", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "employeeId", "as": "e" } },
               {{OwnerFleet.ResolveStage("M-34")}},
-              { "project": { "id": 1, "e": 1, "w": 1 } },
+              { "project": { "id": 1, "e.id": 1, "e.matchCode": 1, "w": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 5 } } ]
             """);

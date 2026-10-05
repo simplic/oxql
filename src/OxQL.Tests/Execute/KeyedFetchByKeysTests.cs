@@ -274,7 +274,7 @@ public class KeyedFetchByKeysTests
         runner.Rows["rc.shipment"] = [ItemRow(Shipment1, "SN-1", Line1, "FREIGHT")];
 
         var result = await FetchAsync(engine, runner, client,
-            """[{ "resolve": { "path": "billingLineId", "as": "line", "select": ["code"], "parentAs": "shipment" } }]""", page);
+            """[{ "resolve": { "path": "billingLineId", "as": "line", "parentAs": "shipment" } }]""", page);
 
         var line = result.Rows[0]["line"]!.AsObject();
 
@@ -304,7 +304,7 @@ public class KeyedFetchByKeysTests
         runner.Rows["rc.tour"] = [ItemRow(Tour1, "Tour 1", Line1, "T1", display: "Name"), ItemRow(Tour1, "Tour 1", Line2, "T2", display: "Name")];
 
         var result = await FetchAsync(engine, runner, client,
-            """[{ "resolve": { "path": "localSource.id", "as": "line", "select": ["code"] } }]""", page);
+            """[{ "resolve": { "path": "localSource.id", "as": "line" } }]""", page);
 
         result.Rows[0]["line"]!["code"]!.GetValue<string>().Should().Be("S1", "the shipment is the first target of the case");
         result.Rows[1]["line"]!["code"]!.GetValue<string>().Should().Be("T2", "the tour alone holds the second key");
@@ -312,7 +312,7 @@ public class KeyedFetchByKeysTests
     }
 
     [Fact]
-    public async Task A_remote_item_target_sends_keyedBy_with_the_select_rebased_onto_the_element_and_mixes_with_local_targets()
+    public async Task A_remote_item_target_sends_keyedBy_with_the_projected_paths_rebased_onto_the_element_and_mixes_with_local_targets()
     {
         var (engine, runner, client) = Host();
         var page = new List<BsonDocument>
@@ -325,7 +325,7 @@ public class KeyedFetchByKeysTests
             new JsonObject { ["id"] = Shipment2.ToString("D"), ["oxEl"] = new JsonObject { ["id"] = Line1.ToString("D"), ["code"] = "REMOTE" } });
 
         var result = await FetchAsync(engine, runner, client,
-            """[{ "resolve": { "path": "source.id", "as": "line", "select": ["code"], "filter": { "amount": { "gt": 1 } } } }]""", page);
+            """[{ "resolve": { "path": "source.id", "as": "line", "filter": { "amount": { "gt": 1 } } } }, { "project": { "number": 1, "line.code": 1 } }]""", page);
 
         result.Rows[0]["line"]!["code"]!.GetValue<string>().Should().Be("REMOTE");
         result.Rows[1]["line"]!["code"]!.GetValue<string>().Should().Be("LOCAL");

@@ -243,7 +243,6 @@ current entity.
     "from": "logistics.shipment_document",   // the child entity id (local to this host)
     "path": "shipmentId",                     // the child's member declared to reference this entity
     "as": "documents",                        // alias: an array of the child entity
-    "select": ["id", "name", "createdAt"],   // optional hint: what a whole alias shows (see below); id is always kept
     "filter": { "isDeleted": { "eq": false } },  // optional condition on the child
     "limit": 20                               // optional, at most Limits:MaxLookupLimit
 } }
@@ -253,13 +252,16 @@ The child must declare the reference (`LOOKUP_NOT_DECLARED`) and is scoped to th
 organisation inside the sub-pipeline. Any other member (`localPath`, `foreignPath`, `convert`,
 `parentSelect`) is `UNKNOWN_STAGE_MEMBER`.
 
-**`select` is a hint, not a bound.** A join loads what the query reads: its key, every path a later
-stage reads under its alias, and what the row shows under it. Every member of the child can be read
-under the alias; nobody lists in advance what later stages need. `select` says only what the alias
-shows when the row keeps it **whole** (no projection, or `"documents": 1`): these paths and the key;
-without `select`, the child's key and display members. A projection that names paths under the
-alias (`"documents.name": 1`) decides alone: the alias shows exactly those paths, whatever `select`
-names. A `select` path the child does not have is `UNKNOWN_PATH`. What joins load is in
+**A join has no `select`.** A join loads what the query reads: its key, every path a later stage
+reads under its alias, and what the row shows under it. Every member of the child can be read under
+the alias; nobody lists in advance what later stages need. What the alias **shows** is the
+projection's to say: a projection that names paths under the alias (`"documents.name": 1`) shows
+exactly those paths (the key only when it names it), and an alias the row keeps **whole** (no
+projection, or `"documents": 1`) shows the child's key and its display member, nothing else. A
+`select` written on a contract 2 `lookup` or `resolve` (also on a union join, and on an internal
+call) is `UNKNOWN_STAGE_MEMBER` with `params { stage, member: "select", reason: "removed", use:
+"project" }`. Contract 1 keeps its `select`: there a join fetches the paths as written with the key,
+and nothing is inferred. What joins load is in
 [`oxql-semantics.md`](oxql-semantics.md#what-a-join-loads).
 
 Contract 2 has four more members:
@@ -269,8 +271,7 @@ Contract 2 has four more members:
     "from": "transport.delivery_attempt", "path": "shipmentId", "as": "lastAttempt",
     "on": "shipment",                              // the parent row: an alias instead of the entity itself
     "sort": [ { "dateTime": "desc" } ],            // order of the children
-    "first": true,                                 // one child or null instead of an array
-    "select": ["dateTime", "status.displayName", "text"]
+    "first": true                                  // one child or null instead of an array
 } }
 ```
 
@@ -295,14 +296,13 @@ it names, one object under the alias, `null` when the target does not exist or f
 { "resolve": {
     "path": "vehicleId",
     "as": "vehicle",
-    "select": ["id", "matchCode", "name"],    // optional hint: what a whole alias shows; default: the target's key and display members
     "filter": { "isDeleted": { "eq": false } }  // optional condition on the target, executed by its owner
 } }
 ```
 
 `path` must carry a declared reference (`RESOLVE_NOT_DECLARED`, whose message names the path's
-kind). `select` is the same hint as a lookup's: it says what the alias shows kept whole, never what
-may be read under it. Under a join alias, a reference whose cases test a sibling (`type`) reads that
+kind). Like a lookup it has no `select`: kept whole the alias shows the target's key and display
+member, under a projection the paths it names. Under a join alias, a reference whose cases test a sibling (`type`) reads that
 sibling; the join that holds the reference loads it with the reference, and explain lists the read
 (`use: "caseCondition"`). A join compares its id exactly, whatever the id's kind: a string id never folds. At most
 `MaxResolveStages` (8) resolve stages run on this host; stages continued at an owner count there.
@@ -314,7 +314,6 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
 { "resolve": {
     "path": "erpLine.sourceBillingLineReference.id",
     "as": "sourceLine",
-    "select": ["id", "status", "quantity.value"],
     "target": "transport.shipment",                  // only this target of a typed reference
     "parentAs": "sourceParent",                      // the row that owns the item target
     "onMissing": "report"
@@ -334,7 +333,7 @@ collection (how such references are declared: [`oxql-semantics.md`](oxql-semanti
 
 There is no `parentSelect`: the owning row shows what the projection names under `parentAs`
 (`UNKNOWN_STAGE_MEMBER` when written). The paths under an alias are flat; on a reference with several
-targets a path some target lacks (in `select`, or projected under the alias or its `parentAs`) is
+targets a path some target lacks (projected under the alias or its `parentAs`) is
 dropped for that target (note `SELECT_PATH_NOT_ON_TARGET`), its member is absent on that target's
 rows, and it is refused (`UNKNOWN_PATH`) only when every target lacks it. Contract 1 refuses the seven
 members with `LEGACY_STAGE_UNSUPPORTED`.
@@ -461,7 +460,7 @@ target, each a branch.
 ```
 
 - A branch is a path, or `{ "path": …, "elements": "first" | "all" }` where the path crosses a
-  collection that is not unwound. `as`, `select`, `filter`, `target` and `onMissing` are the
+  collection that is not unwound. `as`, `filter`, `target` and `onMissing` are the
   stage's and apply to every branch. `path`, `elements`, `forTarget` and `parentAs` beside
   `byTarget` are `OPTION_NOT_APPLICABLE` (`params.reason` `withPath`, `withElements`,
   `withForTarget`, `withParentAs`); a `byTarget` that is not an object of such branches is
@@ -484,8 +483,8 @@ target, each a branch.
 - **Rows.** The alias holds what the branch of the row's target resolved. A row resolved to a
   target without a branch has `null` there (outcome `not_applicable`, no data loss); a row whose R
   is `null` has `null` (`reference_null`). Which branch answered is `parentAs.entity` of R.
-- **Paths under the alias are flat**, as under any union: a path one branch does not reach (in
-  `select`, or projected under the alias) is dropped for that branch (`SELECT_PATH_NOT_ON_TARGET`
+- **Paths under the alias are flat**, as under any union: a path one branch does not reach
+  (projected under the alias) is dropped for that branch (`SELECT_PATH_NOT_ON_TARGET`
   with `params.branch`) and absent on its rows; only a path no branch reaches is `UNKNOWN_PATH`.
   The alias is `null` only where its record is not there: a branch that reaches none of the paths
   projected under the alias leaves an empty object (`{}`) on the rows whose record exists.
@@ -595,9 +594,9 @@ shows (`"vehicle.registrationPlate": 1`): exactly those, without the key unless 
 join loads them. What a stage only reads (a `match` on `vehicle.status`, the key of a later
 `resolve`, the member a `lookup` joins on) is loaded and never shown.
 
-**Without a `project`** the row is the whole entity row, and each join alias shows its `select` hint
-with the key, else the target's key and display members: the same as an alias a projection names
-whole (`"vehicle": 1`). To see another member of a join, name it in a projection; a projection then
+**Without a `project`** the row is the whole entity row, and each join alias shows the target's key
+and its display member (an alias of another service's rows: what its owner answers to `$default`,
+its own key and display member): the same as an alias a projection names whole (`"vehicle": 1`). To see another member of a join, name it in a projection; a projection then
 lists the entity's own members to keep as well.
 
 ## Stage: `sort`

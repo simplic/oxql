@@ -121,14 +121,14 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     public async Task A_lookup_of_whole_shipments_through_their_billing_lines_answers_each_shipment_once_per_invoice_in_key_order()
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
-            { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "select": ["shipmentNumber"] } }
-            """, "\"number\": 1, \"shipments\": 1"));
+            { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments" } }
+            """, "\"number\": 1, \"shipments.id\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         Strings(Row(answer, Invoice)["shipments"], "shipmentNumber").Should().Equal(["S-1", "S-2"], "S-1 holds two lines of the invoice and is one shipment");
         Row(answer, NoLines)["shipments"]!.AsArray().Should().BeEmpty("no line names the transaction");
         Strings(Row(answer, Busy)["shipments"], "shipmentNumber").Should().Equal(["S-2", "S-3", "S-4"]);
-        Row(answer, Invoice)["shipments"]!.AsArray()[0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "shipmentNumber"], "the select and the key; the key the owner grouped by stays at the owner");
+        Row(answer, Invoice)["shipments"]!.AsArray()[0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "shipmentNumber"], "the projected paths; the key the owner grouped by stays at the owner");
     }
 
     [Fact]
@@ -136,8 +136,8 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "latest",
-                          "sort": [ { "loadStart": "desc" } ], "first": true, "select": ["shipmentNumber", "loadStart"] } }
-            """, "\"number\": 1, \"latest\": 1"));
+                          "sort": [ { "loadStart": "desc" } ], "first": true } }
+            """, "\"number\": 1, \"latest.shipmentNumber\": 1, \"latest.loadStart\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         Row(answer, Invoice)["latest"]!["shipmentNumber"]!.GetValue<string>().Should().Be("S-2", "March is later than January");
@@ -149,10 +149,9 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     public async Task An_element_lookup_answers_the_billing_lines_themselves_with_their_owning_shipment_in_the_sort_order()
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
-            { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines",
-                          "select": ["text", "totalPrice"], "sort": [ { "totalPrice": "desc" } ],
+            { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines", "sort": [ { "totalPrice": "desc" } ],
                           "parentAs": "shipments" } }
-            """, "\"number\": 1, \"lines\": 1, \"shipments.shipmentNumber\": 1"));
+            """, "\"number\": 1, \"lines.text\": 1, \"lines.totalPrice\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         var invoice = Row(answer, Invoice);
@@ -169,8 +168,8 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "tolls",
-                          "filter": { "text": { "eq": "toll" } }, "select": ["text", "totalPrice"], "first": true, "sort": [ { "date": "desc" } ] } }
-            """, "\"number\": 1, \"tolls\": 1"));
+                          "filter": { "text": { "eq": "toll" } }, "first": true, "sort": [ { "date": "desc" } ] } }
+            """, "\"number\": 1, \"tolls.text\": 1, \"tolls.totalPrice\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         Row(answer, Invoice)["tolls"]!["totalPrice"]!.GetValue<double>().Should().Be(20, "the invoice's one toll, though a freight line is later");
@@ -183,10 +182,10 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         const string Stage = """
             { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "limit": 2,
-                          "sort": [ { "loadStart": "asc" } ], "select": ["shipmentNumber"] } }
+                          "sort": [ { "loadStart": "asc" } ] } }
             """;
         var client = await LedgerAsync();
-        var answer = await client.QueryAsync(Over(Stage, "\"number\": 1, \"shipments\": 1"));
+        var answer = await client.QueryAsync(Over(Stage, "\"number\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldBeOk();
         Strings(Row(answer, Busy)["shipments"], "shipmentNumber").Should().Equal(["S-3", "S-2"], "February and March; April is cut");
@@ -197,7 +196,7 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         truncated["params"]!["limit"]!.GetValue<int>().Should().Be(2);
         truncated["params"]!["rows"]!.GetValue<int>().Should().Be(1);
 
-        var strict = await client.QueryAsync(JsonNode.Parse(Over(Stage, "\"number\": 1, \"shipments\": 1"))!.AsObject().Also(body => body["strict"] = true));
+        var strict = await client.QueryAsync(JsonNode.Parse(Over(Stage, "\"number\": 1, \"shipments.shipmentNumber\": 1"))!.AsObject().Also(body => body["strict"] = true));
 
         strict.ShouldRefuse("LOOKUP_TRUNCATED", 422);
     }
@@ -207,9 +206,9 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lastLine", "first": true,
-                          "sort": [ { "date": "desc" } ], "select": ["text", "date"], "parentAs": "ship" } },
-            { "lookup": { "from": "fleet.equipment", "path": "assignedShipmentId", "on": "ship", "as": "gear", "first": true, "select": ["name"] } }
-            """, "\"number\": 1, \"lastLine\": 1, \"ship.shipmentNumber\": 1, \"gear\": 1"));
+                          "sort": [ { "date": "desc" } ], "parentAs": "ship" } },
+            { "lookup": { "from": "fleet.equipment", "path": "assignedShipmentId", "on": "ship", "as": "gear", "first": true } }
+            """, "\"number\": 1, \"lastLine.text\": 1, \"lastLine.date\": 1, \"ship.shipmentNumber\": 1, \"gear.name\": 1"));
 
         answer.ShouldBeOk().ShouldHaveNoDiagnostics();
         var invoice = Row(answer, Invoice);
@@ -304,7 +303,7 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment", "path": "shipmentNumber", "as": "shipments" } }
-            """, "\"number\": 1, \"shipments\": 1"));
+            """, "\"number\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldRefuse("RESOLVE_REFUSED", 422);
         var inner = answer.Errors.Single(error => error["code"]!.GetValue<string>() == "LOOKUP_NOT_DECLARED");
@@ -354,7 +353,7 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     {
         var answer = await (await LedgerAsync()).QueryAsync(Over("""
             { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "limit": 101 } }
-            """, "\"number\": 1, \"shipments\": 1"));
+            """, "\"number\": 1, \"shipments.shipmentNumber\": 1"));
 
         answer.ShouldRefuse("LOOKUP_LIMIT_EXCEEDED", 400)["stage"]!.GetValue<int>().Should().Be(1);
     }
@@ -366,7 +365,7 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         var client = shared.Variant(LabService.Ledger, "lookups-200", new Dictionary<string, string?> { ["OxQL:Limits:MaxLookupLimit"] = "200" });
         var body = Over("""
             { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "limit": 150 } }
-            """, "\"number\": 1, \"shipments\": 1");
+            """, "\"number\": 1, \"shipments.shipmentNumber\": 1");
 
         var answer = await client.QueryAsync(body);
 
@@ -388,8 +387,8 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         var shared = await FleetAsync();
         var client = shared.Variant(LabService.Ledger, "keys-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxResolveKeys"] = "2" });
         var body = Over("""
-            { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "select": ["shipmentNumber"] } }
-            """, "\"number\": 1, \"shipments\": 1");
+            { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments" } }
+            """, "\"number\": 1, \"shipments.shipmentNumber\": 1");
 
         var answer = await client.QueryAsync(body);
 
@@ -449,7 +448,7 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
         var answer = await (await LedgerAsync()).ExplainHereAsync(new JsonObject
         {
             ["query"] = JsonNode.Parse(Over("""
-                { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines", "select": ["text"],
+                { "lookup": { "from": "transport.shipment#billingLines", "path": "assignedTransactionId", "as": "lines",
                               "sort": [ { "totalPrice": "desc" } ], "limit": 5, "parentAs": "shipments" } }
                 """, "\"number\": 1, \"lines\": 1, \"shipments\": 1")),
             ["include"] = new JsonArray("shape", "notes", "plan"),
@@ -508,20 +507,20 @@ public class JoinsRemoteLookupTests(JoinsRemoteLookupTests.Rows rows) : IClassFi
     }
 
     [Fact]
-    public async Task Explain_answers_a_select_path_the_owners_child_lacks_as_the_lookups_error_from_the_remote_check()
+    public async Task Explain_answers_a_projected_path_the_owners_child_lacks_as_the_error_of_the_projection_from_the_remote_check()
     {
         var answer = await (await LedgerAsync()).ExplainHereAsync(new JsonObject
         {
             ["query"] = JsonNode.Parse(Over("""
-                { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments", "select": ["shipmentNumbr"] } }
-                """, "\"number\": 1, \"shipments\": 1")),
+                { "lookup": { "from": "transport.shipment", "path": "billingLines.assignedTransactionId", "as": "shipments" } }
+                """, "\"number\": 1, \"shipments.shipmentNumbr\": 1")),
         });
 
         answer.StatusCode.Should().Be(200, answer.ToString());
         answer.Body!["valid"]!.GetValue<bool>().Should().BeFalse();
         var error = answer.Errors.First(each => each["code"]!.GetValue<string>() == "UNKNOWN_PATH");
-        error["stage"]!.GetValue<int>().Should().Be(1);
-        error["path"]!.GetValue<string>().Should().Be("shipmentNumbr");
+        error["stage"]!.GetValue<int>().Should().Be(2, "where the caller wrote the path: the projection");
+        error["path"]!.GetValue<string>().Should().Be("shipments.shipmentNumbr");
         error["params"]!["owner"]!["service"]!.GetValue<string>().Should().Be("transport");
     }
 }

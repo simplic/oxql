@@ -580,13 +580,13 @@ public class StageRulesTests
     [Fact]
     public async Task Lookup_follows_a_declared_backward_reference()
     {
-        var bound = await BindHost.BoundAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number", "amount"], "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }]""");
+        var bound = await BindHost.BoundAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "project": { "name": 1, "orders.amount": 1 } }]""");
         var lookup = (BoundStage.Lookup)bound.Stages[0];
 
         lookup.From.Id.Should().Be(Order);
         lookup.ParentKeyStorage.Should().Be("_id");
         lookup.ChildKeyStorage.Should().Be("CustomerId");
-        lookup.Select.Select(path => path.Storage).Should().Equal(["Amount", "_id", "Number"], "the load set: the key, the hint the whole alias shows, what the match reads, in ordinal order of the wire paths");
+        lookup.Select.Select(path => path.Storage).Should().Equal(["Amount", "_id", "Number"], "the load set: the key, what the projection names under the alias, what the match reads, in ordinal order of the wire paths");
         lookup.Limit.Should().Be(5);
         lookup.ChildScope.Entity.Id.Should().Be(Order);
 
@@ -610,7 +610,7 @@ public class StageRulesTests
     [Fact]
     public async Task Resolve_follows_a_declared_forward_reference_locally_or_remotely()
     {
-        var local = await Bound("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "match": { "cust.name": { "eq": "x" } } }, { "sort": [{ "cust.name": "asc" }] }]""");
+        var local = await Bound("""[{ "resolve": { "path": "customerId", "as": "cust" } }, { "match": { "cust.name": { "eq": "x" } } }, { "sort": [{ "cust.name": "asc" }] }]""");
         var resolve = (BoundStage.Resolve)local.Stages[0];
 
         resolve.IsRemote.Should().BeFalse();
@@ -625,7 +625,7 @@ public class StageRulesTests
 
         ((BoundStage.Resolve)viaReferenceId.Stages[0]).Target!.Id.Should().Be("probe.supplier");
 
-        var remote = await Bound("""[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "filter": { "active": { "eq": true } } } }, { "match": { "contact.name": { "eq": "x" } } }]""");
+        var remote = await Bound("""[{ "resolve": { "path": "contactNumber", "as": "contact", "filter": { "active": { "eq": true } } } }, { "match": { "contact.name": { "eq": "x" } } }, { "project": { "number": 1, "contact.name": 1 } }]""");
         var remoteStage = (BoundStage.Resolve)remote.Stages[0];
 
         remoteStage.IsRemote.Should().BeTrue();

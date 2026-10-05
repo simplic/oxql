@@ -17,19 +17,17 @@
     {
       "resolve": {
         "path": "invoiceRecipient.address.id",
-        "as": "recipientContact",
-        "select": [
-          "primaryEmailAddress.email",
-          "primaryPhoneNumber.number",
-          "address.companyName"
-        ]
+        "as": "recipientContact"
       }
     },
     {
       "project": {
         "number": 1,
         "invoiceRecipient": 1,
-        "recipientContact": 1
+        "recipientContact.id": 1,
+        "recipientContact.primaryEmailAddress.email": 1,
+        "recipientContact.primaryPhoneNumber.number": 1,
+        "recipientContact.address.companyName": 1
       }
     }
   ]

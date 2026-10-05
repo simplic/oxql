@@ -328,8 +328,8 @@ public class AddonBagTests
         expectedChildren.SelectMany(children => children).Should().NotBeEmpty();
 
         var lookup = await fleet.SendAsync(Corpus.Department, $$"""
-            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "select": ["matchCode"], "limit": 100, "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
-              { "project": { "id": 1, "v": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
+            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "limit": 100, "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
+              { "project": { "id": 1, "v.id": 1, "v.matchCode": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
             """);
 
         lookup.ShouldHaveIds(departments.Select(department => department.Id));
@@ -341,8 +341,8 @@ public class AddonBagTests
         expectedTargets.Should().Contain(id => id != null).And.Contain(id => id == null);
 
         var resolve = await fleet.SendAsync(Corpus.Equipment, $$"""
-            [ { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"], "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
-              { "project": { "id": 1, "veh": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
+            [ { "resolve": { "path": "vehicle.id", "as": "veh", "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
+              { "project": { "id": 1, "veh.id": 1, "veh.matchCode": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
             """);
 
         resolve.ShouldHaveIds(equipment.Select(row => row.Id));

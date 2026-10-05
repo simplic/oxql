@@ -81,7 +81,7 @@ public class KeyedFetchOwnerTests
     private static JsonObject Diagnostic(QueryResult result, string code) =>
         JsonSerializer.SerializeToNode(result.Diagnostics!.Single(diagnostic => diagnostic.Code == code), OxQLJson.Wire)!.AsObject();
 
-    private const string ReportActive = """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "filter": { "active": { "eq": true } }, "onMissing": "report" } }, { "page": { "limit": 10 } }]""";
+    private const string ReportActive = """[{ "resolve": { "path": "contactNumber", "as": "contact", "filter": { "active": { "eq": true } }, "onMissing": "report" } }, { "page": { "limit": 10 } }]""";
 
     // ---- the existence probe ------------------------------------------------------------------
 
@@ -148,7 +148,7 @@ public class KeyedFetchOwnerTests
         runner.PageRows = [Row(Id1, "a", "c1"), Row(Id2, "b", "c2")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Page("next", FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "onMissing": "report" } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]""");
 
         result.Items[0]!["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
         result.Items[1]!["contact"].Should().BeNull();
@@ -162,7 +162,7 @@ public class KeyedFetchOwnerTests
         var missing = Diagnostic(result, Codes.ResolveMissing);
         missing["params"]!["rows"]!.AsArray().Should().ContainSingle().Which!["outcome"]!.GetValue<string>().Should().Be("owner_unanswered", "a cut answer never says not_found");
 
-        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "onMissing": "report" } }]""");
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "onMissing": "report" } }]""");
         client.Calls.Should().HaveCount(2, "a partial chunk is not cached");
     }
 
@@ -191,7 +191,7 @@ public class KeyedFetchOwnerTests
             ? new FakeRemoteClient.Answer.Rows(KeysOf(query).Select(key => FakeRemoteClient.Row("number", key, ("name", key))).ToArray())
             : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString("D"), ("matchCode", "V-1")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "resolve": { "path": "vehicleId", "as": "vehicle", "select": ["matchCode"] } }, { "page": { "limit": 10 } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "resolve": { "path": "vehicleId", "as": "vehicle" } }, { "page": { "limit": 10 } }]""");
 
         result.Items.Select(item => item!["contact"]!["name"]!.GetValue<string>()).Should().Equal("c1", "c2");
         result.Items.Should().AllSatisfy(item => item!["vehicle"].Should().BeNull("the first stage spent the request's two keys"));
@@ -205,7 +205,7 @@ public class KeyedFetchOwnerTests
 
     // ---- variables and the cache key ----------------------------------------------------------
 
-    private const string ActiveVariable = """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "filter": { "active": { "eq": { "$var": "on" } } } } }, { "page": { "limit": 10 } }]""";
+    private const string ActiveVariable = """[{ "resolve": { "path": "contactNumber", "as": "contact", "filter": { "active": { "eq": { "$var": "on" } } } } }, { "page": { "limit": 10 } }]""";
 
     [Fact]
     public async Task A_remote_filter_is_sent_with_its_variables_substituted_and_two_values_are_two_cache_entries()
@@ -319,7 +319,7 @@ public class KeyedFetchOwnerTests
         client.Owners["crm"] = new RemoteOwnerInfo("9.9.9", 2, MaxBatchQueries: 2);
         client.Script = (_, query, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", KeysOf(query)[0], ("name", KeysOf(query)[0])));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 10 } }]""");
 
         client.Calls.Select(call => call.Request.Queries.Count).Should().Equal([2, 1], "the owner takes two queries per batch, below this host's ten");
         result.Items.Select(item => item!["contact"]!["name"]!.GetValue<string>()).Should().Equal("c1", "c2", "c3");

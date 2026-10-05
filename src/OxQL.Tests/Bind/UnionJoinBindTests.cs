@@ -64,7 +64,7 @@ public class UnionJoinBindTests
     {
         var bound = await BoundAsync($$"""
             [{{Union}},
-             { "resolve": { "as": "driver", "select": ["name"], "onMissing": "report",
+             { "resolve": { "as": "driver", "onMissing": "report",
                             "byTarget": { "rc.shipment": "owner.driverId", "rc.tour": { "path": "line.code", "elements": "first" } } } }]
             """);
         var anchor = Anchor(bound, "line");
@@ -73,9 +73,9 @@ public class UnionJoinBindTests
         var shipment = Continuation.For(anchor, "rc.shipment", itemTarget: true, continued).Stages.Should().ContainSingle().Subject.Resolve!;
         var tour = Continuation.For(anchor, "rc.tour", itemTarget: true, continued).Stages.Should().ContainSingle().Subject.Resolve!;
 
-        JsonSerializer.Serialize(shipment, OxQLJson.Wire).Should().Be("""{"path":"driverId","as":"driver","select":["name"],"onMissing":"report"}""",
+        JsonSerializer.Serialize(shipment, OxQLJson.Wire).Should().Be("""{"path":"driverId","as":"driver","onMissing":"report"}""",
             "exactly what a forTarget stage sends: no byTarget, no forTarget, the branch's path on the owner's row");
-        JsonSerializer.Serialize(tour, OxQLJson.Wire).Should().Be("""{"path":"oxEl.code","as":"driver","select":["name"],"elements":"first","onMissing":"report"}""");
+        JsonSerializer.Serialize(tour, OxQLJson.Wire).Should().Be("""{"path":"oxEl.code","as":"driver","elements":"first","onMissing":"report"}""");
         Continuation.For(anchor, "transport.shipment", itemTarget: true, continued).IsEmpty.Should().BeTrue();
         Continuation.For(anchor, "rc.shipment", true, continued).Aliases.Should().Equal("driver");
     }

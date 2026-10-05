@@ -193,7 +193,7 @@ public class ContractATests
     {
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, $$"""[ { "lookup": { "localPath": "a", "foreignPath": "b", "as": "x" } }, {{Page1}} ]""");
 
-        answer.ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400)["message"]!.GetValue<string>().Should().Contain("from, path, as, select, filter, limit");
+        answer.ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400)["message"]!.GetValue<string>().Should().Contain("from, path, as, filter, limit").And.NotContain("select");
         answer.ErrorCodes.Should().Equal("UNKNOWN_STAGE_MEMBER");
     }
 

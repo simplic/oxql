@@ -172,7 +172,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxResolveStages` | 8 | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
 | `Limits:MaxGroupFields` | 20 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` | yes | — |
-| `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias, else its `select` hint) become the owner's projection and are checked against the owner's value |
+| `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
 | `Limits:MaxOffset` | 5 000 | binder, `page.offset` of contract 1 and of an internal call (a contract 2 page has none); not a cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
@@ -334,7 +334,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     "sourceLine": {
       "stage": 4, "node": "remote", "entities": ["transport.shipment#billingLines", "transport.tour#billingLines"],
       "heldBy": "transport", "complete": true, "lookupOn": true, "type": "u:sourceLine",
-      "loads": ["totalPrice"], "shows": ["totalPrice"], "hint": null,   // the projection names sourceLine.totalPrice
+      "loads": ["totalPrice"], "shows": ["totalPrice"],   // the projection names sourceLine.totalPrice
       "reference": { "path": "erpLine.sourceBillingLineReference.id",
                      "cases": [ { "when": { "path": "type", "equals": ["logistics"] },
                                   "targets": [ { "entity": "transport.shipment", "item": "billingLines", "field": "id", "remote": true },
@@ -384,7 +384,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
 - **`engine`.** `contract` is the contract the engine speaks. `2` is the marker of this package: an
   engine that reports it has the whole contract 2 language and this answer.
 - **Absent members.** A member that would be null is left out, except where null says something:
-  a root whose owner did not answer (`roots`), `loads`, `shows` and `hint`, an owner never asked
+  a root whose owner did not answer (`roots`), `loads` and `shows`, an owner never asked
   (`answered`), and the revisions.
 - **`etag`, `revision`, `cache`.** `etag` is a validator of the answer itself: it changes when the
   request, who asks (organisation, user) or anything the answer says changes (see *The validator*
@@ -429,7 +429,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   reference's case: the read a caller cannot see in the query) and `lookupOn` (the parent key a
   lookup joins on). `alias` is the join whose rows hold the path and which therefore loads it (a
   path under an unwound copy or an element of a lookup names the lookup); it is absent for a path
-  of the entity row. A join's own `select`, `filter` and `sort` are bound against its target and
+  of the entity row. A join's own `filter` and `sort` are bound against its target and
   are no reads of the row, and neither is a path an exclusion names. A stage continued at an owner
   carries the reads its owner answered, in this host's paths, since only the owner binds it.
   "Why is this member loaded" is every read whose `alias` is the join's.
@@ -464,11 +464,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   alias). A join's alias (a resolve's or lookup's `as`, a `parentAs`, an alias a continued stage adds)
   also says what the join loads: `loads` (the paths fetched under the alias, in ordinal order: for a
   join in the aggregate its key, what stages read and its output set; for a join after the page what
-  its owner is asked for beside the member it is matched by), `shows` (the output set: what the row
-  carries under the alias, empty when the row does not carry it) and `hint` (the `select` as written,
-  or `null`). `loads` and `shows` are `null` for an alias of an owner's rows kept whole without a
-  hint: the owner's own key and display members. For an alias a continued stage adds, the three are
-  its owner's answer, absent when the owner did not answer.
+  its owner is asked for beside the member it is matched by), and `shows` (the output set: what the row
+  carries under the alias, empty when the row does not carry it). There is no `hint` member: a
+  contract 2 join has no `select`. `loads` and `shows` are `null` for an alias of an owner's rows
+  kept whole: the owner's own key and display member. For an alias a continued stage adds, the two
+  are its owner's answer, absent when the owner did not answer.
   The member a stage names with `outcomeAs` is an alias of its own: `node: "scalar"`, `kind:
   "string"`, `outcomeOf` (the alias of its join), `values` (every outcome the member may hold there:
   an inline resolve's `resolved`, `reference_null`, `not_found`, with `ambiguous` onto a field that
@@ -563,7 +563,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   join's alias the columns are its output set (`aliases.<alias>.shows`), each `ifJoined`, whoever
   runs the join: an alias a continued stage adds lists what its owner answered it shows. Only an
   alias whose output set this host does not know is one column of the alias itself (`kind: "object"`,
-  `present: "always"`): an owner's alias kept whole without a hint (`shows: null`), or one whose
+  `present: "always"`): an owner's alias kept whole (`shows: null`), or one whose
   owner did not answer; a keyed alias or a remote lookup's that holds an array of rows is one
   `array` column. The
   outcomes a join may have are its alias's (`aliases.<alias>.outcome`).

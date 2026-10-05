@@ -80,12 +80,12 @@ public class OwnerCheckParityTests
     private static readonly IReadOnlyDictionary<string, Case> Cases = new Dictionary<string, Case>(StringComparer.Ordinal)
     {
         ["remote resolve"] = new(
-            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "project": { "number": 1, "r.name": 1, "r.phone": 1 } }]""",
+            """[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "number": 1, "r.name": 1, "r.phone": 1 } }]""",
             [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))], Strict: false,
             ["crm.contact"]),
 
         ["stage continued under a remote alias"] = new(
-            """[{ "resolve": { "path": "contactId", "as": "r", "select": ["name"] } }, { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"] } }, { "page": { "limit": 10 } }]""",
+            """[{ "resolve": { "path": "contactId", "as": "r" } }, { "resolve": { "path": "r.companyId", "as": "co" } }, { "page": { "limit": 10 } }]""",
             [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))], Strict: true,
             ["crm.contact"]),
 
@@ -128,13 +128,13 @@ public class OwnerCheckParityTests
             ["transport.shipment"]),
 
         ["remote lookup"] = new(
-            """[{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments", "select": ["number"] } }, { "project": { "number": 1, "shipments.number": 1, "shipments.date": 1 } }]""",
+            """[{ "lookup": { "from": "tr.shipment", "path": "lines.invoiceId", "as": "shipments" } }, { "project": { "number": 1, "shipments.number": 1, "shipments.date": 1 } }]""",
             [InvoiceRow(InvoiceId, _ => { })], Strict: false,
             ["tr.shipment"]),
 
         ["remote union target narrowed with forTarget"] = new(
             """
-            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner", "select": ["id", "code"] } },
+            [{ "resolve": { "path": "source.id", "as": "line", "parentAs": "owner" } },
              { "resolve": { "path": "owner.driverId", "as": "drv", "forTarget": "transport.shipment" } },
              { "project": { "number": 1, "line.id": 1, "line.amount": 1, "owner.id": 1, "owner.number": 1, "drv.name": 1 } }]
             """,
@@ -142,7 +142,7 @@ public class OwnerCheckParityTests
             ["transport.shipment"]),
 
         ["union join: a branch per local target"] = new(
-            """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "as": "d", "select": ["name"], "byTarget": { "rc.shipment": "b.driverId", "rc.tour": "b.driverId" } } }, { "project": { "number": 1, "d": 1 } }]""",
+            """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "as": "d", "byTarget": { "rc.shipment": "b.driverId", "rc.tour": "b.driverId" } } }, { "project": { "number": 1, "d.name": 1 } }]""",
             [
                 InvoiceRow(InvoiceId, row => row["Billing"] = new BsonDocument { ["DataType"] = "shipment", ["ReferenceId"] = ShipmentId.ToString() }),
                 InvoiceRow(SecondId, row => row["Billing"] = new BsonDocument { ["DataType"] = "tour", ["ReferenceId"] = TourId.ToString() }),

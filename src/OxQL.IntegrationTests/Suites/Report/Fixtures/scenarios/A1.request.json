@@ -32,28 +32,13 @@
     {
       "resolve": {
         "path": "item.billingLineId",
-        "as": "erpLine",
-        "select": [
-          "id",
-          "text",
-          "sourceBillingLineReference.type",
-          "sourceBillingLineReference.id"
-        ]
+        "as": "erpLine"
       }
     },
     {
       "resolve": {
         "path": "erpLine.sourceBillingLineReference.id",
         "as": "sourceLine",
-        "select": [
-          "id",
-          "type",
-          "status",
-          "singlePrice",
-          "totalPrice",
-          "quantity.value",
-          "quantity.quantityUnit"
-        ],
         "parentAs": "sourceParent"
       }
     },
@@ -65,8 +50,17 @@
         "item.text": 1,
         "item.quantity": 1,
         "item.totalPriceNet": 1,
-        "erpLine": 1,
-        "sourceLine": 1,
+        "erpLine.id": 1,
+        "erpLine.text": 1,
+        "erpLine.sourceBillingLineReference.type": 1,
+        "erpLine.sourceBillingLineReference.id": 1,
+        "sourceLine.id": 1,
+        "sourceLine.type": 1,
+        "sourceLine.status": 1,
+        "sourceLine.singlePrice": 1,
+        "sourceLine.totalPrice": 1,
+        "sourceLine.quantity.value": 1,
+        "sourceLine.quantity.quantityUnit": 1,
         "sourceParent.id": 1,
         "sourceParent.shipmentNumber": 1,
         "sourceParent.referenceNumber": 1,

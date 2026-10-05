@@ -285,25 +285,8 @@ public class EngineOnlyOTests
         error["stage"]!.GetValue<int>().Should().Be(0);
     }
 
-    // ── O13, O16, O17: the engine-only join forms. Legacy: unreachable (no declared reference);
+    // ── O16, O17: the engine-only join forms (O13, a lookup select given as a bare string, went with the select). Legacy: unreachable (no declared reference);
     // the lab model declares references, so each now runs.
-
-    [Fact]
-    public async Task O13_a_lookup_select_given_as_a_bare_string_selects_that_one_path()
-    {
-        var parents = Corpus.Rows(Corpus.Conformance);
-        var children = Corpus.Rows(Corpus.ConformanceChild);
-        var expected = parents.Select(parent => children.Where(child => Corpus.GuidAt(child, "parentId") == parent.Id)
-            .Order(Comparer<CorpusRow>.Create(Corpus.CompareIds)).Select(child => (child.WireId, Corpus.Text(child, "name"))).ToList()).ToList();
-        expected.Should().Contain(list => list.Count > 0);
-
-        var answer = await Send("""[ { "lookup": { "from": "conformance.child", "path": "parentId", "as": "children", "select": "name" } }, { "project": { "id": 1, "children": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 50 } } ]""", Corpus.Conformance);
-
-        answer.ShouldHaveIds(parents.Select(parent => parent.Id));
-        answer.Items.Select(row => row!["children"]!.AsArray().Select(child => (child!["id"]!.GetValue<string>(), child["name"]?.GetValue<string>())).ToList())
-            .Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
-        answer.Items.SelectMany(row => row!["children"]!.AsArray()).Should().OnlyContain(child => child!.AsObject().Select(member => member.Key).Order(StringComparer.Ordinal).SequenceEqual(new[] { "id", "name" }));
-    }
 
     [Fact]
     public async Task O16_an_operand_under_a_remote_alias_is_forwarded_to_the_owner_which_binds_and_refuses_it()

@@ -147,7 +147,7 @@ public class ReportExplainTests
         Alias(answer, "lastAttempt")["type"]!.GetValue<string>().Should().Be("t:transport.delivery_attempt");
         answer["owners"]!.AsArray().Should().BeEmpty();
         answer["result"]!["columns"]!.AsArray().Select(column => Text(column, "path"))
-            .Should().Equal("id", "shipmentNumber", "lastAttempt.id", "lastAttempt.dateTime", "lastAttempt.status", "lastAttempt.text");
+            .Should().Equal(["id", "shipmentNumber", "lastAttempt.dateTime", "lastAttempt.id", "lastAttempt.status", "lastAttempt.text"], "the paths the projection names under the alias, in ordinal order");
     }
 
     [Fact]
@@ -245,7 +245,8 @@ public class ReportExplainTests
     public async Task E08_a_continued_stage_the_owner_cannot_bind_is_valid_false_with_the_owners_error_at_the_callers_stage()
     {
         var request = ReportFixtureExport.InvalidRequest(ReportScenarios.Request("A2b"));
-        var lookup = ReportScenarios.IndexOf(request, "lastAttempt");
+        // The caller wrote the path in the projection: that is the stage the owner's error is mapped to.
+        var written = request["pipeline"]!.AsArray().Select((stage, index) => (stage, index)).Single(entry => entry.stage!["project"] is not null).index;
 
         var answer = await ExplainAsync(new JsonObject { ["query"] = request, ["include"] = new JsonArray("shape", "notes", "plan") });
 
@@ -253,9 +254,10 @@ public class ReportExplainTests
         var error = answer["errors"]!.AsArray().Single()!.AsObject();
 
         Text(error, "code").Should().Be(Codes.UnknownPath);
-        error["stage"]!.GetValue<int>().Should().Be(lookup);
+        error["stage"]!.GetValue<int>().Should().Be(written);
+        Text(error, "path").Should().Be("lastAttempt.statuz");
         Text(error, "params.owner.service").Should().Be("transport");
-        Stage(answer, lookup)["status"]!.GetValue<string>().Should().Be("error");
+        Stage(answer, written)["status"]!.GetValue<string>().Should().Be("error");
         answer.ContainsKey("plan").Should().BeFalse();
     }
 }

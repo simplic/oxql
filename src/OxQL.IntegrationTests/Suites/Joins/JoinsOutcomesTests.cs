@@ -227,8 +227,8 @@ public class JoinsOutcomesTests
         await using var __ = host;
         const string pipeline = """
             [ { "sort": [ { "number": "asc" } ] },
-              { "resolve": { "path": "customerId", "as": "customer", "select": ["name"]ONMISSING } },
-              { "project": { "number": 1, "customer": 1 } } ]
+              { "resolve": { "path": "customerId", "as": "customer"ONMISSING } },
+              { "project": { "number": 1, "customer.id": 1, "customer.name": 1 } } ]
             """;
 
         var plain = await host.SendAsync("oc.order", pipeline.Replace("ONMISSING", ""));
@@ -254,7 +254,8 @@ public class JoinsOutcomesTests
         await using var __ = host;
         const string pipeline = """
             [ { "sort": [ { "number": "asc" } ] },
-              { "resolve": { "path": "lineId", "as": "line", "select": ["code"]ONMISSING } } ]
+              { "resolve": { "path": "lineId", "as": "line"ONMISSING } },
+              { "project": { "number": 1, "line.code": 1 } } ]
             """;
 
         var plain = await host.SendAsync("oc.order", pipeline.Replace("ONMISSING", ""));
@@ -283,7 +284,7 @@ public class JoinsOutcomesTests
         await using var __ = host;
         const string pipeline = """
             [ { "sort": [ { "number": "asc" } ] },
-              { "resolve": { "path": "customerIds", "as": "customers", "elements": "all", "select": ["name"] } } ]
+              { "resolve": { "path": "customerIds", "as": "customers", "elements": "all" } } ]
             """;
 
         var answer = await host.SendAsync("oc.order", pipeline);

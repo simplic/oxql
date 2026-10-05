@@ -987,12 +987,9 @@ public sealed class KeyedFetch
                 var message = $"'{path}' is not a path of what any branch of '{union.Aliases[0]}' joins ({string.Join(", ", branches.Select(target => target.Entity).Distinct(StringComparer.Ordinal))}).";
                 var head = new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = union.OriginIndex };
 
-                // A path of the hint is the stage's own, as written; any other is the projection's, under the alias.
-                var rest = path[(union.Aliases[0].Length + 1)..];
-                var hinted = union.Stage.Resolve?.Select?.Contains(rest, StringComparer.Ordinal) == true;
-
+                // The path is the projection's, under the alias.
                 return Refusal.NotExecutable(Codes.ResolveRefused, message, union.OriginIndex,
-                    [head, new QueryValidationError { Code = Codes.UnknownPath, Message = message, Stage = union.OriginIndex, Path = hinted ? rest : path }]);
+                    [head, new QueryValidationError { Code = Codes.UnknownPath, Message = message, Stage = union.OriginIndex, Path = path }]);
             }
         }
 
@@ -1454,25 +1451,35 @@ public sealed class KeyedFetch
             }
 
             pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
-            pipeline.InsertRange(at, Continued.Stages.Select((stage, index) => Reaching(stage, Continued.Origins[index])));
+            pipeline.InsertRange(at, Continued.Stages);
             ContinuedAt = at;
 
             return query with { Pipeline = pipeline, Strict = strict ? true : null };
         }
 
         /// <summary>
-        /// A continued stage as this target is sent it: the branch of a union join without the paths of
-        /// its <c>select</c> hint that this target's branch does not reach (none left: the join's own
-        /// key and display); every other stage as it is.
+        /// Whether an owner error names a path the caller's projection asked under this stage's alias
+        /// or its owning row: it lies at the owner query's projection, and the path is one the
+        /// projection named. Such a path is written in the projection, not in the join (a contract 2
+        /// join has no <c>select</c>), so it is judged like any other path a target may lack: dropped
+        /// where another target has it, <c>UNKNOWN_PATH</c> at the projection where none has.
         /// </summary>
-        private PipelineStage Reaching(PipelineStage stage, ContinuedStage origin)
+        public bool AskedByProjection(int? ownerStage, string? ownerPath)
         {
-            if (origin.Branches is null || stage.Resolve is not { Select: { Count: > 0 } hint } resolve)
-                return stage;
+            if (ownerStage is null || ownerPath is null || (shown is null && parentShown is null))
+                return false;
 
-            var reached = hint.Where(path => !DroppedContinued.Contains(origin.Aliases[0] + "." + path)).ToList();
+            if (ownerStage != Query([CheckKey]).Pipeline.ToList().FindLastIndex(stage => stage.Project is not null))
+                return false;
 
-            return reached.Count == hint.Count ? stage : stage with { Resolve = resolve with { Select = reached.Count == 0 ? null : reached } };
+            if (Target.Declared.Item is null)
+                return shown?.Contains(ownerPath, StringComparer.Ordinal) == true;
+
+            var element = BoundKeyedBy.Element + ".";
+
+            return ownerPath.StartsWith(element, StringComparison.Ordinal)
+                ? shown?.Contains(ownerPath[element.Length..], StringComparer.Ordinal) == true
+                : parentShown?.Contains(ownerPath, StringComparer.Ordinal) == true;
         }
 
         /// <summary>The continued stage an owner's stage index names, or null for a stage of the query itself.</summary>
@@ -1541,15 +1548,12 @@ public sealed class KeyedFetch
         /// <summary>Takes what an earlier request learned this target's branch does not reach, as far as this plan asks it.</summary>
         public void LearnedContinued(string alias, IEnumerable<string> paths)
         {
-            // What this plan asks under the alias: the paths the projection names there, and the hint.
-            var asked = HintOf(alias).Concat(final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected : []).ToList();
+            // What this plan asks under the alias: the paths the projection names there.
+            var asked = final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected.ToList() : [];
 
             DroppedContinued.UnionWith(paths.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal) && asked.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal)));
             planHash = null;
         }
-
-        /// <summary>The <c>select</c> hint of the union join adding <paramref name="alias"/>, as written; empty when it has none.</summary>
-        private IReadOnlyList<string> HintOf(string alias) => UnionJoinOf(alias)?.Stage.Resolve?.Select ?? [];
 
         /// <summary>
         /// The target as its owner query carries it: the paths the binder inferred for it (improvement
@@ -1662,17 +1666,8 @@ public sealed class KeyedFetch
             if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
                 return false;
 
-            // A path under a union join's alias was asked by the projection or by the hint of the stage as sent.
-            bool Asked(string path)
-            {
-                var alias = path.Split('.')[0];
-                var at = Continued.Origins.ToList().FindIndex(origin => origin.Branches is not null && origin.Aliases[0] == alias);
-
-                return sentFields.ContainsKey(path)
-                    || (at >= 0 && ContinuedAt + at < sent.Pipeline.Count && sent.Pipeline[ContinuedAt + at].Resolve?.Select?.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal) == true);
-            }
-
-            if (!continued.All(Asked))
+            // A path under a union join's alias was asked by the projection.
+            if (!continued.All(sentFields.ContainsKey))
                 return false;
 
             DroppedSelect.UnionWith(select);
@@ -1770,7 +1765,7 @@ public sealed class KeyedFetch
 
             foreach (var alias in Continued.Aliases)
             {
-                var asked = HintOf(alias).Concat(final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected : []).ToList();
+                var asked = final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected.ToList() : [];
 
                 dropped.AddRange(DroppedContinued.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal))
                     .OrderBy(path => asked.IndexOf(path[(alias.Length + 1)..]) is >= 0 and var at ? at : int.MaxValue).ThenBy(path => path, StringComparer.Ordinal)
@@ -2774,8 +2769,9 @@ public sealed class KeyedFetch
     {
         var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
 
+        // A path the projection asked under a lookup's alias is the projection's, as under a resolve's.
         if (target.OriginOf(ownerStage) is not { } origin)
-            return target.Stage.RemoteLookup is { } lookup ? MapLookupBack(error, mapped, target, lookup, service, ownerStage) : null;
+            return target.Stage.RemoteLookup is { } lookup && !target.AskedByProjection(ownerStage, mapped.Path) ? MapLookupBack(error, mapped, target, lookup, service, ownerStage) : null;
 
         var parameters = error["params"] is JsonObject written
             ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
@@ -2799,11 +2795,11 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// An owner error at a remote lookup's own owner query (DESIGN §3.4.4): its key match, filter, sort,
-    /// projection or <c>keyedBy</c>, all written by the caller in the lookup — the path, the filter, the
-    /// sort, the select, the owning-row select, the limit against the owner's own cap — so the error is
-    /// the lookup's, at its stage, with the path as the caller wrote it (relative to the child) and
-    /// <c>params.owner</c> saying where the owner saw it.
+    /// An owner error at a remote lookup's own owner query (DESIGN §3.4.4): its key match, filter, sort
+    /// or <c>keyedBy</c>, all written by the caller in the lookup — the path, the filter, the sort, the
+    /// limit against the owner's own cap — so the error is the lookup's, at its stage, with the path as
+    /// the caller wrote it (relative to the child) and <c>params.owner</c> saying where the owner saw
+    /// it. A path the projection named under the alias is not the lookup's (<see cref="TargetPlan.AskedByProjection"/>).
     /// </summary>
     private static QueryValidationError MapLookupBack(JsonObject error, QueryValidationError mapped, TargetPlan target, BoundRemoteLookup lookup, string service, int? ownerStage)
     {

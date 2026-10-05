@@ -163,10 +163,6 @@ internal static class ExplainGolden
         ["A3"] = () => ReportScenarios.Request("A3"),
         ["A4"] = () => ReportScenarios.Request("A4"),
         ["A5"] = () => ReportScenarios.Request("A5"),
-        // The same three without any select: what a studio writes once the joins infer their loads (§3.S).
-        ["A4-no-select"] = () => ReportScenarios.WithoutSelects(ReportScenarios.Request("A4")),
-        ["A5-no-select"] = () => ReportScenarios.WithoutSelects(ReportScenarios.Request("A5")),
-        ["EX1-no-select"] = () => ReportScenarios.WithoutSelects(JsonNode.Parse(ExampleChain)!.AsObject()),
         ["EX1-source-chain"] = () => JsonNode.Parse(ExampleChain)!.AsObject(),
         ["EX2-continued-refused"] = () => JsonNode.Parse(ContinuedRefused)!.AsObject(),
         ["EX3-union-join"] = () => JsonNode.Parse(UnionJoin)!.AsObject(),
@@ -212,21 +208,16 @@ internal static class ExplainGolden
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
             { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "onMissing": "report",
-                           "select": ["id", "text", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
-            { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "onMissing": "report",
-                           "select": ["id", "totalPrice"], "parentAs": "sourceParent" } },
-            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first",
-                           "select": ["id", "number", "resource.id"] } },
-            { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "target": "fleet.vehicle", "onMissing": "report",
-                           "select": ["matchCode", "registrationPlate.registrationIdentifier"] } },
-            { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "transport.tour", "target": "fleet.vehicle", "onMissing": "report",
-                           "select": ["matchCode", "registrationPlate.registrationIdentifier"] } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "onMissing": "report" } },
+            { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine", "onMissing": "report", "parentAs": "sourceParent" } },
+            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "forTarget": "{{ReportSeed.Shipment}}", "elements": "first" } },
+            { "resolve": { "path": "deliveringTour.resource.id", "as": "shipmentVehicle", "target": "fleet.vehicle", "onMissing": "report" } },
+            { "resolve": { "path": "sourceParent.resource.id", "as": "tourVehicle", "forTarget": "transport.tour", "target": "fleet.vehicle", "onMissing": "report" } },
             { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent", "forTarget": "{{ReportSeed.Shipment}}",
-                          "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ], "select": ["dateTime", "status"] } },
-            { "project": { "position": 1, "item.text": 1, "erpLine": 1, "sourceLine": 1,
-                           "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1,
-                           "shipmentVehicle": 1, "tourVehicle": 1, "lastAttempt": 1 } },
+                          "as": "lastAttempt", "first": true, "sort": [ { "dateTime": "desc" } ] } },
+            { "project": { "position": 1, "item.text": 1, "erpLine.id": 1, "erpLine.text": 1, "erpLine.sourceBillingLineReference.type": 1, "erpLine.sourceBillingLineReference.id": 1, "sourceLine.id": 1, "sourceLine.totalPrice": 1,
+                           "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour.id": 1, "deliveringTour.number": 1, "deliveringTour.resource.id": 1,
+                           "shipmentVehicle.id": 1, "shipmentVehicle.matchCode": 1, "shipmentVehicle.registrationPlate.registrationIdentifier": 1, "tourVehicle.id": 1, "tourVehicle.matchCode": 1, "tourVehicle.registrationPlate.registrationIdentifier": 1, "lastAttempt.id": 1, "lastAttempt.dateTime": 1, "lastAttempt.status": 1 } },
             { "sort": [ { "position": "asc" } ] }
           ]
         }
@@ -268,11 +259,11 @@ internal static class ExplainGolden
             { "match": { "id": { "eq": { "$var": "transactionId" } } } },
             { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } },
             { "match": { "item": { "is": "BillingLineTransactionItem" } } },
-            { "resolve": { "path": "item.billingLineId", "as": "erpLine", "select": ["id", "sourceBillingLineReference.type", "sourceBillingLineReference.id"] } },
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
             { "resolve": { "path": "erpLine.sourceBillingLineReference.id", "as": "sourceLine",
-                           "parentAs": "sourceParent", "select": ["id"] } },
-            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first", "select": ["id", "number"] } },
-            { "project": { "position": 1, "sourceLine": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour": 1 } }
+                           "parentAs": "sourceParent" } },
+            { "resolve": { "path": "sourceParent.tours.tourId", "as": "deliveringTour", "elements": "first" } },
+            { "project": { "position": 1, "sourceLine.id": 1, "sourceParent.id": 1, "sourceParent.shipmentNumber": 1, "sourceParent.number": 1, "deliveringTour.id": 1, "deliveringTour.number": 1 } }
           ]
         }
         """;

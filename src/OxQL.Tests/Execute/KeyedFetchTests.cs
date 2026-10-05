@@ -61,7 +61,7 @@ public class KeyedFetchTests
         return outcome.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
     }
 
-    private const string ResolveContact = """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]""";
+    private const string ResolveContact = """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact.name": 1 } }, { "page": { "limit": 10 } }]""";
 
     // ---- resolve --------------------------------------------------------------------------
 
@@ -96,7 +96,7 @@ public class KeyedFetchTests
         query.Pipeline[0].Match!.Condition!.Path.Should().Be("number");
         query.Pipeline[0].Match!.Condition!.Op.Should().Be("in");
         query.Pipeline[0].Match!.Condition!.Value!.Value.EnumerateArray().Select(item => item.GetString()).Should().Equal("c1", "c2");
-        query.Pipeline[1].Project!.Fields.Keys.Should().BeEquivalentTo(["name", "number"], "the target field is always selected so rows can be keyed");
+        query.Pipeline[1].Project!.Fields.Keys.Should().BeEquivalentTo(["name", "number"], "the projected path, and the target field, which is always asked for so rows can be keyed");
         query.Pipeline[2].Page!.Limit.Should().Be(2);
     }
 
@@ -113,11 +113,11 @@ public class KeyedFetchTests
         client.Calls.Should().ContainSingle("the second page hits the cache");
         again.Items[0]!["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
 
-        // A select that changes the owner query is another plan and another entry; one that only
-        // names the member the rows are keyed by (always projected) sends the same query.
-        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name", "number"] } }]""");
+        // A projection that changes the owner query is another plan and another entry; one that only
+        // adds the member the rows are keyed by (always asked for) sends the same query.
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact.name": 1, "contact.number": 1 } }]""");
         client.Calls.Should().ContainSingle("the owner would be sent the same query");
-        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name", "email"] } }]""");
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact.name": 1, "contact.email": 1 } }]""");
         client.Calls.Should().HaveCount(2);
     }
 
@@ -175,7 +175,7 @@ public class KeyedFetchTests
         runner.PageRows = [Row(Id1, "a", "c1")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.UnknownPath, "'name' is not a path of crm.contact.");
 
-        var refusal = await Refused(engine, """[{ "match": { "number": { "eq": "a" } } }, { "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }]""");
+        var refusal = await Refused(engine, """[{ "match": { "number": { "eq": "a" } } }, { "resolve": { "path": "contactNumber", "as": "contact" } }]""");
 
         refusal.Status.Should().Be(422);
         refusal.Errors![0].Code.Should().Be(Codes.ResolveRefused);
@@ -222,7 +222,7 @@ public class KeyedFetchTests
             ? new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")))
             : new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString(), ("matchCode", "V-1")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "resolve": { "path": "vehicleId", "as": "vehicle", "select": ["matchCode"] } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "resolve": { "path": "vehicleId", "as": "vehicle" } }]""");
 
         client.Calls.Select(call => call.Service).Should().BeEquivalentTo(["crm", "vehicle"]);
         result.Items[0]!["contact"]!["name"]!.GetValue<string>().Should().Be("Alice");
@@ -240,7 +240,7 @@ public class KeyedFetchTests
         runner.PageRows = [Row(Id1, "a", "c1")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1, "contact": 1 } }, { "page": { "limit": 10 } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact.name": 1 } }, { "page": { "limit": 10 } }]""");
 
         var row = result.Items.Should().ContainSingle().Subject!.AsObject();
 
@@ -256,7 +256,7 @@ public class KeyedFetchTests
         runner.PageRows = [Row(Id1, "a", "c1")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
 
-        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "project": { "number": 1 } }, { "page": { "limit": 10 } }]""");
+        var result = await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }, { "page": { "limit": 10 } }]""");
 
         var row = result.Items.Should().ContainSingle().Subject!.AsObject();
 
@@ -489,7 +489,7 @@ public class KeyedFetchTests
         runner.PageRows = [Row(Id1, "a", "c1")];
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("name", "C1"));
 
-        var refusal = await Refused(engine, """[{ "match": { "number": { "eq": "a" } } }, { "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }]""");
+        var refusal = await Refused(engine, """[{ "match": { "number": { "eq": "a" } } }, { "resolve": { "path": "contactNumber", "as": "contact" } }]""");
 
         refusal.Status.Should().Be(422);
         refusal.Errors![0].Code.Should().Be(Codes.ResolveRefused);

@@ -47,7 +47,7 @@ public class ContinuationBindTests
     [InlineData(Line)]
     public async Task A_resolve_under_a_keyed_or_remote_alias_binds_as_a_stage_continued_at_its_owner(string first)
     {
-        var bound = await BoundAsync($$"""[{{first}}, { "resolve": { "path": "r.customerId", "as": "c", "select": ["name"] } }]""");
+        var bound = await BoundAsync($$"""[{{first}}, { "resolve": { "path": "r.customerId", "as": "c" } }]""");
 
         var continued = bound.Stages.OfType<ContinuedStage>().Should().ContainSingle().Subject;
         continued.Anchor.Should().Be("r");
@@ -56,7 +56,7 @@ public class ContinuationBindTests
         continued.Root.Should().Be("r.customerId");
         continued.Aliases.Should().Equal("c");
         continued.ForTarget.Should().BeNull();
-        continued.Stage.Resolve!.Select.Should().Equal("name");
+        continued.Stage.Resolve!.Select.Should().BeNull("a contract 2 join carries no select: the stage travels as written");
 
         bound.Stages.ToList().IndexOf(continued).Should().Be(1, "the bound stages stay the caller's in order");
         bound.FinalShape.Carries("c").Should().BeTrue();
@@ -149,7 +149,7 @@ public class ContinuationBindTests
     [Fact]
     public async Task A_continued_stage_renders_its_anchor_target_aliases_and_stage_in_the_canonical_form_and_the_fingerprint()
     {
-        var bound = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "select": ["name"] } }]""");
+        var bound = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c" } }]""");
 
         var stage = System.Text.Json.Nodes.JsonNode.Parse(bound.Canonical)!["stages"]![1]!;
         stage.ToJsonString().Should().NotContain("unknown");
@@ -159,7 +159,7 @@ public class ContinuationBindTests
         stage["continued"]!["aliases"]!.ToJsonString().Should().Be("""["c"]""");
         stage["continued"]!["stage"]!["resolve"]!["path"]!.GetValue<string>().Should().Be("r.customerId", "the stage as the caller wrote it; the owner's rewrite is per target");
 
-        var other = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "select": ["code"] } }]""");
+        var other = await BoundAsync($$"""[{{Contact}}, { "resolve": { "path": "r.customerId", "as": "c", "onMissing": "report" } }]""");
         other.Fingerprint.Should().NotBe(bound.Fingerprint, "two requests continuing different stages never share a cursor");
 
         var forTarget = await BoundAsync($$"""
@@ -249,7 +249,6 @@ public class ContinuationBindTests
         tour.RemoteParentSelect.Should().Equal("id", "name");
         targets.Single(target => target.IsRemote).RemoteParentSelect.Should().Equal(["id", "name", "nope", "number"], "a remote target's owner decides what its row has");
         bound.Loads["owner"].Loads.Should().Equal("id", "name", "nope", "number");
-        bound.Loads["owner"].Hint.Should().BeNull("an owning row has no hint: the projection alone says what it shows");
     }
 
     [Fact]

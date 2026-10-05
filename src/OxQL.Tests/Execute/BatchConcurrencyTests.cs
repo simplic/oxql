@@ -378,7 +378,7 @@ public class BatchConcurrencyTests
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice")));
 
         var results = await ResultsAsync(service.BatchAsync(
-            Batch(3, pipeline: """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]"""), internalCall: true));
+            Batch(3, pipeline: """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 10 } }]"""), internalCall: true));
 
         results.Should().HaveCount(3).And.OnlyContain(result => result!["items"]![0]!["contact"]!["name"]!.GetValue<string>() == "Alice");
         client.Calls.Should().ContainSingle("run one after another the second and third read the first one's rows from the cache; side by side they wait for its call instead of asking again");
@@ -393,7 +393,7 @@ public class BatchConcurrencyTests
         client.Unreachable.Add("crm");
 
         var results = await ResultsAsync(service.BatchAsync(
-            Batch(3, pipeline: """[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"] } }, { "page": { "limit": 10 } }]"""), internalCall: true));
+            Batch(3, pipeline: """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 10 } }]"""), internalCall: true));
 
         results.Should().HaveCount(3).And.OnlyContain(result => result!["diagnostics"]![0]!["code"]!.GetValue<string>() == Codes.ResolveUnreachable);
         results.Should().OnlyContain(result => result!["items"]![0]!["contact"] == null);

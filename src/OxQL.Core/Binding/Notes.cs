@@ -214,7 +214,7 @@ public static class Notes
                 // limit, the placement and the owner's bounds are what the caller should know.
                 case BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve:
                     collector.Add(OwnerBinds, stage, resolve.As,
-                        $"'{resolve.As}' comes from another service; its owner binds the path, the select, the filter, the sort and every path under the alias.",
+                        $"'{resolve.As}' comes from another service; its owner binds the path, the filter, the sort and every path under the alias.",
                         new() { ["alias"] = resolve.As, ["services"] = new List<string> { remoteLookup.Service }, ["forTarget"] = null });
 
                     if (!remoteLookup.First)
@@ -460,7 +460,7 @@ public static class Notes
 
             if (resolve.IsRemote)
                 Add(OwnerBinds, stage, resolve.Reference.Wire,
-                    $"'{resolve.As}' comes from another service; its owner binds the select, the filter and every path under the alias.",
+                    $"'{resolve.As}' comes from another service; its owner binds the filter and every path under the alias.",
                     new() { ["alias"] = resolve.As, ["services"] = targets.Where(target => target.IsRemote).Select(target => target.Declared.Entity.Split('.')[0]).Distinct(StringComparer.Ordinal).ToList(), ["forTarget"] = null });
 
             if (resolve.Elements == ResolveElements.All)

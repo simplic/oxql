@@ -166,7 +166,7 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Lookup_is_the_concise_form_with_the_scope_inside()
     {
-        var compiled = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"], "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "count": true } }]""", "probe.customer");
+        var compiled = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "count": true } }]""", "probe.customer");
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId",
@@ -186,7 +186,7 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Local_resolve_is_an_indexed_lookup_plus_the_first_element()
     {
-        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"], "filter": { "matchCode": { "eq": "m" } } } }, { "sort": [{ "cust.name": "asc" }] }]""");
+        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "filter": { "matchCode": { "eq": "m" } } } }, { "sort": [{ "cust.name": "asc" }] }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",

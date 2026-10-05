@@ -713,7 +713,9 @@ alias. A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, 
 `resolve` reads, that no `group` follows and whose alias every later `project` passes whole runs
 after the page is taken, on the page's rows alone; a `project` in between keeps the join's
 local key in storage for it and the row leaves the key out when it was not asked for, so the
-rows are the same either way.
+rows are the same either way. Under contract 2 such a join written before an `unwind` runs before
+that unwind, once per parent and not once per element of the page (see *Where the engine places a
+stage* in [`oxql-semantics.md`](oxql-semantics.md)).
 
 ## Strict requests and the report page
 

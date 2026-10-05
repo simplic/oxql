@@ -15,6 +15,11 @@ namespace OxQL.TestCases;
 /// written between the join and the page must not take the key away: the rows carry the joined
 /// value exactly as they would with the join where it was written.
 /// </para>
+/// <para>
+/// A join written before an unwind runs before that unwind, once per parent and never once per
+/// element of the page: on the parents ordered and cut before the unwind where the page is ordered
+/// by them, else where it was written. Its key is read before a projection written after the unwind.
+/// </para>
 /// </summary>
 internal static class LateJoinCases
 {
@@ -120,13 +125,31 @@ internal static class LateJoinCases
             $$$"""[{"id":"{{{WireId(11)}}}","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","p":null}]"""
         },
         {
-            "a lookup whose parent key an unsorted unwound page excludes",
+            "a lookup written after the unwind whose parent key an unsorted unwound page excludes",
+            Parent,
+            """[{ "unwind": { "path": "tags", "as": "tag" } }, { "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "page": { "limit": 5 } }]""",
+            $$$"""[{"tag":"a","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tag":"b","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tag":"c","children":[{"id":"{{{WireId(12)}}}","title":"Child two"}]}]"""
+        },
+        {
+            "a lookup written after the unwind whose parent key a sorted unwound page excludes",
+            Parent,
+            """[{ "unwind": { "path": "tags", "as": "tag" } }, { "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5 } }]""",
+            $$$"""[{"tag":"c","children":[{"id":"{{{WireId(12)}}}","title":"Child two"}]},{"tag":"b","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tag":"a","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]}]"""
+        },
+        {
+            "a lookup written before the unwind of a page ordered by the parents, whose key the projection excludes",
+            Parent,
+            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "sort": [{ "code": "desc" }] }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "page": { "limit": 5 } }]""",
+            $$$"""[{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"}]"""
+        },
+        {
+            "a lookup written before the unwind of an unsorted page, whose parent key the projection excludes",
             Parent,
             """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "page": { "limit": 5 } }]""",
             $$$"""[{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"}]"""
         },
         {
-            "a lookup whose parent key a sorted unwound page excludes",
+            "a lookup written before the unwind of a page ordered by the element, whose parent key the projection excludes",
             Parent,
             """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children.id": 1, "children.title": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5 } }]""",
             $$$"""[{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"}]"""

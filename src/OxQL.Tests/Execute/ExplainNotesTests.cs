@@ -148,6 +148,26 @@ public class ExplainNotesTests
     }
 
     [Fact]
+    public async Task A_join_kept_before_an_unwind_says_so_and_on_which_rows_it_runs()
+    {
+        // The page is ordered by the parents: they are cut before the unwind, and the join runs on those.
+        var parents = Single(await NotesAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }]""", "probe.order", model: BindHost.Probe), Notes.JoinBeforePage);
+
+        parents.Should().Match<Diagnostic>(note => note.Stage == 0 && note.Path == "c");
+        parents.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["alias"] = "c", ["kind"] = "resolve", ["unwind"] = "items", ["rows"] = "parents" });
+
+        // Ordered by the element: where it was written.
+        var written = Single(await NotesAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "item.quantity": "asc" }] }]""", "probe.order", model: BindHost.Probe), Notes.JoinBeforePage);
+
+        written.Params!["rows"].Should().Be("written");
+        written.Message.Should().Contain("once per row there, not once per element");
+
+        // Written after the unwind it was asked once per element: after the page, as before.
+        (await NotesAsync("""[{ "unwind": { "path": "items", "as": "item" } }, { "resolve": { "path": "customerId", "as": "c" } }]""", "probe.order", model: BindHost.Probe))
+            .Should().Contain(note => note.Code == Notes.JoinAfterPage).And.NotContain(note => note.Code == Notes.JoinBeforePage);
+    }
+
+    [Fact]
     public async Task What_an_owner_binds_is_said_for_a_remote_resolve_and_every_continued_stage()
     {
         var notes = await NotesAsync("""

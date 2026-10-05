@@ -404,6 +404,20 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
   does, under contract 1, an inclusion that narrows the alias); a projection that drops the alias
   drops the join (see above). The rows are the same either way; explain shows the order the server
   runs (`JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`).
+- **A join is never moved to where it runs more often than where it was written.** After the page
+  it runs once per row of the page, which is no more than it would have read where it stood as
+  long as nothing in between yields more rows than it reads. An `unwind` does: the page then holds
+  one row per element. So under contract 2 a join only the display reads that is written **before
+  an `unwind`** stays before it and runs once per parent, never once per element: on the parents
+  ordered and cut before the unwind where the page is ordered by them (`SORT_BEFORE_UNWIND`; a
+  page's worth of parents, `JOIN_BEFORE_PAGE` with `params.rows: "parents"`), else where it was
+  written, once per row that reaches it (`params.rows: "written"`; `params.unwind` names the
+  collection). Written **after** the unwind it was asked once per element, and runs after the
+  page. Measured on 25 000 shipments without an index, one record with five elements and a lookup
+  of its latest child (a scan of 20 000 rows each time): 66 ms after the page, 9 ms before the
+  unwind. A join before the unwind of a list ordered by the element runs for every parent the
+  filters leave, as written: where that is many and the page is small, write the join after the
+  unwind. Contract 1 keeps its rule (after the page whenever only the display reads the alias).
 - The reserved key `$default` in an inclusion projection stands for the entity's key and display
   members, the pair a whole alias of a `resolve` shows; it is `UNKNOWN_PATH` after a
   `group` or an `unwind`. A remote `resolve` kept whole sends it to the owner, so a

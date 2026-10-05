@@ -90,13 +90,65 @@ public class LateJoinTests
             "{ $count: 'n' }");
     }
 
-    [Fact]
-    public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_page()
-    {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+    // ---- before an unwind: once per parent, never once per element ---------------------------
 
-        // The parents with an item in the page's order, cut to the page's reach; the unwind; the page; the rename; the join.
+    [Fact]
+    public async Task A_display_only_join_written_before_an_unwind_runs_on_the_parents_cut_before_it()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+        var compiled = MongoCompiler.Compile(bound, Options);
+
+        // The parents with an item in the page's order, cut to the page's reach; the join, once per parent
+        // kept; the unwind; the page; the rename. After the page the join would run once per element.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$match", "$sort", "$limit", "$lookup", "$set", "$unset", "$unwind", "$sort", "$limit", "$set", "$unset");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $limit: NumberLong(6) }"), "a page's worth of parents");
+        MongoCompiler.PhaseOf(bound, 0, bound.Stages.OfType<BoundStage.Resolve>().Single()).Should().Be(JoinPhase.Parents);
+        MongoCompiler.KeptBefore(bound, 0)!.Path.Wire.Should().Be("items");
+
+        // As written (what the differential compares against) nothing is cut first: the join stays where it stands.
+        var written = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(written.PageStages).Should().StartWith(["$match", "$lookup", "$set", "$unset", "$unwind"]);
+    }
+
+    [Fact]
+    public async Task A_display_only_join_written_before_an_unwind_stays_where_it_was_written_when_the_parents_are_not_cut_first()
+    {
+        // Ordered by the element: every parent is unwound, so the join runs once per parent where it stands.
+        var byElement = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "item.quantity": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        Kinds(MongoCompiler.Compile(byElement, Options).PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$unwind", "$sort", "$limit", "$set", "$unset");
+        MongoCompiler.PhaseOf(byElement, 0, byElement.Stages.OfType<BoundStage.Resolve>().Single()).Should().Be(JoinPhase.BeforePage);
+        MongoCompiler.KeptBefore(byElement, 0)!.Path.Wire.Should().Be("items");
+
+        // The same for a lookup whose projection names paths under its alias, and its count never runs the join.
+        var narrowed = MongoCompiler.Compile(await BindHost.BoundAsync(OxQL.TestCases.LateJoinCases.Model, OxQL.TestCases.LateJoinCases.Parent, """
+            [{ "match": { "name": { "eq": "x" } } }, { "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag", "includeIndex": "at" } },
+             { "project": { "name": 1, "tag": 1, "at": 1, "children.title": 1 } }, { "sort": [{ "at": "desc" }] }, { "page": { "limit": 5, "count": true } }]
+            """), Options);
+
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$match", "$lookup", "$set", "$unwind", "$sort", "$limit", "$set", "$unset", "$project");
+        Kinds(narrowed.CountStages!).Should().Equal(["$match", "$match", "$unwind", "$limit", "$count"], "only the display reads the alias");
+    }
+
+    [Fact]
+    public async Task A_display_only_join_written_after_an_unwind_runs_after_the_page()
+    {
+        var compiled = await Compile($$"""[{ "unwind": { "path": "items", "as": "item" } }, {{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        // It was written to run once per element: the page holds no more rows than it would have read there.
         Kinds(compiled.PageStages).Should().Equal("$match", "$match", "$sort", "$limit", "$unwind", "$sort", "$limit", "$set", "$unset", "$lookup", "$set", "$unset");
+    }
+
+    [Fact]
+    public async Task Under_contract_1_a_display_only_join_before_an_unwind_runs_after_the_page_as_it_did()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order,
+            $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""", BindHost.Context(contract: 1));
+        var compiled = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(compiled.PageStages).Should().EndWith(["$limit", "$lookup", "$set", "$unset"]);
+        MongoCompiler.PhaseOf(bound, 0, bound.Stages.OfType<BoundStage.Resolve>().Single(), asWritten: true).Should().Be(JoinPhase.AfterPage);
     }
 
     [Fact]

@@ -283,10 +283,12 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Lookup lookup:
                 {
-                    var after = MongoCompiler.JoinsAfterPage(bound, position, lookup.As);
+                    var phase = MongoCompiler.PhaseOf(bound, position, lookup.As);
 
-                    draft.Placements[index] = ("inline", after ? "afterPage" : "beforePage", host, null, false);
-                    draft.Notes.Add(Notes.Join(index, lookup.As, "lookup", after));
+                    draft.Placements[index] = ("inline", phase == JoinPhase.AfterPage ? "afterPage" : "beforePage", host, null, false);
+                    draft.Notes.Add(MongoCompiler.KeptBefore(bound, position) is { } unwound
+                        ? Notes.JoinBeforeUnwind(index, lookup.As, "lookup", unwound.Path.Wire, phase == JoinPhase.Parents)
+                        : Notes.Join(index, lookup.As, "lookup", phase == JoinPhase.AfterPage));
                     break;
                 }
 
@@ -308,10 +310,12 @@ public sealed partial class MongoQueryEngine
 
                 case BoundStage.Resolve resolve:
                 {
-                    var after = MongoCompiler.JoinsAfterPage(bound, position, resolve);
+                    var phase = MongoCompiler.PhaseOf(bound, position, resolve);
 
-                    draft.Placements[index] = ("inline", after ? "afterPage" : "beforePage", host, null, false);
-                    draft.Notes.Add(Notes.Join(index, resolve.As, "resolve", after));
+                    draft.Placements[index] = ("inline", phase == JoinPhase.AfterPage ? "afterPage" : "beforePage", host, null, false);
+                    draft.Notes.Add(MongoCompiler.KeptBefore(bound, position) is { } unwound
+                        ? Notes.JoinBeforeUnwind(index, resolve.As, "resolve", unwound.Path.Wire, phase == JoinPhase.Parents)
+                        : Notes.Join(index, resolve.As, "resolve", phase == JoinPhase.AfterPage));
                     break;
                 }
 

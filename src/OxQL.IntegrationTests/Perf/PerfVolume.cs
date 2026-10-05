@@ -22,6 +22,9 @@ public static class PerfVolume
     /// <summary>How many vehicles the tours name.</summary>
     public const int Vehicles = 100;
 
+    /// <summary>How many delivery attempts name a shipment: what a lookup from a shipment scans, having no index.</summary>
+    public const int Attempts = 20_000;
+
     /// <summary>The statuses a shipment is in, by ordinal.</summary>
     public static readonly string[] Statuses = ["Open", "Planned", "Loaded", "On tour", "Delivered", "Billed", "Cancelled", "Blocked", "Draft", "Returned", "Archived"];
 
@@ -66,6 +69,18 @@ public static class PerfVolume
                 CreateDateTime = at,
                 UpdateDateTime = at,
             }.ToBsonDocument()));
+
+        // Three attempts for each of the first shipments, the rest spread over the others.
+        await transport
+            .GetCollection<BsonDocument>(LabService.Transport.Model.Entities["transport.delivery_attempt"].Collection)
+            .InsertManyAsync(Enumerable.Range(1, Attempts).Select(n => new DeliveryAttempt
+            {
+                Id = Ids.Of("30000002", Org.C, n),
+                OrganizationId = organisation,
+                Text = $"Zustellversuch {n}",
+                DateTime = at.AddMinutes(n * 7 % 50_000),
+                ShipmentId = ShipmentId(1 + (n % Math.Max(1, shipments / 3))),
+            }.ToBsonDocument()), new InsertManyOptions { IsOrdered = false });
 
         var collection = transport.GetCollection<BsonDocument>(Corpus.Entity(Corpus.Shipment).Collection);
 

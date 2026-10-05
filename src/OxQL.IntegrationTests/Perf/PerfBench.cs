@@ -169,6 +169,14 @@ public class PerfBench(ITestOutputHelper output)
               { "sort": [ {{sort}} ] }, { "page": {{page}} } ]
             """;
 
+        // The parent's latest attempt, written before the unwind: one lookup per parent, each a scan (no index).
+        string Attempted(string head, string sort, string page) => $$"""
+            [ {{head}}, { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "latestAttempt", "sort": [ { "dateTime": "desc" } ], "first": true } },
+              { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } },
+              { "project": { "shipmentNumber": 1, "position": 1, "item.text": 1, "item.reference": 1, "latestAttempt.dateTime": 1, "latestAttempt.text": 1 } },
+              { "sort": [ {{sort}} ] }, { "page": {{page}} } ]
+            """;
+
         string Group(string by, string page) => $$"""
             [ {{Live}}, { "group": { "by": {{by}}, "fields": { "n": { "count": true }, "weight": { "sum": "actualWeight.value" }, "first": { "min": "loadStart" } } } },
               { "page": {{page}} } ]
@@ -206,6 +214,7 @@ public class PerfBench(ITestOutputHelper output)
         var middle = await CursorAsync(page => List(ByNumber, page), half, 500);
         var unwound = await CursorAsync(page => Unwind(ByNumber, page), 30, 100);
         var unwoundByElement = await CursorAsync(page => Unwind("""{ "item.reference": "asc" }""", page), 30, 100);
+        var unwoundByPosition = await CursorAsync(page => Unwind($$"""{{ByNumber}}, { "position": "asc" }""", page), 30, 100);
         var grouped = await CursorAsync(page => Group("""[ { "path": "customer.address.companyName", "as": "company" } ]""", page), 2, 100);
 
         return
@@ -223,6 +232,11 @@ public class PerfBench(ITestOutputHelper output)
             Of("unwind block 31, sort parent key", Unwind(ByNumber, $$"""{ "limit": 100, "cursor": "{{unwound}}" }""")),
             Of("unwind block, sort element key", Unwind("""{ "item.reference": "asc" }""", """{ "limit": 100 }""")),
             Of("unwind block 31, sort element key", Unwind("""{ "item.reference": "asc" }""", $$"""{ "limit": 100, "cursor": "{{unwoundByElement}}" }""")),
+            Of("unwind block, sort parent key + position", Unwind($$"""{{ByNumber}}, { "position": "asc" }""", """{ "limit": 100 }""")),
+            Of("unwind block 31, sort parent key + position", Unwind($$"""{{ByNumber}}, { "position": "asc" }""", $$"""{ "limit": 100, "cursor": "{{unwoundByPosition}}" }""")),
+            Of("unwind block, sort parent key + position desc", Unwind($$"""{{ByNumber}}, { "position": "desc" }""", """{ "limit": 100 }""")),
+            Of("one row, lookup before the unwind, sort position", Attempted($$"""{ "match": { "id": { "eq": "{{PerfVolume.ShipmentId(5)}}" } } }""", """{ "position": "asc" }""", """{ "limit": 100 }""")),
+            Of("unwind block, lookup before the unwind, sort parent key", Attempted(Live, ByNumber, """{ "limit": 20 }""")),
             Of("unwind count only", $$"""[ {{Live}}, { "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 0, "count": { "budgetMs": 800 } } } ]"""),
             Of("group by status, count: true", Group("""[ { "path": "status.name", "as": "status" } ]""", """{ "limit": 100, "count": true }""")),
             Of("group by month (Europe/Berlin), count: true", Group(Month, """{ "limit": 100, "count": true }""")),

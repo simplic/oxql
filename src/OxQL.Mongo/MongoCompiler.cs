@@ -152,6 +152,19 @@ public sealed record CompiledQuery
 /// </summary>
 public sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate);
 
+/// <summary>Where a join that runs is emitted (<see cref="MongoCompiler.PhaseOf(BoundPipeline, int, string, bool)"/>).</summary>
+public enum JoinPhase
+{
+    /// <summary>Where it was written, for every row that reaches it.</summary>
+    BeforePage,
+
+    /// <summary>On the parents ordered and cut before their unwind: before the page, for a page's worth of rows.</summary>
+    Parents,
+
+    /// <summary>After the page is taken, for the page's rows.</summary>
+    AfterPage,
+}
+
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
 public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null)
 {
@@ -359,6 +372,10 @@ public static class MongoCompiler
         // every candidate, and the join is paid per page row rather than per candidate row.
         var lateJoins = new List<BsonDocument>();
 
+        // A join only the display reads, written before the unwind whose parents are ordered and cut
+        // first: it runs on those parents, once each, between their cut and the unwind.
+        var parentJoins = new List<BsonDocument>();
+
         // A projection the page does not depend on runs after the page is taken as well: the server
         // then cuts the page's rows to their columns, not every candidate row before it orders them.
         var lateProjections = new List<BsonDocument>();
@@ -406,11 +423,23 @@ public static class MongoCompiler
                     emitted.Add(new BsonDocument("$match", Renamed(Filter(match.Condition, semiJoins, collated), renamed)));
                     break;
 
-                // JoinsAfterPage decides the phase of a join, which explain reports (JOIN_BEFORE_PAGE /
+                // PhaseOf decides where a join runs, which explain reports (JOIN_BEFORE_PAGE /
                 // JOIN_AFTER_PAGE); a join a later lookup's 'on' reads stays before the page unless
-                // that lookup joins after the page as well (see JoinsAfterPage).
-                case BoundStage.Lookup lookup when JoinsAfterPage(bound, index, lookup.As):
+                // that lookup is only displayed as well (see PhaseOf).
+                case BoundStage.Lookup lookup when JoinsAfterPage(bound, index, lookup.As, options.AsWritten):
                     lateJoins.AddRange(Lookup(lookup, semiJoins, collated, Flag(lookup, flags), options.KeepDiscriminators));
+                    lateJoinKeys.Add(lookup.ParentKeyStorage);
+                    break;
+
+                // On the parents cut before the unwind: its key and its flag are read after every
+                // projection written in between, so both survive them in storage.
+                case BoundStage.Lookup lookup when PhaseOf(bound, index, lookup.As, options.AsWritten) == JoinPhase.Parents:
+                    var parentFlag = Flag(lookup, flags);
+
+                    if (parentFlag is not null)
+                        rowFlags.Add(parentFlag.Field);
+
+                    parentJoins.AddRange(Lookup(lookup, semiJoins, collated, parentFlag, options.KeepDiscriminators));
                     lateJoinKeys.Add(lookup.ParentKeyStorage);
                     break;
 
@@ -436,8 +465,13 @@ public static class MongoCompiler
                     keyed.Add(keyedResolve);
                     break;
 
-                case BoundStage.Resolve resolve when JoinsAfterPage(bound, index, resolve):
+                case BoundStage.Resolve resolve when JoinsAfterPage(bound, index, resolve, options.AsWritten):
                     lateJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
+                    lateJoinKeys.Add(resolve.Reference.Storage!);
+                    break;
+
+                case BoundStage.Resolve resolve when PhaseOf(bound, index, resolve, options.AsWritten) == JoinPhase.Parents:
+                    parentJoins.AddRange(LocalResolve(resolve, semiJoins, collated, Probe(bound, index, resolve, inlineProbes, probeKeys), options.KeepDiscriminators));
                     lateJoinKeys.Add(resolve.Reference.Storage!);
                     break;
 
@@ -473,6 +507,10 @@ public static class MongoCompiler
                     {
                         stages.Add(Sort(ParentFields(sortFields), tieBreak: true));
                         stages.Add(new BsonDocument("$limit", (long)page.Limit + 1 + (position is null ? 0 : 1) + (page.Cursor is { Mode: PagingMode.Offset } skipped ? skipped.Offset : page.Offset)));
+
+                        // The joins written before the unwind that only the display reads: once per parent kept.
+                        stages.AddRange(parentJoins);
+                        parentJoins.Clear();
                     }
 
                     if (unwind.Flatten is { } flatten)
@@ -697,10 +735,10 @@ public static class MongoCompiler
                 case BoundStage.Resolve keyed when IsKeyed(keyed):
                     break;
 
-                case BoundStage.Lookup lookup when !JoinRuns(bound, later, lookup.As) || JoinsAfterPage(bound, later, lookup.As):
+                case BoundStage.Lookup lookup when !JoinRuns(bound, later, lookup.As) || DisplayOnly(bound, later, lookup.As):
                     break;
 
-                case BoundStage.Resolve resolve when !JoinRuns(bound, later, resolve.As) || JoinsAfterPage(bound, later, resolve):
+                case BoundStage.Resolve resolve when !JoinRuns(bound, later, resolve.As) || PhaseOf(bound, later, resolve) == JoinPhase.AfterPage:
                     break;
 
                 default:
@@ -2274,11 +2312,101 @@ public static class MongoCompiler
     private static bool Shown(Shape shape, string alias) => shape.Carries(alias);
 
     /// <summary>
-    /// Whether a join can run after the page is taken. It can when no later stage filters,
-    /// orders, unwinds, groups or resolves through its alias, no group replaces the row, and
-    /// every later projection passes the alias on: the page then holds the same rows, and
-    /// the join adds the same value to each of them, whether it runs before the sort or
-    /// after the limit. Explain reads it for a join step's phase (DESIGN §4.3).
+    /// Where a join that runs is emitted (<see cref="JoinPhase"/>). The rule: a join only the rows'
+    /// display reads is moved from where it was written only to a place where it runs for no more rows
+    /// than there.
+    /// <list type="bullet">
+    /// <item>A later stage filters, orders, unwinds, groups or resolves through its alias, or a group
+    /// replaces the row: where it was written (<see cref="JoinPhase.BeforePage"/>).</item>
+    /// <item>Nothing between it and the page yields more rows than it reads: after the page
+    /// (<see cref="JoinPhase.AfterPage"/>). The page then holds no more rows than the join would have
+    /// read where it was written.</item>
+    /// <item>An unwind stands between it and the page (contract 2): the page holds one row per
+    /// element, and a join after it would run once per element of a parent it was written to read
+    /// once. Where the parents are ordered and cut before that unwind (<see cref="UnwindPlacement.ParentsFirst"/>)
+    /// it runs on those parents, a page's worth of them (<see cref="JoinPhase.Parents"/>); elsewhere
+    /// where it was written, once per parent.</item>
+    /// </list>
+    /// Contract 1 keeps its rule (after the page whenever only the display reads the alias), and so do
+    /// the stages as written (<paramref name="asWritten"/>), which cut no parents. Explain reads it for
+    /// a join step's phase (DESIGN §4.3), so what it says is what runs.
+    /// </summary>
+    public static JoinPhase PhaseOf(BoundPipeline bound, int index, string alias, bool asWritten = false)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        if (!DisplayOnly(bound, index, alias))
+            return JoinPhase.BeforePage;
+
+        if (!bound.UnwoundRows)
+            return JoinPhase.AfterPage;
+
+        var unwound = -1;
+
+        for (var later = index + 1; later < bound.Stages.Count && unwound < 0; later++)
+            if (bound.Stages[later] is BoundStage.Unwind)
+                unwound = later;
+
+        if (unwound < 0)
+            return JoinPhase.AfterPage;
+
+        return !asWritten && PlaceUnwind(bound, bound.Collated) is { ParentsFirst: true } placed && placed.Position == unwound
+            ? JoinPhase.Parents
+            : JoinPhase.BeforePage;
+    }
+
+    /// <summary>
+    /// <see cref="PhaseOf(BoundPipeline, int, string, bool)"/> for an inline resolve: its alias is only
+    /// displayed, and no later stage reads the outcome it names (<c>outcomeAs</c>): a condition or a
+    /// group over the outcome needs it on every candidate row. A projection only passes the outcome on
+    /// or drops it.
+    /// </summary>
+    public static JoinPhase PhaseOf(BoundPipeline bound, int index, BoundStage.Resolve resolve, bool asWritten = false)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(resolve);
+
+        return resolve.OutcomeAs is { } outcomeAs && bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs))
+            ? JoinPhase.BeforePage
+            : PhaseOf(bound, index, resolve.As, asWritten);
+    }
+
+    /// <summary>
+    /// The unwind a join only the display reads is kept before (its phase is not
+    /// <see cref="JoinPhase.AfterPage"/> although nothing but the display reads its alias); null for a
+    /// join a later stage reads and for one that runs after the page. Explain says it at the join.
+    /// </summary>
+    public static BoundStage.Unwind? KeptBefore(BoundPipeline bound, int index, bool asWritten = false)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        var (alias, phase) = bound.Stages[index] switch
+        {
+            BoundStage.Lookup lookup => (lookup.As, PhaseOf(bound, index, lookup.As, asWritten)),
+            BoundStage.Resolve resolve when !IsKeyed(resolve) => (resolve.As, PhaseOf(bound, index, resolve, asWritten)),
+            _ => (null, JoinPhase.AfterPage),
+        };
+
+        if (alias is null || phase == JoinPhase.AfterPage || !DisplayOnly(bound, index, alias)
+            || (bound.Stages[index] is BoundStage.Resolve { OutcomeAs: { } outcomeAs } && bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs))))
+            return null;
+
+        return bound.Stages.Skip(index + 1).OfType<BoundStage.Unwind>().FirstOrDefault();
+    }
+
+    /// <summary>Whether the join at <paramref name="index"/> runs after the page is taken (<see cref="PhaseOf(BoundPipeline, int, string, bool)"/>).</summary>
+    public static bool JoinsAfterPage(BoundPipeline bound, int index, string alias, bool asWritten = false) =>
+        PhaseOf(bound, index, alias, asWritten) == JoinPhase.AfterPage;
+
+    /// <summary>Whether the inline resolve at <paramref name="index"/> runs after the page is taken (<see cref="PhaseOf(BoundPipeline, int, BoundStage.Resolve, bool)"/>).</summary>
+    public static bool JoinsAfterPage(BoundPipeline bound, int index, BoundStage.Resolve resolve, bool asWritten = false) =>
+        PhaseOf(bound, index, resolve, asWritten) == JoinPhase.AfterPage;
+
+    /// <summary>
+    /// Whether only the rows' display reads a join's alias: no later stage filters, orders, unwinds,
+    /// groups or resolves through it, no group replaces the row, and every later projection passes the
+    /// alias on. The rows and their order are then the same wherever the join runs, and it adds the
+    /// same value to each of them.
     /// <para>
     /// A projection passes the alias on when it keeps it whole, and, for a join whose loads the
     /// binder inferred (contract 2), also when it names paths under it: the join then loads those
@@ -2288,10 +2416,8 @@ public static class MongoCompiler
     /// could show chosen members only by running for every candidate row.
     /// </para>
     /// </summary>
-    public static bool JoinsAfterPage(BoundPipeline bound, int index, string alias)
+    private static bool DisplayOnly(BoundPipeline bound, int index, string alias)
     {
-        ArgumentNullException.ThrowIfNull(bound);
-
         var stages = bound.Stages;
         var inferred = bound.Loads.ContainsKey(alias);
 
@@ -2307,9 +2433,10 @@ public static class MongoCompiler
                         return false;
                     break;
 
-                // A lookup on the alias reads the joined parent, which is there after the page
-                // too when that lookup also joins after the page: the late joins run in stage order.
-                case BoundStage.Lookup lookup when lookup.On == alias && JoinsAfterPage(bound, later, lookup.As):
+                // A lookup on the alias reads the joined parent, which is there when that lookup runs
+                // too: it is only displayed itself, so it runs in the same place or a later one, and
+                // the joins of one place run in stage order.
+                case BoundStage.Lookup lookup when lookup.On == alias && DisplayOnly(bound, later, lookup.As):
                     break;
 
                 case var stage when Reads(stage, alias):
@@ -2318,21 +2445,6 @@ public static class MongoCompiler
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// <see cref="JoinsAfterPage(BoundPipeline, int, string)"/> for an inline resolve: its
-    /// alias can be joined after the page, and no later stage reads the outcome it names
-    /// (<c>outcomeAs</c>): a condition or a group over the outcome needs it on every candidate row. A
-    /// projection only passes the outcome on or drops it.
-    /// </summary>
-    public static bool JoinsAfterPage(BoundPipeline bound, int index, BoundStage.Resolve resolve)
-    {
-        ArgumentNullException.ThrowIfNull(bound);
-        ArgumentNullException.ThrowIfNull(resolve);
-
-        return JoinsAfterPage(bound, index, resolve.As)
-            && !(resolve.OutcomeAs is { } outcomeAs && bound.Stages.Skip(index + 1).Any(stage => stage is not BoundStage.Project && Reads(stage, outcomeAs)));
     }
 
     /// <summary>Whether an inclusion keeps the alias by naming it or paths under it: what a join with inferred loads is cut to on the way out.</summary>

@@ -40,7 +40,14 @@ public class LateJoinExecutionTests
 
         var kinds = compiled.PageStages.Select(stage => stage.GetElement(0).Name).ToList();
 
-        kinds.IndexOf("$lookup").Should().BeGreaterThan(kinds.IndexOf("$limit"), $"the join is display-only and runs after the page ({because})");
+        // A join written before an unwind runs before it, once per parent; every other one after the page, once per page row.
+        var written = JsonNode.Parse(pipeline)!.AsArray().Select(stage => stage!.AsObject().First().Key).ToList();
+
+        if (written.IndexOf("unwind") > written.FindIndex(kind => kind is "lookup" or "resolve"))
+            kinds.IndexOf("$lookup").Should().BeLessThan(kinds.IndexOf("$unwind"), $"the join is written before the unwind and runs once per parent ({because})");
+        else
+            kinds.IndexOf("$lookup").Should().BeGreaterThan(kinds.LastIndexOf("$limit"), $"the join is display-only and runs after the page ({because})");
+
         rows.Should().Be(JsonNode.Parse(expected)!.ToJsonString(), because);
     }
 
@@ -83,6 +90,8 @@ public class LateJoinExecutionTests
         private static bool Matches(BsonDocument row, BsonDocument filter) => filter.All(element => element.Name switch
         {
             "$and" => element.Value.AsBsonArray.All(inner => Matches(row, inner.AsBsonDocument)),
+            // What an unwind would drop: a collection that is missing, null or empty.
+            _ when element.Value is BsonDocument { ElementCount: 1 } only && only.GetElement(0) is { Name: "$nin", Value: BsonArray excluded } => !excluded.Contains(Get(row, element.Name) ?? BsonNull.Value),
             _ when element.Name.StartsWith('$') || element.Value is BsonDocument => throw new NotSupportedException($"The evaluator does not match {element.ToJson()}."),
             _ => Get(row, element.Name) == element.Value,
         });
@@ -145,6 +154,10 @@ public class LateJoinExecutionTests
 
                 if (below.Count > 0 && element.Value is BsonDocument inner)
                     result[element.Name] = Include(inner, below);
+
+                // A projection reaches into every document of an array, as the server's does.
+                if (below.Count > 0 && element.Value is BsonArray inners)
+                    result[element.Name] = new BsonArray(inners.OfType<BsonDocument>().Select(each => Include(each, below)));
             }
 
             return result;

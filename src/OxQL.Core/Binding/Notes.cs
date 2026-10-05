@@ -376,6 +376,23 @@ public static class Notes
     };
 
     /// <summary>
+    /// A join only the rows' display reads that still runs before the page, because
+    /// <paramref name="path"/> is unwound after it: after the page it would run once per element of a
+    /// row it was written to read once. With <paramref name="onParents"/> it runs on the rows ordered
+    /// and cut before that unwind (<see cref="SortBeforeUnwind"/>), else where it was written.
+    /// </summary>
+    public static Diagnostic JoinBeforeUnwind(int? stage, string alias, string kind, string path, bool onParents) => new()
+    {
+        Code = JoinBeforePage,
+        Message = onParents
+            ? $"'{alias}' is joined before '{path}' is unwound, on the rows ordered and cut to what the page can reach: once per row, not once per element of the page."
+            : $"'{alias}' is joined where it is written, before '{path}' is unwound: once per row there, not once per element of the page.",
+        Stage = stage,
+        Path = alias,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["kind"] = kind, ["unwind"] = path, ["rows"] = onParents ? "parents" : "written" },
+    };
+
+    /// <summary>
     /// How a lookup of another service's entity runs (DESIGN §3.4.4): one owner query per
     /// <paramref name="keysPerQuery"/> parent keys of the page, at most <c>perKey</c> rows per key,
     /// ranked at the owner by the lookup's sort and the child key over every child of those keys that

@@ -533,7 +533,9 @@ at warning level, with what shaped it. Set it to `0` to turn the line off.
 - Two `sort` stages do not compose: the later one replaces the earlier one.
 - A `lookup` or a local `resolve` that no later `match`, `sort`, `unwind`, `group` or `resolve`
   reads runs after the page is taken, on the page's rows alone; the rows are the same, the
-  join is paid per page row, and the sort stays next to the limit. A join a later stage reads,
+  join is paid per page row, and the sort stays next to the limit. Under contract 2 a join written
+  before an `unwind` runs before it, once per parent and never once per element of the page (on
+  the parents cut before the unwind where the page is ordered by them). A join a later stage reads,
   a join before a `group` that reads it, and a join whose alias a projection narrows stay where
   they were written. A join, local or remote, whose alias a projection drops and no later stage
   reads is not run, and the row does not carry the alias. The count pipeline never carries a

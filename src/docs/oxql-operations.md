@@ -677,7 +677,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `PATTERN_FOLDS` (a `contains` or `endsWith` folds case, and accents at collation strength 1, as a
   pattern no index bounds; `params` `op`, `locale`, `strength`, `accents`),
   `PATTERN_FOLDS_CASE_ONLY` (contract 1 only), `EXACT_FORCES_EXACT`, `SOME_ELEMENT`, `NEQ_MATCHES_ABSENT`,
-  `ONLY_FOR_VARIANTS`, `SNAPSHOT_COPY`, `JOIN_BEFORE_PAGE`, `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
+  `ONLY_FOR_VARIANTS`, `SNAPSHOT_COPY`, `JOIN_BEFORE_PAGE` (`params` `alias`, `kind`; and for a
+  join only the display reads that is kept before an unwind, so that it runs once per parent and
+  not once per element, `unwind`, the collection, and `rows`: `parents`, the rows ordered and cut
+  before that unwind, or `written`, every row that reaches the join where it stands),
+  `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
   `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP` and `OFFSET_PAGING` (contract 1 and
   internal calls only: a contract 2 request has neither a count cap to hit silently nor an offset),
   `LOOKUP_LIMIT`, `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path

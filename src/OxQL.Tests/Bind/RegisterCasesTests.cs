@@ -138,15 +138,24 @@ public class RegisterCasesTests
     }
 
     [Fact]
-    public async Task F13_a_grouped_query_pages_by_offset_behind_the_cursor()
+    public async Task F13_a_grouped_query_pages_by_its_keys_and_by_offset_under_contract_1()
     {
-        var bound = await Bound("""[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1, "count": true } }]""");
+        const string Pipeline = """[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1 } }]""";
+        var bound = await Bound(Pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        bound.PagingMode.Should().Be(PagingMode.Offset);
-        compiled.PageStages.Should().ContainSingle(stage => stage.Contains("$sort"), "a grouped page is ordered by its keys or $skip pages an order Mongo never produced")
+        bound.PagingMode.Should().Be(PagingMode.Keyset);
+        compiled.PageStages.Should().ContainSingle(stage => stage.Contains("$sort"), "a grouped page is ordered by its keys")
             .Which["$sort"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("type", 1), "the group keys order the page; no key is appended to a grouped shape");
-        MongoQueryEngine.NextCursor(compiled, new BsonDocument("type", 1)).Should().BeEquivalentTo(new CursorPayload(bound.Fingerprint, PagingMode.Offset, [], 1));
+        MongoQueryEngine.NextCursor(compiled, new BsonDocument("type", 1)).Should().BeEquivalentTo(
+            new CursorPayload(bound.Fingerprint, PagingMode.Keyset, [new CursorValue("type", true, new BsonInt32(1))], 0), "the cursor carries the last group's keys, and no record key: a group has none");
+
+        // Contract 1 pages a group by offset, as it always has.
+        var legacy = await BindHost.BoundAsync(BindHost.Probe, Order, Pipeline, BindHost.Context(contract: 1));
+        var written = MongoCompiler.Compile(legacy, Options with { AsWritten = true });
+
+        legacy.PagingMode.Should().Be(PagingMode.Offset);
+        MongoQueryEngine.NextCursor(written, new BsonDocument("type", 1)).Should().BeEquivalentTo(new CursorPayload(legacy.Fingerprint, PagingMode.Offset, [], 1));
     }
 
     [Fact]

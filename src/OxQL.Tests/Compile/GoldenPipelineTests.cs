@@ -274,19 +274,46 @@ public class GoldenPipelineTests
     }
 
     [Fact]
-    public async Task Unwind_with_alias_and_index_then_offset_paging()
+    public async Task An_unwind_sorted_on_its_element_renames_after_the_page_and_pages_by_value()
     {
-        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "it.quantity": "desc" }] }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
+        const string Pipeline = """[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "it.quantity": "desc" }] }, { "page": { "limit": 10 } }]""";
+        var compiled = await Compile(Pipeline);
 
+        // The sort reads the element where the unwind left it; the rename waits for the page's rows.
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: true, includeArrayIndex: "i" } }""",
+            """{ $sort: { "Items.Quantity": -1, _id: 1, i: 1 } }""",
+            "{ $limit: 11 }",
             """{ $set: { it: "$Items" } }""",
-            """{ $unset: "Items" }""",
-            """{ $sort: { "it.Quantity": -1, _id: 1, i: 1 } }""",
-            "{ $skip: 20 }",
-            "{ $limit: 11 }");
-        compiled.PagingMode.Should().Be(PagingMode.Offset);
+            """{ $unset: "Items" }""");
+        compiled.Bound.PagingMode.Should().Be(PagingMode.Keyset);
+        compiled.PagingIndexes.Should().Equal("i");
+        compiled.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true), "the order is the elements', not the parents'");
+
+        // The cursor carries the sort value, the key and the position; the next page starts after them.
+        var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
+        var last = new BsonDocument { ["_id"] = id, ["it"] = new BsonDocument("Quantity", 7), ["i"] = 2 };
+        var payload = MongoQueryEngine.NextCursor(compiled, last, served: 10);
+
+        payload.Fields.Should().BeEquivalentTo([new CursorValue("it.quantity", false, new BsonInt32(7)), new CursorValue("_id", true, id), new CursorValue("i", true, new BsonInt32(2))]);
+
+        var next = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(payload)}}" }"""));
+
+        ShouldBe(next.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: true, includeArrayIndex: "i" } }""",
+            $$"""
+            { $match: { $and: [ { "Items.Quantity": { $not: { $gt: 7 } } }, { $or: [
+                { "Items.Quantity": 7, _id: {{id.ToJson()}}, i: { $gt: 2 } },
+                { "Items.Quantity": 7, _id: { $gt: {{id.ToJson()}} } },
+                { "Items.Quantity": { $lt: 7 } },
+                { "Items.Quantity": null } ] } ] } }
+            """,
+            """{ $sort: { "Items.Quantity": -1, _id: 1, i: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { it: "$Items" } }""",
+            """{ $unset: "Items" }""");
     }
 
     [Fact]
@@ -375,31 +402,126 @@ public class GoldenPipelineTests
         var compiled = await Compile($$"""[{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2, "cursor": "{{cursor}}" } }]""");
 
         ShouldBe(compiled.PageStages,
-            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }""",
+            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "abc" } }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }""",
             "{ $sort: { Number: 1, _id: 1 } }",
             "{ $limit: 3 }");
+
+        // Descending, the rows after the position are the smaller values and the nulls: everything not above it.
+        var descending = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "sort": [{ "number": "desc" }] }, { "page": { "limit": 2 } }]""");
+        var back = BindHost.Cursors.Encode(new CursorPayload(descending.Fingerprint, PagingMode.Keyset, [new CursorValue("number", false, new BsonString("abc")), new CursorValue("_id", true, id)], 0));
+
+        (await Compile($$"""[{ "sort": [{ "number": "desc" }] }, { "page": { "limit": 2, "cursor": "{{back}}" } }]""")).PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
+                { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+            """));
+
+        // After a null the leading field bounds nothing, and the key alone is its own range.
+        var afterNull = BindHost.Cursors.Encode(new CursorPayload(first.Fingerprint, PagingMode.Keyset, [new CursorValue("number", true, BsonNull.Value), new CursorValue("_id", true, id)], 0));
+
+        (await Compile($$"""[{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2, "cursor": "{{afterNull}}" } }]""")).PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $and: [ {{OrgJson}}, { $or: [ { Number: null, _id: { $gt: {{id.ToJson()}} } }, { Number: { $ne: null } } ] } ] } }
+            """));
+
+        // Contract 1 keeps the predicate it always sent.
+        var legacy = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2 } }]""", BindHost.Context(contract: 1));
+        var old = BindHost.Cursors.Encode(new CursorPayload(legacy.Fingerprint, PagingMode.Keyset, [new CursorValue(legacy.Sort!.Fields[0].Path.Wire, true, new BsonString("abc")), new CursorValue("_id", true, id)], 0));
+        var again = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2, "cursor": "{{old}}" } }]""", BindHost.Context(contract: 1));
+
+        MongoCompiler.Compile(again, Options with { AsWritten = true }).PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $and: [ {{OrgJson}}, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }
+            """));
     }
 
     [Fact]
-    public async Task An_unwound_page_is_ordered_by_the_key_and_one_index_per_unwind()
+    public async Task An_unwound_page_orders_and_cuts_the_parents_first_and_is_ordered_by_the_key_and_one_index_per_unwind()
     {
-        // No sort of the caller's: $skip over $unwind output nothing ordered repeats and drops
-        // rows between pages, so the binder supplies the key and the compiler completes it.
-        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
+        // No sort of the caller's: the binder supplies the key and the compiler completes it with the
+        // position of the unwind. The order is the parents', so they are ordered and cut before the unwind.
+        const string Pipeline = """[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 10 } }]""";
+        var compiled = await Compile(Pipeline);
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
+            """{ $match: { Items: { $nin: [null, []] } } }""",
+            """{ $sort: { _id: 1 } }""",
+            "{ $limit: 11 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
-            """{ $set: { item: "$Items" } }""",
-            """{ $unset: "Items" }""",
             """{ $sort: { _id: 1, __oxIx0: 1 } }""",
-            """{ $unset: ["__oxIx0"] }""",
-            "{ $skip: 20 }",
-            "{ $limit: 11 }");
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
 
-        compiled.Bound.PagingMode.Should().Be(PagingMode.Offset);
+        compiled.Bound.PagingMode.Should().Be(PagingMode.Keyset);
         compiled.Bound.Sort!.Fields.Should().ContainSingle()
             .Which.Path.Wire.Should().Be("id", "the default sort is bound, so it reaches the canonical form and the fingerprint");
+        compiled.PagingIndexes.Should().Equal("__oxIx0");
+        compiled.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, [], RenameLate: true));
+
+        // The next page: the parents from the cursor's on (it may hold more rows), one more of them, and after the unwind the rows after the position.
+        var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
+        var payload = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["__oxIx0"] = 3 }, served: 10);
+        var next = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(payload)}}" }"""));
+
+        ShouldBe(next.PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { _id: { $gte: {{id.ToJson()}} } } ] } }""",
+            """{ $match: { Items: { $nin: [null, []] } } }""",
+            """{ $sort: { _id: 1 } }""",
+            "{ $limit: 12 }",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            $$"""{ $match: { $and: [ { _id: { $gte: {{id.ToJson()}} } }, { $or: [ { _id: {{id.ToJson()}}, __oxIx0: { $gt: 3 } }, { _id: { $gt: {{id.ToJson()}} } } ] } ] } }""",
+            """{ $sort: { _id: 1, __oxIx0: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
+
+        // An internal owner's offset still skips, behind the parents its offset reaches.
+        var skipped = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
+
+        skipped.PageStages.Select(stage => stage.ToJson()).Should().ContainInOrder(
+            BsonDocument.Parse("{ $limit: 31 }").ToJson(), BsonDocument.Parse("{ $skip: 20 }").ToJson(), BsonDocument.Parse("{ $limit: 11 }").ToJson());
+    }
+
+    [Fact]
+    public async Task What_is_asked_of_the_element_after_an_unwind_is_asked_of_the_collection_before_it()
+    {
+        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2 }, "number": { "neq": "x" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+
+        ShouldBe(compiled.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            """{ $match: { $and: [ { Number: { $ne: "x" } }, { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } ] } }""",
+            """{ $sort: { Number: 1, _id: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            """{ $match: { $and: [ { "Items.Quantity": { $gt: 2 } }, { Number: { $ne: "x" } } ] } }""",
+            """{ $sort: { Number: 1, _id: 1, __oxIx0: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
+        ShouldBe(compiled.CountStages!,
+            $"{{ $match: {OrgJson} }}",
+            """{ $match: { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } }""",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            """{ $match: { $and: [ { "Items.Quantity": { $gt: 2 } }, { Number: { $ne: "x" } } ] } }""",
+            "{ $limit: 1001 }",
+            "{ $count: 'n' }");
+        compiled.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
+
+        // A condition on the position cannot be asked of the collection: the element one still is, the parents are not cut.
+        var byPosition = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "item.quantity": { "gt": 2 }, "at": { "gte": 1 } } }, { "page": { "limit": 10 } }]""");
+
+        byPosition.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, ["item.quantity"], RenameLate: true));
+        byPosition.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } }"""));
+        byPosition.PageStages[2].Contains("$unwind").Should().BeTrue();
+
+        // A kept row without an element has no element to pass anything: nothing is asked before a preserving unwind.
+        var preserved = await Compile("""[{ "unwind": { "path": "items", "as": "item", "preserveNull": true } }, { "match": { "item.quantity": { "neq": 2 } } }, { "page": { "limit": 10 } }]""");
+
+        preserved.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true));
+        preserved.PageStages[1].Contains("$unwind").Should().BeTrue();
+
+        // Two unwinds, a group after the unwind, and contract 1 run as written.
+        (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.stops", "as": "stop" } }, { "page": { "limit": 10 } }]""")).Unwind.Should().BeNull();
+        (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "group": { "by": [{ "path": "item.quantity", "as": "q" }], "fields": { "n": { "count": true } } } }]""")).Unwind.Should().BeNull();
     }
 
     [Fact]

@@ -161,7 +161,8 @@ public class VariantBindingTests
 
         unwind.Flatten.Should().Be(new BoundFlatten("children", "Children", 5, 0));
         unwind.As.Should().Be("node");
-        bound.PagingMode.Should().Be(PagingMode.Offset);
+        bound.PagingMode.Should().Be(PagingMode.Keyset, "unwound rows page by value: the sort, the key and the position of the unwind");
+        bound.UnwoundRows.Should().BeTrue();
     }
 
     [Fact]

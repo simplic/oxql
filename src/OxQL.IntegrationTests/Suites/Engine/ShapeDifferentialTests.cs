@@ -5,6 +5,8 @@ using MongoDB.Driver;
 using OxQL.Core.Binding;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
+using OxQL.IntegrationTests.Fleet.Models.Transport;
+using StoredShipment = OxQL.IntegrationTests.Fleet.Models.Transport.Shipment;
 using OxQL.IntegrationTests.Harness;
 using OxQL.Mongo;
 using Xunit;
@@ -39,7 +41,56 @@ public class ShapeDifferentialTests
         { "rows-volume-desc", Corpus.Template, """[ { "match": { "isDeleted": { "neq": true } } }, { "project": { "templateName": 1 } }, { "sort": [ { "templateName": "desc" } ] } ]""" },
         { "rows-inline-join-display", Corpus.Equipment, """[ { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "name": 1, "veh.matchCode": 1 } }, { "sort": [ { "name": "asc" } ] } ]""" },
         { "rows-inline-join-sorted", Corpus.Equipment, """[ { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "name": 1, "veh.matchCode": 1 } }, { "sort": [ { "veh.matchCode": "asc" } ] } ]""" },
+
+        // ---- unwound rows: the parents first, the element where the unwind left it, the prefilter ----
+        { "unwind-default-order", Corpus.Shipment, $$"""[ {{Items}} ]""" },
+        { "unwind-default-order-projected", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}} ]""" },
+        { "unwind-sort-parent", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-sort-parent-desc", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "loadStart": "desc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-two-parents", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "status.name": "desc" }, { "referenceNumber": "asc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-written-before", Corpus.Shipment, $$"""[ { "sort": [ { "shipmentNumber": "desc" } ] }, {{Items}}, {{ItemColumns}} ]""" },
+        { "unwind-sort-element", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "item.text": "asc" } ] } ]""" },
+        { "unwind-sort-element-desc", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "item.orderNumber": "desc" } ] } ]""" },
+        { "unwind-sort-parent-then-element", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "status.name": "asc" }, { "item.orderNumber": "desc" } ] } ]""" },
+        { "unwind-sort-key-then-position-desc", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "id": "desc" }, { "position": "desc" } ] } ]""" },
+        { "unwind-sort-position", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "position": "desc" } ] } ]""" },
+        { "unwind-without-index", Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item" } }, { "project": { "shipmentNumber": 1, "item.text": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-match-element", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.orderNumber": { "gte": 2 } } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-match-element-negative", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.orderNumber": { "neq": 1 }, "item.text": { "neq": null } } }, {{ItemColumns}} ]""" },
+        { "unwind-match-element-or", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "or": [ { "item.orderNumber": { "eq": 1 } }, { "item.shippingUnit": { "neq": null } } ] } }, {{ItemColumns}}, { "sort": [ { "loadStart": "asc" } ] } ]""" },
+        { "unwind-match-parent-and-element", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "status.name": { "neq": "Closed" }, "item.orderNumber": { "lte": 2 } } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "desc" } ] } ]""" },
+        { "unwind-match-two-stages", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.orderNumber": { "gte": 1 } } }, { "match": { "item.orderNumber": { "lte": 2 } } }, {{ItemColumns}} ]""" },
+        { "unwind-match-mixed-or", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "or": [ { "item.orderNumber": { "eq": 1 } }, { "status.name": { "eq": "Open" } } ] } }, {{ItemColumns}} ]""" },
+        { "unwind-match-index", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "position": { "gte": 1 } } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-match-alias-exists", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item": { "exists": true } } }, {{ItemColumns}} ]""" },
+        { "unwind-match-element-any", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.weightNotes": { "any": { "number": { "neq": null } } } } }, {{ItemColumns}} ]""" },
+        { "unwind-filter-entry", Corpus.Shipment, $$"""[ { "match": { "isDeleted": { "neq": true } } }, {{Items}}, { "match": { "item.text": { "contains": "a" } } }, { "sort": [ { "referenceNumber": "asc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-preserve-null", Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "preserveNull": true } }, {{ItemColumns}} ]""" },
+        { "unwind-preserve-null-sorted", Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "preserveNull": true } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "desc" } ] } ]""" },
+        { "unwind-preserve-null-match", Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "preserveNull": true } }, { "match": { "item.orderNumber": { "neq": 1 } } }, { "project": { "shipmentNumber": 1, "item.orderNumber": 1 } } ]""" },
+        { "unwind-preserve-null-sort-element", Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "preserveNull": true } }, { "project": { "shipmentNumber": 1, "item.text": 1 } }, { "sort": [ { "item.text": "desc" } ] } ]""" },
+        { "unwind-scalars", Corpus.Shipment, """[ { "unwind": { "path": "status.roles", "as": "role" } }, { "project": { "shipmentNumber": 1, "role": 1 } }, { "sort": [ { "role": "asc" } ] } ]""" },
+        { "unwind-two", Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "unwind": { "path": "item.weightNotes", "as": "note", "includeIndex": "at" } }, { "project": { "shipmentNumber": 1, "position": 1, "at": 1, "note.number": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-flatten", Corpus.Transaction, """[ { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }, { "project": { "number": 1, "position": 1, "item.text": 1 } }, { "sort": [ { "number": "asc" } ] } ]""" },
+        { "unwind-flatten-match", Corpus.Transaction, """[ { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }, { "match": { "item.text": { "neq": null } } }, { "project": { "number": 1, "position": 1, "item.text": 1 } } ]""" },
+        { "unwind-lookup-alias", Corpus.Shipment, """[ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts" } }, { "unwind": { "path": "attempts", "as": "attempt", "includeIndex": "n" } }, { "match": { "attempt.text": { "neq": null } } }, { "project": { "shipmentNumber": 1, "n": 1, "attempt.text": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-then-late-join", Corpus.Shipment, $$"""[ {{Items}}, { "resolve": { "path": "department.id", "as": "dep", "onMissing": "null" } }, { "project": { "shipmentNumber": 1, "position": 1, "item.text": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        { "unwind-then-group", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.orderNumber": { "gte": 1 } } }, { "group": { "by": [ { "path": "item.orderNumber", "as": "order" } ], "fields": { "n": { "count": true } } } } ]""" },
+
+        // ---- groups: the keys end the order, the cursor continues after the last group ----
+        { "group-one-key", Corpus.Shipment, """[ { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "n": { "count": true } } } } ]""" },
+        { "group-two-keys", Corpus.Shipment, """[ { "group": { "by": [ { "path": "status.name", "as": "status" }, { "path": "loadingTimeType", "as": "type" } ], "fields": { "n": { "count": true }, "first": { "min": "loadStart" } } } } ]""" },
+        { "group-sorted-by-aggregate", Corpus.Shipment, """[ { "group": { "by": [ { "path": "referenceNumber", "as": "reference" } ], "fields": { "n": { "count": true } } } }, { "sort": [ { "n": "desc" } ] } ]""" },
+        { "group-sorted-by-key-desc", Corpus.Shipment, """[ { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "last": { "max": "loadStart" } } } }, { "sort": [ { "number": "desc" } ] } ]""" },
+        { "group-date-bucket", Corpus.Shipment, """[ { "group": { "by": [ { "dateTrunc": { "path": "loadStart", "unit": "day", "timezone": "Europe/Berlin" }, "as": "day" } ], "fields": { "n": { "count": true } } } } ]""" },
+        { "group-volume-nulls", Corpus.Template, """[ { "group": { "by": [ { "path": "templateName", "as": "name" } ], "fields": { "n": { "count": true } } } } ]""" },
+        { "group-volume-by-count", Corpus.Template, """[ { "group": { "by": [ { "path": "templateName", "as": "name" } ], "fields": { "n": { "count": true } } } }, { "sort": [ { "n": "desc" }, { "name": "desc" } ] } ]""" },
+        { "group-projected", Corpus.Shipment, """[ { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "n": { "count": true } } } }, { "sort": [ { "n": "asc" } ] }, { "project": { "n": 1 } } ]""" },
     };
+
+    private const string Items = """{ "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }""";
+
+    private const string ItemColumns = """{ "project": { "shipmentNumber": 1, "loadStart": 1, "status.name": 1, "position": 1, "item.text": 1, "item.orderNumber": 1 } }""";
 
     /// <summary>The request as the engine places its stages and in the order written answers the same rows in the same order.</summary>
     [Theory]
@@ -51,7 +102,7 @@ public class ShapeDifferentialTests
         var placed = await WalkAsync(direct, database, entity, stages, limit, asWritten: false);
         var written = await WalkAsync(direct, database, entity, stages, limit, asWritten: true);
 
-        placed.Rows.Should().NotBeEmpty(id);
+        placed.Rows.Should().NotBeEmpty($"{id} reads rows");
         placed.Rows.Should().Equal(written.Rows, $"{id}: the same rows in the same order");
         placed.Pages.Should().Be(written.Pages, id);
     }
@@ -63,18 +114,100 @@ public class ShapeDifferentialTests
     {
         var (direct, database) = await HostAsync(entity);
         var whole = await WalkAsync(direct, database, entity, stages, limit: 20_000, asWritten: false);
-        var walked = await WalkAsync(direct, database, entity, stages, limit: entity == Corpus.Template ? 997 : 3, asWritten: false);
 
         whole.Pages.Should().Be(1, id);
-        walked.Pages.Should().BeGreaterThan(1, id);
-        walked.Rows.Should().Equal(whole.Rows, $"{id}: no row twice, none left out, the order kept");
+
+        // A page of one row ends at every row once: every position a cursor can stand at is continued from.
+        foreach (var limit in entity == Corpus.Template ? new[] { 997 } : RowByRow.Contains(id) ? [1, 7] : [7])
+        {
+            var walked = await WalkAsync(direct, database, entity, stages, limit, asWritten: false);
+
+            walked.Rows.Should().Equal(whole.Rows, $"{id} in pages of {limit}: no row twice, none left out, the order kept");
+            walked.Pages.Should().Be(Math.Max(1, (whole.Rows.Count + limit - 1) / limit), $"{id}: a page is full until the rows end");
+        }
+    }
+
+    /// <summary>The requests also walked one row a page.</summary>
+    private static readonly HashSet<string> RowByRow =
+    [
+        "unwind-default-order", "unwind-sort-parent-desc", "unwind-sort-two-parents", "unwind-sort-element", "unwind-sort-key-then-position-desc",
+        "unwind-match-element", "unwind-match-parent-and-element", "unwind-preserve-null-sorted", "unwind-two", "unwind-lookup-alias",
+        "group-one-key", "group-sorted-by-aggregate",
+    ];
+
+    /// <summary>
+    /// The shipments the unwound and grouped requests read: a database of their own with rows made
+    /// for the edges of an order (ties and nulls on every sort field, collations' ties), of an
+    /// unwind (no items, a null collection, a missing one, items without a text, nested notes) and
+    /// of a join (shipments with and without delivery attempts).
+    /// </summary>
+    private static readonly Lazy<Task<IMongoDatabase>> Edges = new(SeedEdgesAsync, LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private const int EdgeShipments = 230;
+
+    private static async Task<IMongoDatabase> SeedEdgesAsync()
+    {
+        var database = (await MongoFixture.CreateDatabaseAsync("shape_differential")).Database;
+        var organisation = EngineDirect.Organisation;
+        var at = new DateTime(2026, 3, 1, 6, 0, 0, DateTimeKind.Utc);
+        string[] statuses = ["Open", "open", "Planned", "Geschlossen", "geschloßen"];
+        var shipments = new List<BsonDocument>();
+        var attempts = new List<BsonDocument>();
+
+        for (var n = 1; n <= EdgeShipments; n++)
+        {
+            var scrambled = n * 37 % EdgeShipments;
+            var document = new StoredShipment
+            {
+                Id = Ids.Of(Spaces.Shipment, Org.A, 5_000 + n),
+                OrganizationId = organisation,
+                IsDeleted = n % 19 == 0,
+                ShipmentNumber = n % 11 == 0 ? null : $"S-{scrambled % 60:D3}",
+                ReferenceNumber = n % 7 == 0 ? null : $"ref-{scrambled % 9}",
+                LoadStart = n % 13 == 0 ? null : at.AddHours(scrambled % 40),
+                Status = n % 17 == 0 ? null : new ShipmentStatus { Name = statuses[scrambled % statuses.Length], Roles = [.. new[] { "plan", "load", "bill" }.Take(scrambled % 4)] },
+                Items = [.. Enumerable.Range(0, n % 5).Select(position => new ShipmentItem
+                {
+                    Id = Ids.Of(Spaces.ShipmentItem, Org.A, 50_000 + n * 10 + position),
+                    Text = (n + position) % 6 == 0 ? null : $"Ware {(char)('a' + (n * 7 + position * 3) % 9)}",
+                    OrderNumber = (n + position) % 4,
+                    ShippingUnit = (n + position) % 3 == 0 ? null : "Palette",
+                    WeightNotes = [.. Enumerable.Range(0, (n + position) % 3).Select(note => new WeightNote { Id = Ids.Of(Spaces.WeightNote, Org.A, 500_000 + n * 100 + position * 10 + note), Number = note == 1 ? null : $"W-{n}-{position}-{note}" })],
+                })],
+            }.ToBsonDocument();
+
+            // A collection stored as null, and one that is not stored at all.
+            if (n % 23 == 0)
+                document["Items"] = BsonNull.Value;
+            else if (n % 29 == 0)
+                document.Remove("Items");
+
+            shipments.Add(document);
+
+            for (var attempt = 0; attempt < (n % 4 == 0 ? 1 + n % 3 : 0); attempt++)
+                attempts.Add(new DeliveryAttempt
+                {
+                    Id = Ids.Of(Spaces.DeliveryAttempt, Org.A, 50_000 + n * 10 + attempt),
+                    OrganizationId = organisation,
+                    ShipmentId = Ids.Of(Spaces.Shipment, Org.A, 5_000 + n),
+                    Text = attempt == 1 ? null : $"Versuch {attempt}",
+                    DateTime = at.AddDays(attempt),
+                }.ToBsonDocument());
+        }
+
+        var model = LabService.Transport.Model;
+
+        await database.GetCollection<BsonDocument>(model.Entities[Corpus.Shipment].Collection).InsertManyAsync(shipments);
+        await database.GetCollection<BsonDocument>(model.Entities["transport.delivery_attempt"].Collection).InsertManyAsync(attempts);
+
+        return database;
     }
 
     private static async Task<(EngineDirect Direct, IMongoDatabase Database)> HostAsync(string entity)
     {
         var service = Corpus.Entity(entity).Service;
 
-        return (new EngineDirect(service.Model), await (await CorpusFleet.SharedAsync()).Fleet.DatabaseAsync(service));
+        return (new EngineDirect(service.Model), entity == Corpus.Shipment ? await Edges.Value : await (await CorpusFleet.SharedAsync()).Fleet.DatabaseAsync(service));
     }
 
     /// <summary>

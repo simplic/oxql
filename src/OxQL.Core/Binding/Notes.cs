@@ -107,13 +107,26 @@ public static class Notes
     /// </summary>
     public const string ProjectAfterPage = "PROJECT_AFTER_PAGE";
 
+    /// <summary>
+    /// The rows are ordered and cut to what the page can reach before their collection is unwound: the
+    /// page's order is the order of the rows that hold the collection, so the unwind and the page's own
+    /// sort see a page's worth of them instead of every candidate row (params <c>path</c>, <c>alias</c>).
+    /// </summary>
+    public const string SortBeforeUnwind = "SORT_BEFORE_UNWIND";
+
+    /// <summary>
+    /// What the request asks of the element after an unwind is also asked of the collection before it:
+    /// only a row with an element that passes is unwound (params <c>path</c>, <c>alias</c>, <c>paths</c>).
+    /// </summary>
+    public const string UnwindPrefilter = "UNWIND_PREFILTER";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
-        PatternFolds, ProjectAfterPage,
+        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -328,6 +341,26 @@ public static class Notes
         Code = ProjectAfterPage,
         Message = "The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.",
         Stage = stage,
+    };
+
+    /// <summary>The parents of an unwound page ordered and cut before the unwind (<see cref="SortBeforeUnwind"/>).</summary>
+    public static Diagnostic ParentsFirst(int? stage, string path, string? alias) => new()
+    {
+        Code = SortBeforeUnwind,
+        Message = $"The rows are ordered and cut to what the page can reach before '{path}' is unwound: the page's order is theirs, so only a page's worth of them is unwound.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
+    };
+
+    /// <summary>The element conditions asked of the collection before its unwind (<see cref="UnwindPrefilter"/>).</summary>
+    public static Diagnostic Prefiltered(int? stage, string path, string? alias, IReadOnlyList<string> paths) => new()
+    {
+        Code = UnwindPrefilter,
+        Message = $"Only rows with an element of '{path}' that passes what is asked of '{alias}' after the unwind are unwound.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias, ["paths"] = paths },
     };
 
     /// <summary>Where a join runs (DESIGN §4.3 <c>phase</c>): in the aggregate before the page, or after it.</summary>

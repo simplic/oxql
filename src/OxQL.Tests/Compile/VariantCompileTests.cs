@@ -76,7 +76,10 @@ public class VariantCompileTests
         var unwound = await Compile("""[ { "unwind": { "path": "stalls", "as": "stall" } }, { "match": { "stall.occupant": { "is": "Cat" } } } ]""");
 
         MatchOf(any).ShouldBeBson(BsonDocument.Parse("""{ "Stalls": { "$elemMatch": { "Occupant._t": { "$in": ["Cat"] } } } }"""));
-        unwound.PageStages.Should().Contain(stage => stage.ToJson() == BsonDocument.Parse("""{ "$match": { "stall.Occupant._t": { "$in": ["Cat"] } } }""").ToJson());
+        unwound.PageStages.Should().Contain(stage => stage.ToJson() == BsonDocument.Parse("""{ "$match": { "Stalls.Occupant._t": { "$in": ["Cat"] } } }""").ToJson(), "the element is read where the unwind left it until the page is taken");
+        unwound.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ "$match": { "Stalls": { "$elemMatch": { "Occupant._t": { "$in": ["Cat"] } } } } }"""), "and asked of the collection before the unwind, relative to the element as inside any");
+        MongoCompiler.Compile(unwound.Bound, new CompileOptions(10_000, null, 100_000) { AsWritten = true }).PageStages
+            .Should().Contain(stage => stage.ToJson() == BsonDocument.Parse("""{ "$match": { "stall.Occupant._t": { "$in": ["Cat"] } } }""").ToJson(), "as written, under the alias");
     }
 
     // ---- flatten -----------------------------------------------------------------------------
@@ -92,8 +95,9 @@ public class VariantCompileTests
         var compiled = await Compile("""[ { "unwind": { "path": "nodes", "flatten": "children", "as": "node", "includeIndex": "position" } } ]""", depth);
         var stages = compiled.PageStages;
 
-        // scope, the descent, the probe, the unwind, the alias.
-        stages.Select(stage => stage.GetElement(0).Name).Take(5).Should().Equal("$match", "$set", "$set", "$unwind", "$set");
+        // scope; the parents that hold a node, in key order, cut to the page's reach; the descent, the probe, the unwind; the page; the alias.
+        stages.Select(stage => stage.GetElement(0).Name).Should().Equal("$match", "$match", "$sort", "$limit", "$set", "$set", "$unwind", "$sort", "$limit", "$set", "$unset");
+        stages = stages.Skip(3).ToList();
 
         var level = stages[1]["$set"]["Nodes"].AsBsonDocument;
         BsonValue input = "$Nodes";
@@ -137,7 +141,7 @@ public class VariantCompileTests
                 "Nodes": { "$map": { "input": "$Nodes", "as": "item", "in": { "$unsetField": { "field": { "$literal": "Children" }, "input": "$$item" } } } } } }
             """));
         stages[3].ShouldBeBson(BsonDocument.Parse("""{ "$unwind": { "path": "$Nodes", "preserveNullAndEmptyArrays": false, "includeArrayIndex": "position" } }"""));
-        stages[4].ShouldBeBson(BsonDocument.Parse("""{ "$set": { "node": "$Nodes" } }"""));
+        stages[6].ShouldBeBson(BsonDocument.Parse("""{ "$set": { "node": "$Nodes" } }"""));
 
         compiled.FlattenProbes.Should().Equal(new FlattenProbe("__oxFlat0", 0, "nodes", depth));
     }
@@ -147,7 +151,7 @@ public class VariantCompileTests
     {
         var compiled = await Compile("""[ { "unwind": { "path": "nodes", "as": "node", "flatten": "children" } }, { "page": { "count": true } } ]""");
 
-        compiled.CountStages!.Select(stage => stage.GetElement(0).Name).Should().Equal("$match", "$set", "$set", "$unwind", "$set", "$unset", "$limit", "$count");
+        compiled.CountStages!.Select(stage => stage.GetElement(0).Name).Should().Equal("$match", "$set", "$set", "$unwind", "$limit", "$count");
     }
 
     [Fact]

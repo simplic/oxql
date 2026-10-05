@@ -101,7 +101,7 @@ public static class Basis
         [Notes.JoinBeforePage] = Advisory, [Notes.JoinAfterPage] = Advisory, [Notes.OwnerBinds] = Advisory, [Notes.SelectPathNotOnTarget] = Advisory,
         [Notes.CountCap] = Advisory, [Notes.LookupLimit] = Advisory, [Notes.OffsetPaging] = Advisory, [Notes.MissingPolicy] = Advisory,
         [Notes.ReportPage] = Advisory, [Notes.IndexAdvice] = Advisory, [Notes.RemoteLookup] = Advisory, [Notes.FilterBindsEarlier] = Advisory,
-        [Notes.ProjectAfterPage] = Advisory,
+        [Notes.ProjectAfterPage] = Advisory, [Notes.SortBeforeUnwind] = Advisory, [Notes.UnwindPrefilter] = Advisory,
     };
 
     /// <summary>The codes that are the organisation's to decide when their path lies under an addon bag.</summary>

@@ -296,7 +296,7 @@ public static class ExplainFacts
             order.Add(Entry(key.Wire, ascending: true, tieBreak: true));
 
         // Unwound rows: one position per unwind, in stage order (the compiler's reserved or named indexes).
-        if (bound.PagingMode == PagingMode.Offset)
+        if (bound.PagingMode == PagingMode.Offset || bound.UnwoundRows)
             foreach (var unwind in bound.Stages.OfType<BoundStage.Unwind>())
             {
                 if (unwind.IncludeIndex is { } index)

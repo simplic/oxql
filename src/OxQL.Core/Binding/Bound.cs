@@ -466,10 +466,14 @@ public sealed record BoundFilter(int Index, string? Id, bool Failed, IReadOnlyLi
 /// <summary>How the next page is addressed.</summary>
 public enum PagingMode
 {
-    /// <summary>By the sort fields' values of the last row, plus the key.</summary>
+    /// <summary>
+    /// By the sort fields' values of the last row, completed to a total order: by the key on the
+    /// entity's rows, by the key and the position of each unwind on unwound rows, by the group's keys
+    /// on groups (the last two under contract 2).
+    /// </summary>
     Keyset,
 
-    /// <summary>By skipping rows: after a group or an unwind, where the row has no stable key.</summary>
+    /// <summary>By skipping rows: after a group or an unwind under contract 1, and where a contract 2 order is not total.</summary>
     Offset,
 }
 
@@ -573,6 +577,13 @@ public sealed record BoundPipeline
 
     /// <summary>Whether any condition is a semi-join on a remote alias.</summary>
     public bool HasSemiJoin { get; init; }
+
+    /// <summary>
+    /// Whether the rows are one per element of an unwind and are ordered and paged as such (contract 2):
+    /// by the sort, the entity's key and the position of each unwind. It covers the unwind of a lookup's
+    /// alias, which the shape does not count as unwound.
+    /// </summary>
+    public bool UnwoundRows { get; init; }
 
     /// <summary>The internal per-key owner answer the request asked for, or null (DESIGN §3.5.2 step 3).</summary>
     public BoundKeyedBy? KeyedBy { get; init; }

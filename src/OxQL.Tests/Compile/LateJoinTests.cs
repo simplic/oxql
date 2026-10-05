@@ -91,11 +91,12 @@ public class LateJoinTests
     }
 
     [Fact]
-    public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_offset_page()
+    public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_page()
     {
         var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$set", "$unset", "$sort", "$unset", "$limit", "$lookup", "$set", "$unset");
+        // The parents with an item in the page's order, cut to the page's reach; the unwind; the page; the rename; the join.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$match", "$sort", "$limit", "$unwind", "$sort", "$limit", "$set", "$unset", "$lookup", "$set", "$unset");
     }
 
     [Fact]
@@ -162,7 +163,7 @@ public class LateJoinTests
             CustomerLookupJson,
             """{ $set: { cust: { $arrayElemAt: ["$cust__arr", 0] } } }""",
             """{ $unset: "cust__arr" }""",
-            $$"""{ $match: { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } }""",
+            $$"""{ $match: { $and: [ { "cust.Name": { $gte: "abc" } }, { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } ] } }""",
             """{ $sort: { "cust.Name": 1, _id: 1 } }""",
             "{ $limit: 3 }");
     }
@@ -201,9 +202,17 @@ public class LateJoinTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$sort", "$limit", "$project");
-        compiled.PageStages[4].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
-        compiled.PageStages[6]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
+        // The parents with a child that passes the match, in key order, cut to the page's reach; the unwind; the
+        // match on the child where the unwind left it; the page; then the child under the name the unwind writes.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit", "$unwind", "$match", "$sort", "$limit", "$set", "$unset", "$project");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { orders: { $elemMatch: { Number: "n-1" } } } }"""), "a parent no child of which passes is not unwound");
+        compiled.PageStages[7]["$match"].AsBsonDocument.Names.Should().Equal(["orders.Number"], "the child's member where the unwind left the child");
+        compiled.PageStages[10].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
+
+        var written = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(written.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$project", "$sort", "$limit");
+        written.PageStages[6]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "as written, the match reads the child under the name the unwind wrote");
 
         var row = WireEncoder.Encode(new BsonDocument
         {
@@ -221,8 +230,8 @@ public class LateJoinTests
     {
         var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders", "as": "order" } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit", "$unwind", "$sort", "$limit", "$set", "$unset");
+        Kinds(compiled.CountStages!).Should().Equal(["$match", "$lookup", "$set", "$unwind", "$limit", "$count"], "the count unwinds and counts: it orders, cuts and renames nothing");
     }
 
     [Fact]

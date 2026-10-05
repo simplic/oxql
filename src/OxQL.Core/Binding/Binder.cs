@@ -807,7 +807,7 @@ public sealed class Binder
         /// </summary>
         private void DefaultSort()
         {
-            if (sort is not null || shape.IsRootShape)
+            if (sort is not null || (shape.IsRootShape && !UnwoundRows))
                 return;
 
             var fields = new List<BoundSortField>();
@@ -882,9 +882,44 @@ public sealed class Binder
             return new BindTrace(entry ?? shape, steps, shape) { Reads = reads.ToList(), Filters = BoundFilters() };
         }
 
+        /// <summary>
+        /// Whether the rows are one per element of an unwind (contract 2): of a member collection, or of
+        /// a lookup's alias, whose rows the shape still counts as the entity's. They share their parent's
+        /// key, so the position of each unwind completes their order, and the binder supplies the key as
+        /// their sort where the request wrote none.
+        /// </summary>
+        private bool UnwoundRows => contract2 && !shape.Grouped && stages.Any(stage => stage is BoundStage.Unwind);
+
+        /// <summary>
+        /// Whether the rows of a shape an unwind or a group made are in a total order the engine can
+        /// continue from by value (contract 2): then the cursor carries the last row's values, and the
+        /// next page starts after them, whatever was written in between and however deep the page lies.
+        /// Unwound rows are: the sort, the entity's key and the position of each unwind. Groups are
+        /// when the sort that orders them stands after the group and ends in every one of its keys,
+        /// which the binder completes it with as far as the shape still carries them. Where it is not
+        /// (a key a projection dropped, a sort written before the group, an unwind of what a group
+        /// collected, no sort at all), the page is still addressed by a cursor, which then counts rows.
+        /// </summary>
+        private bool OrderIsTotal()
+        {
+            if (sort is null)
+                return false;
+
+            if (!shape.Grouped)
+                return true;
+
+            var grouped = stages.FindLastIndex(stage => stage is BoundStage.Group);
+            var sorted = stages.FindLastIndex(stage => ReferenceEquals(stage, sort));
+
+            if (grouped < 0 || sorted < grouped || stages.Skip(grouped + 1).Any(stage => stage is BoundStage.Unwind))
+                return false;
+
+            return ((BoundStage.Group)stages[grouped]).Keys.All(key => sort.Fields.Any(field => field.Path.Storage == key.As));
+        }
+
         public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
         {
-            var mode = shape.IsRootShape ? PagingMode.Keyset : PagingMode.Offset;
+            var mode = shape.IsRootShape || (contract2 && OrderIsTotal()) ? PagingMode.Keyset : PagingMode.Offset;
             // A contract 2 cursor is bound to what decides the rows and their order (DG2 M6); contract 1
             // fingerprints the whole bound form, as it always has.
             var fingerprint = contract2
@@ -920,6 +955,7 @@ public sealed class Binder
                 Fingerprint = fingerprint,
                 Canonical = BoundCanonical.Render(scope, stages, page, mode, keyedByBound, contract2).ToJsonString(),
                 HasSemiJoin = hasSemiJoin,
+                UnwoundRows = UnwoundRows,
                 Filters = BoundFilters(),
                 FilterStages = filterStages.Count > 0 ? filterStages : null,
                 KeyedBy = keyedByBound,

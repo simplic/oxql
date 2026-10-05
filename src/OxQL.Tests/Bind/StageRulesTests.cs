@@ -412,7 +412,7 @@ public class StageRulesTests
         leaves[3].Path.Storage.Should().Be("i");
         leaves[3].Path.Kind.Should().Be(Kind.Int);
         leaves[4].Path.Kind.Should().Be(Kind.Object);
-        bound.PagingMode.Should().Be(PagingMode.Offset);
+        bound.PagingMode.Should().Be(PagingMode.Keyset);
 
         (await Error("""[{ "unwind": { "path": "items.stops", "as": "stop" } }]""", Codes.UnwindOrder)).Path.Should().Be("items.stops");
         await Error("""[{ "unwind": { "path": "shipTo", "as": "shipToRow" } }]""", Codes.NotACollection);
@@ -434,7 +434,7 @@ public class StageRulesTests
         group.Keys[1].Trunc.Timezone.Should().Be("Europe/Berlin");
         group.Fields.Select(field => field.OutputKind).Should().Equal(Kind.Int, Kind.Decimal, Kind.Double, Kind.Int, Kind.Double);
         bound.FinalShape.Grouped.Should().BeTrue();
-        bound.PagingMode.Should().Be(PagingMode.Offset);
+        bound.PagingMode.Should().Be(PagingMode.Keyset, "the sort stands after the group and ends in every key of it");
 
         var and = (BoundCondition.And)((BoundStage.Match)bound.Stages[1]).Condition;
 

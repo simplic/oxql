@@ -42,7 +42,7 @@ public class ExplainNotesTests
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
             "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER",
-            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE");
+            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER");
         Notes.All.Except([Notes.ExplainLimit]).Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue; only an explain limit is both a refusal (past a bound, before binding) and a note (hit mid-way)");
     }
@@ -67,6 +67,42 @@ public class ExplainNotesTests
         notes.Should().NotContain(note => note.Code == Notes.PatternFoldsCaseOnly, "that is what a contract 1 pattern does");
 
         (await NotesAsync("""[{ "match": { "number": { "eq": "RE-1", "options": { "caseSensitive": true } } } }]""")).Should().NotContain(note => note.Code == Notes.TextFolds);
+    }
+
+    [Fact]
+    public async Task What_the_compiler_places_elsewhere_than_the_request_wrote_it_is_said_at_the_stage()
+    {
+        var notes = await NotesAsync(
+            """[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2 } } }, { "project": { "number": 1, "item.quantity": 1 } }, { "sort": [{ "number": "asc" }] }]""",
+            "probe.order", model: BindHost.Probe);
+
+        var late = Single(notes, Notes.ProjectAfterPage);
+
+        late.Stage.Should().Be(2);
+        late.Message.Should().Be("The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.");
+
+        var parents = Single(notes, Notes.SortBeforeUnwind);
+
+        parents.Stage.Should().Be(0);
+        parents.Path.Should().Be("items");
+        System.Text.Json.JsonSerializer.Serialize(parents.Params).Should().Be("""{"path":"items","alias":"item"}""");
+
+        var prefilter = Single(notes, Notes.UnwindPrefilter);
+
+        prefilter.Stage.Should().Be(0);
+        prefilter.Message.Should().Be("Only rows with an element of 'items' that passes what is asked of 'item' after the unwind are unwound.");
+        System.Text.Json.JsonSerializer.Serialize(prefilter.Params).Should().Be("""{"path":"items","alias":"item","paths":["item.quantity"]}""");
+
+        // Sorted on the element, the order is not the parents': nothing is cut before the unwind, and nothing says so.
+        (await NotesAsync("""[{ "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "item.quantity": "asc" }] }]""", "probe.order", model: BindHost.Probe))
+            .Should().NotContain(note => note.Code == Notes.SortBeforeUnwind || note.Code == Notes.UnwindPrefilter);
+
+        // Contract 1 runs as written and says none of it.
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), new FakeRemoteClient());
+        var legacy = (await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "project": { "number": 1 } }, { "sort": [{ "number": "asc" }] }]"""), BindHost.Context(contract: 1)))
+            .Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        legacy.Notes.Should().NotContain(note => note.Code == Notes.ProjectAfterPage);
     }
 
     [Fact]

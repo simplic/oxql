@@ -447,20 +447,28 @@ public class PagingCursorTests
     private const string GroupByNumber = """{ "group": { "by": [{ "path": "number", "as": "number" }], "fields": { "total": { "count": true } } } }""";
 
     [Fact]
-    public async Task P34_a_group_and_an_unwind_both_switch_the_query_to_offset_paging_and_the_cursor_carries_the_offset()
+    public async Task P34_a_group_and_an_unwind_both_page_by_value_and_the_cursor_carries_no_offset()
     {
         var grouped = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 2 } }]""");
         grouped.ShouldBeOk();
         var groupedHead = Cursors.Payload(grouped.NextCursor!);
-        groupedHead["m"]!.GetValue<string>().Should().Be("o");
-        groupedHead["o"]!.GetValue<int>().Should().Be(2);
-        ((JsonArray)groupedHead["v"]!).Should().BeEmpty();
+        groupedHead["m"]!.GetValue<string>().Should().Be("k");
+        groupedHead["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)groupedHead["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["number"], "the key of the last group; a group has no record key");
 
         var unwound = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 5 } }]""");
         unwound.ShouldBeOk();
         var unwoundHead = Cursors.Payload(unwound.NextCursor!);
-        unwoundHead["m"]!.GetValue<string>().Should().Be("o");
-        unwoundHead["o"]!.GetValue<int>().Should().Be(5);
+        unwoundHead["m"]!.GetValue<string>().Should().Be("k");
+        unwoundHead["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)unwoundHead["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["id", "_id", "__oxIx0"], "the sort the binder supplied, the key, the position of the unwind");
+
+        // Contract 1 pages both by offset, as it always has.
+        var legacy = await (await Ledger()).Contract(1).SendAsync(Corpus.Transaction, """[{ "group": { "by": [{ "path": "Number", "as": "number" }], "fields": { "total": { "count": true } } } }, { "page": { "limit": 2 } }]""");
+        legacy.ShouldBeOk();
+        var legacyHead = Cursors.Payload(legacy.NextCursor!);
+        legacyHead["m"]!.GetValue<string>().Should().Be("o");
+        legacyHead["o"]!.GetValue<int>().Should().Be(2);
     }
 
     [Fact]
@@ -509,7 +517,8 @@ public class PagingCursorTests
         }
 
         rows.Should().BeGreaterThan(MaxOffset);
-        Cursors.Payload(cursor!)["o"]!.GetValue<int>().Should().Be(rows);
+        Cursors.Payload(cursor!)["o"]!.GetValue<int>().Should().Be(0, "a page of groups starts after the last group by its key, at any depth; nothing is skipped");
+        Cursors.Payload(cursor!)["n"]!.GetValue<long>().Should().Be(rows, "the cursor carries the rows served");
     }
 
     // ── P37 · P38 · P40 · P42 · P44 — counts ───────────────────────────────────────────────

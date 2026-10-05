@@ -1,5 +1,5 @@
 {
-  "description": "Cursors over the fingerprints of the named golden renders (signing key BindHost.SigningKey). The contract 1 cursor was minted by OxQL 2.0 and must decode for ever; the contract 2 cursors were minted anew at the DG2 wire freeze of the unpublished contract 2 and carry the rows served.",
+  "description": "Cursors over the fingerprints of the named golden renders (signing key BindHost.SigningKey). The contract 1 cursor was minted by OxQL 2.0 and must decode for ever; the contract 2 cursors were minted anew at the DG2 wire freeze of the unpublished contract 2 and carry the rows served. A cursor over unwound rows carries the sort values, the key and the position of each unwind; a cursor over groups the sort values, which end in the group keys (DG2 M5, S5).",
   "cursors": [
     {
       "case": "empty-default-page",
@@ -92,19 +92,51 @@
       "served": 5
     },
     {
-      "case": "unwind-offset-paging",
-      "cursor": "eyJmIjoic2hhMjU2OmQ4MzRiMzBiMjk4NjhhM2Q2OGViZjFkYTQ3NmViZTkyYzRhNjQ1YTEzYzUwNWQzMDFmZGFiYzc1NWM5MmVlYzkiLCJtIjoibyIsIm8iOjMwLCJ2IjpbXSwibiI6NX0.iXeG74QK6f4XS1e7LlWNDL_8u1I0jFjuawfkC1Lktzo",
-      "mode": "offset",
-      "offset": 30,
-      "fields": [],
+      "case": "unwind-paging",
+      "cursor": "eyJmIjoic2hhMjU2Ojk3OTY2ZWY1MTNiYzc1NWU1OTlkYTA3MzMwYmNmMzQ5OGI4N2NiYzk1ZGIzZGU4YjliMDFlNzlmYTUwZjMyMmUiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJpdC5xdWFudGl0eSIsImQiOiJkZXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjdcdTAwMjIgfSJ9LHsicCI6Il9pZCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkYmluYXJ5XHUwMDIyIDogeyBcdTAwMjJiYXNlNjRcdTAwMjIgOiBcdTAwMjJDM3g4Vlc4T1RRNmRmbHRxSEMwXHUwMDJCVHc9PVx1MDAyMiwgXHUwMDIyc3ViVHlwZVx1MDAyMiA6IFx1MDAyMjA0XHUwMDIyIH0gfSJ9LHsicCI6ImkiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjJcdTAwMjIgfSJ9XSwibiI6NX0.qYTY1p3FTn-kNAMWbCwsE6q944_cZ0B_GgPWAGi7qWU",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "it.quantity",
+          "direction": "desc",
+          "value": "{ \"$numberInt\" : \"7\" }"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        },
+        {
+          "path": "i",
+          "direction": "asc",
+          "value": "{ \"$numberInt\" : \"2\" }"
+        }
+      ],
       "served": 5
     },
     {
       "case": "group-composite",
-      "cursor": "eyJmIjoic2hhMjU2OmI0NDEwMmI1ZTY2OGU2OGVhZDExNWViNmE2ZjAzYjdjNWQ5YmY3ZGE4MTNlNDdkMmY5ZmM2N2ZhZGY4N2Y1ZTMiLCJtIjoibyIsIm8iOjUsInYiOltdLCJuIjo1fQ.0af4LQ0zub1-6pxJRnH38kGha4P6qWke_miL3FibGaU",
-      "mode": "offset",
-      "offset": 5,
-      "fields": [],
+      "cursor": "eyJmIjoic2hhMjU2OjdkY2Y2NDU5NDI1MzAxMDZhNTk4NWQ3ZTI2Y2U3MzkyZDlhNDhmZmFlNDNjODQzZGM3OTNjMzVhYjM0ZWI1ODgiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkbnVtYmVySW50XHUwMDIyIDogXHUwMDIyM1x1MDAyMiB9In0seyJwIjoic3QiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjFcdTAwMjIgfSJ9LHsicCI6IndrIiwiZCI6ImFzYyIsImIiOiJ7IFx1MDAyMiRkYXRlXHUwMDIyIDogeyBcdTAwMjIkbnVtYmVyTG9uZ1x1MDAyMiA6IFx1MDAyMjE3NjczMjMwNDUwMDBcdTAwMjIgfSB9In1dLCJuIjo1fQ.TeZXdjnbiRa-k4C-kZ-vhJx2oRJ_T1K5hcJgFlHaZgg",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "n",
+          "direction": "desc",
+          "value": "{ \"$numberInt\" : \"3\" }"
+        },
+        {
+          "path": "st",
+          "direction": "asc",
+          "value": "{ \"$numberInt\" : \"1\" }"
+        },
+        {
+          "path": "wk",
+          "direction": "asc",
+          "value": "{ \"$date\" : { \"$numberLong\" : \"1767323045000\" } }"
+        }
+      ],
       "served": 5
     },
     {

@@ -173,7 +173,7 @@ public class CaseInsensitiveCompileTests
         // The equality leg compares under the collation, so a neighbour that differs only in
         // case falls through to the key leg rather than being skipped or repeated.
         next.PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
-            { $match: { $and: [ {{OrgJson}}, { $or: [ { Number: 'abc', _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: 'abc' } } ] } ] } }
+            { $match: { $and: [ {{OrgJson}}, { Number: { $gte: 'abc' } }, { $or: [ { Number: 'abc', _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: 'abc' } } ] } ] } }
             """));
         next.Collation!.ShouldBeBson(DefaultCollation);
 

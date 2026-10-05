@@ -83,6 +83,7 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
+      {"code":"UNWIND_PREFILTER","message":"Only rows with an element of 'items' that passes what is asked of 'item' after the unwind are unwound.","stage":0,"path":"items","params":{"path":"items","alias":"item","paths":["item.text"]},"basis":"advisory"},
       {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":1,"basis":"advisory"},
       {"code":"TEXT_FOLDS","message":"'sort' on 'number' folds case and accents (collation de, strength 1).","stage":2,"path":"number","params":{"locale":"de","strength":1,"op":"sort"},"basis":"advisory"},
       {"code":"NEQ_MATCHES_ABSENT","message":"'neq' on 'isDeleted' also matches rows where the member is absent or null.","path":"isDeleted","filter":"removeDeleted","params":{"op":"neq"},"basis":"advisory"},

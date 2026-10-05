@@ -292,7 +292,7 @@ public class ShapeKUnwindTests
     }
 
     [Fact]
-    public async Task K18_an_unwind_switches_the_query_to_offset_paging_behind_the_cursor()
+    public async Task K18_unwound_rows_page_by_value_the_cursor_carries_the_key_and_the_position()
     {
         var expected = Unwound(row => Items(row).Count);
         const string stages = """{ "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }""";
@@ -303,8 +303,10 @@ public class ShapeKUnwindTests
         first.ShouldHaveIds(Corpus.PageOf(expected, limit: 3));
         first.HasNextPage.Should().BeTrue();
         var payload = Cursors.Payload(first.NextCursor!);
-        payload["m"]!.GetValue<string>().Should().Be("o", "the offset mode: " + payload.ToJsonString());
-        payload["o"]!.GetValue<int>().Should().Be(3);
+        payload["m"]!.GetValue<string>().Should().Be("k", "unwound rows page by value: " + payload.ToJsonString());
+        payload["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)payload["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["id", "_id", "__oxIx0"], "the sort, the key, the position of the unwind");
+        Cursors.Guid(payload["v"]![1]!["b"]!.GetValue<string>()).Should().Be(expected[2]);
 
         var second = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "cursor": "{{first.NextCursor}}" } } ]""");
         second.ShouldHaveIds(Corpus.PageOf(expected, limit: 3, offset: 3));

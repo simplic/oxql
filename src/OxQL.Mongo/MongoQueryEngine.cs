@@ -647,7 +647,13 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         foreach (var field in compiled.SortFields)
             fields.Add(new CursorValue(field.Path.Wire, field.Ascending, ValueAt(last, field.Path.Storage!)));
 
-        fields.Add(new CursorValue("_id", true, ValueAt(last, "_id")));
+        // A group's keys end its order; its rows have no key of their own.
+        if (!compiled.Bound.FinalShape.Grouped)
+            fields.Add(new CursorValue("_id", true, ValueAt(last, "_id")));
+
+        // Unwound rows of one parent differ by the position of each unwind.
+        foreach (var index in compiled.PagingIndexes)
+            fields.Add(new CursorValue(index, true, ValueAt(last, index)));
 
         return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Keyset, fields, 0) { Served = served };
     }

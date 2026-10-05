@@ -90,7 +90,7 @@ public class MongoQueryEngineTests
     }
 
     [Fact]
-    public async Task A_grouped_page_continues_by_offset()
+    public async Task A_grouped_page_continues_after_the_keys_of_its_last_group()
     {
         var (engine, runner) = Host(runner => runner.PageRows = [new BsonDocument("st", 0), new BsonDocument("st", 1), new BsonDocument("st", 2)]);
         var result = await Success(engine, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
@@ -102,15 +102,19 @@ public class MongoQueryEngineTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
         var payload = BindHost.Cursors.Decode(result.PageInfo.NextCursor!, bound.Fingerprint)!;
 
-        payload.Mode.Should().Be(PagingMode.Offset);
-        payload.Offset.Should().Be(2);
+        payload.Mode.Should().Be(PagingMode.Keyset);
+        payload.Fields.Should().BeEquivalentTo([new CursorValue("st", true, new BsonInt32(1))], "the last group of the page, by its key; a group has no record key");
 
         runner.PageRows = [new BsonDocument("st", 2)];
         var next = await Success(engine, $$"""[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true, "cursor": "{{result.PageInfo.NextCursor}}" } }]""");
 
         next.Items.Should().ContainSingle();
         next.PageInfo.HasNextPage.Should().BeFalse();
-        runner.Calls.Last(call => !call.Stages[^1].Contains("$count")).Stages.Should().Contain(new BsonDocument("$skip", 2));
+        var continued = runner.Calls.Last(call => !call.Stages[^1].Contains("$count")).Stages;
+
+        continued.Should().NotContain(stage => stage.Contains("$skip"), "the next page starts after the last group by value, not by counting groups");
+        continued[^3].ShouldBeBson(BsonDocument.Parse("{ $match: { st: { $gt: 1 } } }"), "after the group, where its key exists, and before the sort");
+        continued[^2].ShouldBeBson(BsonDocument.Parse("{ $sort: { st: 1 } }"));
     }
 
     [Fact]

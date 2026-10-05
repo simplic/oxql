@@ -120,7 +120,37 @@ public sealed record CompiledQuery
     /// is taken instead of where they were written; explain says so at each.
     /// </summary>
     public IReadOnlyList<int> LateProjections { get; init; } = [];
+
+    /// <summary>
+    /// The positions of the unwinds a keyset page of unwound rows is ordered by after the sort and
+    /// the key, by the field each is written to (the caller's <c>includeIndex</c>, or a reserved
+    /// name): the next cursor reads them off the page's last row. Empty for every other page.
+    /// </summary>
+    public IReadOnlyList<string> PagingIndexes { get; init; } = [];
+
+    /// <summary>How the one unwind of the request was placed; null where the stages run as written.</summary>
+    public UnwindPlacement? Unwind { get; init; }
 }
+
+/// <summary>
+/// How the compiler placed the one unwind of a contract 2 request (the stage at
+/// <paramref name="Position"/> of <see cref="BoundPipeline.Stages"/>), each only where the rows and
+/// their order stay what the request as written answers:
+/// <list type="bullet">
+/// <item><paramref name="ParentsFirst"/>: the rows are ordered and cut to what the page can reach
+/// before the unwind, so the unwind and the page's own sort see a page's worth of parents instead of
+/// every candidate row. It holds when the order of the page is the parents' order (every sort field
+/// before the key is a member of the entity) and every row kept yields a row of the page (each has
+/// an element, and what filters after the unwind is applied before it as well).</item>
+/// <item><paramref name="Prefiltered"/>: the paths under the alias whose conditions, written after
+/// the unwind, are also asked of the collection before it ("some element passes them all"), so a
+/// row without such an element is not unwound. Empty when there is none.</item>
+/// <item><paramref name="RenameLate"/>: the element is written under its alias, and the collection
+/// taken out of the row, after the page is taken; until then the stages read the element where the
+/// unwind left it.</item>
+/// </list>
+/// </summary>
+public sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate);
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
 public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null)
@@ -136,7 +166,10 @@ public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Count
     /// Whether the stages are emitted in the order the caller wrote them (contract 1, whose pipelines
     /// stay what they were). Otherwise the compiler places a stage where it costs the database least
     /// while the rows stay the same: a projection after the page is taken
-    /// (<see cref="MongoCompiler.ProjectsAfterPage"/>).
+    /// (<see cref="MongoCompiler.ProjectsAfterPage"/>), the rename of an unwound element after it too,
+    /// the order and the cut of the parents before their unwind, the rows without a passing element
+    /// dropped before it (<see cref="UnwindPlacement"/>), and a cursor's position also as one range on
+    /// the leading sort field.
     /// </summary>
     public bool AsWritten { get; init; }
 }
@@ -242,13 +275,19 @@ public static class MongoCompiler
         var sortFields = bound.Sort?.Fields ?? [];
         var collated = bound.Collated;
 
+        var grouped = bound.FinalShape.Grouped;
+        var keysetPaging = bound.PagingMode == PagingMode.Keyset;
+
         // Rows of an unwound shape share their parent's key, so the key alone does not order
         // them: the index of every unwind completes it. A group replaces the row, and its keys
         // are the order, so this is the unwound case only.
         // `bound.Sort` is the sort the indexes complete; without one there is nothing to
         // complete, and an index injected here would reach the rows with nothing to remove it.
-        var unwoundOffsetPaging = bound.PagingMode == PagingMode.Offset && !bound.FinalShape.Grouped && bound.Sort is not null;
+        var unwoundPaging = !grouped && bound.Sort is not null && (bound.PagingMode == PagingMode.Offset || bound.UnwoundRows);
         var reservedIndexes = new List<string>();
+
+        // Where the one unwind of a contract 2 request is placed (null: as written).
+        var unwinding = options.AsWritten ? null : PlaceUnwind(bound, collated);
         var probes = new List<FlattenProbe>();
         var flags = new List<LookupFlag>();
 
@@ -260,33 +299,44 @@ public static class MongoCompiler
         // The key orders and identifies a page. A projection that drops it leaves the sort and
         // the cursor reading a member that is not there, so it is kept in storage and dropped
         // again on the way out.
-        var keepKey = bound.PagingMode == PagingMode.Keyset || unwoundOffsetPaging;
+        var keepKey = (keysetPaging && !grouped) || unwoundPaging;
         var keyKeptAgainstProjection = false;
 
         // The same rule as the key, for the sort. NextCursor mints each leg by reading the
         // value off the document it hands back, so the sort paths survive every projection in
         // storage: a leg read from a member that is not there is the value null, and a null
         // leg re-admits every non-null row, which pages the first page for ever.
-        var sortStorages = keepKey
+        var sortStorages = keepKey || keysetPaging
             ? sortFields.Select(field => field.Path.Storage).Where(storage => storage is not null).Select(storage => storage!).Distinct(StringComparer.Ordinal).ToList()
             : [];
         var sortKeptAgainstProjection = new List<string>();
 
         // The leading scope, with the keyset predicate merged in on a root shape.
         var scope = ScopeFilter(bound.Scope);
-        var keyset = page.Cursor is { Mode: PagingMode.Keyset } cursor ? KeysetFrom(cursor, sortFields) : null;
+        var position = page.Cursor is { Mode: PagingMode.Keyset } cursor ? cursor : null;
 
-        // A sort path under a local resolve alias has no value before the join writes it, so
-        // the keyset condition on it is evaluated right before the paging sort instead, where
-        // every sort path holds the value the cursor was minted from.
-        var joinedKeyset = keyset is not null && bound.Sort is not null && sortFields.Any(field => field.Path.Root.StoragePrefix.Length > 0)
+        // The rows after the cursor's position. On unwound rows the position reads the unwinds'
+        // indexes, which exist only after them: it is built with the paging sort, after the loop.
+        var keyset = position is null || unwoundPaging ? null
+            : KeysetConjuncts(grouped ? Legs(position, sortFields, key: false, []) : KeysetFrom(position, sortFields), !options.AsWritten);
+
+        // A sort path under a local resolve alias has no value before the join writes it, and a
+        // group's keys and aggregates none before the group, so the keyset condition on them is
+        // evaluated right before the paging sort instead, where every sort path holds the value
+        // the cursor was minted from.
+        var joinedKeyset = keyset is not null && (grouped || (bound.Sort is not null && sortFields.Any(field => field.Path.Root.StoragePrefix.Length > 0)))
             ? keyset
             : null;
 
         if (joinedKeyset is not null)
             keyset = null;
 
-        stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope, keyset })));
+        // Parents first: a parent the position lies in or before passes the leading match, where an
+        // index on the sort bounds it; the rows of the parent the position lies in are cut after the unwind.
+        if (position is not null && unwinding is { ParentsFirst: true })
+            keyset = KeysetConjuncts(Legs(position, ParentFields(sortFields), key: true, []), !options.AsWritten, inclusive: true);
+
+        stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset))));
 
         var countStages = page.IncludeTotalCount || page.Count is not null ? new List<BsonDocument> { new("$match", scope) } : null;
 
@@ -313,6 +363,11 @@ public static class MongoCompiler
         // then cuts the page's rows to their columns, not every candidate row before it orders them.
         var lateProjections = new List<BsonDocument>();
         var lateProjectionStages = new List<int>();
+
+        // The rename of an unwound element that waits for the page, and the alias the stages
+        // until then read where the unwind left it.
+        var lateRename = new List<BsonDocument>();
+        (string Alias, string Storage)? renamed = null;
 
         // The local key each of those joins matches on. It is read only after the page, so it
         // survives every projection in between in storage, as a remote resolve's reference
@@ -348,7 +403,7 @@ public static class MongoCompiler
             switch (stage)
             {
                 case BoundStage.Match match:
-                    emitted.Add(new BsonDocument("$match", Filter(match.Condition, semiJoins, collated)));
+                    emitted.Add(new BsonDocument("$match", Renamed(Filter(match.Condition, semiJoins, collated), renamed)));
                     break;
 
                 // JoinsAfterPage decides the phase of a join, which explain reports (JOIN_BEFORE_PAGE /
@@ -395,10 +450,30 @@ public static class MongoCompiler
                     // paging sort uses and the pipeline drops again before it skips.
                     var indexField = unwind.IncludeIndex;
 
-                    if (unwoundOffsetPaging && indexField is null)
+                    if (unwoundPaging && indexField is null)
                         reservedIndexes.Add(indexField = ReservedIndex + reservedIndexes.Count);
-                    else if (unwoundOffsetPaging)
+                    else if (unwoundPaging)
                         reservedIndexes.Add(indexField!);
+
+                    var placed = unwinding is not null && unwinding.Position == index ? unwinding : null;
+
+                    // The rows no element of which passes what is asked of the element after the
+                    // unwind are not unwound: the page and the count read fewer rows, the same ones.
+                    if (placed is not null && UnwindPrefilter(bound, index, collated, parents: placed.ParentsFirst) is { } prefilter)
+                        stages.Add(new BsonDocument("$match", prefilter));
+
+                    // The count unwinds fewer rows for the same reason; what only the cut of the parents needs it does not ask.
+                    if (placed is not null && countStages is not null && UnwindPrefilter(bound, index, collated, parents: false) is { } unwoundCount)
+                        countStages.Add(new BsonDocument("$match", unwoundCount));
+
+                    // The parents in the page's order, cut to what the page can reach: each yields a row,
+                    // so the page's rows come from the first of them (one more than the page for the row
+                    // that tells a next page exists, and one more for the parent a cursor's position lies in).
+                    if (placed is { ParentsFirst: true })
+                    {
+                        stages.Add(Sort(ParentFields(sortFields), tieBreak: true));
+                        stages.Add(new BsonDocument("$limit", (long)page.Limit + 1 + (position is null ? 0 : 1) + (page.Cursor is { Mode: PagingMode.Offset } skipped ? skipped.Offset : page.Offset)));
+                    }
 
                     if (unwind.Flatten is { } flatten)
                     {
@@ -414,12 +489,23 @@ public static class MongoCompiler
                         ["preserveNullAndEmptyArrays"] = unwind.PreserveNull,
                     }.AddIf(indexField is not null, "includeArrayIndex", indexField)));
 
-                    if (unwind.As is not null)
-                        emitted.Add(new BsonDocument("$set", new BsonDocument(unwind.As, "$" + unwind.Path.Storage)));
+                    // Written under its alias after the page is taken, for the page's rows only: until
+                    // then the stages read the element where the unwind left it.
+                    if (placed is { RenameLate: true })
+                    {
+                        lateRename.Add(new BsonDocument("$set", new BsonDocument(unwind.As!, "$" + unwind.Path.Storage)));
+                        lateRename.Add(new BsonDocument("$unset", unwind.Path.Storage));
+                        renamed = (unwind.As!, unwind.Path.Storage!);
+                    }
+                    else
+                    {
+                        if (unwind.As is not null)
+                            emitted.Add(new BsonDocument("$set", new BsonDocument(unwind.As, "$" + unwind.Path.Storage)));
 
-                    // keepPath: false — the element lives on under the alias only.
-                    if (unwind is { KeepPath: false, As: not null })
-                        emitted.Add(new BsonDocument("$unset", unwind.Path.Storage));
+                        // keepPath: false — the element lives on under the alias only.
+                        if (unwind is { KeepPath: false, As: not null })
+                            emitted.Add(new BsonDocument("$unset", unwind.Path.Storage));
+                    }
 
                     if (unwind.Flatten is { } cut && bound.Strict && FilteredLater(bound.Stages, index, unwind.As ?? unwind.Path.Wire))
                         truncationProbes.Add(new TruncationProbe(Codes.UnwindDepthTruncated, cut.Stage, unwind.Path.Wire, cut.Depth, Probing(stages, emitted, probes[^1].Field)));
@@ -449,15 +535,16 @@ public static class MongoCompiler
                 // The last sort is the one the page is taken in, so on an unwound shape it is
                 // emitted after the loop with the tie-breakers that make it total. Any earlier
                 // sort is the caller's own and stays where it was written.
-                case BoundStage.Sort sort when unwoundOffsetPaging && ReferenceEquals(sort, bound.Sort):
+                case BoundStage.Sort sort when unwoundPaging && ReferenceEquals(sort, bound.Sort):
                     pagingSort = sort.Fields;
                     break;
 
                 case BoundStage.Sort sort:
                     if (joinedKeyset is not null && ReferenceEquals(sort, bound.Sort))
-                        emitted.Add(new BsonDocument("$match", joinedKeyset));
+                        emitted.Add(new BsonDocument("$match", joinedKeyset.Count == 1 ? joinedKeyset[0] : new BsonDocument("$and", new BsonArray(joinedKeyset))));
 
-                    emitted.Add(Sort(sort.Fields, bound.PagingMode == PagingMode.Keyset));
+                    // A group's keys are its order's tie-break already: the rows of a group have no key.
+                    emitted.Add(new BsonDocument("$sort", Renamed(Sort(sort.Fields, keysetPaging && !grouped)["$sort"].AsBsonDocument, renamed)));
                     sortEmitted = true;
                     break;
 
@@ -483,16 +570,26 @@ public static class MongoCompiler
 
         if (pagingSort is not null)
         {
-            stages.Add(Sort(pagingSort, tieBreak: true, reservedIndexes));
+            // The rows after the cursor's position, by the sort, the key and the position of each
+            // unwind: every leg holds its value here, where the page is ordered.
+            if (position is not null && keysetPaging)
+            {
+                var after = KeysetConjuncts(Legs(position, pagingSort, key: true, reservedIndexes, renamed), !options.AsWritten);
+
+                stages.Add(new BsonDocument("$match", after.Count == 1 ? after[0] : new BsonDocument("$and", new BsonArray(after))));
+            }
+
+            stages.Add(new BsonDocument("$sort", Renamed(Sort(pagingSort, tieBreak: true, reservedIndexes)["$sort"].AsBsonDocument, renamed)));
 
             // What ordered the page and was never asked for has no business in a row. An offset
             // cursor carries only its offset, so the key is free to go here; a keyset cursor
-            // reads it off the last row and keeps it (stripped from a contract 1 row instead).
-            var drop = reservedIndexes.Where(name => name.StartsWith(ReservedIndex, StringComparison.Ordinal)).ToList();
+            // reads the key and the indexes off the last row and keeps them (a contract 2 row
+            // follows the shape and shows neither; the key is stripped from a contract 1 row instead).
+            var drop = keysetPaging ? [] : reservedIndexes.Where(name => name.StartsWith(ReservedIndex, StringComparison.Ordinal)).ToList();
 
             // A join after the page that matches on the key still needs it; the wire row leaves
             // it out by the shape.
-            if (keyKeptAgainstProjection && !lateJoinKeys.Contains(KeyStorage, StringComparer.Ordinal))
+            if (!keysetPaging && keyKeptAgainstProjection && !lateJoinKeys.Contains(KeyStorage, StringComparer.Ordinal))
             {
                 drop.Add(KeyStorage);
                 keyKeptAgainstProjection = false;
@@ -501,7 +598,7 @@ public static class MongoCompiler
             if (drop.Count > 0)
                 stages.Add(new BsonDocument("$unset", new BsonArray(drop)));
         }
-        else if (!sortEmitted && bound.PagingMode == PagingMode.Keyset)
+        else if (!sortEmitted && keysetPaging && !grouped)
         {
             stages.Add(new BsonDocument("$sort", new BsonDocument(KeyStorage, 1)));
         }
@@ -512,6 +609,7 @@ public static class MongoCompiler
             stages.Add(new BsonDocument("$skip", offset));
 
         stages.Add(new BsonDocument("$limit", page.Limit + 1));
+        stages.AddRange(lateRename);
         stages.AddRange(lateProjections);
         stages.AddRange(lateJoins);
 
@@ -548,7 +646,273 @@ public static class MongoCompiler
             InlineProbes = inlineProbes,
             TruncationProbes = truncationProbes,
             LateProjections = lateProjectionStages,
+            PagingIndexes = keysetPaging && pagingSort is not null
+                ? reservedIndexes.Where(name => !pagingSort.Any(field => field.Path.Storage == name)).Distinct(StringComparer.Ordinal).ToList()
+                : [],
+            Unwind = unwinding,
         };
+    }
+
+    // ---- the one unwind of a contract 2 request ----------------------------------------------------
+
+    /// <summary>
+    /// Where the one unwind of a request is placed (<see cref="UnwindPlacement"/>); null when the
+    /// request has none or several, is an internal owner query, or nothing about its unwind can move.
+    /// </summary>
+    public static UnwindPlacement? PlaceUnwind(BoundPipeline bound, bool collated = false)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        if (bound.KeyedBy is not null || bound.Stages.Count(stage => stage is BoundStage.Unwind) != 1)
+            return null;
+
+        var at = bound.Stages.ToList().FindIndex(stage => stage is BoundStage.Unwind);
+        var unwind = (BoundStage.Unwind)bound.Stages[at];
+        var grouped = bound.FinalShape.Grouped;
+        var sortFields = bound.Sort?.Fields ?? [];
+
+        // A sort written before the unwind over the collection itself orders by what the collection
+        // holds; as written it runs after the collection has left the row. Nothing about it moves.
+        var sortsCollection = sortFields.Any(field => field.Path.Storage is { } storage && Covers(unwind.Path.Storage!, storage));
+
+        // The rename waits for the page when every stage up to the page reads the element through a
+        // filter or the paging sort (both read it where the unwind left it), or reads the row after
+        // the page is taken (a projection, a join after the page, a keyed join).
+        var renameLate = !grouped && !sortsCollection && unwind is { As: not null, KeepPath: false };
+        var reshaped = false;
+
+        for (var later = at + 1; later < bound.Stages.Count; later++)
+        {
+            switch (bound.Stages[later])
+            {
+                case BoundStage.Match or BoundStage.Page or ContinuedStage:
+                    break;
+
+                case BoundStage.Sort:
+                    break;
+
+                case BoundStage.Project when ProjectsAfterPage(bound, later):
+                    break;
+
+                case BoundStage.Resolve keyed when IsKeyed(keyed):
+                    break;
+
+                case BoundStage.Lookup lookup when !JoinRuns(bound, later, lookup.As) || JoinsAfterPage(bound, later, lookup.As):
+                    break;
+
+                case BoundStage.Resolve resolve when !JoinRuns(bound, later, resolve.As) || JoinsAfterPage(bound, later, resolve):
+                    break;
+
+                default:
+                    renameLate = false;
+                    reshaped = true;
+                    break;
+            }
+        }
+
+        var filter = UnwindFilter.Of(bound, at);
+
+        // Parents first: the page's order is the parents' order (every sort field before the key is
+        // a member of the entity, and not the collection), the rows are paged by value, nothing
+        // between the unwind and the page reshapes or joins the rows, and every parent kept yields a
+        // row of the page: what filters after the unwind is asked before it as well, exactly.
+        var parentsFirst = !grouped && !reshaped && !sortsCollection
+            && bound.PagingMode == PagingMode.Keyset && bound.Sort is not null
+            && filter.Exact
+            && (filter.Element.Count == 0 || unwind is { PreserveNull: false, Flatten: null })
+            && sortFields.TakeWhile(field => !IsKey(field)).All(field => IsOfEntity(field.Path));
+
+        var prefiltered = unwind is { PreserveNull: false, Flatten: null, As: not null } ? filter.ElementPaths : [];
+
+        return parentsFirst || renameLate || prefiltered.Count > 0 ? new UnwindPlacement(at, parentsFirst, prefiltered, renameLate) : null;
+    }
+
+    /// <summary>Whether a sort field is the entity's key, from which on the order lies within one parent.</summary>
+    private static bool IsKey(BoundSortField field) => field.Path.Storage == KeyStorage && field.Path.Root.StoragePrefix.Length == 0;
+
+    /// <summary>Whether a path is a member of the entity's own row: it holds the same value before and after an unwind.</summary>
+    private static bool IsOfEntity(ResolvedPath path) => path.Root is ShapeNode.Entity { StoragePrefix.Length: 0 } && path.Storage is not null;
+
+    /// <summary>
+    /// The sort fields that order the parents: those up to the key, with the key where the request
+    /// sorts on it (it has a direction there); what follows the key orders the rows of one parent.
+    /// </summary>
+    private static List<BoundSortField> ParentFields(IReadOnlyList<BoundSortField> sortFields)
+    {
+        var fields = sortFields.TakeWhile(field => !IsKey(field)).ToList();
+
+        if (fields.Count < sortFields.Count)
+            fields.Add(sortFields[fields.Count]);
+
+        return fields;
+    }
+
+    /// <summary>
+    /// What the matches between an unwind and the page (or the group) ask, split by what each
+    /// top-level condition reads: only the element under the alias (<see cref="Element"/>), only the
+    /// entity's own members (<see cref="Parent"/>), or anything else, which makes the split inexact.
+    /// </summary>
+    private sealed record UnwindFilter(IReadOnlyList<BoundCondition> Element, IReadOnlyList<BoundCondition> Parent, bool Exact)
+    {
+        /// <summary>The paths the element conditions read, in the order they are written.</summary>
+        public IReadOnlyList<string> ElementPaths => Element.SelectMany(Paths).Select(path => path.Wire).Distinct(StringComparer.Ordinal).ToList();
+
+        public static UnwindFilter Of(BoundPipeline bound, int at)
+        {
+            var unwind = (BoundStage.Unwind)bound.Stages[at];
+            var element = new List<BoundCondition>();
+            var parent = new List<BoundCondition>();
+            var exact = true;
+
+            foreach (var stage in bound.Stages.Skip(at + 1).TakeWhile(stage => stage is not BoundStage.Group))
+            {
+                if (stage is not BoundStage.Match match)
+                    continue;
+
+                foreach (var condition in Conjuncts(match.Condition))
+                {
+                    var paths = Paths(condition).ToList();
+
+                    if (paths.Count == 0 || SemiJoins(condition))
+                        exact = false;
+                    else if (unwind.As is { } alias && paths.All(path => Under(path, alias) && path.Storage is not null))
+                        element.Add(condition);
+                    else if (paths.All(path => IsOfEntity(path) && !Covers(unwind.Path.Storage!, path.Storage!)))
+                        parent.Add(condition);
+                    else
+                        exact = false;
+                }
+            }
+
+            return new UnwindFilter(element, parent, exact);
+        }
+
+        private static IEnumerable<BoundCondition> Conjuncts(BoundCondition condition) =>
+            condition is BoundCondition.And and ? and.Conditions.SelectMany(Conjuncts) : [condition];
+
+        private static bool SemiJoins(BoundCondition condition) => condition switch
+        {
+            BoundCondition.And and => and.Conditions.Any(SemiJoins),
+            BoundCondition.Or or => or.Conditions.Any(SemiJoins),
+            BoundCondition.Not not => SemiJoins(not.Condition),
+            BoundCondition.Any any => SemiJoins(any.Inner),
+            BoundCondition.Leaf leaf => leaf.IsSemiJoin,
+            _ => true,
+        };
+    }
+
+    /// <summary>
+    /// The filter asked of a row before its collection is unwound; null when there is nothing to ask.
+    /// The conditions on the element, written after the unwind, as one <c>$elemMatch</c>: some element
+    /// passes them all, which is exactly "the row yields a row after the unwind and its filters".
+    /// With <paramref name="parents"/> (the parents are cut before the unwind) every row kept has to
+    /// yield one, so the conditions on the entity's own members are asked here as well, and a row
+    /// whose collection holds nothing is dropped where the unwind would drop it.
+    /// </summary>
+    private static BsonDocument? UnwindPrefilter(BoundPipeline bound, int at, bool collated, bool parents)
+    {
+        var unwind = (BoundStage.Unwind)bound.Stages[at];
+        var filter = UnwindFilter.Of(bound, at);
+        var conditions = new BsonArray();
+        var storage = unwind.Path.Storage!;
+
+        if (parents)
+            foreach (var condition in filter.Parent)
+                conditions.Add(Filter(condition, null, collated));
+
+        if (filter.Element.Count > 0 && unwind is { PreserveNull: false, Flatten: null, As: not null })
+        {
+            var asked = new BsonArray(filter.Element.Select(condition => (BsonValue)Renamed(Filter(condition, null, collated), (unwind.As!, ""))));
+
+            conditions.Add(new BsonDocument(storage, new BsonDocument("$elemMatch", asked.Count == 1 ? asked[0] : new BsonDocument("$and", asked))));
+        }
+        else if (parents && !unwind.PreserveNull)
+        {
+            // What an unwind that does not preserve drops: a collection that is missing, null or empty.
+            conditions.Add(new BsonDocument(storage, new BsonDocument("$nin", new BsonArray { BsonNull.Value, new BsonArray() })));
+        }
+
+        return conditions.Count switch
+        {
+            0 => null,
+            1 => conditions[0].AsBsonDocument,
+            _ => new BsonDocument("$and", conditions),
+        };
+    }
+
+    /// <summary>
+    /// A filter or sort document with every field path under <c>renamed.Alias</c> read under
+    /// <c>renamed.Storage</c> instead (the element where the unwind left it; an empty storage reads it
+    /// relative to the element, inside <c>$elemMatch</c>). The values are the document's own, so a
+    /// semi-join slot in it is still the slot the executor fills. Null leaves the document as it is.
+    /// </summary>
+    private static BsonDocument Renamed(BsonDocument document, (string Alias, string Storage)? renamed)
+    {
+        if (renamed is not { } rename)
+            return document;
+
+        var result = new BsonDocument();
+
+        foreach (var element in document)
+        {
+            if (element.Name is "$and" or "$or" or "$nor" && element.Value is BsonArray conditions)
+                result.Add(element.Name, new BsonArray(conditions.Select(condition => condition is BsonDocument inner ? Renamed(inner, renamed) : condition)));
+            else if (element.Name.StartsWith(rename.Alias + ".", StringComparison.Ordinal))
+                result.Add(rename.Storage.Length == 0 ? element.Name[(rename.Alias.Length + 1)..] : rename.Storage + element.Name[rename.Alias.Length..], element.Value);
+            else if (element.Name == rename.Alias && rename.Storage.Length > 0)
+                result.Add(rename.Storage, element.Value);
+            else
+                result.Add(element.Name, element.Value);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The legs of a page's total order with the values of the cursor's position: the sort fields,
+    /// then the key unless a sort field is it or the rows have none (<paramref name="key"/>: groups),
+    /// then the position of each unwind not sorted on already. It mirrors the emitted <c>$sort</c>.
+    /// </summary>
+    private static List<KeysetField> Legs(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields, bool key, IReadOnlyList<string> indexes, (string Alias, string Storage)? renamed = null)
+    {
+        BsonValue At(string wire) => cursor.Fields.FirstOrDefault(value => value.Wire == wire)?.Value ?? BsonNull.Value;
+
+        string Stored(string storage) => renamed is not { } rename ? storage
+            : storage == rename.Alias ? rename.Storage
+            : storage.StartsWith(rename.Alias + ".", StringComparison.Ordinal) ? rename.Storage + storage[rename.Alias.Length..]
+            : storage;
+
+        var legs = new List<KeysetField>();
+
+        foreach (var field in sortFields)
+            if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
+                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)));
+
+        if (key && !legs.Any(leg => leg.Storage == KeyStorage))
+            legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
+
+        foreach (var index in indexes)
+            if (!legs.Any(leg => leg.Storage == index))
+                legs.Add(new KeysetField(index, true, At(index)));
+
+        return legs;
+    }
+
+    /// <summary>
+    /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it
+    /// on): the null-aware predicate over every leg and, with <paramref name="ranged"/>, the one range
+    /// on the leading leg it implies, first.
+    /// </summary>
+    private static List<BsonDocument> KeysetConjuncts(IReadOnlyList<KeysetField> legs, bool ranged, bool inclusive = false)
+    {
+        var conjuncts = new List<BsonDocument>();
+
+        if (ranged && KeysetPredicate.LeadingRange(legs) is { } range)
+            conjuncts.Add(range);
+
+        conjuncts.Add(KeysetPredicate.After(legs, inclusive));
+
+        return conjuncts;
     }
 
     /// <summary>
@@ -814,7 +1178,7 @@ public static class MongoCompiler
         return new BsonDocument { ["locale"] = collation.Locale, ["strength"] = collation.Strength };
     }
 
-    private static BsonDocument KeysetFrom(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields)
+    private static List<KeysetField> KeysetFrom(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields)
     {
         var fields = new List<KeysetField>();
         BsonValue key = BsonNull.Value;
@@ -835,7 +1199,9 @@ public static class MongoCompiler
             fields.Add(new KeysetField(sortField.Path.Storage!, value.Ascending, value.Value));
         }
 
-        return KeysetPredicate.Build(fields, KeyStorage, key);
+        fields.Add(new KeysetField(KeyStorage, true, key));
+
+        return fields;
     }
 
     // ---- filters ----------------------------------------------------------------------------

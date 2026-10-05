@@ -127,6 +127,15 @@ public sealed partial class MongoQueryEngine
             if (draft.Indexes[position] is { } projected)
                 draft.Notes.Add(Notes.LateProjection(projected));
 
+        if (compiled.Unwind is { } placed && bound.Stages[placed.Position] is BoundStage.Unwind unwound && draft.Indexes[placed.Position] is { } unwoundAt)
+        {
+            if (placed.ParentsFirst)
+                draft.Notes.Add(Notes.ParentsFirst(unwoundAt, unwound.Path.Wire, unwound.As));
+
+            if (placed.Prefiltered.Count > 0)
+                draft.Notes.Add(Notes.Prefiltered(unwoundAt, unwound.Path.Wire, unwound.As, placed.Prefiltered));
+        }
+
         // A request this host cannot run is not valid, though it binds: the same refusal the query
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)

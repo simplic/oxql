@@ -148,7 +148,9 @@ otherwise; a request that folds nothing runs without a collation, exactly as bef
 **Why a collation, and why `de` at strength 1.** People type a search the way they say it,
 without the case or the diacritics of the stored value. Primary strength is the one level that
 folds both; strength 2 folds case only, 3 and above fold neither. A case-insensitive pattern
-cannot do the same: its `i` flag folds case but not accents, it cannot express an ordered
+cannot do the same by itself: its `i` flag folds case but not accents (the engine writes the
+accents into the pattern of `contains` and `endsWith`, letter by letter, from the collation's own
+data for the Latin-1 and Latin Extended-A letters), it cannot express an ordered
 comparison or a sort, and it cannot be bounded by an index, so it walks every key of the index
 it uses. A collated comparison, sort and group key fold consistently in one aggregate and can be
 served by an index built with the same collation. `de` is the default because German is the
@@ -160,7 +162,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 | `eq neq in nin` on a string | folds case and accents; `options.caseSensitive: true` compares exactly |
 | `gt gte lt lte` on a string | orders under the collation; cannot opt out (`OPTION_NOT_APPLICABLE`) |
 | `startsWith` | a range under the collation, folds case and accents; `caseSensitive` compares exactly |
-| `contains`, `endsWith` | a pattern with the `i` flag: folds case, not accents; `caseSensitive` compares exactly |
+| `contains`, `endsWith` | a pattern with the `i` flag in which each letter of the operand is the class of the letters of its primary weight, and `ss` and `ß` stand for each other: folds case and accents as the collation does at strength 1 (at strength 2 and above the collation tells accents apart, and so does the pattern); `caseSensitive` compares exactly. Never index-served: it reads every candidate row |
 | `regex` | the caller's pattern as written, never folded; `caseSensitive` does not apply |
 | sort on a string | orders under the collation; `{ "direction": …, "caseSensitive": true }` orders by byte value, only in a request where nothing else folds (`OPTION_NOT_APPLICABLE` otherwise) |
 | group key on a string | folds: `Open` and `OPEN` are one group, reported under the first value met |

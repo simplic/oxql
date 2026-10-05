@@ -62,7 +62,7 @@ public class CaseInsensitiveTests
     }
 
     [Fact]
-    public async Task CI01_with_no_option_eq_neq_in_nin_and_startsWith_fold_case_and_accents()
+    public async Task CI01_with_no_option_every_string_operator_folds_case_and_accents()
     {
         var staff = await Staff();
 
@@ -79,9 +79,17 @@ public class CaseInsensitiveTests
         (await Ids(staff, """{ "matchCode": { "startsWith": "MU" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("mu", StringComparison.Ordinal)));
         (await Ids(staff, """{ "matchCode": { "startsWith": "arr-" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("arr-", StringComparison.Ordinal)));
 
-        // contains and endsWith are a regex with i: case only, so ÜLL misses Muller.
-        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL" } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code).Contains("üll", StringComparison.Ordinal)));
-        (await Ids(staff, """{ "matchCode": { "endsWith": "ER" } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code).EndsWith("er", StringComparison.Ordinal)));
+        // contains and endsWith are patterns that fold accents as the collation does (DG2 M10): ÜLL finds Muller, ull finds MÜLLER.
+        var ull = Codes(code => Order.FoldCi(code).Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
+
+        ull.Should().Contain(Folded("Muller")).And.Contain(Folded("MÜLLER"));
+        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL" } }""")).Should().Equal(ull);
+        (await Ids(staff, """{ "matchCode": { "contains": "ull" } }""")).Should().Equal(ull);
+        (await Ids(staff, """{ "matchCode": { "endsWith": "ER" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).EndsWith("er", StringComparison.Ordinal)));
+        (await Ids(staff, """{ "matchCode": { "endsWith": "üller" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).EndsWith(Order.FoldCi("üller"), StringComparison.Ordinal)));
+
+        // caseSensitive: true is the exact text, accents and case as written.
+        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL", "options": { "caseSensitive": true } } }""")).Should().Equal(Codes(code => code.Contains("ÜLL", StringComparison.Ordinal)));
     }
 
     [Fact]

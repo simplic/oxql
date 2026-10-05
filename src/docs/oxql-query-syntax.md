@@ -148,7 +148,12 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 - A comparison on a `string` member folds case and accents: `muller` matches `Müller` and
   `MÜLLER`. The request then runs under the host's collation (German, primary strength, unless
   configured otherwise), `eq neq in nin gt gte lt lte` compare under it, `startsWith` is a
-  range under it, and `contains` and `endsWith` are patterns, which fold case but not accents.
+  range under it, and `contains` and `endsWith` are patterns that fold case and accents the same
+  way: each letter of the operand stands for every letter of its primary weight (`u` for
+  `u ù ú û ü …`, `ss` and `ß` for each other), so `ull` finds `MÜLLER` and `ÜLL` finds `Muller`.
+  A pattern is not served by an index: `contains` and `endsWith` read every candidate row, while
+  `eq` and `startsWith` are bounded by an index of the same collation. An operand whose pattern
+  outgrows the server's 32 KB limit is `INVALID_OPERAND` (some 800 letters).
   A request that compares, sorts and groups no string runs without a collation.
 - `options.caseSensitive: true` compares exactly. It applies to `eq neq in nin contains
   startsWith endsWith` on `string` members (`OPTION_NOT_APPLICABLE` elsewhere: an ordered

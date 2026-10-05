@@ -84,7 +84,7 @@
     "notes": [
       {"code":"TEXT_FOLDS","message":"'sort' on 'number' folds case and accents (collation de, strength 1).","stage":2,"path":"number","params":{"locale":"de","strength":1,"op":"sort"}},
       {"code":"NEQ_MATCHES_ABSENT","message":"'neq' on 'isDeleted' also matches rows where the member is absent or null.","path":"isDeleted","filter":"removeDeleted","params":{"op":"neq"}},
-      {"code":"PATTERN_FOLDS_CASE_ONLY","message":"'contains' on 'item.text' runs as a pattern: it folds case but not accents.","path":"item.text","filter":"col:text","params":{"op":"contains"}},
+      {"code":"PATTERN_FOLDS","message":"'contains' on 'item.text' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.","path":"item.text","filter":"col:text","params":{"locale":"de","strength":1,"op":"contains","accents":true}},
       {"code":"TEXT_FOLDS","message":"'startsWith' on 'number' folds case and accents (collation de, strength 1).","path":"number","filter":"preset:first","params":{"locale":"de","strength":1,"op":"startsWith"}}
     ],
     "entry": {

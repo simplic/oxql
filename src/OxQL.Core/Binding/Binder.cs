@@ -1430,7 +1430,11 @@ public sealed class Binder
             // is bound, so it is checked then.
             var isPattern = op is "contains" or "startsWith" or "endsWith" || (ignoreCase && !contract2);
 
-            if (isPattern && !TextFits(operand))
+            // A folding contains or endsWith is a pattern that folds accents too (DG2 M10): each letter
+            // is a class of its equivalents, and it is that pattern the server has to compile.
+            var foldsAccents = contract2 && ignoreCase && op is "contains" or "endsWith" && AccentFold.Applies(options.Representation.Collation);
+
+            if (isPattern && (foldsAccents ? !TextsOf(operand).All(text => RegexGuard.PatternFits(AccentFold.Pattern(text, options.Representation.Collation))) : !TextFits(operand)))
             {
                 errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, condition.Path), index, condition.Path));
                 return null;

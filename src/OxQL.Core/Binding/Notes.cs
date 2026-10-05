@@ -18,8 +18,15 @@ public static class Notes
     /// <summary>A string comparison, sort or group key folds case and accents under the host's collation (params <c>locale</c>, <c>strength</c>, <c>op</c>).</summary>
     public const string TextFolds = "TEXT_FOLDS";
 
-    /// <summary>A folding comparison that runs as a pattern folds case only, not accents (params <c>op</c>).</summary>
+    /// <summary>A folding comparison that runs as a pattern folds case only, not accents (params <c>op</c>). Contract 1 only: a contract 2 pattern folds what its collation folds (<see cref="PatternFolds"/>).</summary>
     public const string PatternFoldsCaseOnly = "PATTERN_FOLDS_CASE_ONLY";
+
+    /// <summary>
+    /// <c>contains</c> or <c>endsWith</c> folds case, and accents when the collation does, as a pattern:
+    /// no index bounds it, it reads every candidate row (params <c>op</c>, <c>locale</c>,
+    /// <c>strength</c>, <c>accents</c>).
+    /// </summary>
+    public const string PatternFolds = "PATTERN_FOLDS";
 
     /// <summary>An exact sort makes every string comparison, sort and group key of the request exact as well (params <c>op</c>).</summary>
     public const string ExactForcesExact = "EXACT_FORCES_EXACT";
@@ -99,6 +106,7 @@ public static class Notes
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
+        PatternFolds,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -567,6 +575,8 @@ public static class Notes
             {
                 if (bound.Collated && leaf.Op is not ("contains" or "endsWith"))
                     Folds(stage, wire, leaf.Op);
+                else if (bound.Collated)
+                    PatternFolds(stage, wire, leaf.Op);
                 else
                     Add(PatternFoldsCaseOnly, stage, wire, $"'{leaf.Op}' on '{wire}' runs as a pattern: it folds case but not accents.", new() { ["op"] = leaf.Op });
             }
@@ -591,6 +601,17 @@ public static class Notes
                 Add(ExactForcesExact, stage, field.Path.Wire,
                     $"The sort on '{field.Path.Wire}' is exact: every other string comparison, sort and group key of the request must be caseSensitive too.",
                     new() { ["op"] = "sort" });
+        }
+
+        /// <summary>A contract 2 contains or endsWith: what it folds under the collation, and that it is a pattern no index bounds.</summary>
+        public void PatternFolds(int? stage, string wire, string op)
+        {
+            var collation = options.Representation.Collation;
+            var accents = AccentFold.Applies(collation);
+
+            Add(Binding.Notes.PatternFolds, stage, wire,
+                $"'{op}' on '{wire}' folds case{(accents ? " and accents" : "")} (collation {collation.Locale}, strength {collation.Strength}) as a pattern{(accents ? "" : "; this strength tells accents apart")}: no index bounds it, it reads every candidate row.",
+                new() { ["locale"] = collation.Locale, ["strength"] = collation.Strength, ["op"] = op, ["accents"] = accents });
         }
 
         public void Folds(int? stage, string wire, string op)

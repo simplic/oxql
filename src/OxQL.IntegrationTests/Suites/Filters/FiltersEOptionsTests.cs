@@ -118,17 +118,18 @@ public class FiltersEOptionsTests
     }
 
     [Fact]
-    public async Task E61_contains_and_endsWith_fold_case_only_and_startsWith_folds_case_and_accents()
+    public async Task E61_contains_endsWith_and_startsWith_fold_case_and_accents()
     {
-        IReadOnlyList<Guid> CaseOnly(Func<string, bool> test) => Codes(code => test(Order.FoldCaseOnly(code)));
+        IReadOnlyList<Guid> CaseOnly(Func<string, bool> test) => Codes(code => test(Order.FoldCi(code)));
 
-        var contains = CaseOnly(code => code.Contains(Order.FoldCaseOnly("ÜLL"), StringComparison.Ordinal));
-        contains.Should().Equal(Keys(Corpus.Employee, MullerCased), "Muller has no Ü, and a regex folds no accent");
+        // DG2 M10: the pattern of contains and endsWith folds accents as the collation does.
+        var contains = CaseOnly(code => code.Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
+        contains.Should().Contain(Keys(Corpus.Employee, MullerFolded), "Muller has no Ü, and the pattern folds the accent");
 
         var prefix = Codes(code => Order.FoldCi(code).StartsWith(Order.FoldCi("mÜ"), StringComparison.Ordinal));
         prefix.Should().Equal(Keys(Corpus.Employee, MullerFolded), "the prefix range runs under the collation");
 
-        var suffix = CaseOnly(code => code.EndsWith(Order.FoldCaseOnly("LLER"), StringComparison.Ordinal));
+        var suffix = CaseOnly(code => code.EndsWith(Order.FoldCi("LLER"), StringComparison.Ordinal));
         suffix.Should().Equal(Keys(Corpus.Employee, MullerFolded));
 
         var staff = await StaffClient();
@@ -213,7 +214,7 @@ public class FiltersEOptionsTests
     public async Task E44_notContains_arrives_as_not_contains_and_answers_the_complement_either_way()
     {
         // The client's half (the bytes) is a client spec; the engine half is what the two bodies answer.
-        var folded = Codes(code => Order.FoldCaseOnly(code).Contains(Order.FoldCaseOnly("ÜLL"), StringComparison.Ordinal));
+        var folded = Codes(code => Order.FoldCi(code).Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
         var exact = Codes(code => code.Contains("ÜLL", StringComparison.Ordinal));
         exact.Should().Equal(Employee("case-upper"));
         folded.Count.Should().BeGreaterThan(exact.Count);

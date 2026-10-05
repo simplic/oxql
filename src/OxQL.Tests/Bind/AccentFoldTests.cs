@@ -1,0 +1,60 @@
+using System.Text.RegularExpressions;
+using FluentAssertions;
+using OxQL.Core.Binding;
+using OxQL.Core.Models;
+using Xunit;
+
+namespace OxQL.Tests.Bind;
+
+/// <summary>
+/// DG2 M10: the pattern <c>contains</c> and <c>endsWith</c> run as folds accents the way the
+/// request's collation does. Each letter is the class of the characters that share its primary
+/// weight, <c>ss</c> and <c>ß</c> stand for each other, everything else is escaped. At a strength
+/// that tells accents apart the pattern is the escaped text.
+/// </summary>
+public class AccentFoldTests
+{
+    private static readonly CollationOptions German = new();
+
+    private static bool Finds(string operand, string stored) =>
+        Regex.IsMatch(stored, AccentFold.Pattern(operand, German), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    [Fact]
+    public void A_letter_is_the_class_of_its_equivalents_and_anything_else_is_escaped()
+    {
+        AccentFold.Pattern("a", German).Should().Be("[aÀÁÂÃÄÅàáâãäåĀāĂăĄą]");
+        AccentFold.Pattern("U", German).Should().Be("[uÙÚÛÜùúûüŨũŪūŬŭŮůŰűŲų]", "an upper-case operand folds to the same class");
+        AccentFold.Pattern("ü", German).Should().Be(AccentFold.Pattern("u", German), "an accented operand finds the plain letter too");
+        AccentFold.Pattern("1.5 (x)", German).Should().Be(@"1\.5\ \(x\)", "digits and punctuation match themselves, escaped");
+        AccentFold.Pattern("", German).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("muller", "Müller")]
+    [InlineData("MÜLL", "muller")]
+    [InlineData("ull", "MÜLLER")]
+    [InlineData("strasse", "Hauptstraße")]
+    [InlineData("straße", "HAUPTSTRASSE")]
+    [InlineData("francois", "François")]
+    [InlineData("Šk", "skoda")]
+    [InlineData("a.b", "A.B")]
+    public void An_operand_finds_the_stored_text_whatever_its_accents_and_case(string operand, string stored) =>
+        Finds(operand, stored).Should().BeTrue();
+
+    [Theory]
+    [InlineData("muller", "Mueller")]
+    [InlineData("a.b", "axb")]
+    [InlineData("ss", "s")]
+    public void It_finds_nothing_the_collation_tells_apart(string operand, string stored) =>
+        Finds(operand, stored).Should().BeFalse();
+
+    [Fact]
+    public void A_strength_that_tells_accents_apart_keeps_the_text_as_written()
+    {
+        var secondary = new CollationOptions { Strength = 2 };
+
+        AccentFold.Applies(secondary).Should().BeFalse();
+        AccentFold.Pattern("Müller.", secondary).Should().Be(@"Müller\.");
+        AccentFold.Applies(German).Should().BeTrue();
+    }
+}

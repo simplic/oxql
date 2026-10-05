@@ -41,13 +41,14 @@ public class ExplainNotesTests
         Notes.All.Should().Equal(
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
-            "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER");
+            "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER",
+            "PATTERN_FOLDS");
         Notes.All.Except([Notes.ExplainLimit]).Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue; only an explain limit is both a refusal (past a bound, before binding) and a note (hit mid-way)");
     }
 
     [Fact]
-    public async Task A_folding_comparison_says_its_collation_and_a_folding_pattern_that_it_folds_case_only()
+    public async Task A_folding_comparison_says_its_collation_and_a_folding_pattern_what_it_folds_and_that_no_index_bounds_it()
     {
         var notes = await NotesAsync("""[{ "match": { "and": [{ "number": { "eq": "re-1" } }, { "number": { "contains": "e-" } }] } }]""");
 
@@ -57,7 +58,13 @@ public class ExplainNotesTests
         folds.Params!["op"].Should().Be("eq");
         folds.Params["locale"].Should().Be(BindHost.Options().Representation.Collation.Locale);
         folds.Params["strength"].Should().Be(BindHost.Options().Representation.Collation.Strength);
-        Single(notes, Notes.PatternFoldsCaseOnly).Params!["op"].Should().Be("contains");
+
+        // contains and endsWith fold what the collation folds, as a pattern (DG2 M10).
+        var pattern = Single(notes, Notes.PatternFolds);
+
+        pattern.Message.Should().Be("'contains' on 'number' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.");
+        System.Text.Json.JsonSerializer.Serialize(pattern.Params).Should().Be("""{"locale":"de","strength":1,"op":"contains","accents":true}""");
+        notes.Should().NotContain(note => note.Code == Notes.PatternFoldsCaseOnly, "that is what a contract 1 pattern does");
 
         (await NotesAsync("""[{ "match": { "number": { "eq": "RE-1", "options": { "caseSensitive": true } } } }]""")).Should().NotContain(note => note.Code == Notes.TextFolds);
     }

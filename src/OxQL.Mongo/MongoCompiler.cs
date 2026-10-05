@@ -191,10 +191,35 @@ public static class MongoCompiler
         Exact,
     }
 
+    /// <summary>
+    /// The collation of the aggregate being compiled on this thread, which a folding
+    /// <c>contains</c> or <c>endsWith</c> builds its accent-folding pattern by (DG2 M10). A filter
+    /// compiled outside <see cref="Compile"/> folds by the default collation.
+    /// </summary>
+    [ThreadStatic]
+    private static CollationOptions? folding;
+
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(options);
+
+        var outer = folding;
+
+        folding = options.Collation ?? new CollationOptions();
+
+        try
+        {
+            return CompileUnder(bound, options);
+        }
+        finally
+        {
+            folding = outer;
+        }
+    }
+
+    private static CompiledQuery CompileUnder(BoundPipeline bound, CompileOptions options)
+    {
 
         var page = bound.Page;
         var stages = new List<BsonDocument>();
@@ -883,12 +908,16 @@ public static class MongoCompiler
             // The binder refuses a text operator on a member that holds no text, so `value`
             // is a string by the time it gets here; Text() renders any other type rather than
             // casting it.
+            // Under the collation a pattern folds accents itself: every letter is the class of its
+            // equivalents, so contains and endsWith find what eq and startsWith find. It is still a
+            // pattern: no index bounds it, and it reads every candidate row.
+            "contains" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
+            "endsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()) + "$", flags)),
             "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
             // Under the collation a prefix is the range from the prefix up to the prefix
             // followed by the highest character: every string that starts with it under the
-            // collation, accents and case folded, and nothing else. A pattern cannot fold
-            // accents, so the range is the only form that folds the way the rest of the
-            // aggregate does.
+            // collation, accents and case folded, and nothing else, and an index on the member
+            // bounds it, which no pattern does.
             "startsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonDocument { ["$gte"] = Text(value), ["$lt"] = Text(value) + AfterEveryCharacter }),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
             "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),

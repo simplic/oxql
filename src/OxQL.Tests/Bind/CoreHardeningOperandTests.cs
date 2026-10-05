@@ -57,8 +57,16 @@ public class CoreHardeningOperandTests
         await BindHost.BoundAsync(Model, Order, $$"""[{ "match": { "number": { "eq": "{{TooLong}}" } } }]""");
 
     [Fact]
-    public async Task A_long_text_operand_under_the_limit_still_binds() =>
-        await BindHost.BoundAsync(Model, Order, $$"""[{ "match": { "number": { "contains": "{{new string('a', 5_000)}}" } } }]""");
+    public async Task A_long_text_operand_under_the_limit_still_binds()
+    {
+        await BindHost.BoundAsync(Model, Order, $$"""[{ "match": { "number": { "contains": "{{new string('a', 500)}}" } } }]""");
+        await BindHost.BoundAsync(Model, Order, $$"""[{ "match": { "number": { "contains": "{{new string('1', 5_000)}}" } } }]""");
+        await BindHost.BoundAsync(Model, Order, $$"""[{ "match": { "number": { "contains": "{{new string('a', 5_000)}}", "options": { "caseSensitive": true } } } }]""");
+
+        // A folding contains is the pattern that folds accents (DG2 M10): each letter is the class of
+        // its equivalents, and it is that pattern the limit holds.
+        await BindHost.ErrorAsync(Model, Order, $$"""[{ "match": { "number": { "contains": "{{new string('a', 5_000)}}" } } }]""", Codes.InvalidOperand);
+    }
 
     [Fact]
     public async Task A_regex_longer_than_the_database_compiles_is_refused_whatever_the_host_allows()

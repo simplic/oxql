@@ -132,7 +132,7 @@ public class RegisterCasesTests
     public async Task F12_ignoreCase_restates_the_fold_every_string_operator_makes_under_the_collation()
     {
         (await Filter("""[{ "match": { "number": { "startsWith": "templatename", "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $gte: 'templatename', $lt: 'templatename￿' } }"));
-        (await Filter("""[{ "match": { "number": { "endsWith": "NAME 1", "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: /NAME\\ 1$/i }"));
+        (await Filter("""[{ "match": { "number": { "endsWith": "NAME 1", "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(new BsonDocument("Number", new BsonRegularExpression(AccentFold.Pattern("NAME 1", new OxQL.Core.Models.CollationOptions()) + "$", "i")));
         (await Filter("""[{ "match": { "number": { "in": ["templatename 1"], "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $in: [ 'templatename 1' ] } }"));
         await Error("""[{ "match": { "number": { "regex": "^templatename", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
     }

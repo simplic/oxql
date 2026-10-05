@@ -748,7 +748,9 @@ Nothing else changes compared with a plain remote resolve:
   continued stages at explain is given what is left of its origin's explain (time and owner calls) and
   asks its own owners only within it, so a slow second owner comes back unchecked (`REMOTE_UNCHECKED`,
   or `EXPLAIN_LIMIT` when the explain's own time ran out) and one explain never causes more than
-  `Explain:MaxOwnerCalls` owner calls in all.
+  `Explain:MaxOwnerCalls` owner calls in all. The conditions a run asks owners before the page
+  (the semi-joins) are checked in the same calls and within the same budget: a condition adds a
+  check to its owner's call, never a round, and one that was not asked is said to be unchecked.
 - **Cost.** Owner queries per level are bounded by stages × key chunks, and keys per level by the
   rows the previous level returned; the remaining limits are `MaxResolveKeys` (per request),
   `MaxContinuedStages`, the owner's `MaxBatchQueries` and the time ceiling.

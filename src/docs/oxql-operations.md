@@ -248,7 +248,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Explain:DefaultShapeDepth` / `MaxTypeMembers` | 2 (never above `MaxShapeDepth`) / 300 | only with `include: ["types"]`: the levels of member rows listed below each root when the request names no `shape.depth` / the member rows of one type, then `truncated` | — | no | by default an answer names its types and lists no member; an owner writes its rows out at the depth the origin was asked for |
 | `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the member rows (where asked for) keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
 | `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | the distinct owner services one explain asks / the owner calls it causes in all, one per service and round, transitive ones included | note `EXPLAIN_LIMIT` (`ownerServices`, `ownerCalls`) | no | an internal explain carries the calls left; an owner starts none beyond them |
-| `Explain:MaxBatchChecks` | 64 | the checks one internal explain carries (`checks`): what one round of an origin's explain asks one owner | origin: note `EXPLAIN_LIMIT` (`checks`) for what exceeds it; owner: 400 `EXPLAIN_LIMIT` before anything is bound | no | — |
+| `Explain:MaxBatchChecks` | 64 | the checks one internal explain carries (`checks`): what one round of an origin's explain asks one owner, one per remote target of a keyed stage and one per distinct condition asked of that owner | origin: note `EXPLAIN_LIMIT` (`checks`) for what exceeds it; owner: 400 `EXPLAIN_LIMIT` before anything is bound | no | — |
 | `Explain:RatePerMinute` / `RateBurst` | 120 / 30 | the public explain route, per organisation and user: a token bucket that admits an explain, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic; an explain that binds here and asks no owner costs nothing else |
 | `Explain:OwnerRatePerMinute` / `OwnerRateBurst` | 20 / 5 | the same identity: a second token bucket, charged once when an explain is about to make its first call to an owner | never a refusal: the explain asks no owner and answers from what is kept (`cache.complete: false`, note `EXPLAIN_LIMIT` with `params.limit: "ownerRate"`, `max`, `retryAfter`) | no | an answer kept by an earlier check is served without a charge |
 | `Explain:MaxConcurrentPerUser` / `MaxConcurrentPerHost` | 2 / 8 | explains in flight on the public route, per user and per host | 429 `EXPLAIN_LIMIT` (`concurrentPerUser`, `concurrentPerHost`) | no | — |
@@ -664,10 +664,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   list is then every operator a condition may carry, **not narrowed to the member's kind**, which
   only the owner's type says; a client narrows it by the owner's schema document or offers it as
   unchecked. An outcome member of a join that runs after the page (`outcomeAs` of a keyed or
-  remote resolve) is `joinedAfterPage` for every use. A run meets the owner's binder either way: a
-  condition whose operator the member's kind does not admit is refused (422 `RESOLVE_REFUSED` with
-  the owner's `INVALID_OPERAND`), although explain, which does not send a semi-join to its owner,
-  answers such a request `valid`. `sortVia` on a column of a join
+  remote resolve) is `joinedAfterPage` for every use. A condition that is written is checked at its
+  owner whatever `can.filter` lists (see *remote*, *Conditions at owners*): a run that the owner's
+  binder refuses (422 `RESOLVE_REFUSED` with the owner's `INVALID_OPERAND`) is a request explain
+  answers `valid: false` with that `INVALID_OPERAND`. `sortVia` on a column of a join
   that cannot order the page names the same member in a copy of the joined record the row embeds
   (`snapshotOf`), when that path sorts; the engine never applies it. **A member that is no result
   column** has the same answer by rule: `can.filter` is its flag set's `operators`, `can.sort` its
@@ -737,13 +737,42 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   share `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (a client that cannot explain,
   unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED` note with `params.reason`,
   never an error.
-  - *Rounds.* The checks go out in rounds. The first carries every owner query of every keyed stage;
+  - *Conditions at owners.* A condition on a member of another service's rows (a semi-join) is bound
+    by that owner when the query runs, before the page. Explain has the owner bind the query the run
+    sends it first for the condition (the condition relative to the target, the target field
+    projected, the first page with its count, at the run's page size), and never run it. What the
+    owner refuses is this request's error: the owner's code, message and `params`, with
+    `params.owner { service, entity, target, stage, path }`, under the path the caller wrote
+    (`recipient.id`), at the `match` stage that carries the condition, whose status is `error`; for
+    a condition of the request's `filter` at its entry instead (`filter`: the entry's id, or its
+    index; no `stage`; the entry's `status` in `filter[]` is `error`). The basis is the code's, as
+    for every owner error. What an owner's binder refuses of such a condition: `INVALID_OPERAND` (the
+    operator does not apply to the member's kind, or the operand is not of it), `UNKNOWN_PATH` (no
+    such member of the target), `NOT_FILTERABLE` (an object, a collection of objects, a member of
+    unknown kind), `UNKNOWN_ENUM_MEMBER`, `OPTION_NOT_APPLICABLE`, `NOT_STORED`,
+    `DECIMAL_TEXT_NOT_ORDERABLE`, `UNKNOWN_VARIANT` (all `model`), `INVALID_REGEX`, `OPERAND_NOT_ARRAY`,
+    `INVALID_PATH` (`request`) and `REGEX_TOO_LONG` (`limits`); one under the owner's addon bag is `organisation`
+    and keeps the owner's `params.addon`. An error at a
+    stage this host added to that query (the projection of the target field, the page) is said at
+    the condition too, since the run is refused for it all the same. A condition no owner was asked
+    for is never valid by silence: it leaves a `REMOTE_UNCHECKED` note at the same place, with
+    `path` and `params { service, target, reason, condition }` (`reason: "cached"` under the cached
+    tier without a kept answer, else `unsupported`, `unreachable`, `timeout`), or the
+    `EXPLAIN_LIMIT` note of the limit that left it out; `cache.complete` is then false and
+    `executable` is `unknown`, never `yes`. What only a run can tell stays a run's: more matching
+    rows than `MaxSemiJoinIds` (`SEMI_JOIN_TOO_LARGE`), an owner that does not answer then, a
+    matching owner row without the member the reference names.
+  - *Rounds.* The checks go out in rounds. The first carries every owner query of every keyed stage
+    and the query of every condition asked of an owner, a query several conditions share once;
     each owner service gets one call with all its checks (`POST internal/oxql/explain`, `checks`), and
     the services are asked at once. A further round asks again what a run asks again: a target whose
     owner refused only paths it lacks, without them (at most two more). What an earlier request (an
     explain or a run) learned a target lacks is dropped before the first round, so a warm explain needs
     one. An owner explains the checks of one call side by side and asks each of its own owners once per
-    round for all of them, so a transitive owner costs one call per round as well.
+    round for all of them, so a transitive owner costs one call per round as well. A condition adds
+    a check to the first round's call of its owner and no call: it costs a call of its own only when
+    everything else that owner is asked is kept and the condition's answer is not (another operand
+    is another query), and never a further round.
   - *Kept answers.* An owner's answer is kept 30 s by organisation, user, owner service, the revision
     of that owner's schema document and the forwarded body. An answer that names another revision of a
     service retires every answer kept for the old one, also those of other owners that reached it. An
@@ -755,7 +784,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     kept and no owner is asked, not for a check, not for a catalog entry and not for its health. What
     is not kept is left out and said: a `REMOTE_UNCHECKED` note with `params.reason: "cached"`, the
     owner listed with `answered: null`, `reason: "cached"` and no call, the alias `complete: false`
-    with `type: null`, `cache.complete: false`. What this host binds itself is all there. Once every
+    with `type: null`, `cache.complete: false`. A condition asked of an owner whose answer is not
+    kept is unchecked in the same way (the note carries its `path`), and `executable` is `unknown`:
+    the kept answers are per forwarded body, so a condition with another operand than the last
+    `check` saw is not known. What this host binds itself is all there. Once every
     owner answer is kept, the cached answer is the answer a `check` gives, with the same `etag`.
 - **The validator.** `etag` is a hash of the request (but not of `remote`), of who asks (the
   organisation and the user) and of the answer as it is written, less what differs between two
@@ -840,7 +872,8 @@ identity. Its body is what one round of an origin's explain asks the owner:
 `{ "answers": [ … ] }` with one entry per check, in order; an entry is null where a check was
 refused before binding or the budget ran out before it. An origin sends it through
 `IRemoteQueryClient.ExplainBatchAsync` (`IOxQLQueryService.ExplainBatchAsync` on the owner's side),
-for the remote check and for catalog entries of the owner's entities. An owner answers each check
+for the remote check (the owner queries of the keyed stages and of the conditions asked of the
+owner before the page) and for catalog entries of the owner's entities. An owner answers each check
 *slim*: what an origin reads and nothing it would compute itself and drop, namely `valid`,
 `contract`, `engine`, `revision`, `cache`, `errors`, the notes about the answer itself
 (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`), `stages` with `index`, `kind`, `status`,
@@ -872,7 +905,9 @@ through one mechanism, the **keyed fetch**, in two modes:
   path.
 - **By condition**, before the page: the semi-join. A condition on a member of a plain remote alias
   asks the owner for the matching target keys page by page, refuses above `MaxSemiJoinIds`, and
-  substitutes them as an `$in`. It exists for plain remote resolves only.
+  substitutes them as an `$in`. It exists for plain remote resolves only. The first of those
+  queries is what explain has the owner bind (`KeyedFetch.ConditionChecks`, the builder and the
+  page size a run uses), so explain refuses what the owner's binder refuses.
 
 Both modes share the owner query builder, the batching, the time budgets, the error mapping and the
 cache. The owner queries are ordinary OxQL queries, one per target and key chunk, in batches per

@@ -363,7 +363,11 @@ on a member of the alias is a semi-join (the owner supplies the matching ids; mo
 `MaxSemiJoinIds` is 422 `SEMI_JOIN_TOO_LARGE`), a `match` on the alias itself (`{ "veh": { "eq":
 null } }`, `{ "veh": { "exists": true } }`) is refused before the owner is called
 (`RESOLVE_NOT_FILTERABLE`), and a `sort` is refused (`RESOLVE_NOT_SORTABLE`). The owner binds a
-semi-join condition under its own default; `caseSensitive` travels to it as written.
+semi-join condition under its own default; `caseSensitive` travels to it as written. What the
+owner's binder refuses (an operator the member's kind does not take, an operand of another kind, a
+member the target does not have, a name that is no member of the enum) is 422 `RESOLVE_REFUSED`
+with the owner's error when run, and that error in explain, at the stage or the `filter` entry
+that carries the condition.
 A typed, item, converted, element-wise or continued remote alias takes no semi-join
 (`RESOLVE_NOT_FILTERABLE`).
 

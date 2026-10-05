@@ -236,7 +236,9 @@ queries (per owning service one call to the owner's internal batch route through
 assigns the answers per row. Answers are cached per target, organisation, key and the substituted
 owner query for `Cache:ResolveTtlSeconds`. A `match` on a member of a plain remote alias is a
 semi-join: the owner is asked for the matching ids first, and binds the condition under its own
-default; `caseSensitive` or `ignoreCase` travel to it as the caller wrote them.
+default; `caseSensitive` or `ignoreCase` travel to it as the caller wrote them. Explain has the
+owner bind that same query (never run it), so a condition the owner refuses is refused by explain
+as by a run, with the owner's code where the caller wrote the condition.
 
 A `resolve` or `lookup` on an alias another service returned is **continued**: it rides in the
 query sent to that owner, which binds it with its own model and answers enriched rows, and so on

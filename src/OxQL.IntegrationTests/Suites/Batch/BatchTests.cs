@@ -30,7 +30,7 @@ public class BatchTests
 
     private static JsonObject Query(string pipeline, object? variables = null) => Json.Request(Corpus.Employee, pipeline, variables);
 
-    private static JsonObject Heavy() => Json.Request(Corpus.Template, """[ { "sort": [ { "templateName": "desc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]""");
+    private static JsonObject Heavy() => Json.Request(Corpus.Template, """[ { "sort": [ { "templateName": "desc" } ] }, { "page": { "limit": 500, "count": true } } ]""");
 
     [Fact]
     public async Task R01_R02_R03_one_POST_carrying_queries_answers_200_with_one_full_body_per_entry_in_order()
@@ -147,18 +147,18 @@ public class BatchTests
         var all = All();
         var client = await Staff();
 
-        var first = await client.BatchAsync([Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "includeTotalCount": true } } ]""")]);
+        var first = await client.BatchAsync([Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "count": true } } ]""")]);
         first.Results[0].ShouldHaveIds([all[0], all[1]]).ShouldHaveTotal(all.Count);
         var cursor = first.Results[0].NextCursor;
         cursor.Should().NotBeNullOrEmpty();
 
         var second = await client.BatchAsync([
-            Query($$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "cursor": "{{cursor}}", "includeTotalCount": false } } ]"""),
-            Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Query($$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "cursor": "{{cursor}}", "count": false } } ]"""),
+            Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "count": true } } ]"""),
         ]);
 
         second.Results[0].ShouldHaveIds([all[2], all[3]]);
-        second.Results[0].TotalCount.Should().BeNull();
+        second.Results[0].ShouldCount("atLeast", 5, "page", because: "no count was asked: the two pages served four rows and a fifth is known to follow");
         second.Results[1].ShouldHaveIds([all[0], all[1]]).ShouldHaveTotal(all.Count);
     }
 
@@ -233,7 +233,7 @@ public class BatchTests
 
         var expected = Corpus.PageOf(Corpus.SortedIds(Corpus.Template, "templateName", descending: true), limit: 500);
         var generous = await client.BatchAsync([Heavy()], maxTimeMs: 30_000);
-        generous.Results[0].ShouldHaveIds(expected).ShouldHaveTotal(Corpus.Counts(Corpus.Template).A);
+        generous.Results[0].ShouldHaveIds(expected).ShouldCount("atLeast", 1_000, "budget");
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class BatchTests
 
         var answer = await (await Staff()).BatchAsync([
             Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]"""),
-            Query("""[ { "match": { "matchCode": { "eq": "DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } } ]"""),
+            Query("""[ { "match": { "matchCode": { "eq": "DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } } ]"""),
             Query("""[ { "project": { "id": 1, "group.displayKey": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500 } } ]"""),
         ]);
 

@@ -12,12 +12,17 @@ namespace OxQL.Tests.Bind;
 
 /// <summary>
 /// The number form of <c>page.includeTotalCount</c>: the request's own count cap, under the
-/// host's, contract 2 only; the boolean form is unchanged.
+/// host's. Since DG2 M3 the public contract 2 route asks with <c>count</c> (<see cref="PageCountTests"/>);
+/// <c>includeTotalCount</c> is what contract 1 and an internal call (a semi-join's owner query) keep,
+/// so the contract 2 cases here bind as an internal call.
 /// </summary>
 public class CountCapTests
 {
     private const string Order = "probe.order";
     private static readonly CompileOptions Options = new(10_000, null, 100_000);
+
+    /// <summary>An internal contract 2 call, which keeps <c>includeTotalCount</c>.</summary>
+    private static RequestContext Internal(OxQLOptions? options = null) => BindHost.Context(options) with { Internal = true };
 
     private static string Page(string includeTotalCount) => $$"""[{ "page": { "limit": 5, "includeTotalCount": {{includeTotalCount}} } }]""";
 
@@ -65,20 +70,20 @@ public class CountCapTests
     [Fact]
     public async Task A_cap_binds_under_the_hosts_cap_and_the_boolean_form_binds_as_before()
     {
-        var capped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"));
+        var capped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"), Internal());
 
         capped.Page.IncludeTotalCount.Should().BeTrue();
         capped.Page.CountCap.Should().Be(500);
 
-        var clamped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("10000000000"));
+        var clamped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("10000000000"), Internal());
 
         clamped.Page.CountCap.Should().Be(100_000, "the host's cap bounds the request's");
 
-        var hostCap = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"), BindHost.Context(BindHost.Options(options => options.Limits.CountCap = 200)));
+        var hostCap = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"), Internal(BindHost.Options(options => options.Limits.CountCap = 200)));
 
         hostCap.Page.CountCap.Should().Be(200);
 
-        var counted = await BindHost.BoundAsync(BindHost.Probe, Order, Page("true"));
+        var counted = await BindHost.BoundAsync(BindHost.Probe, Order, Page("true"), Internal());
 
         counted.Page.IncludeTotalCount.Should().BeTrue();
         counted.Page.CountCap.Should().BeNull();
@@ -90,7 +95,7 @@ public class CountCapTests
     [InlineData("1.5")]
     public async Task A_cap_that_is_not_a_positive_integer_is_refused(string cap)
     {
-        var error = await BindHost.ErrorAsync(BindHost.Probe, Order, Page(cap), Codes.InvalidPageLimit);
+        var error = await BindHost.ErrorAsync(BindHost.Probe, Order, Page(cap), Codes.InvalidPageLimit, Internal());
 
         error.Stage.Should().Be(0);
         error.Message.Should().Contain("positive integer");
@@ -113,8 +118,8 @@ public class CountCapTests
     [Fact]
     public async Task The_canonical_form_carries_the_cap_and_the_fingerprint_does_not()
     {
-        var capped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"));
-        var counted = await BindHost.BoundAsync(BindHost.Probe, Order, Page("true"));
+        var capped = await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"), Internal());
+        var counted = await BindHost.BoundAsync(BindHost.Probe, Order, Page("true"), Internal());
 
         capped.Canonical.Should().Contain("\"includeTotalCount\":500");
         counted.Canonical.Should().Contain("\"includeTotalCount\":true");
@@ -126,12 +131,12 @@ public class CountCapTests
     [Fact]
     public async Task The_count_pipeline_stops_at_the_requests_cap()
     {
-        var capped = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, Page("500")), Options);
+        var capped = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, Page("500"), Internal()), Options);
 
         capped.CountCap.Should().Be(500);
         capped.CountStages![^2].ShouldBeBson(BsonDocument.Parse("{ $limit: 501 }"));
 
-        var counted = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, Page("true")), Options);
+        var counted = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, Page("true"), Internal()), Options);
 
         counted.CountCap.Should().Be(100_000);
         counted.CountStages![^2].ShouldBeBson(BsonDocument.Parse("{ $limit: 100001 }"));
@@ -162,7 +167,7 @@ public class CountCapTests
     public async Task Explain_shows_the_cap_in_the_bound_form_and_in_the_count_pipeline()
     {
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options());
-        var outcome = await engine.ExplainAsync(OxQL.Tests.Execute.ExplainAnswer.Planned(BindHost.Request(Order, Page("500"))), BindHost.Context());
+        var outcome = await engine.ExplainAsync(OxQL.Tests.Execute.ExplainAnswer.Planned(BindHost.Request(Order, Page("500"))), Internal());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         explain.Plan!.Bound["page"]!["includeTotalCount"]!.GetValue<int>().Should().Be(500);
@@ -171,7 +176,7 @@ public class CountCapTests
 
     private static async Task<QueryResult> Success(MongoQueryEngine engine, string pipeline)
     {
-        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline), BindHost.Context());
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline), Internal());
 
         outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
 

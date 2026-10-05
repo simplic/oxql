@@ -145,7 +145,7 @@ public sealed class LabClient
     /// </summary>
     public async Task<IReadOnlyList<Guid>> MatchIdsAsync(string entityType, object condition, int limit = 500)
     {
-        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": {{limit}}, "includeTotalCount": true } }]""");
+        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": {{limit}}, "count": true } }]""");
 
         answer.ShouldBeOk();
         answer.HasNextPage.Should().BeFalse($"MatchIdsAsync needs the whole set in one page: {answer}");
@@ -153,14 +153,33 @@ public sealed class LabClient
         return answer.Ids();
     }
 
-    /// <summary>The number of rows a condition matches, read off <c>includeTotalCount</c>.</summary>
+    /// <summary>The number of rows a condition matches: a count-only request with a budget that lets the count finish.</summary>
     public async Task<long> MatchCountAsync(string entityType, object condition)
     {
-        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var answer = await CountOnlyAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }]""");
 
         answer.ShouldBeOk();
+        answer.CountState.Should().Be("exact", answer.ToString());
 
-        return answer.TotalCount ?? throw new InvalidOperationException($"The engine answered no totalCount: {answer}");
+        return answer.TotalCount ?? throw new InvalidOperationException($"The engine answered no count: {answer}");
+    }
+
+    /// <summary>
+    /// The count-only request over <paramref name="stages"/> (a JSON array without a page): <c>limit: 0</c>
+    /// with <c>count</c>, refined within <paramref name="budgetMs"/> and, when given, no further than <paramref name="upTo"/>.
+    /// </summary>
+    public Task<WireAnswer> CountOnlyAsync(string entityType, object stages, int budgetMs = 5_000, int? upTo = null)
+    {
+        var pipeline = Json.Node(stages) as JsonArray ?? throw new ArgumentException("The stages are a JSON array.", nameof(stages));
+        var count = new JsonObject { ["budgetMs"] = budgetMs };
+
+        if (upTo is not null)
+            count["upTo"] = upTo;
+
+        pipeline = (JsonArray)pipeline.DeepClone();
+        pipeline.Add(new JsonObject { ["page"] = new JsonObject { ["limit"] = 0, ["count"] = count } });
+
+        return SendAsync(entityType, pipeline);
     }
 
     /// <summary>

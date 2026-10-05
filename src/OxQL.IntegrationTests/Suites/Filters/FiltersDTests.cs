@@ -157,7 +157,7 @@ public class FiltersDTests
         var expected = Corpus.AllIds(Corpus.Employee);
 
         var answer = await (await StaffClient()).SendAsync(Corpus.Employee, """
-            [ { "match": {} }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]
+            [ { "match": {} }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -167,7 +167,7 @@ public class FiltersDTests
     public async Task D16_the_folded_away_or_the_client_sends_as_an_empty_id_set_matches_no_row_and_counts_zero()
     {
         var answer = await (await StaffClient()).SendAsync(Corpus.Employee, """
-            [ { "match": { "id": { "in": [] } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]
+            [ { "match": { "id": { "in": [] } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds([]).ShouldHaveTotal(0);
@@ -260,7 +260,7 @@ public class FiltersDTests
               { "match": { "matchCode": { "eq": "DUP" } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -285,7 +285,7 @@ public class FiltersDTests
               { "group": { "by": [ { "path": "matchCode", "as": "matchCode" } ], "fields": { "n": { "count": true } } } },
               { "match": { "n": { "gte": 2 } } },
               { "sort": [ { "matchCode": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldBeOk();
@@ -314,7 +314,7 @@ public class FiltersDTests
             [ { "match": { "and": [ { "or": [ { "matchCode": { "eq": "VEH-001" } }, { "matchCode": { "eq": "VEH-004" } } ] },
                                     { "not": { "isDeleted": { "eq": true } } } ] } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);

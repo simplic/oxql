@@ -108,6 +108,21 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             }
         }
 
+        // A count-only request reads no page: the count is refined step by step within its budget.
+        if (bound.Page is { CountOnly: true, Count: { } ladder } && compiled.CountStages is { } counted)
+        {
+            var known = await CountLadderAsync(bound, counted, ladder, runOptions, context, cancellationToken).ConfigureAwait(false);
+
+            Log(compiled, timer, 0, false, known is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, 0);
+
+            return QueryOutcome.Of(new QueryResult
+            {
+                Items = [],
+                PageInfo = new PageInfo { HasNextPage = false, Count = known },
+                Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
+            });
+        }
+
         IReadOnlyList<BsonDocument> rows;
         IReadOnlyList<BsonDocument>? countRows = null;
         var timedOut = false;
@@ -121,13 +136,28 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         using var aggregates = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task<IReadOnlyList<BsonDocument>>? pageTask = null;
         Task<IReadOnlyList<BsonDocument>>? countTask = null;
+
+        // The count step of a contract 2 page (DG2 M3) runs beside the page under its own time and
+        // its own cancellation: it never fails the rows, and however this request ends it is stopped.
+        var step = compiled.CountStages is null ? null : compiled.Count;
+        using var counting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var stopCounting = new CancelOnExit(counting);
+        Stopwatch? countTimer = null;
         var probeTasks = new List<Task<IReadOnlyList<BsonDocument>>>();
 
         try
         {
             // The page asks for its rows in one reply: the limit and the row that tells whether a next page exists.
             pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 1 }, aggregates.Token);
-            countTask = compiled.CountStages is not null ? runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token) : null;
+            if (step is not null)
+            {
+                countTimer = Stopwatch.StartNew();
+                countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
+            }
+            else if (compiled.CountStages is not null)
+            {
+                countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token);
+            }
 
             // Whatever ends this request before the count is read (the caller giving up while the
             // page runs, say), the count's own failure is read, never left unobserved.
@@ -144,7 +174,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             rows = await pageTask.ConfigureAwait(false);
 
-            if (countTask is not null)
+            // The count of includeTotalCount (contract 1, an internal call) is part of the answer and
+            // is waited for; a page's count step is read once the rows are ready.
+            if (countTask is not null && step is null)
                 countRows = await countTask.ConfigureAwait(false);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -284,6 +316,13 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         long? totalCount = null;
         bool? capped = null;
 
+        // What a contract 2 answer knows of the count (DG2 M3): for free off the page, and by the
+        // count step when one was asked. The cursor carries the rows served so far.
+        var served = context.Contract == 2 ? (bound.Page.Cursor?.Served ?? 0) + page.Count : 0;
+        var countInfo = context.Contract == 2
+            ? await CountAsync(step, countTask, countTimer, hasNextPage, served, context, cancellationToken).ConfigureAwait(false)
+            : null;
+
         if (compiled.IncludeTotalCount)
         {
             var n = countRows is { Count: > 0 } && countRows[0].TryGetValue("n", out var count) ? count.ToInt64() : 0;
@@ -295,7 +334,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 diagnostics.Add(new Diagnostic { Code = Codes.TotalCountCapped, Message = $"More than {compiled.CountCap} rows match; the count is the cap.", Params = new Dictionary<string, object?> { ["cap"] = compiled.CountCap } });
         }
 
-        var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1])) : null;
+        var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1], served)) : null;
         var items = new List<JsonNode?>(page.Count);
         var unfit = new List<string>();
 
@@ -334,13 +373,142 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var result = new QueryResult
         {
             Items = items,
-            PageInfo = new PageInfo { HasNextPage = hasNextPage, NextCursor = nextCursor, TotalCount = totalCount, TotalCountCapped = capped },
+            PageInfo = new PageInfo { HasNextPage = hasNextPage, NextCursor = nextCursor, TotalCount = totalCount, TotalCountCapped = capped, Count = countInfo },
             Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
         };
 
-        Log(compiled, timer, page.Count, timedOut, capped == true, context, null, resolveCalls, cacheHits);
+        Log(compiled, timer, page.Count, timedOut, capped == true || countInfo is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, cacheHits);
 
         return QueryOutcome.Of(result);
+    }
+
+    /// <summary>The steps of a count grow by this factor, and a step is taken to cost that many times the one before it.</summary>
+    private const int LadderFactor = 10;
+
+    /// <summary>
+    /// The count of a count-only request (DG2 M3): a ladder under a time budget. Step <c>k</c> counts up
+    /// to <c>Rows × 10^k</c> rows, up to the ceiling; a step that finds no more rows than its bound is
+    /// exact and ends the ladder. The next step runs only when its predicted time (the last step's,
+    /// times the growth of the bound) fits what is left of the budget; otherwise the last bound is
+    /// the answer, stopped by the budget. Each step's own time limit is what is left; one that runs
+    /// out leaves the bound before it, stopped by time. Nothing counted yet is unknown.
+    /// </summary>
+    private async Task<CountInfo> CountLadderAsync(BoundPipeline bound, IReadOnlyList<BsonDocument> counted, BoundCount ladder, AggregateRunOptions runOptions, RequestContext context, CancellationToken cancellationToken)
+    {
+        var timer = Stopwatch.StartNew();
+        var budget = Math.Min(ladder.BudgetMs, runOptions.MaxTimeMs);
+        var stages = counted.Take(counted.Count - 2).ToList();
+        long proven = 0;
+        long rung = Math.Min(ladder.Rows, ladder.Ceiling);
+
+        while (true)
+        {
+            var left = budget - (long)timer.Elapsed.TotalMilliseconds;
+            var started = timer.Elapsed;
+
+            try
+            {
+                if (left < 1)
+                    throw new TimeoutException();
+
+                var rows = await runner.AggregateAsync(bound.Entity, [.. stages, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
+                var found = rows is { Count: > 0 } && rows[0].TryGetValue("n", out var n) ? n.ToInt64() : 0;
+                var ms = (long)timer.Elapsed.TotalMilliseconds;
+
+                if (found <= rung)
+                    return new CountInfo { State = CountInfo.Exact, Value = found, Ms = ms };
+
+                proven = rung;
+
+                if (rung >= ladder.Ceiling)
+                    return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByCap, Ms = ms };
+
+                var next = Math.Min(rung * LadderFactor, ladder.Ceiling);
+                var predicted = (timer.Elapsed - started).TotalMilliseconds * next / rung;
+
+                if (predicted > budget - timer.Elapsed.TotalMilliseconds)
+                    return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByBudget, Ms = ms };
+
+                rung = next;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                var timeout = exception is TimeoutException or OperationCanceledException or MongoExecutionTimeoutException or MongoCommandException { Code: 50 };
+                var ms = (long)timer.Elapsed.TotalMilliseconds;
+
+                if (!timeout)
+                    logger.LogWarning(exception, "OxQL count step failed. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
+
+                // A bound an earlier step proved stands, whatever ended the step after it.
+                return proven > 0
+                    ? new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByTime, Ms = ms }
+                    : new CountInfo { State = CountInfo.Unknown, Reason = timeout ? CountInfo.Timeout : CountInfo.Failed, Ms = ms };
+            }
+        }
+    }
+
+    /// <summary>Stops what a request still runs beside its page when the request ends, however it ends.</summary>
+    private sealed class CancelOnExit(CancellationTokenSource source) : IDisposable
+    {
+        public void Dispose() => source.Cancel();
+    }
+
+    /// <summary>
+    /// What a contract 2 answer knows of how many rows match (DG2 M3).
+    /// <list type="bullet">
+    /// <item>A page without a next one ends the list: the rows served are the exact count, and a count
+    /// step still running is not waited for.</item>
+    /// <item>Without a count step, a page with a next one proves the rows served and one more.</item>
+    /// <item>The count step is waited for until its budget ends, counted from when it was sent. Up to
+    /// its bound it is exact; above it the bound is a lower bound, stopped by the cap when the request
+    /// could not have counted further and by the budget otherwise. A step that times out or fails
+    /// leaves the count unknown and the rows as they are.</item>
+    /// </list>
+    /// A bound below what the pages already served gives way to the rows served and one more.
+    /// </summary>
+    private async Task<CountInfo> CountAsync(BoundCount? step, Task<IReadOnlyList<BsonDocument>>? countTask, Stopwatch? countTimer, bool hasNextPage, long served, RequestContext context, CancellationToken cancellationToken)
+    {
+        if (!hasNextPage)
+            return new CountInfo { State = CountInfo.Exact, Value = served };
+
+        var walked = new CountInfo { State = CountInfo.AtLeast, Value = served + 1, StoppedBy = CountInfo.ByPage };
+
+        if (step is null || countTask is null || countTimer is null)
+            return walked;
+
+        try
+        {
+            var left = TimeSpan.FromMilliseconds(step.BudgetMs) - countTimer.Elapsed;
+            var rows = countTask.IsCompleted
+                ? await countTask.ConfigureAwait(false)
+                : await countTask.WaitAsync(left > TimeSpan.Zero ? left : TimeSpan.Zero, cancellationToken).ConfigureAwait(false);
+            var counted = rows is { Count: > 0 } && rows[0].TryGetValue("n", out var n) ? n.ToInt64() : 0;
+            var ms = (long)countTimer.Elapsed.TotalMilliseconds;
+
+            if (counted <= step.Rows)
+                return counted > served ? new CountInfo { State = CountInfo.Exact, Value = counted, Ms = ms } : walked with { Ms = ms };
+
+            return step.Rows > served
+                ? new CountInfo { State = CountInfo.AtLeast, Value = step.Rows, StoppedBy = step.Rows >= step.Ceiling ? CountInfo.ByCap : CountInfo.ByBudget, Ms = ms }
+                : walked with { Ms = ms };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var timeout = exception is TimeoutException or OperationCanceledException or MongoExecutionTimeoutException or MongoCommandException { Code: 50 };
+
+            if (!timeout)
+                logger.LogWarning(exception, "OxQL count step failed; the rows are answered without a count. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
+
+            return new CountInfo { State = CountInfo.Unknown, Reason = timeout ? CountInfo.Timeout : CountInfo.Failed, Ms = (long)countTimer.Elapsed.TotalMilliseconds };
+        }
     }
 
     /// <summary>
@@ -436,10 +604,11 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     }
 
     /// <summary>The cursor for the page after <paramref name="last"/>.</summary>
-    public static CursorPayload NextCursor(CompiledQuery compiled, BsonDocument last)
+    /// <remarks><paramref name="served"/> is how many rows the pages up to this one served; a contract 2 cursor carries it (DG2 M3).</remarks>
+    public static CursorPayload NextCursor(CompiledQuery compiled, BsonDocument last, long served = 0)
     {
         if (compiled.PagingMode == PagingMode.Offset)
-            return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Offset, [], compiled.Offset + compiled.Limit);
+            return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Offset, [], compiled.Offset + compiled.Limit) { Served = served };
 
         var fields = new List<CursorValue>();
 
@@ -448,7 +617,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         fields.Add(new CursorValue("_id", true, ValueAt(last, "_id")));
 
-        return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Keyset, fields, 0);
+        return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Keyset, fields, 0) { Served = served };
     }
 
     /// <summary>
@@ -556,7 +725,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 rows,
                 HasRegex(compiled.PageStages),
                 HasUnboundedSort(compiled.PageStages),
-                compiled.IncludeTotalCount,
+                compiled.IncludeTotalCount || compiled.Count is not null,
                 compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0,
                 outcome,
                 context.Organisation,

@@ -402,7 +402,7 @@ public partial class RowsABTests
         bag["tourCount"]!.GetValue<string>().Should().Be("9007199254740993");
 
         // The round trip closes: the value read back selects the row it came from.
-        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.tourCount": { "eq": "{{bag["tourCount"]!.GetValue<string>()}}" } } }, { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldHaveTotal(1);
+        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.tourCount": { "eq": "{{bag["tourCount"]!.GetValue<string>()}}" } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveTotal(1);
 
         // A key with no definition has no kind to encode by: it stays what the bag holds.
         bag["plainCount"]!.GetValueKind().Should().Be(JsonValueKind.Number);
@@ -423,7 +423,7 @@ public partial class RowsABTests
         read.Should().Be(expected, "a defined date key travels as YYYY-MM-DD, as every date does");
 
         // Read a value, filter on it: the commonest round trip there is.
-        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.probationEnd": { "eq": "{{read}}" } } }, { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldHaveTotal(1);
+        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.probationEnd": { "eq": "{{read}}" } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveTotal(1);
     }
 
     [Fact]
@@ -432,7 +432,7 @@ public partial class RowsABTests
         var stored = Corpus.Date(Corpus.Row(Corpus.Employee, "addon-rich"), "addon.probationEnd")!.Value;
 
         var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee,
-            $$"""[ { "match": { "addon.probationEnd": { "eq": "{{stored:yyyy-MM-dd}}" } } }, { "page": { "limit": 1, "includeTotalCount": true } } ]""");
+            $$"""[ { "match": { "addon.probationEnd": { "eq": "{{stored:yyyy-MM-dd}}" } } }, { "page": { "limit": 1, "count": true } } ]""");
 
         answer.ShouldHaveIds([Corpus.IdOf(Corpus.Employee, "addon-rich")]).ShouldHaveTotal(1);
     }
@@ -489,8 +489,9 @@ public partial class RowsABTests
         answer.ShouldBeOk();
         answer.Body!.AsObject().Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("items", "pageInfo");
 
-        var counted = await transport.SendAsync(Corpus.Shipment, """[ { "page": { "limit": 1, "includeTotalCount": true } } ]""");
+        var counted = await transport.SendAsync(Corpus.Shipment, """[ { "page": { "limit": 1, "count": true } } ]""");
         counted.Body!.AsObject().Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("items", "pageInfo");
-        counted.PageInfo.Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("hasNextPage", "nextCursor", "totalCount", "totalCountCapped");
+        counted.PageInfo.Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("count", "hasNextPage", "nextCursor");
+        counted.Count!.Select(member => member.Key).Should().Equal("state", "value", "ms");
     }
 }

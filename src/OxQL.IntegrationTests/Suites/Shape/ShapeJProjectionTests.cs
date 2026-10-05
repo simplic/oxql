@@ -222,7 +222,7 @@ public class ShapeJProjectionTests
         expected.Count.Should().BeGreaterThan(7);
 
         var client = await Lab.ClientAsync(LabService.Transport);
-        var first = await client.SendAsync(Corpus.Shipment, """[ { "project": { "id": 0, "shipmentNumber": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] }, { "page": { "limit": 7, "includeTotalCount": true } } ]""");
+        var first = await client.SendAsync(Corpus.Shipment, """[ { "project": { "id": 0, "shipmentNumber": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] }, { "page": { "limit": 7, "count": true } } ]""");
         first.ShouldHaveTotal(expected.Count);
         first.HasNextPage.Should().BeTrue();
         Members(first).Should().Equal("shipmentNumber");

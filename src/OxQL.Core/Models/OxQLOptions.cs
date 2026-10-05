@@ -21,6 +21,9 @@ public sealed class OxQLOptions
     /// <summary>Time and memory bounds on the aggregate.</summary>
     public ExecutionOptions Execution { get; set; } = new();
 
+    /// <summary>How far and how long a contract 2 page counts (<c>page.count</c>).</summary>
+    public CountOptions Count { get; set; } = new();
+
     /// <summary>How operands are encoded for members whose storage is not uniform.</summary>
     public RepresentationOptions Representation { get; set; } = new();
 
@@ -379,6 +382,37 @@ public sealed class LimitOptions
 
     /// <summary>How many rows one diagnostic lists (a missing or ambiguous reference names the rows it met, up to this many).</summary>
     public int MaxReportedRows { get; set; } = 50;
+}
+
+/// <summary>
+/// The bounds of the count a contract 2 page asks for with <c>page.count</c>. The count is one
+/// bounded step that runs beside the page: it stops at <see cref="StepRows"/> rows and at
+/// <see cref="BudgetMs"/>, and its failure never fails the rows. <c>Limits:CountCap</c> stays the
+/// ceiling of every count.
+/// </summary>
+public sealed class CountOptions
+{
+    /// <summary>How many rows the count step that runs beside a page counts before it stops; above it the answer is a lower bound.</summary>
+    public int StepRows { get; set; } = 1_000;
+
+    /// <summary>
+    /// The time the count step has, from the moment it is sent: its own <c>maxTimeMS</c>, and the
+    /// longest an answer waits for it once its rows are ready. A step that does not finish in it is
+    /// stopped and the count is <c>unknown</c>.
+    /// </summary>
+    public int BudgetMs { get; set; } = 500;
+
+    /// <summary>The longest budget a request may ask for with <c>page.count.budgetMs</c>; a larger one is clamped to it.</summary>
+    public int MaxBudgetMs { get; set; } = 5_000;
+
+    /// <summary>The effective step: the configured value, at least 1.</summary>
+    public int EffectiveStepRows => Math.Max(1, StepRows);
+
+    /// <summary>The effective ceiling of a request's budget: the configured value, at least 1.</summary>
+    public int EffectiveMaxBudgetMs => Math.Max(1, MaxBudgetMs);
+
+    /// <summary>The effective default budget: the configured value between 1 and <see cref="EffectiveMaxBudgetMs"/>.</summary>
+    public int EffectiveBudgetMs => Math.Clamp(BudgetMs, 1, EffectiveMaxBudgetMs);
 }
 
 /// <summary>Time and memory bounds on the aggregate.</summary>

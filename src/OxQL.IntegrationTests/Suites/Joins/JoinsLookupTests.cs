@@ -273,7 +273,7 @@ public class JoinsLookupTests
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
               { "project": { "id": 1, "eq": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -292,7 +292,7 @@ public class JoinsLookupTests
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
               { "project": { "id": 1, "matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         // Every one of these rows provably has a child, so an [] under the alias is a lie; the
@@ -431,7 +431,7 @@ public class JoinsLookupTests
         var client = await FleetClient();
 
         var unread = await client.SendAsync(Corpus.Vehicle, """
-            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "project": { "id": 1 } }, { "page": { "limit": 3, "includeTotalCount": true } } ]
+            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "project": { "id": 1 } }, { "page": { "limit": 3, "count": true } } ]
             """);
         unread.ShouldHaveTotal(Vehicles().Count);
 
@@ -443,7 +443,7 @@ public class JoinsLookupTests
             [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
               { "project": { "id": 1, "eq": 1 } },
-              { "page": { "limit": 3, "includeTotalCount": true } } ]
+              { "page": { "limit": 3, "count": true } } ]
             """);
         read.ShouldHaveTotal(expected);
     }

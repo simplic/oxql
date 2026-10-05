@@ -352,7 +352,7 @@ public class PagingLimitsTests
         var client = await Transport();
         var dup = Corpus.Where(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP").Count;
         static object[] Entries(int count) => Enumerable.Range(0, count)
-            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "includeTotalCount": true } }] }""")
+            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": true } }] }""")
             .ToArray();
 
         var at = await client.BatchAsync(Entries(Limit("maxBatchQueries")));
@@ -368,18 +368,17 @@ public class PagingLimitsTests
     // ── U17 — the count cap, against the bulk organisation ────────────────────────────────
 
     [Fact]
-    public async Task U17_count_cap_exactly_100000_matches_count_exactly_and_100001_answer_the_cap_with_the_diagnostic()
+    public async Task U17_count_cap_exactly_100000_matches_count_exactly_and_100001_answer_the_cap_as_a_lower_bound()
     {
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
         var client = shared.Client(LabService.Transport, Org.C);
 
-        var at = await client.SendAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        at.ShouldHaveTotal(Limit("countCap"), capped: false).ShouldHaveNoDiagnostics();
+        var at = await client.CountOnlyAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }]""", budgetMs: 5_000);
+        at.ShouldCount("exact", Limit("countCap")).ShouldHaveNoDiagnostics();
 
-        var over = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        over.ShouldHaveTotal(Limit("countCap"), capped: true);
-        over.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
+        var over = await client.CountOnlyAsync(Corpus.Template, "[]", budgetMs: 5_000);
+        over.ShouldCount("atLeast", Limit("countCap"), "cap").ShouldHaveNoDiagnostics();
     }
 
     // ── the resolve limits, reached through variants ──────────────────────────────────────

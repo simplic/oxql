@@ -307,12 +307,14 @@ public class ContractATests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, $"[ {Page1} ]");
 
         answer.ShouldBeOk();
-        answer.PageInfo.Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("hasNextPage", "nextCursor");
+        answer.PageInfo.Select(member => member.Key).Order(StringComparer.Ordinal).Should().Equal("count", "hasNextPage", "nextCursor");
+        answer.Count!.Select(member => member.Key).Should().Equal(["state", "value", "stoppedBy"], "what a page knows without counting: no reason, no ms");
         answer.Body!.AsObject().ContainsKey("diagnostics").Should().BeFalse();
 
         // …and the cursor is omitted, not null, on the last page.
         var last = await (await Transport()).SendAsync(Corpus.Shipment, """[ { "page": { "limit": 500 } } ]""");
-        last.PageInfo.Select(member => member.Key).Should().Equal("hasNextPage");
+        last.PageInfo.Select(member => member.Key).Should().Equal("hasNextPage", "count");
+        last.Count!.Select(member => member.Key).Should().Equal("state", "value");
     }
 
     [Fact]

@@ -27,7 +27,7 @@ public class ExplainNeverExecutesTests
         [ { "match": { "id": { "neq": null } } },
           { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "equipment", "select": ["name"] } },
           { "sort": [ { "id": "asc" } ] },
-          { "page": { "limit": 5, "includeTotalCount": true } } ]
+          { "page": { "limit": 5, "count": true } } ]
         """;
 
     /// <summary>The whole engine over the shared fleet database on a client whose every command to that database is recorded.</summary>

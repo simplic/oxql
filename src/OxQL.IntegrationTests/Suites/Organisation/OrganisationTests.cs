@@ -73,8 +73,8 @@ public class OrganisationTests
         var (a, b) = Corpus.Counts(Corpus.Employee);
         a.Should().NotBe(b);
 
-        var answerA = await (await Client(Corpus.Employee, Org.A)).SendAsync(Corpus.Employee, """[{ "page": { "limit": 1, "includeTotalCount": true } }]""");
-        var answerB = await (await Client(Corpus.Employee, Org.B)).SendAsync(Corpus.Employee, """[{ "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var answerA = await (await Client(Corpus.Employee, Org.A)).SendAsync(Corpus.Employee, """[{ "page": { "limit": 1, "count": true } }]""");
+        var answerB = await (await Client(Corpus.Employee, Org.B)).SendAsync(Corpus.Employee, """[{ "page": { "limit": 1, "count": true } }]""");
 
         answerA.TotalCount.Should().Be(a, answerA.ToString());
         answerB.TotalCount.Should().Be(b, answerB.ToString());

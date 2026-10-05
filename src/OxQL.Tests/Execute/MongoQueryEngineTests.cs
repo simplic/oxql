@@ -93,20 +93,20 @@ public class MongoQueryEngineTests
     public async Task A_grouped_page_continues_by_offset()
     {
         var (engine, runner) = Host(runner => runner.PageRows = [new BsonDocument("st", 0), new BsonDocument("st", 1), new BsonDocument("st", 2)]);
-        var result = await Success(engine, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true } }]""");
+        var result = await Success(engine, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
 
         result.Items.Should().HaveCount(2);
         result.Items[0]!["st"]!.GetValue<int>().Should().Be(0);
         result.PageInfo.HasNextPage.Should().BeTrue();
 
-        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true } }]""");
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
         var payload = BindHost.Cursors.Decode(result.PageInfo.NextCursor!, bound.Fingerprint)!;
 
         payload.Mode.Should().Be(PagingMode.Offset);
         payload.Offset.Should().Be(2);
 
         runner.PageRows = [new BsonDocument("st", 2)];
-        var next = await Success(engine, $$"""[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true, "cursor": "{{result.PageInfo.NextCursor}}" } }]""");
+        var next = await Success(engine, $$"""[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true, "cursor": "{{result.PageInfo.NextCursor}}" } }]""");
 
         next.Items.Should().ContainSingle();
         next.PageInfo.HasNextPage.Should().BeFalse();
@@ -121,8 +121,10 @@ public class MongoQueryEngineTests
             runner.PageRows = [Row(Id1, "a")];
             runner.Count = 42;
         });
-        var result = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""");
+        var internalCall = BindHost.Context() with { Internal = true };
+        var result = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", internalCall);
 
+        // includeTotalCount is contract 1's and an internal call's (DG2 M3); PageCountTests has the contract 2 count.
         result.PageInfo.TotalCount.Should().Be(42);
         result.PageInfo.TotalCountCapped.Should().BeFalse();
         result.Diagnostics.Should().BeNull();
@@ -131,14 +133,11 @@ public class MongoQueryEngineTests
         runner.Calls[1].Stages[^2].ShouldBeBson(new BsonDocument("$limit", 100_001));
 
         runner.Count = 100_001;
-        var capped = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""");
+        var capped = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", internalCall);
 
         capped.PageInfo.TotalCount.Should().Be(100_000);
         capped.PageInfo.TotalCountCapped.Should().BeTrue();
         capped.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == Codes.TotalCountCapped);
-
-        runner.Count = null;
-        (await Success(engine, """[{ "page": { "includeTotalCount": true } }]""")).PageInfo.TotalCount.Should().Be(0, "no count row means no match");
     }
 
     [Fact]
@@ -162,7 +161,7 @@ public class MongoQueryEngineTests
     {
         var (engine, runner) = Host();
 
-        await Success(engine, """[{ "page": { "limit": 250, "includeTotalCount": true } }]""");
+        await Success(engine, """[{ "page": { "limit": 250, "count": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
         runner.Calls[0].Options.BatchSize.Should().Be(251, "the page's rows and the one that tells whether a next page exists arrive without a getMore");
@@ -174,7 +173,7 @@ public class MongoQueryEngineTests
     {
         var (engine, runner) = Host();
 
-        await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { CorrelationId = "corr-41" });
+        await Success(engine, """[{ "page": { "count": true } }]""", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { CorrelationId = "corr-41" });
         await Success(engine, "[]");
 
         runner.Calls.Take(2).Select(call => call.Options.Comment).Should().Equal("corr-41", "corr-41");
@@ -242,7 +241,7 @@ public class MongoQueryEngineTests
     public async Task Explain_returns_the_bound_form_and_the_stages_without_running()
     {
         var (engine, runner) = Host();
-        var query = BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""");
+        var query = BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
         var outcome = await engine.ExplainAsync(query.Planned(), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 

@@ -43,7 +43,7 @@ public class GroupTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -64,7 +64,7 @@ public class GroupTests
         var keyed = await client.SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "shipmentNumber", "as": "number" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "number": "asc" }] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         keyed.ShouldHaveTotal(keys.Count);
@@ -73,7 +73,7 @@ public class GroupTests
         Number(keyed.Items.Single(item => item!["number"]?.GetValue<string>() == "S-DUP")!["total"]).Should().Be(Corpus.Where(Corpus.Shipment, row => Corpus.Text(row, "shipmentNumber") == "S-DUP").Count);
         Numbers(keyed, "total").Sum().Should().Be(Corpus.Counts(Corpus.Shipment).A);
 
-        var total = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [], "fields": { "total": { "count": true } } } }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var total = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [], "fields": { "total": { "count": true } } } }, { "page": { "limit": 5, "count": true } }]""");
         total.ShouldHaveTotal(1);
         CountTexts(total, "total").Should().Equal(Corpus.Counts(Corpus.Shipment).A.ToString(CultureInfo.InvariantCulture));
     }
@@ -91,7 +91,7 @@ public class GroupTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }, { "path": "isDeleted", "as": "deleted" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "status": "asc" }, { "deleted": "asc" }] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -494,7 +494,7 @@ public class GroupTests
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "total": { "count": true } } } },
               { "match": { "total": { "gte": { "$var": "floor" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """, new { floor = Floor });
 
         answer.ShouldHaveTotal(expected.Count);
@@ -507,7 +507,7 @@ public class GroupTests
         var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """
             [ { "group": { "by": [{ "path": "isDeleted", "as": "deleted" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "deleted": "asc" }] },
-              { "page": { "limit": 5, "includeTotalCount": true } } ]
+              { "page": { "limit": 5, "count": true } } ]
             """);
 
         answer.ShouldBeOk();

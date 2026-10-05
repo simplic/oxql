@@ -262,9 +262,9 @@ public class StrictRequestBindTests
     [Fact]
     public async Task The_same_constructs_under_contract_2_carry_no_hint()
     {
-        var bound = await BoundAsync("", """[{ "sort": [{ "number": { "direction": "asc" } }] }, { "page": { "includeTotalCount": 500 } }]""");
+        var bound = await BoundAsync("", """[{ "sort": [{ "number": { "direction": "asc" } }] }, { "page": { "count": { "upTo": 500 } } }]""");
 
-        bound.Page.CountCap.Should().Be(500);
+        bound.Page.Count!.Ceiling.Should().Be(500);
 
         var errors = await ErrorsAsync("", """[{ "resolve": { "path": "customerId", "as": "c", "source": "x" } }]""");
 

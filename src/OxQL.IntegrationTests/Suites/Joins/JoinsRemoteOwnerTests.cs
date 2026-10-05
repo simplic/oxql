@@ -206,7 +206,7 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
         var answer = await client.SendAsync(Corpus.Conformance, """
             [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
               { "match": { "w.name": { "startsWith": "Widget" } } },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldRefuse("SEMI_JOIN_TOO_LARGE", 422)["stage"]!.GetValue<int>().Should().Be(1);
@@ -226,7 +226,7 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
         var answer = await Conformance().SendAsync(Corpus.Conformance, """
             [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
               { "match": { "w.name": { "startsWith": "Widget" } } },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveIds([]).ShouldHaveTotal(0);

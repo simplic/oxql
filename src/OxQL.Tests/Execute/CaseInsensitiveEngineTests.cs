@@ -43,10 +43,11 @@ public class CaseInsensitiveEngineTests
     {
         var (engine, runner, _) = Host();
 
-        await Success(engine, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""");
+        await Success(engine, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Select(call => call.Options with { BatchSize = null }).Should().AllBeEquivalentTo(new AggregateRunOptions(10_000, true, DefaultCollation));
+        runner.Calls.Select(call => call.Options with { BatchSize = null, MaxTimeMs = 0 }).Should().AllBeEquivalentTo(new AggregateRunOptions(0, true, DefaultCollation));
+        runner.Calls.Select(call => call.Options.MaxTimeMs).Should().Equal([10_000, 500], "the page under the request's time, the count step under its budget");
     }
 
     [Fact]
@@ -54,10 +55,10 @@ public class CaseInsensitiveEngineTests
     {
         var (engine, runner, _) = Host();
 
-        await Success(engine, """[{ "match": { "count": { "eq": 1 } } }, { "sort": [{ "when": "desc" }] }, { "page": { "includeTotalCount": true } }]""");
+        await Success(engine, """[{ "match": { "count": { "eq": 1 } } }, { "sort": [{ "when": "desc" }] }, { "page": { "count": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Select(call => call.Options with { BatchSize = null }).Should().AllBeEquivalentTo(new AggregateRunOptions(10_000, true));
+        runner.Calls.Select(call => call.Options with { BatchSize = null, MaxTimeMs = 0 }).Should().AllBeEquivalentTo(new AggregateRunOptions(0, true));
     }
 
     [Fact]

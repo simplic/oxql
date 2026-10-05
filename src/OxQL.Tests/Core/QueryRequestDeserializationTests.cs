@@ -206,7 +206,7 @@ public class QueryRequestDeserializationTests
               "page": {
                 "limit": 25,
                 "cursor": null,
-                "includeTotalCount": true
+                "count": true
               }
             }
           ]
@@ -219,7 +219,8 @@ public class QueryRequestDeserializationTests
         request!.Pipeline[0].Page.Should().NotBeNull();
         request.Pipeline[0].Page!.Limit.Should().Be(25);
         request.Pipeline[0].Page.Cursor.Should().BeNull();
-        request.Pipeline[0].Page.IncludeTotalCount.Should().BeTrue();
+        request.Pipeline[0].Page.Count.Should().BeEquivalentTo(new PageCount { Asked = true });
+        request.Pipeline[0].Page.IncludeTotalCount.Should().BeFalse();
     }
 
     [Fact]
@@ -284,7 +285,7 @@ public class QueryRequestDeserializationTests
               "page": {
                 "limit": 50,
                 "cursor": null,
-                "includeTotalCount": false
+                "count": false
               }
             }
           ]

@@ -295,7 +295,7 @@ public class GroupDateTruncTests
         var weeks = await client.SendAsync(Corpus.Shipment, $$"""
             [ { "group": { "by": [{ "dateTrunc": {{DateTrunc("week", Berlin, "monday")}}, "as": "week" }], "fields": { "total": { "count": true }, "earliest": { "min": "loadStart" } } } },
               { "sort": [{ "week": "asc" }] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         weeks.ShouldHaveTotal(expected.Count);
@@ -312,7 +312,7 @@ public class GroupDateTruncTests
             [ { "group": { "by": [{ "dateTrunc": {{DateTrunc("year", Berlin, null)}}, "as": "year" }], "fields": { "total": { "count": true } } } },
               { "match": { "year": { "gte": "{{From}}" } } },
               { "sort": [{ "year": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         late.ShouldHaveTotal(1);

@@ -240,7 +240,7 @@ public class HostTests
     [Fact]
     public async Task Explain_is_404_when_switched_off_and_carries_the_advisory_only_when_asked()
     {
-        var request = """{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "a" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }] }""";
+        var request = """{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "a" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "count": true } }] }""";
 
         using (var disabled = new SampleHost(options => options.Explain.Enabled = false))
         {

@@ -166,8 +166,8 @@ public class ExplainNotesTests
     [Fact]
     public async Task The_caps_and_limits_are_said_where_they_bind()
     {
-        Single(await NotesAsync("""[{ "page": { "includeTotalCount": true } }]"""), Notes.CountCap).Should()
-            .Match<Diagnostic>(note => note.Stage == 0 && (int)note.Params!["cap"]! == BindHost.Options().Limits.CountCap);
+        // The count says where it stopped in its own answer (pageInfo.count); no note repeats the cap (DG2 M3).
+        (await NotesAsync("""[{ "page": { "count": true } }]""")).Should().NotContain(note => note.Code == Notes.CountCap);
 
         Single(await NotesAsync("""[{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoices", "limit": 7 } }]""", "rc.customer"), Notes.LookupLimit)
             .Params!["limit"].Should().Be(7);

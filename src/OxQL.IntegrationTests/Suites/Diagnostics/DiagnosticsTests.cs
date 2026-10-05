@@ -85,7 +85,7 @@ public class DiagnosticsTests
     {
         var expected = Corpus.AllIds(Corpus.Employee);
 
-        var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """[{ "sort": [{ "addon.shiftModel": "asc" }] }, { "page": { "limit": 500, "includeTotalCount": true } }]""");
+        var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """[{ "sort": [{ "addon.shiftModel": "asc" }] }, { "page": { "limit": 500, "count": true } }]""");
 
         answer.ShouldHaveIdsInAnyOrder(expected).ShouldHaveTotal(expected.Count);
         answer.Diagnostics.Should().ContainSingle();
@@ -123,15 +123,14 @@ public class DiagnosticsTests
 
         var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = $"{cap}" });
 
-        var answer = await capped.SendAsync(Corpus.Template, """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var answer = await capped.SendAsync(Corpus.Template, """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 5, "count": true } }]""");
 
-        answer.ShouldHaveIds(Corpus.PageOf(all, 5)).ShouldHaveTotal(cap, capped: true);
-        var diagnostic = Only(answer, "TOTAL_COUNT_CAPPED");
-        diagnostic["params"]!["cap"]!.GetValue<int>().Should().Be(cap);
+        // The bound and why counting stopped there are in the count itself; no diagnostic repeats them (DG2 M3).
+        answer.ShouldHaveIds(Corpus.PageOf(all, 5)).ShouldCount("atLeast", cap, "cap").ShouldHaveNoDiagnostics();
 
         // Under the cap the count is exact and says nothing.
         var under = Corpus.IdsWhere(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP");
-        var small = await capped.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50, "includeTotalCount": true } }]""");
+        var small = await capped.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50, "count": true } }]""");
         small.ShouldHaveIds(under).ShouldHaveTotal(under.Count, capped: false).ShouldHaveNoDiagnostics();
     }
 

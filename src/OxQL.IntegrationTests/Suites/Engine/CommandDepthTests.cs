@@ -67,7 +67,7 @@ public class CommandDepthTests
     public async Task D1_a_page_and_its_count_are_one_round_trip()
     {
         var depths = await DepthsAsync("D1", fleet => fleet.Client(LabService.Transport).SendAsync(Corpus.Shipment,
-            """[ { "match": { "id": { "neq": null } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5, "includeTotalCount": true } } ]"""));
+            """[ { "match": { "id": { "neq": null } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5, "count": true } } ]"""));
 
         depths["transport"].Should().Be(1, "the page and the count are sent together");
     }

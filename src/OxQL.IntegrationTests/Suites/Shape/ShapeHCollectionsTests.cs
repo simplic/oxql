@@ -20,7 +20,7 @@ namespace OxQL.IntegrationTests.Suites.Shape;
 [Trait("Category", "Integration")]
 public class ShapeHCollectionsTests
 {
-    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } }""";
+    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } }""";
 
     /// <summary>One stored <c>items</c> element of a shipment, read by storage name.</summary>
     private sealed record Item(string? Status, double? Quantity, string? Article, string? Text);

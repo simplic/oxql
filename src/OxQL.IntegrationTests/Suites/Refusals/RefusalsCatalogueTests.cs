@@ -129,7 +129,7 @@ public class RefusalsCatalogueTests
         await shared.SeedBulkAsync();
         var client = shared.Variant(LabService.Transport, "b5-maxtime-1", new Dictionary<string, string?> { ["OxQL:Execution:MaxTimeMs"] = "1" }, Org.C);
 
-        var answer = await client.SendAsync(Corpus.Template, """[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var answer = await client.SendAsync(Corpus.Template, """[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         answer.StatusCode.Should().Be(504, answer.ToString());
         answer.Type.Should().Be("timeout");

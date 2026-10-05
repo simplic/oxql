@@ -51,6 +51,72 @@ public sealed record PageInfo
     [JsonPropertyName("totalCountCapped")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? TotalCountCapped { get; init; }
+
+    /// <summary>What a contract 2 answer knows of how many rows match (DG2 M3); on every contract 2 page.</summary>
+    [JsonPropertyName("count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CountInfo? Count { get; init; }
+}
+
+/// <summary>
+/// What an answer knows of how many rows match: <c>exact</c> with the number, <c>atLeast</c> with a
+/// proven lower bound and why counting stopped there, or <c>unknown</c> with why.
+/// </summary>
+public sealed record CountInfo
+{
+    /// <summary>Every matching row was counted, or the list was walked to its end.</summary>
+    public const string Exact = "exact";
+
+    /// <summary>A proven lower bound: that many rows were found, and more exist or may exist.</summary>
+    public const string AtLeast = "atLeast";
+
+    /// <summary>The count that was asked for did not finish.</summary>
+    public const string Unknown = "unknown";
+
+    /// <summary><c>stoppedBy</c>: only the rows the pages served, and the one that told a next page exists, are known.</summary>
+    public const string ByPage = "page";
+
+    /// <summary><c>stoppedBy</c>: the request's <c>upTo</c> or the host's <c>CountCap</c> was reached; counting on would not go further.</summary>
+    public const string ByCap = "cap";
+
+    /// <summary>
+    /// <c>stoppedBy</c>: the next step did not fit the time: beside a page the count is one step, and
+    /// alone it takes a further step only when that is predicted to fit what is left of its budget.
+    /// </summary>
+    public const string ByBudget = "budget";
+
+    /// <summary><c>stoppedBy</c>: a step ran out of time; the bound is what the step before it proved.</summary>
+    public const string ByTime = "time";
+
+    /// <summary><c>reason</c>: the count did not finish in its time.</summary>
+    public const string Timeout = "timeout";
+
+    /// <summary><c>reason</c>: the count failed.</summary>
+    public const string Failed = "failed";
+
+    /// <summary><c>exact</c>, <c>atLeast</c> or <c>unknown</c>.</summary>
+    [JsonPropertyName("state")]
+    public required string State { get; init; }
+
+    /// <summary>The count, or the lower bound; absent when unknown.</summary>
+    [JsonPropertyName("value")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Value { get; init; }
+
+    /// <summary>Why counting stopped at a lower bound: <c>page</c>, <c>cap</c>, <c>budget</c> or <c>time</c>.</summary>
+    [JsonPropertyName("stoppedBy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StoppedBy { get; init; }
+
+    /// <summary>Why the count is unknown: <c>timeout</c> or <c>failed</c>.</summary>
+    [JsonPropertyName("reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; init; }
+
+    /// <summary>The time the count step took, in milliseconds; only when one was waited for.</summary>
+    [JsonPropertyName("ms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Ms { get; init; }
 }
 
 /// <summary>A successful response: rows in the wire encoding, paging, and diagnostics when any.</summary>

@@ -93,7 +93,7 @@ public class CoreHardeningEngineTests
         }
     }
 
-    private const string Counted = """[{ "page": { "limit": 1, "includeTotalCount": true } }]""";
+    private const string Counted = """[{ "page": { "limit": 1, "count": true } }]""";
 
     [Fact]
     public async Task A_failed_page_cancels_the_count_that_runs_beside_it()

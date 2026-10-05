@@ -5,6 +5,7 @@ using MongoDB.Bson;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Suites.Filters;
 using Xunit;
 
 namespace OxQL.IntegrationTests.Suites.Paging;
@@ -319,17 +320,17 @@ public class PagingCursorTests
     }
 
     [Fact]
-    public async Task P32_limit_offset_and_include_total_count_are_outside_the_fingerprint_so_the_page_size_may_change_mid_walk()
+    public async Task P32_limit_and_count_are_outside_the_fingerprint_so_the_page_size_may_change_mid_walk()
     {
         const string stages = """{ "sort": [{ "templateName": "asc" }] }, { "project": { "id": 1, "templateName": 1 } }""";
         var expected = Corpus.SortedIds(Corpus.Template, "templateName");
         var client = await Transport();
 
         var first = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 3 } }]""");
-        var wider = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 7, "cursor": "{{first.NextCursor}}", "includeTotalCount": true } }]""");
+        var wider = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 7, "cursor": "{{first.NextCursor}}", "count": true } }]""");
 
         first.ShouldHaveIds(expected.Take(3));
-        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldHaveTotal(Corpus.TemplateVolume);
+        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldCount("atLeast", 1_000, "budget");
     }
 
     [Fact]
@@ -492,14 +493,12 @@ public class PagingCursorTests
         dup.Should().Be(10);
         var client = await Transport();
 
-        (await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(Corpus.TemplateVolume, capped: false);
-        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(dup);
+        (await client.CountOnlyAsync(Corpus.Template, """[{ "project": { "id": 1 } }]""")).ShouldCount("exact", Corpus.TemplateVolume);
+        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } }]"""))
+            .ShouldCount("exact", dup);
 
-        var none = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "no such template" } } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        none.ShouldHaveTotal(0, capped: false);
-        none.PageInfo["totalCountCapped"]!.GetValue<bool>().Should().BeFalse();
+        var none = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "no such template" } } }, { "page": { "limit": 1, "count": true } }]""");
+        none.ShouldCount("exact", 0);
     }
 
     [Fact]
@@ -508,28 +507,36 @@ public class PagingCursorTests
         var groups = TransactionNumbers().Count;
         groups.Should().BeLessThan(Corpus.Counts(Corpus.Transaction).A);
 
-        var answer = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var answer = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 1, "count": true } }]""");
 
         answer.ShouldHaveTotal(groups);
     }
 
     [Fact]
-    public async Task P44_the_count_request_the_client_sends_limit_1_with_the_count_answers_the_exact_total()
+    public async Task P44_the_count_only_request_limit_0_with_the_count_answers_the_exact_total_and_no_rows()
     {
-        // The client's count() terminal writes { limit: 1, includeTotalCount: true } and yields no
-        // rows (that half is the client's). The engine half: the total of that exact request.
+        // A count() terminal writes { limit: 0, count: { budgetMs } } (DG2 M3): no page is read.
         var client = await Transport();
 
-        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(10, capped: false);
-        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(Corpus.TemplateVolume, capped: false);
+        var dup = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 0, "count": true } }]""");
+        dup.ShouldCount("exact", 10).Items.Should().BeEmpty();
+        dup.HasNextPage.Should().BeFalse("a count-only answer says nothing of pages");
+        dup.NextCursor.Should().BeNull();
+
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": { "budgetMs": 5000 } } }]""")).ShouldCount("exact", Corpus.TemplateVolume);
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": { "budgetMs": 5000, "upTo": 2500 } } }]""")).ShouldCount("atLeast", 2_500, "cap");
+
+        // limit 0 is the count alone: without a count, or with a cursor, it asks for nothing.
+        var bare = await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0 } }]""");
+        bare.ShouldRefuseExactly("INVALID_PAGE_LIMIT");
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": false } }]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": true, "cursor": "a.b" } }]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
     }
 
     [Fact]
     public async Task P42_the_page_and_the_count_come_from_one_request_and_agree_on_a_quiet_corpus()
     {
-        var answer = await (await Staff()).SendAsync(Corpus.Employee, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": {{MaxPageSize}}, "includeTotalCount": true } }]""");
+        var answer = await (await Staff()).SendAsync(Corpus.Employee, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": {{MaxPageSize}}, "count": true } }]""");
 
         answer.ShouldHaveTotal(Corpus.Counts(Corpus.Employee).A);
         answer.TotalCount.Should().Be(answer.Items.Count);
@@ -538,22 +545,23 @@ public class PagingCursorTests
     // ── P39 — the count cap, against the bulk organisation ─────────────────────────────────
 
     [Fact]
-    public async Task P39_one_row_above_the_cap_counts_the_cap_flags_it_and_carries_the_diagnostic_and_exactly_the_cap_counts_exactly()
+    public async Task P39_one_row_above_the_cap_counts_the_cap_as_a_lower_bound_and_exactly_the_cap_counts_exactly()
     {
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
         BulkRows.Count.Should().Be(CountCap + 1);
         var client = shared.Client(LabService.Transport, Org.C);
 
-        var over = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        over.ShouldHaveTotal(CountCap, capped: true);
-        over.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
-        over.Diagnostics[0]["params"]!.ToJsonString().Should().Be($$"""{"cap":{{CountCap}}}""");
+        // Beside a page the count is one step; alone it climbs to the cap and says the cap stopped it.
+        var beside = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } }]""");
+        beside.ShouldCount("atLeast", 1_000, "budget").ShouldHaveNoDiagnostics();
+
+        var over = await client.CountOnlyAsync(Corpus.Template, """[{ "project": { "id": 1 } }]""");
+        over.ShouldCount("atLeast", CountCap, "cap").ShouldHaveNoDiagnostics();
 
         // The last bulk name is the one row above the cap; everything below it is exactly the cap.
-        var exact = await client.SendAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        exact.ShouldHaveTotal(CountCap, capped: false);
-        exact.ShouldHaveNoDiagnostics();
+        var exact = await client.CountOnlyAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }]""");
+        exact.ShouldCount("exact", CountCap).ShouldHaveNoDiagnostics();
     }
 
     // ── keyset paging with a sort on a local resolve alias ────────────────────────────────

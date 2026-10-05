@@ -183,7 +183,7 @@ public class KindsConformanceTests
     [Fact]
     public async Task K0_the_conformance_host_holds_exactly_the_corpus_rows_of_organisation_A()
     {
-        var answer = await Send("""[{ "project": { "id": 1, "name": 1, "organizationId": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10, "includeTotalCount": true } }]""");
+        var answer = await Send("""[{ "project": { "id": 1, "name": 1, "organizationId": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
 
         answer.ShouldHaveIds(Mine.Select(row => row.Id)).ShouldHaveTotal(Mine.Count);
         answer.Strings("name").Should().Equal(Mine.Select(NameOf));

@@ -29,7 +29,7 @@ public class StrictProbeTests
     private const string HiddenByAMatch = """
         [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": 2 } },
          { "match": { "orders.number": { "eq": "x" } } },
-         { "page": { "includeTotalCount": true } }]
+         { "page": { "count": true } }]
         """;
 
     /// <summary>Holds the page back until the probe has been sent, and answers each aggregate by what it is.</summary>
@@ -91,7 +91,8 @@ public class StrictProbeTests
 
         outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
         runner.Calls.Select(call => call.Kind).Should().BeEquivalentTo(["page", "count", "probe"]);
-        runner.Calls.Select(call => call.Options.MaxTimeMs).Distinct().Should().ContainSingle("one deadline for the request, not a budget per probe");
+        runner.Calls.Where(call => call.Kind != "count").Select(call => call.Options.MaxTimeMs).Distinct().Should().ContainSingle("one deadline for the request, not a budget per probe");
+        runner.Calls.Single(call => call.Kind == "count").Options.MaxTimeMs.Should().Be(BindHost.Options().Count.BudgetMs, "the count step has its own budget and never holds the rows back longer (DG2 M3)");
         runner.Calls.Single(call => call.Kind == "probe").Options.BatchSize.Should().BeNull("a probe returns one row");
     }
 

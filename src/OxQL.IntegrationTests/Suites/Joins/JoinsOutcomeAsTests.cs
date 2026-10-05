@@ -61,7 +61,7 @@ public class JoinsOutcomeAsTests
         var broken = await host.SendAsync("oc.order", """
             [ { "resolve": { "path": "customerId", "as": "customer", "outcomeAs": "customerOutcome" } },
               { "match": { "customerOutcome": { "eq": "not_found" } } },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         broken.ShouldBeOk().Items.Select(item => item!["number"]!.GetValue<string>()).Should().Equal(["O-32"], "broken lines only");

@@ -55,7 +55,7 @@ public sealed class OwnerFleet : IAsyncLifetime
     /// semi-join cache key is the case's own; <c>Widget One</c> is the member that matches, so the
     /// honest answer is always exactly the <c>W-1</c> row.
     /// </summary>
-    public static string SemiJoin(string caseId, string page = """{ "limit": 10, "includeTotalCount": true }""") =>
+    public static string SemiJoin(string caseId, string page = """{ "limit": 10, "count": true }""") =>
         $$"""
         [ {{ResolveStage(caseId)}},
           { "match": { "w.name": { "in": ["Widget One", "{{caseId}}"] } } },

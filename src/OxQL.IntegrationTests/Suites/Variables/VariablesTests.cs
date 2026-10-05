@@ -42,12 +42,12 @@ public class VariablesTests
 
         // The bytes the client compiles for a declared variable beside a literal.
         var answer = await (await Staff()).QueryAsync(
-            """{"entityType":"staff.employee","pipeline":[{"match":{"and":[{"matchCode":{"eq":"DUP"}},{"children":{"eq":{"$var":"kids"}}}]}},{"sort":[{"id":"asc"}]},{"page":{"limit":10,"includeTotalCount":true}}],"variables":{"kids":2}}""");
+            """{"entityType":"staff.employee","pipeline":[{"match":{"and":[{"matchCode":{"eq":"DUP"}},{"children":{"eq":{"$var":"kids"}}}]}},{"sort":[{"id":"asc"}]},{"page":{"limit":10,"count":true}}],"variables":{"kids":2}}""");
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
 
         // S24: the variable alone selects exactly what the literal selects.
-        var dup = await (await Staff()).SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": { "$var": "code" } } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]""", new JsonObject { ["code"] = "DUP" });
+        var dup = await (await Staff()).SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": { "$var": "code" } } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } } ]""", new JsonObject { ["code"] = "DUP" });
         dup.ShouldHaveIds(Dup()).ShouldHaveTotal(Dup().Count);
     }
 

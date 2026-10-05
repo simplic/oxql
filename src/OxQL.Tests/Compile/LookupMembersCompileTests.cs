@@ -114,7 +114,7 @@ public class LookupMembersCompileTests
     {
         var compiled = await Compile($$"""
             [{{CustomerResolve}}, { "lookup": { "from": "probe.order", "path": "customerId", "on": "cust", "as": "siblings", "first": true } },
-             { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]
+             { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "count": true } }]
             """, Order);
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup", "$set", "$unset", "$lookup", "$set");

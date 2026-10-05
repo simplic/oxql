@@ -196,7 +196,7 @@ public class JoinsResolveTests
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
               { "project": { "id": 1, "veh": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
         filtered.ShouldHaveIds(expectedRows).ShouldHaveTotal(expectedRows.Count, because: "the alias condition reached the count too");
     }
@@ -449,7 +449,7 @@ public class JoinsResolveTests
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
               { "project": { "id": 1, "templateName": 1, "veh": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count, because: "M39: the owner's ids reached the count too");
@@ -472,7 +472,7 @@ public class JoinsResolveTests
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -495,7 +495,7 @@ public class JoinsResolveTests
               { "match": { "veh.matchCode": { "eq": "{{lowered}}"{{options}} } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         (await Ask(""", "options": { "caseSensitive": false }""")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);

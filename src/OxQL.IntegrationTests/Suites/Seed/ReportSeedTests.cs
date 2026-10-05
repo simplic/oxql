@@ -92,7 +92,7 @@ public class ReportSeedTests
     [Fact]
     public async Task R04_every_report_entity_answers_exactly_its_rows_in_organisation_R_and_none_in_A()
     {
-        const string Pipeline = """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 500, "includeTotalCount": true } }]""";
+        const string Pipeline = """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 500, "count": true } }]""";
 
         foreach (var (entityId, service, rows) in ReportSeed.Entities)
         {

@@ -48,7 +48,7 @@ public class GroupTypesTests
                   "distinctDate": { "countDistinct": "loadStart" }, "distinctEnum": { "countDistinct": "loadingTimeType" },
                   "distinctBool": { "countDistinct": "isDeleted" }, "distinctDouble": { "countDistinct": "actualWeight.value" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(statuses.Count);

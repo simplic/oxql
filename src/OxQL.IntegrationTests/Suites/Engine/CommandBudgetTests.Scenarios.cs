@@ -14,7 +14,7 @@ public partial class CommandBudgetTests
     public Task S1_a_plain_page_with_its_total_is_the_page_and_the_count() => MeasureAsync(
         "S1",
         fleet => fleet.Client(LabService.Transport).SendAsync(Corpus.Shipment,
-            """[ { "match": { "id": { "neq": null } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5, "includeTotalCount": true } } ]"""),
+            """[ { "match": { "id": { "neq": null } } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5, "count": true } } ]"""),
         cold: 2,
         warm: 2);
 
@@ -22,7 +22,7 @@ public partial class CommandBudgetTests
     public Task S2_an_inline_resolve_adds_no_command_to_the_page_and_the_count() => MeasureAsync(
         "S2",
         fleet => fleet.Client(LabService.Fleet).SendAsync(Corpus.Equipment,
-            """[ { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "name": 1, "veh": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10, "includeTotalCount": true } } ]"""),
+            """[ { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "name": 1, "veh": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10, "count": true } } ]"""),
         cold: 2,
         warm: 2);
 
@@ -34,7 +34,7 @@ public partial class CommandBudgetTests
             [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact", "select": ["address.companyName"] } },
               { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null", "select": ["address.lastName"] } },
               { "project": { "number": 1, "date": 1, "recipientContact": 1, "clerk": 1 } },
-              { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]
             """),
         cold: 4,
         warm: 2);
@@ -50,7 +50,7 @@ public partial class CommandBudgetTests
             [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact", "select": ["address.companyName"] } },
               { "resolve": { "path": "createUserId", "as": "clerk", "onMissing": "null", "select": ["address.lastName"] } },
               { "project": { "number": 1, "recipientContact": 1, "clerk": 1 } },
-              { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "sort": [ { "number": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]
             """);
         var commands = capture.Drain().Engine;
 

@@ -19,7 +19,7 @@ namespace OxQL.IntegrationTests.Suites.Shape;
 [Trait("Category", "Integration")]
 public class ShapeKUnwindTests
 {
-    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } }""";
+    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } }""";
 
     private static Guid Id(string key) => Corpus.IdOf(Corpus.Shipment, key);
 
@@ -109,7 +109,7 @@ public class ShapeKUnwindTests
     {
         var stored = Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32).ToList();
 
-        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "keepPath": false } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 50, "includeTotalCount": true } } ]""");
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "keepPath": false } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 50, "count": true } } ]""");
 
         answer.ShouldHaveTotal(3);
         answer.Items.Should().OnlyContain(row => !row!.AsObject().ContainsKey("items"), "the unwound collection left the row");
@@ -150,7 +150,7 @@ public class ShapeKUnwindTests
     [Fact]
     public async Task K05_the_index_member_is_filterable_and_sortable()
     {
-        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "includeIndex": "position" } }, { "match": { "position": { "gte": 1 } } }, { "sort": [ { "position": "desc" } ] }, { "page": { "limit": 50, "includeTotalCount": true } } ]""");
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "includeIndex": "position" } }, { "match": { "position": { "gte": 1 } } }, { "sort": [ { "position": "desc" } ] }, { "page": { "limit": 50, "count": true } } ]""");
 
         answer.ShouldHaveTotal(2);
         answer.Values("position").Select(value => value!.GetValue<int>()).Should().Equal(2, 1);
@@ -217,7 +217,7 @@ public class ShapeKUnwindTests
               { "unwind": { "path": "billingLines.references", "as": "ref", "includeIndex": "ri" } },
               { "project": { "id": 1, "bi": 1, "ri": 1, "ref.referenceId": 1 } },
               { "sort": [ { "id": "asc" }, { "bi": "asc" }, { "ri": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -298,7 +298,7 @@ public class ShapeKUnwindTests
         const string stages = """{ "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }""";
         var client = await Lab.ClientAsync(LabService.Transport);
 
-        var first = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "includeTotalCount": true } } ]""");
+        var first = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "count": true } } ]""");
 
         first.ShouldHaveIds(Corpus.PageOf(expected, limit: 3));
         first.HasNextPage.Should().BeTrue();
@@ -316,7 +316,7 @@ public class ShapeKUnwindTests
         var expected = Corpus.Rows(Corpus.Shipment).Sum(row => Items(row).Count);
         expected.Should().NotBe(Corpus.Counts(Corpus.Shipment).A);
 
-        (await Send("""[ { "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3, "includeTotalCount": true } } ]""")).ShouldHaveTotal(expected, capped: false);
+        (await Send("""[ { "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3, "count": true } } ]""")).ShouldHaveTotal(expected, capped: false);
     }
 
     [Fact]
@@ -411,7 +411,7 @@ public class ShapeKUnwindTests
               { "unwind": { "path": "items" } },
               { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "n": { "count": true } } } },
               { "sort": [ { "number": "asc" } ] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -424,7 +424,7 @@ public class ShapeKUnwindTests
         var three = Corpus.Row(Corpus.Shipment, "items-three");
         var stored = Items(three).Select(item => item["OrderNumber"].AsInt32).ToList();
 
-        var answer = await Send($$"""[ { "match": { "shipmentNumber": { "eq": "{{Corpus.Text(three, "shipmentNumber")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 20, "includeTotalCount": true } } ]""");
+        var answer = await Send($$"""[ { "match": { "shipmentNumber": { "eq": "{{Corpus.Text(three, "shipmentNumber")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]""");
 
         answer.ShouldHaveTotal(stored.Count);
         answer.Values("position").Select(value => value!.GetValue<int>()).Should().Equal(0, 1, 2);
@@ -447,7 +447,7 @@ public class ShapeKUnwindTests
               { "group": { "by": [ { "path": "item.article.name", "as": "article" } ], "fields": { "n": { "count": true } } } },
               { "match": { "n": { "gte": 1 } } },
               { "sort": [ { "article": "asc" } ] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         // v1 answered a post-group match with nothing unless a match {} led the pipeline (VAL G4/G5).

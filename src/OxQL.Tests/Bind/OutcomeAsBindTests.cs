@@ -245,7 +245,7 @@ public class OutcomeAsBindTests
     public async Task A_stage_that_reads_the_outcome_keeps_the_join_before_the_page_and_in_the_count()
     {
         var late = await BoundAsync($$"""[{{Customer}}, { "sort": [{ "number": "asc" }] }]""");
-        var early = await BoundAsync($$"""[{{Customer}}, { "match": { "customerOutcome": { "eq": "not_found" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "includeTotalCount": true } }]""");
+        var early = await BoundAsync($$"""[{{Customer}}, { "match": { "customerOutcome": { "eq": "not_found" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
 
         MongoCompiler.JoinsAfterPage(late.Stages, 0, late.Stages.OfType<BoundStage.Resolve>().Single()).Should().BeTrue("nothing reads it: the join is paid per page row");
         MongoCompiler.JoinsAfterPage(early.Stages, 0, early.Stages.OfType<BoundStage.Resolve>().Single()).Should().BeFalse("a condition on the outcome needs it on every candidate row");

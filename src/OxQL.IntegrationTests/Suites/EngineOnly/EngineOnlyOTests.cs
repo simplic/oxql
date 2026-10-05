@@ -18,7 +18,7 @@ namespace OxQL.IntegrationTests.Suites.EngineOnly;
 [Trait("Category", "Integration")]
 public class EngineOnlyOTests
 {
-    private const string Counted = """{ "page": { "limit": 3, "includeTotalCount": true } }""";
+    private const string Counted = """{ "page": { "limit": 3, "count": true } }""";
 
     private static Task<LabClient> Transport() => Lab.ClientAsync(LabService.Transport);
 
@@ -225,7 +225,7 @@ public class EngineOnlyOTests
 
         var answer = await (await Transport()).BatchAsync(
         [
-            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "count": true } } ]"""),
             Json.Request(Corpus.Shipment, """[ { "match": { "nope": { "eq": 1 } } }, { "page": { "limit": 1 } } ]"""),
         ], maxTimeMs: 5000);
 
@@ -243,7 +243,7 @@ public class EngineOnlyOTests
 
         var answer = await (await Transport()).BatchAsync(
         [
-            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "count": true } } ]"""),
             Json.Request(Corpus.Shipment, """[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 1 } } ]"""),
         ]);
 

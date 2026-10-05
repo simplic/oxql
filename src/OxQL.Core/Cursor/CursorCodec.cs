@@ -44,6 +44,10 @@ public sealed class CursorCodec
             }).ToArray()),
         };
 
+        // Written only by a contract 2 page, so a contract 1 cursor is byte for byte what it was.
+        if (payload.Served > 0)
+            body["n"] = payload.Served;
+
         var bytes = Encoding.UTF8.GetBytes(body.ToJsonString());
 
         return Base64Url(bytes) + "." + Base64Url(HMACSHA256.HashData(key, bytes));
@@ -94,7 +98,7 @@ public sealed class CursorCodec
                     BsonSerializerExtensions.ParseCanonical(field["b"]!.GetValue<string>())));
             }
 
-            return new CursorPayload(expectedFingerprint, mode, fields, offset);
+            return new CursorPayload(expectedFingerprint, mode, fields, offset) { Served = body["n"]?.GetValue<long>() ?? 0 };
         }
         catch (Exception exception) when (exception is JsonException or FormatException or InvalidOperationException or InvalidCastException)
         {

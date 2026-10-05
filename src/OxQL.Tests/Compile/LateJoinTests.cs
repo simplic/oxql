@@ -58,7 +58,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_nothing_but_the_display_reads_runs_after_the_page()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -68,14 +68,14 @@ public class LateJoinTests
             OrdersCutJson);
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
     }
 
     [Fact]
     public async Task A_local_resolve_nothing_but_the_display_reads_runs_after_the_page()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -86,7 +86,7 @@ public class LateJoinTests
             """{ $unset: "cust__arr" }""");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
     }
 
@@ -140,7 +140,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_a_later_match_reads_stays_before_the_match_and_in_the_count()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit");
         Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$match", "$limit", "$count");
@@ -184,7 +184,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_resolve_a_later_sort_reads_stays_before_the_sort()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$sort", "$limit");
         Kinds(compiled.CountStages!).Should().Equal(["$match", "$limit", "$count"], "the sort is not in the count, so the count does not need the join");
@@ -219,7 +219,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_a_later_unwind_reads_stays_before_the_unwind()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$sort", "$limit");
         Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$unwind", "$limit", "$count");
@@ -278,7 +278,7 @@ public class LateJoinTests
             (Order, CustomerResolve, """{ "project": { "id": 1, "number": 1 } }"""),
         })
         {
-            var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "includeTotalCount": true } }]""", entity);
+            var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "count": true } }]""", entity);
 
             Kinds(compiled.PageStages).Should().Equal(["$match", "$project", "$sort", "$limit"], $"{join} then {projection}: the row does not carry the alias");
             Kinds(compiled.CountStages!).Should().Equal("$match", "$project", "$limit", "$count");

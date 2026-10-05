@@ -3607,7 +3607,7 @@ public sealed class Binder
         // ---- page ----------------------------------------------------------------------------
 
         /// <summary>The members of a page stage on the public contract 2 route.</summary>
-        private const string PublicPageMembers = "limit, cursor, includeTotalCount";
+        private const string PublicPageMembers = "limit, cursor, count";
 
         private void BindPage(PageStage stage, int index)
         {
@@ -3615,8 +3615,24 @@ public sealed class Binder
             // offset, and so does an internal call: a semi-join walks its owner's ids by offset.
             var cursorOnly = contract2 && !context.Internal;
 
-            if (!CheckStageMembers(stage.Unknown, "page", cursorOnly ? PublicPageMembers : "limit, offset, cursor, includeTotalCount", index))
+            // count is a contract 2 member; under contract 1 it is one the stage does not have.
+            IReadOnlyList<string> unknown = contract2 || stage.Count is null ? stage.Unknown : [.. stage.Unknown, "count"];
+
+            if (!CheckStageMembers(unknown, "page", cursorOnly ? PublicPageMembers : contract2 ? "limit, offset, cursor, includeTotalCount, count" : "limit, offset, cursor, includeTotalCount", index))
                 return;
+
+            // The count is asked with 'count' and answered under 'pageInfo.count' (DG2 M3).
+            if (cursorOnly && stage.IncludeTotalCountWritten)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownStageMember,
+                    Message = $"'includeTotalCount' is not a member of page; page carries {PublicPageMembers}. A count is asked with 'count' and answered under 'pageInfo.count'.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "page", ["member"] = "includeTotalCount", ["reason"] = "removed", ["use"] = "count" },
+                });
+                return;
+            }
 
             if (cursorOnly && stage.OffsetWritten)
             {
@@ -3643,7 +3659,18 @@ public sealed class Binder
             var report = contract2 && request.IsStrict && stage.Cursor is null && stage.Offset is null;
             var maximum = report ? Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize) : options.Limits.MaxPageSize;
 
-            if (limit < 1)
+            // A count-only request (DG2 M3): limit 0 with a count and without a cursor reads no page.
+            var countOnly = contract2 && limit == 0 && stage.Count is { Asked: true } && stage.Cursor is null;
+
+            if (limit == 0 && contract2 && !countOnly)
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidPageLimit,
+                    Message = "The page limit 0 asks for the count alone: it needs 'count' and takes no cursor.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["limit"] = 0, ["needs"] = "count" },
+                });
+            else if (limit < 1 && !countOnly)
                 errors.Add(Error(Codes.InvalidPageLimit, $"The page limit {limit} is not positive.", index, null));
             else if (limit > maximum)
                 errors.Add(Error(Codes.PageSizeExceeded, report
@@ -3693,9 +3720,52 @@ public sealed class Binder
                     countCap = Math.Min(cap, options.Limits.CountCap);
             }
 
-            page = new BoundStage.Page(Math.Max(1, limit), Math.Max(0, offset), null, stage.IncludeTotalCount, countCap);
+            page = new BoundStage.Page(Math.Max(1, limit), Math.Max(0, offset), null, stage.IncludeTotalCount, countCap) { Count = contract2 ? BindCount(stage.Count, index) : null, CountOnly = countOnly };
             pageIndex = index;
             stages.Add(page);
+        }
+
+        /// <summary>
+        /// The count step of a contract 2 page (DG2 M3): one step of <c>Count:StepRows</c> rows, lowered
+        /// by the request's <c>upTo</c> and by the host's <c>CountCap</c>, within the request's
+        /// <c>budgetMs</c> under <c>Count:MaxBudgetMs</c>. Null when no count is asked.
+        /// </summary>
+        private BoundCount? BindCount(PageCount? count, int index)
+        {
+            if (count is null)
+                return null;
+
+            if (count.Invalid)
+            {
+                errors.Add(Error(Codes.InvalidPageLimit, "'count' is true, false, or an object carrying upTo and budgetMs.", index, null));
+                return null;
+            }
+
+            if (count.Unknown.Count > 0)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownStageMember,
+                    Message = $"'{string.Join(", ", count.Unknown)}' is not a member of page.count; it carries upTo, budgetMs.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "page", ["member"] = "count." + count.Unknown[0] },
+                });
+                return null;
+            }
+
+            if (count.UpTo is { } upTo && upTo < 1)
+                errors.Add(Error(Codes.InvalidPageLimit, $"'count.upTo' is {upTo}; it is a positive integer.", index, null));
+
+            if (count.BudgetMs is { } asked && asked < 1)
+                errors.Add(Error(Codes.InvalidPageLimit, $"'count.budgetMs' is {asked}; it is a positive integer.", index, null));
+
+            if (!count.Asked)
+                return null;
+
+            var ceiling = Math.Min(Math.Max(1, count.UpTo ?? options.Limits.CountCap), options.Limits.CountCap);
+            var budget = Math.Min(Math.Max(1, count.BudgetMs ?? options.Count.EffectiveBudgetMs), options.Count.EffectiveMaxBudgetMs);
+
+            return new BoundCount(Math.Min(options.Count.EffectiveStepRows, ceiling), ceiling, budget);
         }
 
         /// <summary>Where a larger page is available: a strict contract 2 request without cursor or offset reads up to <c>MaxReportPageSize</c>.</summary>

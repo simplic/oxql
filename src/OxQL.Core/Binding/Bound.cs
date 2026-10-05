@@ -410,7 +410,18 @@ public abstract record BoundStage
     public sealed record Sort(IReadOnlyList<BoundSortField> Fields) : BoundStage;
 
     /// <summary>The page; <paramref name="CountCap"/> is the request's own count cap, already under the host's, or null for the host's.</summary>
-    public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount, int? CountCap = null) : BoundStage;
+    public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount, int? CountCap = null) : BoundStage
+    {
+        /// <summary>The count a contract 2 page asked for (<c>page.count</c>); null when it asked for none.</summary>
+        public BoundCount? Count { get; init; }
+
+        /// <summary>
+        /// The request asks for the count alone (<c>limit: 0</c> with <c>count</c>): no page is read, and
+        /// the count is refined step by step within its budget. <see cref="Limit"/> is 1 then, which
+        /// nothing runs.
+        /// </summary>
+        public bool CountOnly { get; init; }
+    }
 }
 
 /// <summary>
@@ -444,7 +455,22 @@ public enum PagingMode
 }
 
 /// <summary>What a cursor carries.</summary>
-public sealed record CursorPayload(string Fingerprint, PagingMode Mode, IReadOnlyList<CursorValue> Fields, int Offset);
+public sealed record CursorPayload(string Fingerprint, PagingMode Mode, IReadOnlyList<CursorValue> Fields, int Offset)
+{
+    /// <summary>
+    /// How many rows the pages up to and including the one this cursor ends have served (contract 2):
+    /// what a later page's count is known by without counting. 0 on a cursor that carries none.
+    /// </summary>
+    public long Served { get; init; }
+}
+
+/// <summary>
+/// The count step of a contract 2 page (DG2 M3): it counts up to <paramref name="Rows"/> rows within
+/// <paramref name="BudgetMs"/>. <paramref name="Ceiling"/> is the most this request could ever have
+/// counted (its <c>upTo</c> under the host's <c>CountCap</c>): a step that stops at it stopped at the
+/// cap, one that stops below it stopped because a page's count is one step.
+/// </summary>
+public sealed record BoundCount(int Rows, int Ceiling, int BudgetMs);
 
 /// <summary>One sort field's value at the last row.</summary>
 public sealed record CursorValue(string Wire, bool Ascending, BsonValue Value);

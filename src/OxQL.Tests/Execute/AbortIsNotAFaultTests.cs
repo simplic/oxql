@@ -81,7 +81,7 @@ public class AbortIsNotAFaultTests
         using var caller = new CancellationTokenSource();
         var (engine, logs) = Host(new ResetRunner(caller, reset: true));
 
-        var run = () => engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "includeTotalCount": true } }]"""), BindHost.Context(), caller.Token);
+        var run = () => engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "count": true } }]"""), BindHost.Context(), caller.Token);
 
         (await run.Should().ThrowAsync<OperationCanceledException>()).WithInnerException<IOException>();
         logs.Entries.Should().NotContain(entry => entry.Level >= LogLevel.Warning);

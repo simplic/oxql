@@ -140,7 +140,7 @@ public class RegisterCasesTests
     [Fact]
     public async Task F13_a_grouped_query_pages_by_offset_behind_the_cursor()
     {
-        var bound = await Bound("""[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var bound = await Bound("""[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1, "count": true } }]""");
         var compiled = MongoCompiler.Compile(bound, Options);
 
         bound.PagingMode.Should().Be(PagingMode.Offset);
@@ -152,7 +152,7 @@ public class RegisterCasesTests
     [Fact]
     public async Task F14_the_scope_is_engine_owned_and_leads_the_pipeline_whatever_the_caller_writes()
     {
-        var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "id": 1, "number": 1, "flag": 1 } }, { "match": { "flag": { "eq": false } } }, { "page": { "limit": 20, "includeTotalCount": true } }]"""), Options);
+        var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "id": 1, "number": 1, "flag": 1 } }, { "match": { "flag": { "eq": false } } }, { "page": { "limit": 20, "count": true } }]"""), Options);
 
         compiled.PageStages[0]["$match"].AsBsonDocument.Names.Should().Equal("OrganizationId");
         compiled.PageStages[1].Contains("$project").Should().BeTrue();

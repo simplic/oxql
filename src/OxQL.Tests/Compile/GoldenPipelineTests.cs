@@ -47,7 +47,7 @@ public class GoldenPipelineTests
     [Fact]
     public async Task A_match_after_a_projection_still_sees_the_scope_first()
     {
-        var compiled = await Compile("""[{ "project": { "number": 1 } }, { "match": { "number": { "eq": "x" } } }, { "page": { "limit": 20, "includeTotalCount": true } }]""");
+        var compiled = await Compile("""[{ "project": { "number": 1 } }, { "match": { "number": { "eq": "x" } } }, { "page": { "limit": 20, "count": true } }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -59,7 +59,7 @@ public class GoldenPipelineTests
             $"{{ $match: {OrgJson} }}",
             "{ $project: { Number: 1 } }",
             "{ $match: { Number: 'x' } }",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
     }
 
@@ -166,7 +166,7 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Lookup_is_the_concise_form_with_the_scope_inside()
     {
-        var compiled = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"], "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""", "probe.customer");
+        var compiled = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"], "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "count": true } }]""", "probe.customer");
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId",
@@ -177,7 +177,7 @@ public class GoldenPipelineTests
         compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { "orders.Number": "x" } }"""));
         compiled.CountStages!.Should().HaveCount(6, "the lookup is read by the later match, so the count keeps it");
 
-        var unread = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "page": { "includeTotalCount": true } }]""", "probe.customer");
+        var unread = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "page": { "count": true } }]""", "probe.customer");
 
         unread.CountStages!.Should().HaveCount(3, "a lookup nothing reads is not in the count");
         unread.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
@@ -232,7 +232,7 @@ public class GoldenPipelineTests
         // normalises a missing member to null; a subdocument _id omits the field instead, so
         // the same data bucketed null and missing together under one key and apart under two,
         // and the row lost the member altogether.
-        var compiled = await Compile("""[{ "group": { "by": [{ "path": "state", "as": "st" }, { "dateTrunc": { "path": "when", "unit": "week", "timezone": "Europe/Berlin" }, "as": "wk" }], "fields": { "n": { "count": true }, "total": { "sum": "amount" }, "kinds": { "countDistinct": "number" }, "x": { "max": { "add": ["ratio", 1] } } } } }, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var compiled = await Compile("""[{ "group": { "by": [{ "path": "state", "as": "st" }, { "dateTrunc": { "path": "when", "unit": "week", "timezone": "Europe/Berlin" }, "as": "wk" }], "fields": { "n": { "count": true }, "total": { "sum": "amount" }, "kinds": { "countDistinct": "number" }, "x": { "max": { "add": ["ratio", 1] } } } } }, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -246,7 +246,7 @@ public class GoldenPipelineTests
             """{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
             """{ $addFields: { kinds: { $size: "$kinds" } } }""",
             """{ $project: { st: "$_id.st", wk: "$_id.wk", n: 1, total: 1, kinds: 1, x: 1, _id: 0 } }""",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
 
         var single = await Compile("""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "month" }, "as": "m" }], "fields": {} } }]""");

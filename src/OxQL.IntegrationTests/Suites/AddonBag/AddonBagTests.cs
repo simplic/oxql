@@ -27,7 +27,7 @@ public class AddonBagTests
     private static IReadOnlyList<CorpusRow> Rows => Corpus.Rows(Corpus.Conformance);
 
     private static string Page(string match, string extra = "") =>
-        $$"""[{ "match": {{match}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, {{(extra.Length > 0 ? extra + ", " : "")}}{ "page": { "limit": 50, "includeTotalCount": true } }]""";
+        $$"""[{ "match": {{match}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, {{(extra.Length > 0 ? extra + ", " : "")}}{ "page": { "limit": 50, "count": true } }]""";
 
     /// <summary>The ids of the conformance rows whose bag value at <paramref name="key"/> satisfies <paramref name="predicate"/>, in id order.</summary>
     private static IReadOnlyList<Guid> Where(string key, Func<BsonValue?, bool> predicate, string entity = Corpus.Conformance) =>

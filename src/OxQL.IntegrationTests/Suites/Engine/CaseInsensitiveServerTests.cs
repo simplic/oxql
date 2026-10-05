@@ -70,7 +70,7 @@ public class CaseInsensitiveServerTests
         exactInsideCollated.Collation.Should().NotBeNull();
         (await EngineDirect.RunAsync(database, Collection, exactInsideCollated)).Should().ContainSingle().Which["Number"].AsString.Should().Be("ABC");
 
-        (await Run(database, """[{ "match": { "number": { "eq": "abc" } } }, { "page": { "includeTotalCount": true } }]""", count: true)).Single()["n"].ToInt64().Should().Be(3);
+        (await Run(database, """[{ "match": { "number": { "eq": "abc" } } }, { "page": { "count": true } }]""", count: true)).Single()["n"].ToInt64().Should().Be(3);
     }
 
     [Fact]

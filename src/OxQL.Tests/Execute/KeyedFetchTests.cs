@@ -266,7 +266,7 @@ public class KeyedFetchTests
 
     // ---- semi-join ------------------------------------------------------------------------
 
-    private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }, { "page": { "limit": 10, "includeTotalCount": true } }]""";
+    private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }, { "page": { "limit": 10, "count": true } }]""";
 
     [Fact]
     public async Task A_semi_join_asks_the_owner_for_the_ids_and_substitutes_them_into_the_page_and_count_filters()
@@ -281,7 +281,7 @@ public class KeyedFetchTests
         var result = await Success(engine, SemiJoin);
 
         result.Items.Should().ContainSingle();
-        result.PageInfo.TotalCount.Should().Be(1);
+        result.PageInfo.Count.Should().BeEquivalentTo(new CountInfo { State = CountInfo.Exact, Value = 1 }, "the page ends the list");
 
         // The owner was asked before the page ran, with the condition rebased onto the target.
         var (service, request, _) = client.Calls[0];

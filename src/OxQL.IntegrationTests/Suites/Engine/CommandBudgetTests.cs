@@ -151,7 +151,7 @@ public partial class CommandBudgetTests
         async fleet =>
         {
             var answer = await fleet.Client(LabService.Transport, Org.C).SendAsync(Corpus.Template,
-                $$"""[ { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1 } }, { "page": { "limit": {{limit}}, "includeTotalCount": true } } ]""");
+                $$"""[ { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1 } }, { "page": { "limit": {{limit}}, "count": true } } ]""");
 
             answer.Items.Should().HaveCount(limit);
 

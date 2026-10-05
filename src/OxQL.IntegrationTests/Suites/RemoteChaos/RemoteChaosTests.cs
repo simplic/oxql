@@ -368,15 +368,18 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
-    public async Task C11_TOTAL_COUNT_CAPPED_with_a_cap_of_two_a_three_row_count_reports_the_cap_and_says_so()
+    public async Task C11_with_a_count_cap_of_two_a_count_of_more_rows_is_a_lower_bound_stopped_by_the_cap()
     {
         RowCount.Should().BeGreaterThan(2);
 
-        var answer = await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 10, "includeTotalCount": true } } ]""");
+        // A page that holds every row proves the count by itself, whatever the cap.
+        (await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 10, "count": true } } ]""")).ShouldCount("exact", RowCount).ShouldHaveNoDiagnostics();
 
-        answer.ShouldHaveTotal(2, capped: true);
-        answer.ShouldHaveDiagnostic("TOTAL_COUNT_CAPPED")["params"]!["cap"]!.GetValue<int>().Should().Be(2);
-        answer.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
+        // The count step stops at the host's cap and says so; no diagnostic repeats it (DG2 M3).
+        var answer = await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 1, "count": true } } ]""");
+
+        answer.ShouldCount("atLeast", 2, "cap").ShouldHaveNoDiagnostics();
+        (await LoweredPosture().CountOnlyAsync(Corpus.Conformance, "[]")).ShouldCount("atLeast", 2, "cap");
     }
 
     [Fact]

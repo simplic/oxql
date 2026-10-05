@@ -18,7 +18,7 @@ namespace OxQL.IntegrationTests.Suites.Shape;
 [Trait("Category", "Integration")]
 public class ShapeCPathsTests
 {
-    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } }""";
+    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } }""";
 
     private static Task<LabClient> Transport() => Lab.ClientAsync(LabService.Transport);
 

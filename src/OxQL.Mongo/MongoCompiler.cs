@@ -81,6 +81,9 @@ public sealed record CompiledQuery
     /// <summary>The cap the count stops at: the request's own when it gave one, otherwise the host's.</summary>
     public required int CountCap { get; init; }
 
+    /// <summary>The count step a contract 2 page asked for; null for none, and for the count of <c>includeTotalCount</c>.</summary>
+    public BoundCount? Count { get; init; }
+
     /// <summary>
     /// The projection excluded the key and the compiler kept it anyway so the sort and the
     /// cursor have something to read. Contract 2 rows follow the shape and never show it;
@@ -246,7 +249,7 @@ public static class MongoCompiler
 
         stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope, keyset })));
 
-        var countStages = page.IncludeTotalCount ? new List<BsonDocument> { new("$match", scope) } : null;
+        var countStages = page.IncludeTotalCount || page.Count is not null ? new List<BsonDocument> { new("$match", scope) } : null;
 
         // An internal owner query grouped per key: the keys matched first, where an index serves
         // them, and the window after the caller's leading matches (the resolve's filter), so a
@@ -458,7 +461,7 @@ public static class MongoCompiler
         stages.AddRange(lateJoins);
 
         // The request's own count cap, when it gave one, is already under the host's.
-        var countCap = page.CountCap ?? options.CountCap;
+        var countCap = page.Count?.Rows ?? page.CountCap ?? options.CountCap;
 
         if (countStages is not null)
         {
@@ -481,6 +484,7 @@ public static class MongoCompiler
             MaxTimeMs = options.MaxTimeMs,
             AllowDiskUse = options.AllowDiskUse,
             CountCap = countCap,
+            Count = page.Count,
             KeyKeptAgainstProjection = keyKeptAgainstProjection,
             SortKeptAgainstProjection = sortKeptAgainstProjection,
             Collation = collated ? CollationDocument(options.Collation ?? new CollationOptions()) : null,

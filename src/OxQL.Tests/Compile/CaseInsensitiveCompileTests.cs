@@ -52,7 +52,7 @@ public class CaseInsensitiveCompileTests
                 { "number": { "gt": "a" } },
                 { "number": { "startsWith": "a.b" } },
                 { "number": { "contains": "a" } },
-                { "number": { "endsWith": "a" } } ] } }, { "page": { "includeTotalCount": true } }]
+                { "number": { "endsWith": "a" } } ] } }, { "page": { "count": true } }]
             """);
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
@@ -115,7 +115,7 @@ public class CaseInsensitiveCompileTests
         var compiled = await Compile("""
             [{ "match": { "count": { "gte": 1 }, "when": { "lt": "2026-01-01T00:00:00Z" }, "customerId": { "eq": "195fb742-82b3-405e-b77b-42838eb0aaa9" }, "flag": { "eq": true }, "state": { "in": ["Open"] } } },
              { "sort": [{ "count": "desc" }] },
-             { "page": { "limit": 20, "includeTotalCount": true } }]
+             { "page": { "limit": 20, "count": true } }]
             """);
 
         ShouldBe(compiled.PageStages,
@@ -126,7 +126,7 @@ public class CaseInsensitiveCompileTests
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
             """{ $match: { $and: [ { Count: { $gte: NumberLong(1) } }, { When: { $lt: ISODate("2026-01-01T00:00:00Z") } }, { CustomerId: BinData(4, "GV+3QoKzQF63e0KDjrCqqQ==") }, { Flag: true }, { State: { $in: [0] } } ] } }""",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
         compiled.Collation.Should().BeNull();
     }

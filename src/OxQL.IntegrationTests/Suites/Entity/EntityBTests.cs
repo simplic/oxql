@@ -54,7 +54,7 @@ public class EntityBTests
         var service = LabService.Of(serviceKey);
         var expected = Corpus.AllIds(currentId);
         expected.Should().NotBeEmpty();
-        const string pipeline = """[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]""";
+        const string pipeline = """[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } } ]""";
 
         var viaRetired = await RetiredIdHost.SendAsync(service, retiredId, pipeline);
 
@@ -72,7 +72,7 @@ public class EntityBTests
         viaCurrent.Body!.AsObject().ContainsKey("diagnostics").Should().BeFalse();
 
         // Contract 1 matches a retired id case-insensitively, as it does every id.
-        var legacy = await RetiredIdHost.SendAsync(service, retiredId.ToUpperInvariant(), pipeline, contract: null);
+        var legacy = await RetiredIdHost.SendAsync(service, retiredId.ToUpperInvariant(), """[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]""", contract: null);
         legacy.ShouldBeOk();
         legacy.TotalCount.Should().Be(expected.Count);
         legacy.DiagnosticCodes.Should().Equal("ENTITY_ID_RETIRED");
@@ -113,10 +113,11 @@ public class EntityBTests
         all.Count.Should().BeGreaterThan(1);
         var key = entity.KeyPath;
 
-        var answer = await (await Lab.ClientForAsync(entityId)).SendAsync(entityId, $$"""[ { "sort": [ { "{{key}}": "asc" } ] }, { "page": { "limit": 3, "includeTotalCount": true } } ]""");
+        var client = await Lab.ClientForAsync(entityId);
+        var answer = await client.SendAsync(entityId, $$"""[ { "sort": [ { "{{key}}": "asc" } ] }, { "page": { "limit": 3 } } ]""");
 
         // Organisation B clones A on the filtered members, so a wrong count here is a scope leak.
-        answer.ShouldHaveTotal(all.Count);
+        (await client.CountOnlyAsync(entityId, "[]")).ShouldCount("exact", all.Count);
         answer.Strings(key).Should().Equal(Corpus.Rows(entityId).Order(Comparer<CorpusRow>.Create(Corpus.CompareIds)).Take(3).Select(row => row.WireId));
     }
 

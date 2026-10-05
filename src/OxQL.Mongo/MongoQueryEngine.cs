@@ -147,8 +147,11 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         try
         {
-            // The page asks for its rows in one reply: the limit and the row that tells whether a next page exists.
-            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 1 }, aggregates.Token);
+            // The page asks for its rows in one reply: the limit and the row that tells whether a next
+            // page exists, and room for one more. A batch of exactly what the pipeline's own $limit lets
+            // through leaves the cursor open (the server has not seen its end yet), and the driver then
+            // sends a getMore that returns nothing; one above it, the first reply closes the cursor.
+            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 2 }, aggregates.Token);
             if (step is not null)
             {
                 countTimer = Stopwatch.StartNew();

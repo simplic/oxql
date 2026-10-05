@@ -26,6 +26,28 @@ public partial class CommandBudgetTests
         cold: 2,
         warm: 2);
 
+    /// <summary>
+    /// A page with a next one whose order no index serves (the server sorts in memory, so it cannot
+    /// tell the cursor is at its end from the limit alone), over the entity's rows, over unwound rows
+    /// and over groups: one aggregate whose first reply closes the cursor, no <c>getMore</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("rows", """[ { "sort": [ { "referenceNumber": "desc" } ] }, { "project": { "id": 1, "referenceNumber": 1 } }, { "page": { "limit": 3 } } ]""")]
+    [InlineData("unwound", """[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "item.orderNumber": "desc" } ] }, { "project": { "id": 1, "position": 1 } }, { "page": { "limit": 3 } } ]""")]
+    [InlineData("groups", """[ { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "total": { "count": true } } } }, { "page": { "limit": 3 } } ]""")]
+    public Task S2b_a_page_the_server_sorts_in_memory_is_one_aggregate_without_a_getMore(string label, string pipeline) => MeasureAsync(
+        "S2b_" + label,
+        async fleet =>
+        {
+            var answer = await fleet.Client(LabService.Transport).SendAsync(Corpus.Shipment, pipeline);
+
+            answer.HasNextPage.Should().BeTrue("the case is a page with a next one: {0}", answer);
+
+            return answer;
+        },
+        cold: 1,
+        warm: 1);
+
     [Fact]
     public Task S3_a_grid_page_with_two_keyed_joins_to_two_owners_is_one_fetch_per_owner_cold_and_none_warm() => MeasureAsync(
         "S3",

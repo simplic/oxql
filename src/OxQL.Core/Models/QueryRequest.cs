@@ -21,6 +21,16 @@ public sealed record QueryRequest
     public QueryVariables? Variables { get; init; }
 
     /// <summary>
+    /// The conditions the engine places (contract 2, DG2 M1): a list of <c>{ id?, where }</c>, all of
+    /// which a row must meet. Each condition runs at the earliest point of the pipeline where the
+    /// paths it reads are in the row. Kept as written: the binder reads it under contract 2, and
+    /// contract 1, which never had the member, ignores it as it ignores every member it does not know.
+    /// </summary>
+    [JsonPropertyName("filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Filter { get; init; }
+
+    /// <summary>
     /// The ordered list of pipeline stages to execute.
     /// </summary>
     [JsonPropertyName("pipeline")]

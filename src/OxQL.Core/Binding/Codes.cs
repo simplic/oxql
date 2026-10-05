@@ -53,6 +53,19 @@ public static class Codes
 
     /// <summary>An unwind's <c>flatten</c> names a member that is not a collection of the same items as the unwound collection.</summary>
     public const string FlattenNotRecursive = "FLATTEN_NOT_RECURSIVE";
+
+    /// <summary>
+    /// The top-level <c>filter</c> is malformed: it is not an array, an entry is not an object or carries
+    /// a member it does not have, <c>where</c> is missing or is no condition object, or an <c>id</c> is
+    /// not a non-empty string of at most 64 characters or names two entries (params <c>reason</c>).
+    /// </summary>
+    public const string InvalidFilter = "INVALID_FILTER";
+
+    /// <summary>
+    /// A condition of the top-level <c>filter</c> reads paths that are never in the row at the same
+    /// point of the pipeline, so the engine has nowhere to place it (params <c>paths</c>, <c>births</c>).
+    /// </summary>
+    public const string FilterNotPlaceable = "FILTER_NOT_PLACEABLE";
     public const string StageAfterPage = "STAGE_AFTER_PAGE";
     public const string MultiplePageStages = "MULTIPLE_PAGE_STAGES";
     public const string MixedProjection = "MIXED_PROJECTION";

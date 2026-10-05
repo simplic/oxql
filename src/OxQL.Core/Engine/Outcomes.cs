@@ -24,6 +24,14 @@ public sealed record Diagnostic
     [JsonPropertyName("path")]
     public string? Path { get; init; }
 
+    /// <summary>
+    /// The entry of the top-level <c>filter</c> the diagnostic belongs to: its <c>id</c>, or its index
+    /// in the list when it has none; absent for a caller stage's.
+    /// </summary>
+    [JsonPropertyName("filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object? Filter { get; init; }
+
     /// <summary>Machine-readable details, e.g. <c>currentId</c> on <c>ENTITY_ID_RETIRED</c>.</summary>
     [JsonPropertyName("params")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -724,6 +732,14 @@ public sealed record ExplainResult
     [JsonPropertyName("stages")]
     public required IReadOnlyList<ExplainStage> Stages { get; init; }
 
+    /// <summary>
+    /// One entry per entry of the request's top-level <c>filter</c>, in order: where the engine placed
+    /// its conditions. Absent when the request carries no <c>filter</c>.
+    /// </summary>
+    [JsonPropertyName("filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ExplainFilter>? Filter { get; init; }
+
     /// <summary>Every alias a stage creates, by name: the stage, the node, the targets, its type and who holds it.</summary>
     [JsonPropertyName("aliases")]
     public JsonObject Aliases { get; init; } = [];
@@ -782,6 +798,56 @@ public sealed record ExplainResult
         Notes = [],
         Stages = [],
     };
+}
+
+/// <summary>
+/// One entry of the request's top-level <c>filter</c> as the engine placed it: <c>ok</c> when every
+/// condition of it bound, <c>error</c> otherwise (the errors carry <c>filter</c>).
+/// </summary>
+public sealed record ExplainFilter
+{
+    /// <summary>The entry's <c>id</c>, when it has one; the entry is at this position of the request's list either way.</summary>
+    [JsonPropertyName("id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Id { get; init; }
+
+    /// <summary><c>ok</c> or <c>error</c>.</summary>
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    /// <summary>Where its conditions run, in pipeline order: one entry per point, with the paths read there.</summary>
+    [JsonPropertyName("placed")]
+    public required IReadOnlyList<ExplainFilterPlacement> Placed { get; init; }
+}
+
+/// <summary>
+/// One point of the pipeline a filter entry's conditions run at: <c>before: 0</c> is the entry into
+/// the pipeline (before the first caller stage), <c>after: i</c> right after caller stage <c>i</c>.
+/// </summary>
+public sealed record ExplainFilterPlacement
+{
+    /// <summary>0: before the first caller stage. Absent when the point lies after a stage.</summary>
+    [JsonPropertyName("before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Before { get; init; }
+
+    /// <summary>The caller stage the conditions run right after. Absent at the entry.</summary>
+    [JsonPropertyName("after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? After { get; init; }
+
+    /// <summary>The paths the conditions placed here read, as written, each once.</summary>
+    [JsonPropertyName("paths")]
+    public required IReadOnlyList<string> Paths { get; init; }
+
+    /// <summary>True when the point lies after a group: the conditions filter groups, not rows.</summary>
+    [JsonPropertyName("having")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Having { get; init; }
+
+    /// <summary>The placement of the boundary before caller stage <paramref name="boundary"/>.</summary>
+    public static ExplainFilterPlacement At(int boundary, IReadOnlyList<string> paths, bool having) =>
+        new() { Before = boundary == 0 ? 0 : null, After = boundary == 0 ? null : boundary - 1, Paths = paths, Having = having ? true : null };
 }
 
 /// <summary>The engine block of an explain answer.</summary>

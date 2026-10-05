@@ -86,12 +86,19 @@ public static class Notes
     /// <summary>The answer was larger than <c>Explain.MaxAnswerBytes</c> and was trimmed (params <c>dropped</c>, <c>bytes</c>, <c>max</c>).</summary>
     public const string ExplainTrimmed = "EXPLAIN_TRIMMED";
 
+    /// <summary>
+    /// A condition of the top-level <c>filter</c> was placed where its path first exists, and a later
+    /// <c>group</c> gives the same name to another thing (an aggregate, or a key over another path): the
+    /// condition is about the earlier one (params <c>path</c>, <c>alias</c>).
+    /// </summary>
+    public const string FilterBindsEarlier = "FILTER_BINDS_EARLIER";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
-        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed,
+        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -174,6 +181,9 @@ public static class Notes
         {
             var stage = indexes[position];
 
+            // A condition the engine placed for a filter entry is said under that entry, not under a stage.
+            collector.Filter = bound.FilterOf(bound.Stages[position]);
+
             switch (bound.Stages[position])
             {
                 case BoundStage.Match match:
@@ -253,6 +263,20 @@ public static class Notes
                     break;
             }
         }
+
+        collector.Filter = null;
+
+        foreach (var filter in bound.Filters)
+            foreach (var (path, alias, stage) in filter.BindsEarlier)
+                collector.Notes.Add(new Diagnostic
+                {
+                    Code = FilterBindsEarlier,
+                    Message = $"The condition on '{path}' runs before the group of stage {stage}, on the rows that feed it; the group's '{alias}' is another thing of the same name. A match stage after the group filters that one.",
+                    Stage = stage,
+                    Path = path,
+                    Filter = filter.Label,
+                    Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
+                });
 
         if (bound.Page.IncludeTotalCount)
         {
@@ -389,14 +413,17 @@ public static class Notes
     /// <summary>Collects the notes once per (code, stage, path).</summary>
     private sealed class Collector(BoundPipeline bound, int contract, OxQLOptions options)
     {
-        private readonly HashSet<(string, int?, string?)> seen = [];
+        private readonly HashSet<(string, int?, string?, object?)> seen = [];
 
         public List<Diagnostic> Notes { get; } = [];
 
+        /// <summary>The filter entry the notes being collected belong to (its id, or its index); null for a caller stage.</summary>
+        public object? Filter { get; set; }
+
         public void Add(string code, int? stage, string? path, string message, Dictionary<string, object?> parameters)
         {
-            if (seen.Add((code, stage, path)))
-                Notes.Add(new Diagnostic { Code = code, Message = message, Stage = stage, Path = path, Params = parameters });
+            if (seen.Add((code, stage, path, Filter)))
+                Notes.Add(new Diagnostic { Code = code, Message = message, Stage = stage, Path = path, Filter = Filter, Params = parameters });
         }
 
         /// <summary>The services owning the targets of a keyed or remote alias of this pipeline, in target order.</summary>

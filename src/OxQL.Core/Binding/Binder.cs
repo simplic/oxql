@@ -43,7 +43,7 @@ public sealed class Binder
     /// The top-level members a request carries. An internal call may also carry <c>keyedBy</c>
     /// (<see cref="InternalRequestMembers"/>); the public route never names it.
     /// </summary>
-    public const string RequestMembers = "entityType, variables, pipeline, strict";
+    public const string RequestMembers = "entityType, variables, filter, pipeline, strict";
 
     /// <summary>The top-level members a request carries on an internal call (<see cref="RequestContext.Internal"/>).</summary>
     public const string InternalRequestMembers = RequestMembers + ", keyedBy";
@@ -247,6 +247,7 @@ public sealed class Binder
 
             BindRequestMembers();
             BindKeyedBy();
+            ReadFilter();
 
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
                 errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
@@ -270,6 +271,11 @@ public sealed class Binder
             for (var index = 0; index < pipeline.Count; index++)
             {
                 var stage = pipeline[index];
+
+                // The conditions of the request's filter run at the earliest point their paths are in
+                // the row (DG2 M1): each boundary between two stages is tried in order, the page's last.
+                if (page is null)
+                    PlaceFilter(index, last: stage?.Kind == "page");
 
                 // A null element is a caller error, not a fault, and is refused with a code.
                 var before = shape;
@@ -327,8 +333,15 @@ public sealed class Binder
                 while (callerIndexes.Count < stages.Count)
                     callerIndexes.Add(index);
 
+                if (stage.Kind == "group" && errors.Count == errorsBefore && stages.Count > boundBefore && stages[^1] is BoundStage.Group grouped)
+                    NoteFilterBindsEarlier(grouped, index);
+
                 traced.Add((index, stage.Kind, before, shape));
             }
+
+            // Without a page stage the end of the pipeline is the last point a condition can run at.
+            if (page is null)
+                PlaceFilter(pipeline.Count, last: true);
 
             // What failed only because it lay under a poisoned alias was reported where the alias
             // failed; explain shows such a stage as skipped.
@@ -352,6 +365,8 @@ public sealed class Binder
                 foreach (var (stage, path, op) in exactTexts)
                     errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, path), stage, path));
             }
+
+            LabelFilterFindings();
 
             if (errors.Count == 0)
                 DefaultSort();
@@ -864,7 +879,7 @@ public sealed class Binder
                     step.After))
                 .ToList();
 
-            return new BindTrace(entry ?? shape, steps, shape) { Reads = reads.ToList() };
+            return new BindTrace(entry ?? shape, steps, shape) { Reads = reads.ToList(), Filters = BoundFilters() };
         }
 
         public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
@@ -905,11 +920,323 @@ public sealed class Binder
                 Fingerprint = fingerprint,
                 Canonical = BoundCanonical.Render(scope, stages, page, mode, keyedByBound, contract2).ToJsonString(),
                 HasSemiJoin = hasSemiJoin,
+                Filters = BoundFilters(),
+                FilterStages = filterStages.Count > 0 ? filterStages : null,
                 KeyedBy = keyedByBound,
                 Collated = collated,
                 Strict = contract2 && request.IsStrict,
             };
         }
+
+        // ---- filter (DG2 M1) -------------------------------------------------------------------
+
+        /// <summary>One entry of the request's <c>filter</c>: its place in the list, its id, and what became of it.</summary>
+        private sealed class FilterEntry(int index)
+        {
+            public int Index { get; } = index;
+
+            public string? Id { get; set; }
+
+            /// <summary>What errors, diagnostics and notes name the entry by: its id, or its index when it has none.</summary>
+            public object Label => Id is null ? Index : Id;
+
+            public bool Failed { get; set; }
+
+            public List<FilterPlacement> Placed { get; } = [];
+
+            public List<(string Path, string Alias, int Stage)> BindsEarlier { get; } = [];
+        }
+
+        /// <summary>
+        /// One condition the engine places on its own: a top-level conjunct of an entry's <c>where</c>
+        /// (a comparison, or an <c>or</c>, <c>not</c> or <c>any</c> group as a whole), with the paths
+        /// it reads off the row and the boundary each was first in the row at.
+        /// </summary>
+        private sealed class FilterUnit(FilterEntry entry, FilterCondition condition, IReadOnlyList<string> paths)
+        {
+            public FilterEntry Entry { get; } = entry;
+
+            public FilterCondition Condition { get; } = condition;
+
+            public IReadOnlyList<string> Paths { get; } = paths;
+
+            public Dictionary<string, int> Births { get; } = new(StringComparer.Ordinal);
+
+            public bool Placed { get; set; }
+        }
+
+        private readonly List<FilterEntry> filterEntries = [];
+        private readonly List<FilterUnit> filterUnits = [];
+        private readonly Dictionary<BoundStage, object> filterStages = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// The stage index the findings of a filter entry are recorded under while binding: below zero,
+        /// so no caller stage has it. <see cref="LabelFilterFindings"/> turns it into the entry's label.
+        /// </summary>
+        private static int FilterMarker(FilterEntry entry) => -1 - entry.Index;
+
+        private QueryValidationError FilterError(FilterEntry? entry, string reason, string message) => new()
+        {
+            Code = Codes.InvalidFilter,
+            Message = message,
+            Filter = entry?.Label,
+            Params = new Dictionary<string, object?> { ["reason"] = reason },
+        };
+
+        /// <summary>
+        /// Reads the request's <c>filter</c> (contract 2): a list of <c>{ id?, where }</c>. Each
+        /// <c>where</c> is a condition object as a <c>match</c> stage takes it; its top-level conjuncts
+        /// are placed one by one, an <c>or</c>, <c>not</c> or <c>any</c> group as a whole. Contract 1
+        /// never had the member and ignores it.
+        /// </summary>
+        private void ReadFilter()
+        {
+            if (!contract2 || request.Filter is not { } raw || raw.ValueKind == JsonValueKind.Null)
+                return;
+
+            if (raw.ValueKind != JsonValueKind.Array)
+            {
+                errors.Add(FilterError(null, "notAnArray", "'filter' is an array of entries, each { id?, where }."));
+                return;
+            }
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var index = 0;
+
+            foreach (var element in raw.EnumerateArray())
+            {
+                var entry = new FilterEntry(index++);
+
+                filterEntries.Add(entry);
+
+                if (element.ValueKind != JsonValueKind.Object)
+                {
+                    Fail("notAnObject", "A filter entry is an object carrying id and where.");
+                    continue;
+                }
+
+                JsonElement? where = null;
+                var unknown = new List<string>();
+
+                foreach (var property in element.EnumerateObject())
+                {
+                    switch (property.Name)
+                    {
+                        case "id":
+                            if (property.Value.ValueKind != JsonValueKind.String || property.Value.GetString() is not { Length: > 0 and <= MaxFilterIdLength } id)
+                                Fail("invalidId", $"A filter entry's 'id' is a string of 1 to {MaxFilterIdLength} characters.");
+                            else if (!ids.Add(id))
+                                Fail("duplicateId", $"The filter id '{id}' names more than one entry.");
+                            else
+                                entry.Id = id;
+                            break;
+
+                        case "where": where = property.Value; break;
+                        default: unknown.Add(property.Name); break;
+                    }
+                }
+
+                if (unknown.Count > 0)
+                    Fail("unknownMember", $"'{string.Join(", ", unknown)}' is not a member of a filter entry; an entry carries id, where.");
+
+                if (where is not { ValueKind: JsonValueKind.Object } condition)
+                {
+                    Fail("whereRequired", "A filter entry carries its condition under 'where', a condition object as a match stage takes it.");
+                    continue;
+                }
+
+                FilterCondition? parsed;
+
+                try
+                {
+                    parsed = FilterConditionConverter.ReadFromElement(condition, OxQLJson.Wire);
+                }
+                catch (JsonException malformed)
+                {
+                    Fail("malformedWhere", malformed.Message);
+                    continue;
+                }
+
+                // An empty where matches everything and places nothing.
+                if (parsed is null)
+                    continue;
+
+                foreach (var conjunct in Conjuncts(parsed))
+                    filterUnits.Add(new FilterUnit(entry, conjunct, RowPaths(conjunct).Distinct(StringComparer.Ordinal).ToList()));
+
+                void Fail(string reason, string message)
+                {
+                    entry.Failed = true;
+                    errors.Add(FilterError(entry, reason, message));
+                }
+            }
+        }
+
+        /// <summary>The longest <c>id</c> a filter entry may carry.</summary>
+        private const int MaxFilterIdLength = 64;
+
+        /// <summary>The top-level conjuncts of a condition: an <c>and</c> flattened through every <c>and</c> directly in it; anything else is one.</summary>
+        private static IEnumerable<FilterCondition> Conjuncts(FilterCondition condition) =>
+            condition.And is { Count: > 0 } and ? and.SelectMany(Conjuncts) : [condition];
+
+        /// <summary>The paths a condition reads off the row: a comparison's path, an <c>any</c>'s collection (its inner paths are the element's), and those of every member of a group.</summary>
+        private static IEnumerable<string> RowPaths(FilterCondition condition)
+        {
+            if (condition.Path is { } path)
+                return [path];
+
+            IEnumerable<FilterCondition> members = [.. condition.And ?? [], .. condition.Or ?? [], .. condition.Not is { } negated && !ReferenceEquals(negated, FilterCondition.EmptyGroup) ? [negated] : Array.Empty<FilterCondition>()];
+
+            return members.SelectMany(RowPaths);
+        }
+
+        /// <summary>
+        /// Whether a path is in the row here. A path that resolves is; so is one that is there but
+        /// cannot be filtered (its error is the condition's, reported where it is placed). A path that
+        /// is unknown here, left the row with an unwind, a projection or a group, or is not born yet is not.
+        /// </summary>
+        private bool InRow(string wire)
+        {
+            // not a read: a probe of whether the path is in the row at this boundary
+            var resolution = shape.Resolve(wire, PathUsage.Match);
+
+            return resolution.Succeeded || resolution.Code != Codes.UnknownPath;
+        }
+
+        /// <summary>
+        /// Places every condition of the filter that can run at the boundary before caller stage
+        /// <paramref name="boundary"/>: one whose paths are all in the row here and that was not placed
+        /// earlier. So each runs at the earliest point its paths exist: a condition on an entity member
+        /// at the entry, on an unwind's alias right after the unwind, on a join's alias after the join,
+        /// on an aggregate after its group. The conditions of one entry placed at one boundary are one
+        /// match. At the <paramref name="last"/> boundary what is still unplaced is refused: a path that
+        /// was never in the row as an unknown path, paths that were never in the row together as
+        /// <c>FILTER_NOT_PLACEABLE</c>.
+        /// </summary>
+        private void PlaceFilter(int boundary, bool last)
+        {
+            if (filterUnits.Count == 0)
+                return;
+
+            foreach (var entry in filterEntries)
+            {
+                var conditions = new List<BoundCondition>();
+                var paths = new List<string>();
+
+                foreach (var unit in filterUnits.Where(unit => ReferenceEquals(unit.Entry, entry) && !unit.Placed))
+                {
+                    foreach (var path in unit.Paths)
+                        if (!unit.Births.ContainsKey(path) && InRow(path))
+                            unit.Births[path] = boundary;
+
+                    if (unit.Paths.All(InRow))
+                    {
+                        unit.Placed = true;
+                        paths.AddRange(unit.Paths.Where(path => !paths.Contains(path, StringComparer.Ordinal)));
+
+                        if (BindCondition(unit.Condition, shape, FilterMarker(entry), Reading.Row) is { } bound)
+                            conditions.Add(bound);
+                    }
+                    else if (last)
+                    {
+                        unit.Placed = true;
+                        RefuseUnplaced(unit);
+                    }
+                }
+
+                if (paths.Count > 0 || conditions.Count > 0)
+                    entry.Placed.Add(new FilterPlacement(boundary, paths, shape.Grouped));
+
+                if (conditions.Count == 0)
+                    continue;
+
+                var stage = new BoundStage.Match(conditions.Count == 1 ? conditions[0] : new BoundCondition.And(conditions));
+
+                stages.Add(stage);
+                callerIndexes.Add(null);
+                filterStages[stage] = entry.Label;
+            }
+        }
+
+        /// <summary>
+        /// The refusal of a condition no boundary could take. A path that was never in the row is the
+        /// error it would be in a match at the end of the pipeline. Paths that each were in the row, but
+        /// never together (a member the group removed, OR-ed with an aggregate), cannot be placed.
+        /// </summary>
+        private void RefuseUnplaced(FilterUnit unit)
+        {
+            var never = unit.Paths.Where(path => !unit.Births.ContainsKey(path)).ToList();
+
+            foreach (var path in never)
+                // not a read: the refusal of a path that was never in the row
+                errors.Add(Unresolved(shape.Resolve(path, PathUsage.Match), FilterMarker(unit.Entry), path));
+
+            if (never.Count > 0)
+                return;
+
+            errors.Add(new QueryValidationError
+            {
+                Code = Codes.FilterNotPlaceable,
+                Message = $"The condition reads {string.Join(", ", unit.Paths.Select(path => $"'{path}'"))}, which are never in the row at the same point of the pipeline; the engine places a condition where every path it reads exists. Split it into conditions that each read what exists together, or write a match stage where it should run.",
+                Stage = FilterMarker(unit.Entry),
+                Params = new Dictionary<string, object?>
+                {
+                    ["paths"] = unit.Paths.ToList(),
+                    ["births"] = unit.Paths.Select(path => new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["path"] = path,
+                        [unit.Births[path] == 0 ? "before" : "after"] = unit.Births[path] == 0 ? 0 : unit.Births[path] - 1,
+                    }).ToList(),
+                },
+            });
+        }
+
+        /// <summary>
+        /// A group gives a name a placed condition reads to another thing: an aggregate, or a key over
+        /// another path. The condition stays where its path first existed; explain says so
+        /// (<c>FILTER_BINDS_EARLIER</c>). A key over the path of the same name is the same thing, and
+        /// filtering the rows that feed it is filtering its groups.
+        /// </summary>
+        private void NoteFilterBindsEarlier(BoundStage.Group group, int index)
+        {
+            var reborn = group.Keys.Where(key => key.Path?.Wire != key.As).Select(key => key.As)
+                .Concat(group.Fields.Select(field => field.As))
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var entry in filterEntries)
+                foreach (var path in entry.Placed.SelectMany(placement => placement.Paths).Distinct(StringComparer.Ordinal))
+                    if (reborn.Contains(path.Split('.', 2)[0]) && !entry.BindsEarlier.Any(noted => noted.Path == path))
+                        entry.BindsEarlier.Add((path, path.Split('.', 2)[0], index));
+        }
+
+        /// <summary>
+        /// Names every finding of a filter entry by the entry: an error or a diagnostic recorded under
+        /// an entry's marker loses the stage it never had and carries <c>filter</c>, the entry's id or
+        /// its index.
+        /// </summary>
+        private void LabelFilterFindings()
+        {
+            if (filterEntries.Count == 0)
+                return;
+
+            for (var at = 0; at < errors.Count; at++)
+            {
+                if (errors[at].Stage is not { } marker || marker >= 0)
+                    continue;
+
+                var entry = filterEntries[-1 - marker];
+
+                entry.Failed = true;
+                errors[at] = errors[at] with { Stage = null, Filter = entry.Label };
+            }
+
+            for (var at = 0; at < diagnostics.Count; at++)
+                if (diagnostics[at].Stage is < 0 and var marker)
+                    diagnostics[at] = diagnostics[at] with { Stage = null, Filter = filterEntries[-1 - marker].Label };
+        }
+
+        private List<BoundFilter> BoundFilters() =>
+            filterEntries.Select(entry => new BoundFilter(entry.Index, entry.Id, entry.Failed, entry.Placed.ToList(), entry.BindsEarlier.ToList())).ToList();
 
         private async Task LoadAddonsAsync(EntityDef target)
         {

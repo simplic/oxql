@@ -419,6 +419,7 @@ public sealed partial class MongoQueryEngine
             Notes = Ordered(notes),
             Entry = entry,
             Stages = stages,
+            Filter = FiltersOf(request.Query, trace),
             Aliases = aliases,
             Types = draft.Types.Types,
             Rules = draft.Types.Rules,
@@ -450,8 +451,22 @@ public sealed partial class MongoQueryEngine
     /// diagnostics, the other notes and the validator are this host's own to compute for its own
     /// callers; an origin computes its own and would drop these.
     /// </summary>
+    /// <summary>
+    /// The entries of the request's <c>filter</c> as the binder placed them (DG2 M1), one per entry in
+    /// order; null when the request carries none or was not read as contract 2.
+    /// </summary>
+    private static List<ExplainFilter>? FiltersOf(QueryRequest query, BindTrace? trace) =>
+        query.Filter is null || trace is null || trace.Filters.Count == 0 && query.Filter.Value.ValueKind != JsonValueKind.Array ? null
+        : trace.Filters.Select(filter => new ExplainFilter
+        {
+            Id = filter.Id,
+            Status = filter.Failed ? "error" : "ok",
+            Placed = filter.Placed.Select(placement => ExplainFilterPlacement.At(placement.Boundary, placement.Paths, placement.Having)).ToList(),
+        }).ToList();
+
     private static ExplainResult Slim(ExplainResult answer) => answer with
     {
+        Filter = null,
         Diagnostics = [],
         Notes = answer.Notes.Where(IsAboutTheAnswer).ToList(),
         Entry = null,

@@ -93,8 +93,10 @@ public partial class ReadLedgerCallSiteTests
             "the matched member of the join's own target",
             "why no target has a hint path",
             "why a branch path is not one a union join continues from",
+            "a probe of whether the path is in the row at this boundary",
+            "the refusal of a path that was never in the row",
         ]);
-        direct.Should().HaveCount(19);
+        direct.Should().HaveCount(21);
     }
 
     [Fact]

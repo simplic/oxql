@@ -444,6 +444,24 @@ public sealed record Aggregate(string As, string Function, BoundExpression? Argu
 /// <summary>One sort field; <paramref name="IgnoreCase"/> when a string member orders under the collation rather than by its exact value.</summary>
 public sealed record BoundSortField(ResolvedPath Path, bool Ascending, bool IgnoreCase = false);
 
+/// <summary>
+/// One point a filter entry's conditions were placed at: the boundary before caller stage
+/// <paramref name="Boundary"/> (0 the entry, the pipeline length the end), the paths read there, and
+/// whether the row there is a group's (<paramref name="Having"/>).
+/// </summary>
+public sealed record FilterPlacement(int Boundary, IReadOnlyList<string> Paths, bool Having);
+
+/// <summary>
+/// One entry of the request's top-level <c>filter</c> as bound (DG2 M1): where its conditions were
+/// placed, whether one of them failed, and the paths a later group gave to another thing
+/// (<paramref name="BindsEarlier"/>: the path, the group's alias, the group's caller stage).
+/// </summary>
+public sealed record BoundFilter(int Index, string? Id, bool Failed, IReadOnlyList<FilterPlacement> Placed, IReadOnlyList<(string Path, string Alias, int Stage)> BindsEarlier)
+{
+    /// <summary>What errors, diagnostics and notes name the entry by: its id, or its index when it has none.</summary>
+    public object Label => Id is null ? Index : Id;
+}
+
 /// <summary>How the next page is addressed.</summary>
 public enum PagingMode
 {
@@ -494,6 +512,15 @@ public sealed record BoundPipeline
     /// binder; <see cref="CallerIndexOf(int)"/> then takes the position.
     /// </summary>
     public IReadOnlyList<int?>? CallerIndexes { get; init; }
+
+    /// <summary>The entries of the request's top-level <c>filter</c>, in order, as they were placed.</summary>
+    public IReadOnlyList<BoundFilter> Filters { get; init; } = [];
+
+    /// <summary>The match stages the binder placed for a filter entry, each with the entry's label; compared by reference.</summary>
+    public IReadOnlyDictionary<BoundStage, object>? FilterStages { get; init; }
+
+    /// <summary>The label of the filter entry a bound stage was placed for (its id, or its index), or null for any other stage.</summary>
+    public object? FilterOf(BoundStage stage) => FilterStages is { } placed && placed.TryGetValue(stage, out var label) ? label : null;
 
     /// <summary>The caller's index of the stage at <paramref name="position"/>, or null for a stage the binder supplied.</summary>
     public int? CallerIndexOf(int position) =>
@@ -643,6 +670,9 @@ public sealed record BindTrace(Shape Entry, IReadOnlyList<StageTrace> Stages, Sh
 {
     /// <summary>The read ledger as far as the stages bound: every path a stage reads, with its use and the join it loads from.</summary>
     public IReadOnlyList<PathRead> Reads { get; init; } = [];
+
+    /// <summary>The entries of the request's top-level <c>filter</c> as far as they were placed; empty when the request carries none.</summary>
+    public IReadOnlyList<BoundFilter> Filters { get; init; } = [];
 
     /// <summary>The shape before pipeline index <paramref name="at"/>; past the last stage, the final shape.</summary>
     public Shape ShapeAt(int at) =>

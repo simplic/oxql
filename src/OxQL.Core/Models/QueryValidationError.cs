@@ -18,6 +18,14 @@ public sealed record QueryValidationError
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Stage { get; init; }
 
+    /// <summary>
+    /// The entry of the top-level <c>filter</c> the error belongs to: its <c>id</c>, or its index in
+    /// the list when it has none. An error of a filter entry carries no <c>stage</c>.
+    /// </summary>
+    [JsonPropertyName("filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object? Filter { get; init; }
+
     /// <summary>The wire path the error is about, when any.</summary>
     [JsonPropertyName("path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

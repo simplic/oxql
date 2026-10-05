@@ -82,7 +82,7 @@ public class StrictRequestBindTests
 
         error.Code.Should().Be(Codes.UnknownRequestMember);
         error.Stage.Should().BeNull();
-        error.Message.Should().Be("'strictness, limit' is not a member of a request; a request carries entityType, variables, pipeline, strict.");
+        error.Message.Should().Be("'strictness, limit' is not a member of a request; a request carries entityType, variables, filter, pipeline, strict.");
     }
 
     [Fact]

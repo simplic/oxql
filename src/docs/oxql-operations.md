@@ -108,7 +108,7 @@ the listed status.
 | `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
-| `RESOLVE_REFUSED` | 422 | the owner refused its part (its own codes follow in `errors`, for a continued stage mapped to the caller's `stage` and `path` with `params.owner`), or answered a row without the key it was asked for |
+| `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
@@ -567,7 +567,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   rows joined after the page from local targets (a member is projected and followed, nothing else,
   and counts no collection above it; with `many` the alias holds an array, and `crossed` is one
   more); `owner`, rows another service holds (nothing sorts, groups or unwinds; with `filter` a
-  condition may compare a member's value, as a semi-join on the owner, never `is` or `any`; without
+  condition on a member travels to the owner as a semi-join, a variant test (`is`) among them,
+  which the owner binds like any other; only `any` is refused here, `ANY_NOT_APPLICABLE`; without
   it no condition). `unwound` lists the collections below the root that are unwound here, relative
   to it. `unwoundAbove`, on the element of a nested collection, is the number of collections above
   its own that are unwound here: its members count that many fewer `above` than in their type. `shows` lists the paths the row carries under a join's alias where that is not every
@@ -618,7 +619,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `UNKNOWN_ENUM_MEMBER`) depends on the organisation's definition; the error then carries
   `params.addon { key, state }`, `state` one of `undefined`, `retired`, `object`, `defined`.
   `owner`: a part could not be checked (`RESOLVE_UNAVAILABLE`; the notes `REMOTE_UNCHECKED`,
-  `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). `data`: only a run can tell (never an explain error).
+  `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). `data`: only a run can tell (never an explain error; the
+  note `SEMI_JOIN_NOT_BY_KEY` has it).
   `advisory`: the query runs. `RESOLVE_REFUSED` beside the errors it wraps has the strongest of
   theirs. The top-level `executable` is derived: `never` with an error whose basis is `request`,
   `model` or `limits`; `unknown` with no such error and another error or `cache.complete: false`;
@@ -703,7 +705,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `JOIN_AFTER_PAGE`, `OWNER_BINDS`,
   `REMOTE_UNCHECKED`, `SELECT_PATH_NOT_ON_TARGET`, `COUNT_CAP` and `OFFSET_PAGING` (contract 1 and
   internal calls only: a contract 2 request has neither a count cap to hit silently nor an offset),
-  `LOOKUP_LIMIT`, `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path
+  `LOOKUP_LIMIT`, `SEMI_JOIN_NOT_BY_KEY` (a condition on another service's member is asked of an
+  owner whose rows are read by a member that is not their key: a run refuses, 422 `RESOLVE_REFUSED`,
+  when a matching row does not carry that member, which only a run can tell; basis `data`, no
+  effect on `executable`; `params` `alias`, `target`, `field`, `services`),
+  `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path
   first exists, and a later group gives the name to another thing; `params` `path`, `alias`),
   `PROJECT_AFTER_PAGE` (the projection at this stage runs after the page is taken, on the page's
   rows), `SORT_BEFORE_UNWIND` (the rows are ordered and cut to what the page can reach before the
@@ -755,10 +761,18 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     and keeps the owner's `params.addon`. An error at a
     stage this host added to that query (the projection of the target field, the page) is said at
     the condition too, since the run is refused for it all the same. A condition no owner was asked
+    A run's refusal carries the same error under its `RESOLVE_REFUSED` head (contract 2), so the
+    two answers differ in `basis` alone. The `filter` a remote `resolve` or `lookup` stage carries
+    itself is checked the same way with the stage's own owner query: what the owner refuses of it is
+    an error at that stage, under the path as the caller wrote it in the filter, with `params.owner`.
+    Over several targets explain asks every owner and says an error once per code, stage and path;
+    a run stops at the first owner that refuses. A condition no owner was asked
     for is never valid by silence: it leaves a `REMOTE_UNCHECKED` note at the same place, with
     `path` and `params { service, target, reason, condition }` (`reason: "cached"` under the cached
     tier without a kept answer, else `unsupported`, `unreachable`, `timeout`), or the
-    `EXPLAIN_LIMIT` note of the limit that left it out; `cache.complete` is then false and
+    `EXPLAIN_LIMIT` note of the limit that left it out (once per limit and service, and once more
+    with `filter` for each entry of the request's `filter` a left-out condition belongs to);
+    `cache.complete` is then false and
     `executable` is `unknown`, never `yes`. What only a run can tell stays a run's: more matching
     rows than `MaxSemiJoinIds` (`SEMI_JOIN_TOO_LARGE`), an owner that does not answer then, a
     matching owner row without the member the reference names.

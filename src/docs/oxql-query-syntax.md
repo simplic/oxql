@@ -367,7 +367,8 @@ semi-join condition under its own default; `caseSensitive` travels to it as writ
 owner's binder refuses (an operator the member's kind does not take, an operand of another kind, a
 member the target does not have, a name that is no member of the enum) is 422 `RESOLVE_REFUSED`
 with the owner's error when run, and that error in explain, at the stage or the `filter` entry
-that carries the condition.
+that carries the condition; both carry the path as written and `params.owner`. The same holds for
+the `filter` member of a `resolve` or `lookup` whose rows another service holds, at that stage.
 A typed, item, converted, element-wise or continued remote alias takes no semi-join
 (`RESOLVE_NOT_FILTERABLE`).
 

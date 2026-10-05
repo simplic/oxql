@@ -251,7 +251,7 @@ owner an origin reaches runs this package: an owner needs the internal routes
 the version 1 package is not listed in `InternalHosts` and cannot be an owner.
 
 An owner refusal becomes the caller's 422 `RESOLVE_REFUSED` with the owner's errors mapped to the
-caller's stages; a timeout or an unreachable owner yields `null` under the alias and a
+caller's stages, paths and `filter` entries, as explain says them; a timeout or an unreachable owner yields `null` under the alias and a
 `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE` diagnostic (the message says whether the owner answered
 with an HTTP error or was not reached at all); a semi-join whose owner does not answer is 422
 `RESOLVE_UNAVAILABLE`. Each join's outcome (`resolved`, `ambiguous`, `reference_null`, `excluded`,

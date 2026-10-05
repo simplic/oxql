@@ -505,6 +505,26 @@ public class StageRulesTests
         await Error("""[{ "page": { "cursor": "a.b", "offset": 1 } }]""", Codes.InvalidPageLimit, internalCall);
     }
 
+    /// <summary>DG2 M11: a variable name that starts with '$' is the engine's; contract 1 never had the rule.</summary>
+    [Fact]
+    public async Task A_variable_name_starting_with_a_dollar_is_reserved_under_contract_2()
+    {
+        const string pipeline = """[{ "match": { "number": { "eq": { "$var": "n" } } } }]""";
+
+        var refusal = await BindHost.RefusedAsync(BindHost.Probe, Order, pipeline, variablesJson: """{ "n": "x", "$now": "2026-01-01T00:00:00Z", "$$a": 1 }""");
+
+        refusal.Errors!.Select(error => (error.Code, error.Stage, System.Text.Json.JsonSerializer.Serialize(error.Params))).Should().Equal(
+            (Codes.InvalidVariable, null, """{"name":"$$a","reason":"reserved"}"""),
+            (Codes.InvalidVariable, null, """{"name":"$now","reason":"reserved"}"""));
+
+        // Unused or used, the name alone is refused; a reference to a name no request can bind is unbound.
+        await Error("""[]""", Codes.InvalidVariable, variables: """{ "$x": 1 }""");
+        await Error("""[{ "match": { "number": { "eq": { "$var": "$now" } } } }]""", Codes.UnboundVariable);
+
+        await Bound(pipeline, variables: """{ "n": "x", "a$b": 1 }""");
+        await Bound(pipeline, BindHost.Context(contract: 1), """{ "n": "x", "$now": 1 }""");
+    }
+
     /// <summary>DG2 M4: the public contract 2 page is addressed by its cursor alone; contract 1 keeps its offset.</summary>
     [Theory]
     [InlineData("0")]

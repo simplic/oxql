@@ -251,6 +251,17 @@ public sealed class Binder
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
                 errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
 
+            // A name that starts with '$' is the engine's to bind (DG2 M11): a request that supplies
+            // one is refused, so a variable the engine binds later never changes what a request means.
+            if (contract2)
+                foreach (var name in (request.Variables?.Values.Keys ?? Enumerable.Empty<string>()).Where(name => name.StartsWith('$')).Order(StringComparer.Ordinal))
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.InvalidVariable,
+                        Message = $"The variable name '{name}' is reserved: a name that starts with '$' is bound by the engine, never by a request.",
+                        Params = new Dictionary<string, object?> { ["name"] = name, ["reason"] = "reserved" },
+                    });
+
             var pipeline = request.Pipeline ?? [];
 
             if (pipeline.Count > options.Limits.MaxPipelineStages)

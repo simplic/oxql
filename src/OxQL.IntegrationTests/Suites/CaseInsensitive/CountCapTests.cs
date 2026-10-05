@@ -31,7 +31,7 @@ public class CountCapTests
         capped.Items.Should().HaveCount(2);
 
         // true counts one step beside the page; the count alone runs to the end within its budget.
-        (await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldCount("atLeast", 1_000, "budget");
+        (await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldCount("atLeast", 1_000, "step");
         (await transport.CountOnlyAsync(Corpus.Template, """[ { "project": { "id": 1 } } ]""")).ShouldCount("exact", total);
     }
 

@@ -280,7 +280,7 @@ public class GroupOrderTests
             if (page == 1)
             {
                 // Beside a page the count is one step of 1 000 groups; alone it runs to the exact number.
-                answer.ShouldCount("atLeast", 1_000, "budget");
+                answer.ShouldCount("atLeast", 1_000, "step");
                 (await client.CountOnlyAsync(Corpus.Template, Stages)).ShouldCount("exact", groups);
                 answer.Items[0]!["name"].Should().BeNull();
             }

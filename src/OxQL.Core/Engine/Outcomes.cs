@@ -97,8 +97,14 @@ public sealed record CountInfo
     public const string ByCap = "cap";
 
     /// <summary>
-    /// <c>stoppedBy</c>: the next step did not fit the time: beside a page the count is one step, and
-    /// alone it takes a further step only when that is predicted to fit what is left of its budget.
+    /// <c>stoppedBy</c>: the count beside a page is one step of <c>Count:StepRows</c> rows and found more;
+    /// the count alone (<c>limit: 0</c>) goes further. Neither the cap nor the time stopped it.
+    /// </summary>
+    public const string ByStep = "step";
+
+    /// <summary>
+    /// <c>stoppedBy</c>: a further step of the count alone was predicted not to fit what is left of
+    /// its time budget, so it was not sent.
     /// </summary>
     public const string ByBudget = "budget";
 
@@ -120,7 +126,7 @@ public sealed record CountInfo
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? Value { get; init; }
 
-    /// <summary>Why counting stopped at a lower bound: <c>page</c>, <c>cap</c>, <c>budget</c> or <c>time</c>.</summary>
+    /// <summary>Why counting stopped at a lower bound: <c>page</c>, <c>step</c>, <c>cap</c>, <c>budget</c> or <c>time</c>.</summary>
     [JsonPropertyName("stoppedBy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StoppedBy { get; init; }

@@ -143,6 +143,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         using var counting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var stopCounting = new CancelOnExit(counting);
         Stopwatch? countTimer = null;
+
+        // Beside a page of groups the count is not sent with the page: counting the groups computes
+        // every group, which is what the page itself does, and a page of groups that is not full
+        // (the usual one) is its own exact count. The count is sent once the page has come back
+        // full. A count beside a page of rows stops at its step's bound and leaves with the page.
+        var countAfterPage = step is not null && bound.FinalShape.Grouped;
         var probeTasks = new List<Task<IReadOnlyList<BsonDocument>>>();
 
         try
@@ -152,12 +158,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             // through leaves the cursor open (the server has not seen its end yet), and the driver then
             // sends a getMore that returns nothing; one above it, the first reply closes the cursor.
             pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 2 }, aggregates.Token);
-            if (step is not null)
+            if (step is not null && !countAfterPage)
             {
                 countTimer = Stopwatch.StartNew();
                 countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
             }
-            else if (compiled.CountStages is not null)
+            else if (step is null && compiled.CountStages is not null)
             {
                 countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token);
             }
@@ -223,6 +229,20 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         var hasNextPage = rows.Count > compiled.Limit;
         var page = hasNextPage ? rows.Take(compiled.Limit).ToList() : rows;
+
+        // A page without a next one is its own count: a step still running is stopped now, not when
+        // the request ends. The driver gives up the connection and the server ends the command when
+        // it next looks (about half a second at most), so only a long count is cut short by it.
+        if (!hasNextPage && step is not null)
+            counting.Cancel();
+
+        // The groups are counted only now that the page has come back full, under the step's own time.
+        if (hasNextPage && countAfterPage && page.Count > 0)
+        {
+            countTimer = Stopwatch.StartNew();
+            countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step!.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
+            Observe(countTask);
+        }
         var losses = new List<Diagnostic>();
 
         // A flattening unwind marks the rows whose collection nests deeper than it descends.
@@ -385,16 +405,22 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return QueryOutcome.Of(result);
     }
 
-    /// <summary>The steps of a count grow by this factor, and a step is taken to cost that many times the one before it.</summary>
+    /// <summary>A further step of a count is sent only when one this many times the last is predicted to fit the time left.</summary>
     private const int LadderFactor = 10;
 
+    /// <summary>The share of the time left a further step is sized to fill; the rest is the margin of the prediction.</summary>
+    private const double LadderFill = 0.5;
+
     /// <summary>
-    /// The count of a count-only request (DG2 M3): a ladder under a time budget. Step <c>k</c> counts up
-    /// to <c>Rows × 10^k</c> rows, up to the ceiling; a step that finds no more rows than its bound is
-    /// exact and ends the ladder. The next step runs only when its predicted time (the last step's,
-    /// times the growth of the bound) fits what is left of the budget; otherwise the last bound is
-    /// the answer, stopped by the budget. Each step's own time limit is what is left; one that runs
-    /// out leaves the bound before it, stopped by time. Nothing counted yet is unknown.
+    /// The count of a count-only request (DG2 M3): a first step of <c>Count:StepRows</c> rows, then as
+    /// far as the time allows. A step counts up to its bound (<c>$limit bound + 1</c>, <c>$count</c>);
+    /// one that finds no more rows than its bound is exact and ends the count. The first step is cheap
+    /// where matches are dense and proves a lower bound whatever follows. From what it took, the next
+    /// step is sized to what the time left is predicted to reach (a scan is linear in what it reads),
+    /// which for a count the database answers quickly is the ceiling at once: two commands, not one
+    /// per power of ten. A step is sent only when ten times the last one is predicted to fit; otherwise
+    /// the last bound is the answer, stopped by the budget. Each step's own time limit is what is left;
+    /// one that runs out leaves the bound before it, stopped by time. Nothing counted yet is unknown.
     /// </summary>
     private async Task<CountInfo> CountLadderAsync(BoundPipeline bound, IReadOnlyList<BsonDocument> counted, BoundCount ladder, AggregateRunOptions runOptions, RequestContext context, CancellationToken cancellationToken)
     {
@@ -426,13 +452,16 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 if (rung >= ladder.Ceiling)
                     return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByCap, Ms = ms };
 
-                var next = Math.Min(rung * LadderFactor, ladder.Ceiling);
-                var predicted = (timer.Elapsed - started).TotalMilliseconds * next / rung;
+                // How many times the step just taken fits what is left of the budget.
+                var took = Math.Max((timer.Elapsed - started).TotalMilliseconds, 0.01);
+                var fits = (budget - timer.Elapsed.TotalMilliseconds) / took;
 
-                if (predicted > budget - timer.Elapsed.TotalMilliseconds)
+                if (fits < LadderFactor)
                     return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByBudget, Ms = ms };
 
-                rung = next;
+                var reach = rung * Math.Max(LadderFactor, fits * LadderFill);
+
+                rung = reach >= ladder.Ceiling ? ladder.Ceiling : (long)reach;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -468,8 +497,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// <item>Without a count step, a page with a next one proves the rows served and one more.</item>
     /// <item>The count step is waited for until its budget ends, counted from when it was sent. Up to
     /// its bound it is exact; above it the bound is a lower bound, stopped by the cap when the request
-    /// could not have counted further and by the budget otherwise. A step that times out or fails
-    /// leaves the count unknown and the rows as they are.</item>
+    /// could not have counted further and by the step otherwise (the count alone goes further). A step
+    /// that times out or fails leaves the count unknown and the rows as they are.</item>
     /// </list>
     /// A bound below what the pages already served gives way to the rows served and one more.
     /// </summary>
@@ -496,7 +525,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 return counted > served ? new CountInfo { State = CountInfo.Exact, Value = counted, Ms = ms } : walked with { Ms = ms };
 
             return step.Rows > served
-                ? new CountInfo { State = CountInfo.AtLeast, Value = step.Rows, StoppedBy = step.Rows >= step.Ceiling ? CountInfo.ByCap : CountInfo.ByBudget, Ms = ms }
+                ? new CountInfo { State = CountInfo.AtLeast, Value = step.Rows, StoppedBy = step.Rows >= step.Ceiling ? CountInfo.ByCap : CountInfo.ByStep, Ms = ms }
                 : walked with { Ms = ms };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

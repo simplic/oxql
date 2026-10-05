@@ -48,6 +48,46 @@ public partial class CommandBudgetTests
         cold: 1,
         warm: 1);
 
+    /// <summary>
+    /// A page of groups with <c>count: true</c>. Not full, it is its own exact count and the groups are
+    /// computed once: one aggregate. Full, the count follows the page: two aggregates, one after the other.
+    /// </summary>
+    [Theory]
+    [InlineData(100, 1, false)]
+    [InlineData(2, 2, true)]
+    public Task S2c_a_page_of_groups_is_counted_only_when_it_comes_back_full(int limit, int commands, bool full) => MeasureAsync(
+        "S2c_" + limit,
+        async fleet =>
+        {
+            var answer = await fleet.Client(LabService.Transport).SendAsync(Corpus.Shipment,
+                $$"""[ { "group": { "by": [ { "path": "status.name", "as": "status" } ], "fields": { "total": { "count": true } } } }, { "page": { "limit": {{limit}}, "count": true } } ]""");
+
+            answer.HasNextPage.Should().Be(full, answer.ToString());
+            answer.CountState.Should().Be("exact", answer.ToString());
+
+            return answer;
+        },
+        cold: commands,
+        warm: commands);
+
+    /// <summary>The count alone: a first step that proves a lower bound, then one sized to the time left. Two aggregates above the first step's bound, one below it.</summary>
+    [Theory]
+    [InlineData(Org.C, 2)]
+    [InlineData(Org.B, 1)]
+    public Task S2d_the_count_alone_is_one_aggregate_up_to_its_first_step_and_two_above_it(Org org, int commands) => MeasureAsync(
+        "S2d_" + org,
+        async fleet =>
+        {
+            var answer = await fleet.Client(LabService.Transport, org).CountOnlyAsync(Corpus.Template, "[]", budgetMs: 5_000);
+
+            answer.CountState.Should().Be("exact", answer.ToString());
+
+            return answer;
+        },
+        cold: commands,
+        warm: commands,
+        extra: org == Org.C ? SeedTemplatesAsync : null);
+
     [Fact]
     public Task S3_a_grid_page_with_two_keyed_joins_to_two_owners_is_one_fetch_per_owner_cold_and_none_warm() => MeasureAsync(
         "S3",

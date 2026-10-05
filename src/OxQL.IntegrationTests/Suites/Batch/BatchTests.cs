@@ -233,7 +233,7 @@ public class BatchTests
 
         var expected = Corpus.PageOf(Corpus.SortedIds(Corpus.Template, "templateName", descending: true), limit: 500);
         var generous = await client.BatchAsync([Heavy()], maxTimeMs: 30_000);
-        generous.Results[0].ShouldHaveIds(expected).ShouldCount("atLeast", 1_000, "budget");
+        generous.Results[0].ShouldHaveIds(expected).ShouldCount("atLeast", 1_000, "step");
     }
 
     [Fact]

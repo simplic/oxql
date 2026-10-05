@@ -35,6 +35,9 @@ public class PageCountTests
         /// <summary>What a count step does instead of answering, by its bound; null answers.</summary>
         public Func<long, Task>? OnCount { get; set; }
 
+        /// <summary>Called when the page is answered.</summary>
+        public Action? OnPage { get; set; }
+
         public List<(string Kind, long Bound, int MaxTimeMs)> Calls { get; } = [];
 
         public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
@@ -42,6 +45,8 @@ public class PageCountTests
             if (stages.Count == 0 || !stages[^1].Contains("$count"))
             {
                 lock (Calls) Calls.Add(("page", 0, options.MaxTimeMs));
+
+                OnPage?.Invoke();
 
                 return PageRows;
             }
@@ -238,7 +243,7 @@ public class PageCountTests
         Wire((await Run(engine, """{ "limit": 5, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"exact","value":1000}""");
 
         runner.Matching = 1_001;
-        Wire((await Run(engine, """{ "limit": 5, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":1000,"stoppedBy":"budget"}""", "a page's count is one step; counting on would go further");
+        Wire((await Run(engine, """{ "limit": 5, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":1000,"stoppedBy":"step"}""", "a page's count is one step; the count alone goes further, and neither the cap nor the time stopped it");
         Wire((await Run(engine, """{ "limit": 5, "count": { "upTo": 50 } }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":50,"stoppedBy":"cap"}""", "the request needs no more");
 
         var (capped, _) = Host(rows: 6, matching: 5_000);
@@ -329,7 +334,7 @@ public class PageCountTests
         result.PageInfo.HasNextPage.Should().BeFalse();
         result.PageInfo.NextCursor.Should().BeNull();
         Wire(result.PageInfo.Count).Should().Be("""{"state":"exact","value":41234}""");
-        runner.Calls.Select(call => (call.Kind, call.Bound)).Should().Equal([("count", 1_000L), ("count", 10_000L), ("count", 100_000L)], "each step counts ten times further, and no page is read");
+        runner.Calls.Select(call => (call.Kind, call.Bound)).Should().Equal([("count", 1_000L), ("count", 100_000L)], "the first step answered at once, so the second goes as far as the request may count: two commands, and no page is read");
         runner.Calls.Should().OnlyContain(call => call.MaxTimeMs <= 5_000, "a step's time limit is what is left of the budget");
 
         runner.Matching = 0;
@@ -346,7 +351,77 @@ public class PageCountTests
 
         runner.Calls.Clear();
         Wire((await Run(engine, """{ "limit": 0, "count": { "budgetMs": 5000 } }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":100000,"stoppedBy":"cap"}""");
-        runner.Calls.Select(call => call.Bound).Should().Equal(1_000L, 10_000L, 100_000L);
+        runner.Calls.Select(call => call.Bound).Should().Equal(1_000L, 100_000L);
+    }
+
+    [Fact]
+    public async Task The_second_step_is_sized_to_what_the_time_left_is_predicted_to_reach()
+    {
+        var (engine, runner) = Host(rows: 0, matching: 500_000);
+
+        // The first step takes about 25 ms of 2 000: what is left holds it some 80 times, and the step is sized to half of that.
+        runner.OnCount = bound => bound == 1_000 ? Task.Delay(25) : Task.CompletedTask;
+
+        var result = await Run(engine, """{ "limit": 0, "count": { "budgetMs": 2000 } }""");
+
+        runner.Calls.Should().HaveCountGreaterThanOrEqualTo(2);
+        runner.Calls[1].Bound.Should().BeInRange(10_000, 99_999, "a step is at least ten times the last and no further than the time is predicted to reach");
+        result.PageInfo.Count!.State.Should().Be(CountInfo.AtLeast);
+        result.PageInfo.Count.Value.Should().BeGreaterThanOrEqualTo(runner.Calls[1].Bound);
+    }
+
+    // ---- the count beside a page of groups ---------------------------------------------------
+
+    private static async Task<QueryResult> RunGrouped(MongoQueryEngine engine, string page)
+    {
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, $$"""[{ "group": { "by": [{ "path": "number", "as": "number" }], "fields": { "total": { "count": true } } } }, { "page": {{page}} }]"""), BindHost.Context());
+
+        outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
+
+        return ((QueryOutcome.Success)outcome).Result;
+    }
+
+    private static List<BsonDocument> Groups(int count) =>
+        Enumerable.Range(0, count).Select(index => new BsonDocument { ["number"] = "n" + index, ["total"] = 1 }).ToList();
+
+    [Fact]
+    public async Task A_page_of_groups_that_is_not_full_is_its_own_count_and_no_count_is_sent()
+    {
+        var (engine, runner) = Host(rows: 0, matching: 3);
+
+        runner.PageRows = Groups(3);
+
+        Wire((await RunGrouped(engine, """{ "limit": 5, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"exact","value":3}""");
+        runner.Calls.Select(call => call.Kind).Should().Equal(["page"], "counting the groups computes every group again; the page that is not full already is the count");
+    }
+
+    [Fact]
+    public async Task A_full_page_of_groups_is_counted_after_it_came_back()
+    {
+        var (engine, runner) = Host(rows: 0, matching: 412);
+        var pageDone = false;
+
+        runner.PageRows = Groups(6);
+        runner.OnPage = () => pageDone = true;
+        runner.OnCount = _ =>
+        {
+            pageDone.Should().BeTrue("the count of the groups is sent once the page has come back full");
+
+            return Task.CompletedTask;
+        };
+
+        var result = await RunGrouped(engine, """{ "limit": 5, "count": true }""");
+
+        Wire(result.PageInfo.Count).Should().Be("""{"state":"exact","value":412}""");
+        result.PageInfo.Count!.Ms.Should().NotBeNull();
+        runner.Calls.Select(call => (call.Kind, call.MaxTimeMs)).Should().Equal([("page", 10_000), ("count", 500)], "one step, under its own budget");
+
+        runner.OnCount = _ => Task.Delay(TimeSpan.FromSeconds(30));
+
+        var slow = await RunGrouped(engine, """{ "limit": 5, "count": { "budgetMs": 40 } }""");
+
+        slow.Items.Should().HaveCount(5);
+        Wire(slow.PageInfo.Count).Should().Be("""{"state":"unknown","reason":"timeout"}""", "the groups are answered; the count that did not finish in its budget is unknown");
     }
 
     [Fact]

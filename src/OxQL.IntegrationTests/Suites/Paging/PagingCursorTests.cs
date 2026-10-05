@@ -368,7 +368,7 @@ public class PagingCursorTests
         var wider = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 7, "cursor": "{{first.NextCursor}}", "count": true } }]""");
 
         first.ShouldHaveIds(expected.Take(3));
-        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldCount("atLeast", 1_000, "budget");
+        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldCount("atLeast", 1_000, "step");
     }
 
     [Fact]
@@ -592,7 +592,7 @@ public class PagingCursorTests
 
         // Beside a page the count is one step; alone it climbs to the cap and says the cap stopped it.
         var beside = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } }]""");
-        beside.ShouldCount("atLeast", 1_000, "budget").ShouldHaveNoDiagnostics();
+        beside.ShouldCount("atLeast", 1_000, "step").ShouldHaveNoDiagnostics();
 
         var over = await client.CountOnlyAsync(Corpus.Template, """[{ "project": { "id": 1 } }]""");
         over.ShouldCount("atLeast", CountCap, "cap").ShouldHaveNoDiagnostics();

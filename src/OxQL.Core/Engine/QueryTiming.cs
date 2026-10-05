@@ -294,7 +294,7 @@ public sealed class QueryTiming
         if (waited > 0)
             Metric("remote", waited);
 
-        if (roots.Sum(root => Interlocked.Read(ref root.countWait)) is var counted and > 0)
+        if (roots.Sum(root => Interlocked.Read(ref root.countWait)) is var counted && Ms(counted) > 0)
             Metric("count", counted);
 
         if (roots.Select(root => root.rtt).Where(measured => measured >= 0).DefaultIfEmpty(-1).Max() is var rtt and >= 0)

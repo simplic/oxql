@@ -80,6 +80,32 @@ public class PagingByValueTests
         rest.Should().Equal(whole.Skip(10), "the rows after the position are the rows that were after it: none again, none left out");
     }
 
+    /// <summary>
+    /// The rows of an unwound lookup alias share their parent's key like any unwound rows, though the
+    /// shape still counts them as the entity's: they are ordered and continued by the key and the
+    /// position. Continued by the key alone, a walk lost the children a page boundary cut off their
+    /// parent (9 children in pages of 2 answered 6).
+    /// </summary>
+    [Fact]
+    public async Task A_walk_over_the_unwound_children_of_a_lookup_answers_every_child()
+    {
+        await using var fleet = await CorpusFleet.CreateAsync("paging_by_value_lookup", [LabService.Transport]);
+        var database = await fleet.Fleet.DatabaseAsync(LabService.Transport);
+
+        await database.GetCollection<BsonDocument>(Corpus.Entity(Corpus.Shipment).Collection).InsertManyAsync(Enumerable.Range(1, 3).Select(n => Shipment(n, "S-" + n, 0).ToBsonDocument()));
+        await database.GetCollection<BsonDocument>(LabService.Transport.Model.Entities["transport.delivery_attempt"].Collection).InsertManyAsync(Enumerable.Range(1, 9).Select(n =>
+            new DeliveryAttempt { Id = Ids.Of(Spaces.DeliveryAttempt, Org.C, n), OrganizationId = Org.C.Id(), ShipmentId = Ids.Of(Spaces.Shipment, Org.C, 1 + (n % 3)), Text = "attempt " + n }.ToBsonDocument()));
+
+        var client = fleet.Client(LabService.Transport, Org.C);
+        const string Stages = """[ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts" } }, { "unwind": { "path": "attempts", "as": "attempt" } }, { "project": { "shipmentNumber": 1, "attempt.text": 1 } } ]""";
+        var whole = await client.WalkAsync(Corpus.Shipment, Stages, limit: 100);
+        var walked = await client.WalkAsync(Corpus.Shipment, Stages, limit: 2);
+
+        whole.Items.Should().HaveCount(9);
+        walked.Items.Select(item => item.ToJsonString()).Should().Equal(whole.Items.Select(item => item.ToJsonString()), "three parents with three children each, in pages of two: no child is lost at a page boundary");
+        walked.Pages.Should().Be(5);
+    }
+
     [Fact]
     public async Task A_group_that_appears_before_the_position_between_two_pages_moves_no_group()
     {

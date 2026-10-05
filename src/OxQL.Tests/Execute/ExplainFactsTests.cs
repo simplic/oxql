@@ -298,6 +298,10 @@ public class ExplainFactsTests
 
         below.Why!["sort"]!.GetValue<string>().Should().Be("underCollection");
         below.Can["filter"]!.AsArray().Should().NotBeEmpty("a condition through a collection matches where some element does");
+        below.Can["aggregate"]!.ToJsonString().Should().Be("""["push"]""", "under a collection only push takes the path");
+        below.Why!["aggregate"]!.GetValue<string>().Should().Be("underCollection");
+        await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "group": { "by": [], "fields": { "all": { "push": "lines.customerId" } } } }]""");
+        await BindHost.ErrorAsync(ResolveModel.Model, Invoice, """[{ "group": { "by": [], "fields": { "one": { "first": "lines.customerId" } } } }]""", Codes.GroupOnCollection);
 
         result.Columns.Should().OnlyContain(column => column.Can != null && result.Capabilities!.ContainsKey(column.Can));
         result.Capabilities!.Select(pair => pair.Value!.ToJsonString()).Should().OnlyHaveUniqueItems("equal answers are written once");

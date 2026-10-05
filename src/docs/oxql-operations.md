@@ -621,8 +621,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   column** has the same answer by rule: `can.filter` is its flag set's `operators`, `can.sort` its
   `sortable`, `can.group` and `can.values` its `groupable` (the flags of its type, with the stage's
   rule or override set), and `can.aggregate` is every function for a number and all but `sum` and
-  `avg` otherwise, wherever the member is in the row before the page and not under a collection
-  that is not unwound (`ExplainFacts.CanOf`; the tests hold `can` equal to what the binder accepts).
+  `avg` otherwise, wherever the member is in the row before the page (under a collection that is
+  not unwound, `push` alone) (`ExplainFacts.CanOf`; the tests hold `can` equal to what the binder accepts).
 - **`owners`**: each owner service once, in pipeline order, this host among them when it answers a
   keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this
   host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,

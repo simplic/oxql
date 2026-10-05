@@ -363,7 +363,8 @@ public static class ExplainFacts
             why["values"] = reason;
         }
 
-        if (!aggregate.Succeeded)
+        // Under a collection that is not unwound only push takes the path; the others need one value per row.
+        if (!aggregate.Succeeded || flags.UnderCollection > 0)
             why["aggregate"] = reason;
 
         return (can, why.Count == 0 ? null : why);
@@ -373,9 +374,9 @@ public static class ExplainFacts
     /// <c>can</c> of a member from its flags at a boundary: <c>filter</c> the flag set's operators,
     /// <c>sort</c> its <c>sortable</c>, <c>group</c> and <c>values</c> its <c>groupable</c>, and
     /// <c>aggregate</c> the functions its kind takes where an aggregate may read it
-    /// (<paramref name="aggregable"/>: the member is in the row before the page and not under a
-    /// collection that is not unwound; every function for a number, all but <c>sum</c> and
-    /// <c>avg</c> for anything else).
+    /// (<paramref name="aggregable"/>: the member is in the row before the page; every function for a
+    /// number, all but <c>sum</c> and <c>avg</c> for anything else, and under a collection that is not
+    /// unwound <c>push</c> alone).
     /// </summary>
     public static JsonObject CanOf(MemberFlags flags, bool aggregable, Kind kind)
     {
@@ -388,7 +389,9 @@ public static class ExplainFacts
         var numeric = kind is Kind.Int or Kind.Long or Kind.Double or Kind.Decimal;
         var functions = new JsonArray();
 
-        if (aggregable)
+        if (aggregable && flags.UnderCollection > 0)
+            functions.Add("push");
+        else if (aggregable)
             foreach (var function in AggregateOrder)
                 if (numeric || function is not ("sum" or "avg"))
                     functions.Add(function);

@@ -502,7 +502,7 @@ public sealed class KeyedFetch
                 var result = index < outcome.Results.Count ? outcome.Results[index] : null;
 
                 if (result is null || !Succeeded(result))
-                    return Refused(result, OwnerQueryBuilder.TargetOf(slot), StageIndexOf(compiled.Bound, slot));
+                    return Refused(result, slot, compiled.Bound, context);
 
                 var total = CountOf(result);
 
@@ -573,7 +573,7 @@ public sealed class KeyedFetch
                     var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
 
                     if (result is null || !Succeeded(result))
-                        return Refused(result, OwnerQueryBuilder.TargetOf(slot), StageIndexOf(compiled.Bound, slot));
+                        return Refused(result, slot, compiled.Bound, context);
 
                     if (plan.Ids.Count > cap)
                         return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
@@ -643,6 +643,65 @@ public sealed class KeyedFetch
             return new ConditionCheck(slot.Leaf.Path.Wire, slot.Leaf.Path.Root.StoragePrefix, ServiceKeyOf(target), target,
                 OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true), written.Stage, written.Filter);
         }).ToList();
+    }
+
+    /// <summary>
+    /// An owner's error about a semi-join's query as the caller's (explain and a run say the same):
+    /// the owner's code, message and params, <c>params.owner</c> saying where the owner saw it, at
+    /// the caller's match stage or, for a condition of the request's <c>filter</c>, at its entry
+    /// (<c>filter</c>, no stage). An error at the owner query's match (its stage 0) lies under the
+    /// path the caller wrote, <c>&lt;alias&gt;.&lt;owner path&gt;</c>; one at the stages this host
+    /// added (the projection of the target field, the page) at the condition's path.
+    /// </summary>
+    public static QueryValidationError MapCondition(ConditionCheck condition, JsonObject error)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        ArgumentNullException.ThrowIfNull(error);
+
+        var ownerStage = error["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : (int?)null;
+        var ownerPath = error["path"] is JsonValue named && named.TryGetValue<string>(out var text) ? text : null;
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = condition.Service,
+            ["entity"] = condition.Target,
+            ["target"] = condition.Target,
+            ["stage"] = ownerStage,
+            ["path"] = ownerPath,
+        };
+
+        return new QueryValidationError
+        {
+            Code = error["code"]?.ToString() ?? Codes.InternalError,
+            Message = error["message"]?.ToString() ?? "",
+            Stage = condition.Stage,
+            Filter = condition.Stage is null ? condition.Filter : null,
+            Path = ownerStage is null or 0 && ownerPath is { Length: > 0 } ? condition.Alias + "." + ownerPath : condition.Path,
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// An owner's refusal of a semi-join's query as this host's 422 <c>RESOLVE_REFUSED</c>. Under
+    /// contract 2 the owner's errors are the caller's, as explain says them (<see cref="MapCondition"/>),
+    /// and the head lies where they lie: at the match stage, or at the entry of the request's
+    /// <c>filter</c>. Contract 1 keeps the owner's errors as the owner wrote them.
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, SemiJoinSlot slot, BoundPipeline bound, RequestContext context)
+    {
+        var written = WrittenAt(bound, slot);
+        var target = OwnerQueryBuilder.TargetOf(slot);
+
+        if (context.Contract != 2)
+            return Refused(result, target, written.Stage);
+
+        var condition = new ConditionCheck(slot.Leaf.Path.Wire, slot.Leaf.Path.Root.StoragePrefix, ServiceKeyOf(target), target,
+            new QueryRequest { EntityType = target, Pipeline = [] }, written.Stage, written.Filter);
+
+        return Refused(result, target, written.Stage, (error, _) => MapCondition(condition, error), written.Stage is null ? written.Filter : null, unwrap: true);
     }
 
     /// <summary>The services a compiled request's semi-joins ask.</summary>
@@ -812,7 +871,7 @@ public sealed class KeyedFetch
                             continue;
                         }
 
-                        return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, query), Calls = calls, CacheHits = cacheHits };
+                        return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, query, filter: context.Contract == 2), Calls = calls, CacheHits = cacheHits };
                     }
 
                     var items = result["items"]!.AsArray();
@@ -868,7 +927,7 @@ public sealed class KeyedFetch
                 var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
 
                 if (result is null || !Succeeded(result))
-                    return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex), Calls = calls, CacheHits = cacheHits };
+                    return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, filter: context.Contract == 2), Calls = calls, CacheHits = cacheHits };
 
                 foreach (var item in result["items"]!.AsArray())
                 {
@@ -1594,6 +1653,14 @@ public sealed class KeyedFetch
                 ? shown?.Contains(ownerPath[element.Length..], StringComparer.Ordinal) == true
                 : parentShown?.Contains(ownerPath, StringComparer.Ordinal) == true;
         }
+
+        /// <summary>
+        /// The owner query's stage that carries a remote resolve's own <c>filter</c>: right after the key
+        /// match of a plain query, the first stage of a grouped one (its keys travel in <c>keyedBy</c>);
+        /// null without a filter, for a local target (this host binds its filter) and for a remote
+        /// lookup (whose every own stage is the lookup's).
+        /// </summary>
+        public int? FilterAt => Target.IsRemote && Stage.RemoteLookup is null && Target.RemoteFilter is { ValueKind: JsonValueKind.Object } ? (Grouped ? 0 : 1) : null;
 
         /// <summary>The continued stage an owner's stage index names, or null for a stage of the query itself.</summary>
         public ContinuedStage? OriginOf(int? ownerStage) =>
@@ -2952,7 +3019,7 @@ public sealed class KeyedFetch
     /// carries only the other errors (R3 F2).
     /// </para>
     /// </summary>
-    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage, QueryRequest? sent = null)
+    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage, QueryRequest? sent = null, bool filter = false)
     {
         if (sent is not null && result?["errors"] is JsonArray errors && errors.OfType<JsonObject>().Any(error => !target.Droppable(error, sent)))
         {
@@ -2962,7 +3029,7 @@ public sealed class KeyedFetch
             result = kept;
         }
 
-        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service));
+        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service, filter), unwrap: filter);
     }
 
     /// <summary>An owner error at one of <paramref name="target"/>'s continued stages as the caller's; null for one at the owner query's own stages.</summary>
@@ -2974,13 +3041,17 @@ public sealed class KeyedFetch
             Path = error["path"]?.ToString(),
         }, target, service);
 
-    private static QueryValidationError? MapBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service)
+    private static QueryValidationError? MapBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service, bool filter = true)
     {
         var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
 
         // A path the projection asked under a lookup's alias is the projection's, as under a resolve's.
+        // A remote resolve's own filter is the caller's, written in the stage: the owner binds it, and
+        // what it refuses there is the resolve's (the key match beside it is this host's making).
         if (target.OriginOf(ownerStage) is not { } origin)
-            return target.Stage.RemoteLookup is { } lookup && !target.AskedByProjection(ownerStage, mapped.Path) ? MapLookupBack(error, mapped, target, lookup, service, ownerStage) : null;
+            return target.Stage.RemoteLookup is { } lookup && !target.AskedByProjection(ownerStage, mapped.Path) ? MapLookupBack(error, mapped, target, lookup, service, ownerStage)
+                : filter && target.FilterAt is { } filterAt && ownerStage == filterAt ? MapFilterBack(error, mapped, target, service, ownerStage)
+                : null;
 
         var parameters = error["params"] is JsonObject written
             ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
@@ -2999,6 +3070,37 @@ public sealed class KeyedFetch
         {
             Stage = origin.OriginIndex,
             Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null, target.Entity),
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// An owner error at the filter of a remote resolve's owner query: the stage's <c>filter</c>, which
+    /// the caller wrote and only the owner can bind. It is the resolve's, at its stage, with the path
+    /// as the caller wrote it (relative to the target, or to the element of an item target) and
+    /// <c>params.owner</c> saying where the owner saw it; the owner's own params travel with it.
+    /// </summary>
+    private static QueryValidationError MapFilterBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service, int? ownerStage)
+    {
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.TargetName,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        var element = BoundKeyedBy.Element + ".";
+
+        return mapped with
+        {
+            Stage = target.Stage.Stage < 0 ? null : target.Stage.Stage,
+            Path = mapped.Path is { } owned && target.Target.Declared.Item is not null && owned.StartsWith(element, StringComparison.Ordinal) ? owned[element.Length..] : mapped.Path,
             Params = parameters,
         };
     }
@@ -3043,7 +3145,7 @@ public sealed class KeyedFetch
     /// <c>RESOLVE_REFUSED</c> at <paramref name="stage"/>; <paramref name="map"/> maps an owner error
     /// back to the caller's stage, or leaves it (null), and the head then points at the first mapped one.
     /// </summary>
-    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null)
+    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null, object? filter = null, bool unwrap = false)
     {
         result = OwnerFaults.Scrubbed(result);
 
@@ -3051,8 +3153,21 @@ public sealed class KeyedFetch
         int? mappedStage = null;
 
         if (result?["errors"] is JsonArray errors)
+        {
+            // An owner that was itself refused by an owner of its own answers that owner's errors under a
+            // head of its own. Under contract 2 the chain's errors are said once, as explain says them:
+            // the errors themselves, under this host's one head; a head that wraps nothing stays.
+            var wrapping = unwrap && errors.OfType<JsonObject>().Any(error => error["code"]?.ToString() != Codes.ResolveRefused);
+
             foreach (var error in errors.OfType<JsonObject>())
             {
+                // The head lies where the owner's own head lay, mapped back like any error of its.
+                if (wrapping && error["code"]?.ToString() == Codes.ResolveRefused)
+                {
+                    mappedStage ??= map?.Invoke(error, new QueryValidationError { Code = Codes.ResolveRefused, Message = "", Path = error["path"]?.ToString() })?.Stage;
+                    continue;
+                }
+
                 var owner = new QueryValidationError
                 {
                     Code = error["code"]?.ToString() ?? Codes.InternalError,
@@ -3068,6 +3183,7 @@ public sealed class KeyedFetch
 
                 inner.Add(owner);
             }
+        }
 
         var at = mappedStage ?? stage;
         var head = new QueryValidationError
@@ -3077,6 +3193,7 @@ public sealed class KeyedFetch
                 ? $"The owner of '{targetEntity}' answered without a result for this query."
                 : $"The owner of '{targetEntity}' refused the query: {result["title"]?.ToString() ?? result["type"]?.ToString() ?? "no reason given"}.",
             Stage = at,
+            Filter = at is null ? filter : null,
         };
 
         return Refusal.NotExecutable(Codes.ResolveRefused, head.Message, at, [head, .. inner]);

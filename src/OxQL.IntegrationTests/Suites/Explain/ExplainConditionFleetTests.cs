@@ -87,6 +87,40 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
         return pipeline.Count > 0 && pipeline[^1]!.AsObject().ContainsKey("page") ? pipeline.Count - 1 : pipeline.Count;
     }
 
+    /// <summary>
+    /// What stands between the errors a run was refused with for how it binds and the errors explain
+    /// answers: null when they are the same errors (code, message, stage or filter entry, path, params;
+    /// explain's carry a basis on top, the run's 422 a head that wraps them).
+    /// </summary>
+    private static string? SameErrors(WireAnswer run, WireAnswer explained, bool among = false)
+    {
+        var ran = (run.StatusCode == 422 ? run.Errors.Skip(1) : run.Errors).Select(error => error.ToJsonString()).ToList();
+        var said = explained.Body!["errors"]!.AsArray().Select(error =>
+        {
+            var copy = error!.DeepClone().AsObject();
+
+            copy.Remove("basis");
+
+            return copy.ToJsonString();
+        }).ToList();
+
+        // A run stops at the first owner that refuses; explain asks every target's owner and says an
+        // error once per code, stage and path, in the words of the first target that gave it. Over
+        // several targets the run's errors are therefore among explain's by code, stage and path.
+        if (among)
+        {
+            static string Key(JsonNode? error) => $"{error!["code"]}|{error["stage"]}|{error["filter"]}|{error["path"]}";
+
+            var known = explained.Body["errors"]!.AsArray().Select(Key).ToHashSet(StringComparer.Ordinal);
+            var met = (run.StatusCode == 422 ? run.Errors.Skip(1) : run.Errors).Select(error => Key(error)).ToList();
+
+            if (met.Count > 0 && met.All(known.Contains))
+                return null;
+        }
+
+        return ran.SequenceEqual(said) ? null : $"the run's errors are {string.Join(" ", ran)}, explain's {string.Join(" ", said)}";
+    }
+
     private static string Said(WireAnswer explained) =>
         string.Join("; ", explained.Body!["errors"]!.AsArray().Select(error => $"{error!["code"]}@{error["stage"] ?? error["filter"]} {error["path"]}"));
 
@@ -108,6 +142,8 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
 
         run.StatusCode.Should().Be(422, run.ToString());
         run.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "INVALID_OPERAND");
+        run.Errors[0]["stage"]!.GetValue<int>().Should().Be(resolve + 1, "the head lies where the owner's error lies");
+        SameErrors(run, await client.ExplainHereAsync(written)).Should().BeNull("a run's refusal carries what explain's error carries");
 
         explained.Status.Should().Be(HttpStatusCode.OK, explained.Text);
         explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse("explain says what the run does");
@@ -140,6 +176,10 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
 
         run.StatusCode.Should().Be(422, run.ToString());
         run.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "INVALID_OPERAND");
+        output.WriteLine($"run: {run.Text}");
+        run.Errors[0]["filter"]!.GetValue<string>().Should().Be("recipient", "the head names the entry");
+        run.Errors[0].ContainsKey("stage").Should().BeFalse();
+        SameErrors(run, explained).Should().BeNull("a run's refusal carries what explain's error carries");
         explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse(explained.Text);
         explained.Body["executable"]!.GetValue<string>().Should().Be("never");
 
@@ -188,6 +228,73 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
         error["params"]!["addon"]!.ToJsonString().Should().Be("""{"key":"noSuchKeyOfEng5","state":"undefined"}""");
         error["params"]!["owner"]!["service"]!.GetValue<string>().Should().Be("directory");
         explained.Body["executable"]!.GetValue<string>().Should().Be("unknown", "a definition of the organisation changes it, no deployment");
+    }
+
+    [Fact]
+    public async Task L5_a_remote_resolves_own_filter_the_owner_refuses_is_refused_by_explain_at_the_resolve_as_by_the_run()
+    {
+        var request = ReportScenarios.Request("A3");
+        var resolve = ReportScenarios.IndexOf(request, "recipientContact");
+
+        request["pipeline"]![resolve]!["resolve"]!["filter"] = JsonNode.Parse("""{ "id": { "contains": "x" } }""");
+
+        var client = await ReportScenarios.ClientAsync(request);
+        var run = await client.QueryAsync(request);
+        var explained = await client.ExplainHereAsync(request);
+
+        output.WriteLine($"run: {run.Text}");
+        run.StatusCode.Should().Be(422, run.ToString());
+        run.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "INVALID_OPERAND");
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse(explained.Text);
+        explained.Body["executable"]!.GetValue<string>().Should().Be("never");
+
+        var error = explained.Body["errors"]!.AsArray().Should().ContainSingle().Subject!.AsObject();
+
+        output.WriteLine($"explain: {error.ToJsonString()}");
+        error["code"]!.GetValue<string>().Should().Be("INVALID_OPERAND");
+        error["stage"]!.GetValue<int>().Should().Be(resolve);
+        error["path"]!.GetValue<string>().Should().Be("id", "the path as the caller wrote it in the stage's filter");
+        error["basis"]!.GetValue<string>().Should().Be("model");
+        error["params"]!["owner"]!.ToJsonString().Should().Be("""{"service":"directory","entity":"directory.contact","target":"directory.contact","stage":1,"path":"id"}""");
+        explained.Body["stages"]![resolve]!["status"]!.GetValue<string>().Should().Be("error");
+        SameErrors(run, explained).Should().BeNull("a run's refusal carries what explain's error carries");
+
+        // A filter the owner binds leaves both as they were.
+        request["pipeline"]![resolve]!["resolve"]!["filter"] = JsonNode.Parse("""{ "address.companyName": { "contains": "x" } }""");
+
+        var ran = await client.QueryAsync(request);
+        var said = await client.ExplainHereAsync(request);
+
+        said.Body!["valid"]!.GetValue<bool>().Should().BeTrue(said.Text);
+        said.Body["executable"]!.GetValue<string>().Should().Be("yes");
+        BindRefused(ran).Should().BeFalse(ran.ToString());
+    }
+
+    [Fact]
+    public async Task L6_a_condition_through_a_reference_onto_a_member_that_is_not_the_key_is_noted_as_the_runs_to_tell()
+    {
+        // The clerk is referenced by its user id, which is not the employee's key.
+        var byMember = ReportScenarios.Request("A4");
+        var explained = await (await ReportScenarios.ClientAsync(byMember)).ExplainHereAsync(
+            WithStage(byMember, ReportScenarios.IndexOf(byMember, "clerk") + 1, """{ "match": { "clerk.address.lastName": { "startsWith": "M" } } }"""));
+
+        explained.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explained.Text);
+        explained.Body["executable"]!.GetValue<string>().Should().Be("yes", "a note about what only a run can tell changes no verdict");
+
+        var note = explained.Body["notes"]!.AsArray().Should().ContainSingle(note => note!["code"]!.GetValue<string>() == "SEMI_JOIN_NOT_BY_KEY").Subject!.AsObject();
+
+        output.WriteLine($"explain: {note.ToJsonString()}");
+        note["basis"]!.GetValue<string>().Should().Be("data");
+        note["stage"]!.GetValue<int>().Should().Be(ReportScenarios.IndexOf(byMember, "clerk") + 1);
+        note["path"]!.GetValue<string>().Should().Be("clerk.address.lastName");
+        note["params"]!.ToJsonString().Should().Be("""{"alias":"clerk","target":"staff.employee","field":"userId","services":["staff"]}""");
+
+        // The recipient is referenced by its key: no such note.
+        var byKey = ReportScenarios.Request("A3");
+        var plain = await (await ReportScenarios.ClientAsync(byKey)).ExplainHereAsync(
+            WithStage(byKey, ReportScenarios.IndexOf(byKey, "recipientContact") + 1, """{ "match": { "recipientContact.address.companyName": { "contains": "x" } } }"""));
+
+        plain.Body!["notes"]!.AsArray().Should().NotContain(note => note!["code"]!.GetValue<string>() == "SEMI_JOIN_NOT_BY_KEY");
     }
 
     // ---- the cost -----------------------------------------------------------------------------------------
@@ -366,6 +473,8 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
 
             if (!codes.SequenceEqual(RefusedWith(run)))
                 disagreements.Add($"{id}: '{path}' {op} {operand}: explain refuses with {string.Join(",", codes)}, the run with {string.Join(",", RefusedWith(run))}");
+            else if (SameErrors(run, explained) is { } differing)
+                disagreements.Add($"{id}: '{path}' {op} {operand}: {differing}");
 
             // An owner's refusal is said where the caller wrote the condition, under the caller's path.
             if (run.StatusCode == 422 && !explained.Body["errors"]!.AsArray().All(error => error!["stage"]?.GetValue<int>() == at
@@ -447,6 +556,156 @@ public class ExplainConditionFleetTests(ITestOutputHelper output)
         {
             accepted.Should().BePositive("an operator of the member's kind with an operand of its kind runs");
             refused.Should().BePositive("and one that is not is refused, by explain as by the run");
+        }
+    }
+
+    /// <summary>A request explain calls not valid only for what an owner refuses, while its run answers.</summary>
+    private sealed record Unreached(string What, JsonObject Request, WireAnswer Explained, WireAnswer Run);
+
+    /// <summary>
+    /// The same parity for the <c>filter</c> a join stage carries itself, where another service holds the
+    /// joined rows: a remote <c>resolve</c> (plain, typed, of an item, continued), a remote <c>lookup</c>
+    /// and a union join. For every such stage of every reference query, a filter over one member of each
+    /// kind its first target's model has (and one that is no member), with every operator and an operand
+    /// of the member's kind, and <c>eq</c> with one that is not. The owner binds the filter when the page
+    /// reaches it: a run refused for how it binds is a request explain refuses with the same errors at
+    /// that stage (over several targets the run's errors are among explain's: a run stops at the first
+    /// owner that refuses, explain asks them all). A request explain refuses only for what an owner refuses may still run when its page
+    /// holds no row for that owner; those are counted and bounded, as the route differential bounds them.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Reference))]
+    public async Task P2_every_operator_in_the_filter_of_every_remote_join_is_accepted_by_a_run_or_refused_by_explain_with_the_runs_errors(string id)
+    {
+        var request = ExplainGolden.Cases[id]();
+        var client = await ReportScenarios.ClientAsync(request);
+        var answer = await client.ExplainHereAsync(request);
+
+        if (answer.Body?["valid"]?.GetValue<bool>() != true)
+            return;
+
+        var disagreements = new List<string>();
+        var unreached = new List<Unreached>();
+        var compared = 0;
+        var refused = 0;
+        var accepted = 0;
+        var stages = new List<string>();
+
+        async Task CompareAsync(int stage, string kind, string member, string op, string operand, bool several)
+        {
+            var written = request.DeepClone().AsObject();
+
+            written["pipeline"]![stage]![kind]!["filter"] = JsonNode.Parse($$"""{ "{{member}}": { "{{op}}": {{operand}} } }""");
+
+            var run = await client.QueryAsync(written);
+            var explained = await client.ExplainHereAsync(written);
+            var what = $"{id}: stage {stage} {kind} filter '{member}' {op} {operand}";
+
+            compared++;
+
+            if (explained.StatusCode != 200)
+            {
+                if (run.StatusCode != explained.StatusCode)
+                    disagreements.Add($"{what}: explain answered {explained.StatusCode}, the run {run.StatusCode}");
+
+                return;
+            }
+
+            var valid = explained.Body!["valid"]!.GetValue<bool>();
+            var bindRefused = BindRefused(run);
+
+            if (valid && bindRefused)
+            {
+                disagreements.Add($"{what}: explain is valid, the run answered {run.StatusCode} {string.Join(",", run.ErrorCodes)}: {string.Join(" | ", run.Errors.Select(error => error["message"]?.GetValue<string>()))}");
+                return;
+            }
+
+            if (!valid && !bindRefused)
+            {
+                // What only an owner refuses, a page that asks that owner nothing does not meet.
+                if (explained.Body["errors"]!.AsArray().All(error => error!["params"]?["owner"] is JsonObject))
+                    unreached.Add(new Unreached(what, written, explained, run));
+                else
+                    disagreements.Add($"{what}: explain refuses ({Said(explained)}), the run answered {run.StatusCode}");
+
+                return;
+            }
+
+            if (valid)
+            {
+                accepted++;
+                return;
+            }
+
+            refused++;
+
+            if (SameErrors(run, explained, among: several) is { } differing)
+                disagreements.Add($"{what}: {differing}");
+            else if (run.StatusCode == 422 && !explained.Body["errors"]!.AsArray().All(error => error!["stage"]?.GetValue<int>() == stage && error["params"]?["owner"] is JsonObject))
+                disagreements.Add($"{what}: an owner's refusal is not said at the stage: {explained.Body["errors"]!.ToJsonString()}");
+        }
+
+        var pipeline = request["pipeline"]!.AsArray();
+
+        for (var stage = 0; stage < pipeline.Count; stage++)
+        {
+            var written = pipeline[stage]!.AsObject();
+            var kind = written.ContainsKey("resolve") ? "resolve" : written.ContainsKey("lookup") ? "lookup" : null;
+
+            if (kind is null || written[kind]!["as"]?.GetValue<string>() is not { } alias || answer.Body["aliases"]![alias] is not JsonObject described
+                || described["node"]?.GetValue<string>() != "remote" || described["entities"] is not JsonArray { Count: > 0 } entities)
+                continue;
+
+            // The first target's members: of the entity, or of the element of an item target.
+            var target = entities[0]!.GetValue<string>();
+            var hash = target.IndexOf('#', StringComparison.Ordinal);
+
+            if (!Entities.Value.TryGetValue(hash < 0 ? target : target[..hash], out var entity))
+                continue;
+
+            var item = hash < 0 ? null : target[(hash + 1)..] + ".";
+            var members = entity.Paths
+                .Where(member => member.Stored && !member.Wire.Contains('*', StringComparison.Ordinal)
+                    && (item is null ? member.CollectionAncestors == 0 : member.Wire.StartsWith(item, StringComparison.Ordinal) && member.CollectionAncestors == 1))
+                .GroupBy(member => member.LeafKind == member.Kind ? member.Kind.ToString() : $"{member.Kind} of {member.LeafKind}")
+                .Select(group => group.First())
+                .ToList();
+
+            stages.Add($"{stage} {kind} {alias} ({string.Join(", ", entities.Select(each => each!.GetValue<string>()))})");
+
+            foreach (var member in members)
+            {
+                var path = item is null ? member.Wire : member.Wire[item.Length..];
+
+                foreach (var op in Operators)
+                    if (ValueOf(member) is { } value)
+                        await CompareAsync(stage, kind, path, op, Operand(op, value), entities.Count > 1);
+
+                await CompareAsync(stage, kind, path, "eq", member.LeafKind == Kind.String ? "1" : "\"x\"", entities.Count > 1);
+            }
+
+            await CompareAsync(stage, kind, "noSuchMember", "eq", "\"x\"", entities.Count > 1);
+        }
+
+        // An excuse is checked, not taken: no row of the run holds a record under an alias of the refused stage.
+        foreach (var each in unreached)
+        {
+            var at = each.Explained.Body!["errors"]![0]!["stage"]!.GetValue<int>();
+            var created = each.Explained.Body["stages"]![at]!["creates"]!.AsArray().Select(alias => alias!.GetValue<string>()).ToList();
+
+            if (each.Run.StatusCode == 200 && each.Run.Items.OfType<JsonObject>().Any(row => created.Any(alias => row[alias] is JsonObject or JsonArray { Count: > 0 })))
+                disagreements.Add($"{each.What}: explain refuses ({Said(each.Explained)}); a row of the run holds a record under {string.Join(", ", created)}, yet the run answered");
+        }
+
+        output.WriteLine($"{id}: {stages.Count} join stages over other services' rows [{string.Join("; ", stages)}], {compared} requests explained and run: {accepted} accepted, {refused} refused for how they bind with the same errors, {unreached.Count} refused by an owner the run's page did not reach");
+
+        disagreements.Should().BeEmpty();
+        unreached.Count.Should().BeLessThanOrEqualTo(compared / 4, "a parity that excuses most of what it compares shows nothing");
+
+        if (stages.Count > 0)
+        {
+            accepted.Should().BePositive();
+            refused.Should().BePositive();
         }
     }
 

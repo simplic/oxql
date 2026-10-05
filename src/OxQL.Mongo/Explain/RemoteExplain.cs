@@ -724,31 +724,8 @@ public sealed class RemoteExplain : IExplainOwners
 
         foreach (var error in answer["errors"]?.AsArray().OfType<JsonObject>() ?? [])
         {
-            var ownerStage = error["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : (int?)null;
-            var ownerPath = error["path"] is JsonValue named && named.TryGetValue<string>(out var text) ? text : null;
-            var parameters = error["params"] is JsonObject written
-                ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
-                : new Dictionary<string, object?>(StringComparer.Ordinal);
-
-            parameters["owner"] = new Dictionary<string, object?>
-            {
-                ["service"] = condition.Service,
-                ["entity"] = condition.Target,
-                ["target"] = condition.Target,
-                ["stage"] = ownerStage,
-                ["path"] = ownerPath,
-            };
-
-            var mapped = new QueryValidationError
-            {
-                Code = error["code"]?.ToString() ?? Codes.InternalError,
-                Message = error["message"]?.ToString() ?? "",
-                Stage = condition.Stage,
-                Filter = condition.Stage is null ? condition.Filter : null,
-                // The owner query's match is the caller's condition, its path relative to the target.
-                Path = ownerStage is null or 0 && ownerPath is { Length: > 0 } ? condition.Alias + "." + ownerPath : condition.Path,
-                Params = parameters,
-            };
+            // The mapping a run's refusal uses: both say the same of the owner's error.
+            var mapped = KeyedFetch.MapCondition(condition, error);
 
             if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && Equals(other.Filter, mapped.Filter) && other.Path == mapped.Path))
                 errors.Add(mapped);
@@ -1184,6 +1161,7 @@ public sealed class RemoteExplain : IExplainOwners
                 foreach (var index in indexes)
                     results[index] = late;
 
+                AtEntries(late, service, asks, indexes);
                 continue;
             }
 
@@ -1198,6 +1176,7 @@ public sealed class RemoteExplain : IExplainOwners
                 foreach (var index in indexes)
                     results[index] = limited;
 
+                AtEntries(limited, service, asks, indexes);
                 continue;
             }
 
@@ -1256,6 +1235,7 @@ public sealed class RemoteExplain : IExplainOwners
                 foreach (var index in indexes)
                     results[index] = failed;
 
+                AtEntries(failed, use.Service, asks, indexes);
                 continue;
             }
 
@@ -1376,12 +1356,17 @@ public sealed class RemoteExplain : IExplainOwners
         return Limited("time", wallMs, service, target, stage, filter: filter);
     }
 
-    /// <summary>A part a limit left out: noted once per limit and service, never retried.</summary>
+    /// <summary>A part a limit left out: noted once per limit and service, and once more per entry of the request's filter a left-out condition belongs to; never retried.</summary>
     private (JsonObject? Answer, string? Reason) Limited(string limit, int max, string service, string target, int? stage, int? retryAfter = null, object? filter = null)
     {
         Complete = false;
+        lastLimit = (limit, max);
 
-        if (!limitNotes.Any(note => Equals(note.Params?["limit"], limit) && Equals(note.Params?["service"], service)))
+        // Once per limit and service; a condition of the request's filter is said at its entry as well,
+        // so the entry it concerns is never lost in the note of the owner's target.
+        var entry = stage is null ? filter : null;
+
+        if (!limitNotes.Any(note => Equals(note.Params?["limit"], limit) && Equals(note.Params?["service"], service) && Equals(note.Filter, entry)))
             limitNotes.Add(new Diagnostic
             {
                 Code = Notes.ExplainLimit,
@@ -1394,13 +1379,33 @@ public sealed class RemoteExplain : IExplainOwners
                     _ => $"This explain had {max} ms left of the time an explain may take; what '{service}' binds for '{target}' was not checked.",
                 },
                 Stage = stage,
-                Filter = stage is null ? filter : null,
+                Filter = entry,
                 Params = retryAfter is null
                     ? new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target }
                     : new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target, ["retryAfter"] = retryAfter },
             });
 
         return (null, Limit);
+    }
+
+    /// <summary>The limit the last <see cref="Limited"/> noted.</summary>
+    private (string Limit, int Max) lastLimit;
+
+    /// <summary>
+    /// A limit left out everything one owner was asked in a round, and its note lies at the first of
+    /// those asks. A condition of the request's <c>filter</c> among them is noted at its entry as
+    /// well, so a reader of that entry finds what was not checked of it.
+    /// </summary>
+    private void AtEntries((JsonObject? Answer, string? Reason) outcome, string service, IReadOnlyList<Ask> asks, IReadOnlyList<int> indexes)
+    {
+        if (outcome.Reason != Limit)
+            return;
+
+        var (limit, max) = lastLimit;
+
+        foreach (var index in indexes)
+            if (asks[index] is { Stage: null, Filter: not null } entry)
+                Limited(limit, max, service, entry.Target, null, filter: entry.Filter);
     }
 
     /// <summary>Whether a call already ran out of the shared budget.</summary>

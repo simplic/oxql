@@ -120,13 +120,21 @@ public static class Notes
     /// </summary>
     public const string UnwindPrefilter = "UNWIND_PREFILTER";
 
+    /// <summary>
+    /// A condition on another service's member is asked of its owner through a reference onto a member
+    /// that is not the target's key: the owner's matching rows are read by that member, and a run
+    /// refuses (422 <c>RESOLVE_REFUSED</c>) when one of them does not carry it. Only a run can tell
+    /// (params <c>alias</c>, <c>target</c>, <c>field</c>, <c>services</c>).
+    /// </summary>
+    public const string SemiJoinNotByKey = "SEMI_JOIN_NOT_BY_KEY";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
-        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter,
+        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -619,6 +627,13 @@ public static class Notes
                     Add(OwnerBinds, stage, semiJoin.Path.Wire,
                         $"The condition on '{semiJoin.Path.Wire}' is asked of the owner before the page is taken; the owner binds it.",
                         new() { ["alias"] = semiJoin.Path.Root.StoragePrefix, ["services"] = ServicesOf(semiJoin.Path.Root.StoragePrefix), ["forTarget"] = null });
+
+                    // The owner's rows are matched by a member that is not their key: one without it refuses the run.
+                    if (bound.Stages.OfType<BoundStage.Resolve>().Where(resolve => resolve.As == semiJoin.Path.Root.StoragePrefix).SelectMany(TargetsOf)
+                        .FirstOrDefault(target => !target.Declared.FieldIsKey) is { } byMember)
+                        Add(SemiJoinNotByKey, stage, semiJoin.Path.Wire,
+                            $"The condition on '{semiJoin.Path.Wire}' is asked of the owner of '{byMember.Declared.Entity}', whose matching rows are read by '{byMember.Declared.Field}', which is not their key: a run refuses (RESOLVE_REFUSED) when a matching row does not carry that member. Only a run can tell.",
+                            new() { ["alias"] = semiJoin.Path.Root.StoragePrefix, ["target"] = byMember.Declared.Entity, ["field"] = byMember.Declared.Field, ["services"] = ServicesOf(semiJoin.Path.Root.StoragePrefix) });
                     break;
 
                 case BoundCondition.Leaf { Path.IsRemote: true }:

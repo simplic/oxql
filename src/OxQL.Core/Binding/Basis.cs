@@ -102,6 +102,9 @@ public static class Basis
         [Notes.CountCap] = Advisory, [Notes.LookupLimit] = Advisory, [Notes.OffsetPaging] = Advisory, [Notes.MissingPolicy] = Advisory,
         [Notes.ReportPage] = Advisory, [Notes.IndexAdvice] = Advisory, [Notes.RemoteLookup] = Advisory, [Notes.FilterBindsEarlier] = Advisory,
         [Notes.ProjectAfterPage] = Advisory, [Notes.SortBeforeUnwind] = Advisory, [Notes.UnwindPrefilter] = Advisory,
+
+        // the query binds; what an owner's rows hold decides whether a run answers
+        [Notes.SemiJoinNotByKey] = Data,
     };
 
     /// <summary>The codes that are the organisation's to decide when their path lies under an addon bag.</summary>

@@ -268,6 +268,67 @@ public class ExplainConditionCheckTests
         result.OwnerOf("crm")["calls"]!.GetValue<int>().Should().Be(1, "never a second call in a round");
     }
 
+    [Fact]
+    public async Task A_limit_that_leaves_out_a_condition_of_the_filter_says_so_at_its_entry_beside_the_note_of_the_target()
+    {
+        var client = OwnerFleet.Client();
+        var result = await ExplainAsync($$""" "pipeline": [{{Join}}], "filter": [ { "id": "byContact", "where": { "r.id": { "contains": "x" } } } ] """, client, configure: options => options.Explain.MaxOwnerCalls = 0);
+
+        result.Valid.Should().BeTrue("a limit is never an error");
+        result.Executable.Should().Be(Basis.Unknown);
+        client.ExplainCalls.Should().BeEmpty();
+
+        var limits = result.Notes.Where(note => note.Code == Notes.ExplainLimit && Equals(note.Params!["limit"], "ownerCalls") && Equals(note.Params["service"], "crm")).ToList();
+
+        limits.Select(note => (note.Stage, note.Filter)).Should().BeEquivalentTo(new (int?, object?)[] { (0, null), (null, "byContact") },
+            "the target's note at its stage, and the condition's at its filter entry: the entry is not lost in the target's note");
+        limits.Should().OnlyContain(note => note.Basis == Basis.Owner);
+
+        // A batch with room for the target alone: the note of the condition left out carries its entry.
+        var crowded = await ExplainAsync($$""" "pipeline": [{{Join}}], "filter": [ { "where": { "r.id": { "contains": "x" } } } ] """, OwnerFleet.Client(), configure: options => options.Explain.MaxBatchChecks = 1);
+
+        crowded.Notes.Should().ContainSingle(note => note.Code == Notes.ExplainLimit && Equals(note.Params!["limit"], "checks")).Which.Filter.Should().Be(0, "an entry without an id is named by its index");
+        crowded.Executable.Should().Be(Basis.Unknown);
+    }
+
+    // ---- a remote resolve's own filter --------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("""{ "id": { "contains": "x" } }""", Codes.InvalidOperand, "id")]
+    [InlineData("""{ "nope": { "eq": "x" } }""", Codes.UnknownPath, "nope")]
+    [InlineData("""{ "phones": { "eq": "x" } }""", Codes.NotFilterable, "phones")]
+    public async Task What_the_owner_refuses_of_a_remote_resolves_own_filter_is_an_error_at_the_resolve(string filter, string code, string path)
+    {
+        var client = OwnerFleet.Client();
+        var result = await ExplainAsync($$""" "pipeline": [{ "resolve": { "path": "contactId", "as": "r", "filter": {{filter}} } }] """, client);
+
+        result.Valid.Should().BeFalse();
+        result.Executable.Should().Be(Basis.Never);
+
+        var error = result.Errors.Should().ContainSingle().Subject;
+
+        error.Code.Should().Be(code);
+        error.Stage.Should().Be(0);
+        error.Path.Should().Be(path, "the path as the caller wrote it in the filter, relative to the target");
+        error.Basis.Should().Be(Basis.OfCode[code]);
+        Owner(error).Should().Be($$"""{"service":"crm","entity":"crm.contact","target":"crm.contact","stage":1,"path":"{{path}}"}""");
+        result.Stage(0).Status.Should().Be("error");
+    }
+
+    [Fact]
+    public async Task A_remote_resolves_filter_the_owner_binds_leaves_the_answer_valid_and_an_error_at_the_key_match_stays_this_hosts()
+    {
+        (await ExplainAsync(""" "pipeline": [{ "resolve": { "path": "contactId", "as": "r", "filter": { "name": { "contains": "x" } } } }] """, OwnerFleet.Client())).Executable.Should().Be(Basis.Yes);
+
+        // The check key at the owner query's key match is this host's making, with a filter beside it or without.
+        var client = new FakeRemoteClient
+        {
+            Explains = (_, _) => new JsonObject { ["valid"] = false, ["errors"] = new JsonArray(new JsonObject { ["code"] = Codes.InvalidOperand, ["message"] = "the key", ["stage"] = 0, ["path"] = "id" }) },
+        };
+
+        (await ExplainAsync(""" "pipeline": [{ "resolve": { "path": "contactId", "as": "r", "filter": { "name": { "contains": "x" } } } }] """, client)).Valid.Should().BeTrue();
+    }
+
     // ---- what an owner's answer may carry ----------------------------------------------------------------
 
     [Fact]

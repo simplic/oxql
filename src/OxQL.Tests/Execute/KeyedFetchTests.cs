@@ -318,6 +318,57 @@ public class KeyedFetchTests
         runner.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task A_semi_join_the_owner_refuses_carries_the_owners_error_as_the_callers_under_contract_2_and_as_the_owner_wrote_it_under_contract_1()
+    {
+        var (engine, runner, client) = Host();
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.InvalidOperand, "'contains' does not apply to a guid.", 0, "matchCode");
+
+        var refusal = await Refused(engine, SemiJoin);
+
+        refusal.Status.Should().Be(422);
+        refusal.Errors!.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal(
+            (Codes.ResolveRefused, 1, null), (Codes.InvalidOperand, 1, "veh.matchCode"));
+        System.Text.Json.JsonSerializer.Serialize(refusal.Errors![1].Params!["owner"], OxQL.Core.Models.OxQLJson.Wire).Should().Be(
+            """{"service":"vehicle","entity":"vehicle.vehicle","target":"vehicle.vehicle","stage":0,"path":"matchCode"}""");
+        runner.Calls.Should().BeEmpty();
+
+        // The request's filter: the head and the error name the entry, and carry no stage.
+        var byFilter = await engine.ExecuteAsync(BindHost.Parse($$"""{ "entityType": "{{Order}}", "pipeline": [{ "resolve": { "path": "vehicleId", "as": "veh" } }], "filter": [ { "id": "byCode", "where": { "veh.matchCode": { "contains": "x" } } } ] }"""), BindHost.Context());
+        var named = byFilter.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
+
+        named.Errors!.Select(error => (error.Code, error.Stage, error.Filter, error.Path)).Should().Equal(
+            (Codes.ResolveRefused, null, "byCode", null), (Codes.InvalidOperand, null, "byCode", "veh.matchCode"));
+
+        // Contract 1 answers what it always did.
+        var before = await engine.ExecuteAsync(BindHost.Request(Order, SemiJoinOneRow), BindHost.Context(contract: 1));
+        var kept = before.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
+
+        kept.Errors!.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal((Codes.ResolveRefused, 1, null), (Codes.InvalidOperand, null, "matchCode"));
+        kept.Errors![1].Params.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_remote_resolves_filter_the_owner_refuses_is_the_resolves_under_contract_2_with_the_owners_params()
+    {
+        const string filtered = """[{ "resolve": { "path": "vehicleId", "as": "veh", "filter": { "matchCode": { "gt": 1 } } } }, { "page": { "limit": 10 } }]""";
+
+        var (engine, runner, client) = Host();
+        runner.PageRows = [Row(Id1, "a", null, Vehicle1)];
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Refused(Codes.InvalidOperand, "'matchCode' expects text.", 1, "matchCode");
+
+        var refusal = await Refused(engine, filtered);
+
+        refusal.Errors!.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal((Codes.ResolveRefused, 0, null), (Codes.InvalidOperand, 0, "matchCode"));
+        System.Text.Json.JsonSerializer.Serialize(refusal.Errors![1].Params!["owner"], OxQL.Core.Models.OxQLJson.Wire).Should().Be(
+            """{"service":"vehicle","entity":"vehicle.vehicle","target":"vehicle.vehicle","stage":1,"path":"matchCode"}""");
+
+        var before = await engine.ExecuteAsync(BindHost.Request(Order, filtered), BindHost.Context(contract: 1));
+
+        before.Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal.Errors!.Select(error => (error.Code, error.Stage, error.Path)).Should().Equal(
+            (Codes.ResolveRefused, 0, null), (Codes.InvalidOperand, null, "matchCode"));
+    }
+
     private const string SemiJoinOneRow = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1" } } }, { "page": { "limit": 1 } }]""";
 
     private static readonly Guid Vehicle2 = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002");

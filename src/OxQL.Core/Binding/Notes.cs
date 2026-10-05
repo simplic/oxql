@@ -100,13 +100,20 @@ public static class Notes
     /// </summary>
     public const string FilterBindsEarlier = "FILTER_BINDS_EARLIER";
 
+    /// <summary>
+    /// A projection runs after the page is taken, on the page's rows, wherever the request wrote it: the
+    /// rows and their order are the same, and the database cuts the page to its columns instead of every
+    /// candidate row (no params).
+    /// </summary>
+    public const string ProjectAfterPage = "PROJECT_AFTER_PAGE";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
-        PatternFolds,
+        PatternFolds, ProjectAfterPage,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -314,6 +321,14 @@ public static class Notes
 
         return collector.Notes;
     }
+
+    /// <summary>A projection the engine runs after the page is taken (<see cref="ProjectAfterPage"/>).</summary>
+    public static Diagnostic LateProjection(int? stage) => new()
+    {
+        Code = ProjectAfterPage,
+        Message = "The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.",
+        Stage = stage,
+    };
 
     /// <summary>Where a join runs (DESIGN §4.3 <c>phase</c>): in the aggregate before the page, or after it.</summary>
     public static Diagnostic Join(int? stage, string alias, string kind, bool afterPage) => new()

@@ -114,6 +114,12 @@ public sealed record CompiledQuery
 
     /// <summary>The truncation checks of a strict request whose truncated alias a later match reads.</summary>
     public IReadOnlyList<TruncationProbe> TruncationProbes { get; init; } = [];
+
+    /// <summary>
+    /// The positions (in <see cref="BoundPipeline.Stages"/>) of the projections emitted after the page
+    /// is taken instead of where they were written; explain says so at each.
+    /// </summary>
+    public IReadOnlyList<int> LateProjections { get; init; } = [];
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
@@ -125,6 +131,14 @@ public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Count
     /// contract 2 row; a contract 1 row is the document as stored and would show it).
     /// </summary>
     public bool KeepDiscriminators { get; init; }
+
+    /// <summary>
+    /// Whether the stages are emitted in the order the caller wrote them (contract 1, whose pipelines
+    /// stay what they were). Otherwise the compiler places a stage where it costs the database least
+    /// while the rows stay the same: a projection after the page is taken
+    /// (<see cref="MongoCompiler.ProjectsAfterPage"/>).
+    /// </summary>
+    public bool AsWritten { get; init; }
 }
 
 /// <summary>
@@ -295,6 +309,11 @@ public static class MongoCompiler
         // every candidate, and the join is paid per page row rather than per candidate row.
         var lateJoins = new List<BsonDocument>();
 
+        // A projection the page does not depend on runs after the page is taken as well: the server
+        // then cuts the page's rows to their columns, not every candidate row before it orders them.
+        var lateProjections = new List<BsonDocument>();
+        var lateProjectionStages = new List<int>();
+
         // The local key each of those joins matches on. It is read only after the page, so it
         // survives every projection in between in storage, as a remote resolve's reference
         // does; the wire row follows the shape and leaves it out when it was not asked for.
@@ -414,7 +433,17 @@ public static class MongoCompiler
                     if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
                         [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
                         sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
-                        emitted.Add(projection);
+                    {
+                        if (!options.AsWritten && ProjectsAfterPage(bound, index))
+                        {
+                            lateProjections.Add(projection);
+                            lateProjectionStages.Add(index);
+                        }
+                        else
+                        {
+                            emitted.Add(projection);
+                        }
+                    }
                     break;
 
                 // The last sort is the one the page is taken in, so on an unwound shape it is
@@ -483,6 +512,7 @@ public static class MongoCompiler
             stages.Add(new BsonDocument("$skip", offset));
 
         stages.Add(new BsonDocument("$limit", page.Limit + 1));
+        stages.AddRange(lateProjections);
         stages.AddRange(lateJoins);
 
         // The request's own count cap, when it gave one, is already under the host's.
@@ -517,7 +547,59 @@ public static class MongoCompiler
             LookupFlags = flags,
             InlineProbes = inlineProbes,
             TruncationProbes = truncationProbes,
+            LateProjections = lateProjectionStages,
         };
+    }
+
+    /// <summary>
+    /// The largest page a projection is moved behind: the server then orders whole documents and keeps
+    /// the page's worth of them in memory, which for a report page of thousands of large documents
+    /// could reach its sort memory limit where the projected rows would not.
+    /// </summary>
+    public const int MaxLateProjectionPage = 1_000;
+
+    /// <summary>
+    /// Whether the projection at <paramref name="index"/> can run after the page is taken, whatever
+    /// place the caller wrote it in. It can when every stage after it only filters, orders or cuts
+    /// the rows, or joins after the page: a filter or a sort written after a projection reads only what
+    /// the projection kept, which holds the same values before it, and what the page and the engine
+    /// read off the rows afterwards (the key, the paging sort's paths, a keyed join's reference, a late
+    /// join's key) the projection keeps anyway. The page then holds the same rows in the same order,
+    /// and the projection cuts the page's rows instead of every candidate row. A later unwind, group
+    /// or join before the page reshapes the row, so a projection before one stays where it is; so does
+    /// every projection of an internal owner query, and of a page above
+    /// <see cref="MaxLateProjectionPage"/>. Explain reads it (<c>PROJECT_AFTER_PAGE</c>).
+    /// </summary>
+    public static bool ProjectsAfterPage(BoundPipeline bound, int index)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        if (bound.KeyedBy is not null || bound.Page.Limit > MaxLateProjectionPage || bound.Stages[index] is not BoundStage.Project)
+            return false;
+
+        for (var later = index + 1; later < bound.Stages.Count; later++)
+        {
+            switch (bound.Stages[later])
+            {
+                case BoundStage.Match or BoundStage.Sort or BoundStage.Page or BoundStage.Project or ContinuedStage:
+                    break;
+
+                case BoundStage.Resolve keyed when IsKeyed(keyed):
+                    break;
+
+                // A join that is not run, or runs after the page, does not stand between the projection and the page.
+                case BoundStage.Lookup lookup when !JoinRuns(bound, later, lookup.As) || JoinsAfterPage(bound, later, lookup.As):
+                    break;
+
+                case BoundStage.Resolve resolve when !JoinRuns(bound, later, resolve.As) || JoinsAfterPage(bound, later, resolve):
+                    break;
+
+                default:
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Whether a match after the stage at <paramref name="index"/> reads the alias: it may filter out a row the stage truncated.</summary>

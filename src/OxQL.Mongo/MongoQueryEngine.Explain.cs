@@ -122,6 +122,11 @@ public sealed partial class MongoQueryEngine
         draft.Notes.AddRange(Notes.Of(bound, request.Query, draft.Indexes, strict, context.Contract, options));
         Place(draft);
 
+        // What the compiler placed elsewhere than the request wrote it, said at the stage (explain ≡ execution).
+        foreach (var position in compiled.LateProjections)
+            if (draft.Indexes[position] is { } projected)
+                draft.Notes.Add(Notes.LateProjection(projected));
+
         // A request this host cannot run is not valid, though it binds: the same refusal the query
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)

@@ -169,8 +169,8 @@ public class LookupMembersCompileTests
     {
         var compiled = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "project": { "name": 1, "orders": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
-        compiled.PageStages[1]["$project"].AsBsonDocument.Names.Should().NotContain("__oxLk0");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
+        compiled.PageStages[3]["$project"].AsBsonDocument.Names.Should().NotContain("__oxLk0");
         compiled.LookupFlags.Should().ContainSingle();
     }
 

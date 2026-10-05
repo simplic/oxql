@@ -96,7 +96,7 @@ public class RegisterCasesTests
     {
         var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "flag": 0, "organizationId": 0 } }]"""), Options);
 
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Flag: 0, OrganizationId: 0 } }"));
+        compiled.PageStages[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { Flag: 0, OrganizationId: 0 } }"), "after the page is taken: the scope match reads the organisation before the projection drops it");
         await Error("""[{ "project": { "number": 1, "flag": 0 } }]""", Codes.MixedProjection);
     }
 
@@ -155,8 +155,8 @@ public class RegisterCasesTests
         var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "id": 1, "number": 1, "flag": 1 } }, { "match": { "flag": { "eq": false } } }, { "page": { "limit": 20, "count": true } }]"""), Options);
 
         compiled.PageStages[0]["$match"].AsBsonDocument.Names.Should().Equal("OrganizationId");
-        compiled.PageStages[1].Contains("$project").Should().BeTrue();
-        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("{ $match: { Flag: false } }"));
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Flag: false } }"));
+        compiled.PageStages[^1].Contains("$project").Should().BeTrue("the projection cuts the page's rows, after the page is taken");
         compiled.CountStages![0].ShouldBeBson(compiled.PageStages[0]);
 
         // A caller cannot displace it: organizationId in a condition is an ordinary member, the scope stays.

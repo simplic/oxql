@@ -103,12 +103,12 @@ public class LateJoinTests
     {
         var included = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "name": 1, "orders": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
-        included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Name: 1, orders: 1, _id: 1 } }"), "the projection is emitted as written; the join adds the alias to what it kept");
+        Kinds(included.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
+        included.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { Name: 1, orders: 1, _id: 1 } }"), "the projection cuts the page's rows; the join adds the alias to what it kept");
 
         var excludedElsewhere = await Compile($$"""[{{OrdersLookup}}, { "project": { "matchCode": 0 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
+        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
     }
 
     [Fact]
@@ -126,13 +126,13 @@ public class LateJoinTests
     {
         var included = await Compile($$"""[{{CustomerResolve}}, { "project": { "id": 1, "cust": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
-        included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { cust: 1, _id: 1, CustomerId: 1 } }"), "the join after the page reads the key off the row");
+        Kinds(included.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set", "$unset");
+        included.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { cust: 1, _id: 1, CustomerId: 1 } }"), "the join after the page reads the key off the row");
 
         var excluded = await Compile($$"""[{{CustomerResolve}}, { "project": { "customerId": 0, "number": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(excluded.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
-        excluded.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 0 } }"), "an exclusion of the key is not emitted while a later join reads it");
+        Kinds(excluded.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set", "$unset");
+        excluded.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 0 } }"), "an exclusion of the key is not emitted while a later join reads it");
     }
 
     // ---- not moved -------------------------------------------------------------------------
@@ -201,7 +201,7 @@ public class LateJoinTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$project", "$sort", "$limit");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$sort", "$limit", "$project");
         compiled.PageStages[4].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
         compiled.PageStages[6]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
 
@@ -263,7 +263,7 @@ public class LateJoinTests
         // those paths with its key, and it still runs for the page's rows only.
         var narrowed = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(narrowed.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set");
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
         narrowed.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the late join loads what the projection names, and its key");
 
         // An exclusion under the alias cuts what the join produced: the join stays before it.
@@ -280,7 +280,7 @@ public class LateJoinTests
 
         var read = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "n-1" } } }, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$set", "$match", "$project", "$sort", "$limit"], "a match reads the alias before the projection drops it");
+        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$set", "$match", "$sort", "$limit", "$project"], "a match reads the alias before the projection drops it");
     }
 
     [Fact]
@@ -295,8 +295,8 @@ public class LateJoinTests
         {
             var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "count": true } }]""", entity);
 
-            Kinds(compiled.PageStages).Should().Equal(["$match", "$project", "$sort", "$limit"], $"{join} then {projection}: the row does not carry the alias");
-            Kinds(compiled.CountStages!).Should().Equal("$match", "$project", "$limit", "$count");
+            Kinds(compiled.PageStages).Should().Equal(["$match", "$sort", "$limit", "$project"], $"{join} then {projection}: the row does not carry the alias");
+            Kinds(compiled.CountStages!).Should().Equal(["$match", "$limit", "$count"], "a projection that runs after the page is not in the count: it changes no row");
         }
     }
 

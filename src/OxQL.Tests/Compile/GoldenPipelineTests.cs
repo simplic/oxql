@@ -51,16 +51,79 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            "{ $project: { Number: 1 } }",
             "{ $match: { Number: 'x' } }",
             "{ $sort: { _id: 1 } }",
-            "{ $limit: 21 }");
+            "{ $limit: 21 }",
+            "{ $project: { Number: 1 } }");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            "{ $project: { Number: 1 } }",
             "{ $match: { Number: 'x' } }",
             "{ $limit: 1001 }",
             "{ $count: 'n' }");
+    }
+
+    // ---- a projection runs after the page is taken (PERF 1) -------------------------------------
+
+    [Fact]
+    public async Task A_projection_runs_after_the_page_is_taken_wherever_the_caller_wrote_it()
+    {
+        const string Sorted = """{ "sort": [{ "number": "desc" }] }""";
+        const string Projected = """{ "project": { "number": 1, "shipTo.city": 1 } }""";
+        string[] expected =
+        [
+            $"{{ $match: {OrgJson} }}",
+            "{ $sort: { Number: -1, _id: 1 } }",
+            "{ $limit: 6 }",
+            "{ $project: { Number: 1, 'ShipTo.City': 1 } }",
+        ];
+
+        var before = await Compile($$"""[{{Projected}}, {{Sorted}}, { "page": { "limit": 5 } }]""");
+        var after = await Compile($$"""[{{Sorted}}, {{Projected}}, { "page": { "limit": 5 } }]""");
+
+        ShouldBe(before.PageStages, expected);
+        ShouldBe(after.PageStages, expected);
+        before.LateProjections.Should().Equal([0], "explain says it at the stage");
+        after.LateProjections.Should().Equal(1);
+
+        // The paging sort's path survives a projection that drops it, so the page orders by the same values either way.
+        var dropped = await Compile($$"""[{{Sorted}}, { "project": { "shipTo.city": 1 } }, { "page": { "limit": 5 } }]""");
+
+        dropped.PageStages[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { 'ShipTo.City': 1, Number: 1 } }"));
+
+        // Several projections keep their order behind the page.
+        var two = await Compile($$"""[{ "project": { "number": 1, "state": 1, "flag": 1 } }, {{Sorted}}, { "project": { "flag": 0 } }, { "page": { "limit": 5 } }]""");
+
+        ShouldBe(two.PageStages.Skip(3).ToList(), "{ $project: { Number: 1, State: 1, Flag: 1 } }", "{ $project: { Flag: 0 } }");
+    }
+
+    [Fact]
+    public async Task A_projection_stays_where_it_was_written_before_a_stage_that_reshapes_the_row_and_under_contract_1()
+    {
+        static string[] Kinds(CompiledQuery compiled) => compiled.PageStages.Select(stage => stage.GetElement(0).Name).ToArray();
+
+        // An unwind after the projection unwinds what the projection kept.
+        (await Compile("""[{ "project": { "number": 1, "items": 1 } }, { "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 5 } }]""")).PageStages[1]
+            .Contains("$project").Should().BeTrue("a projection before an unwind is the unwind's input");
+
+        // A group after it groups what it kept.
+        Kinds(await Compile("""[{ "project": { "state": 1 } }, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]"""))
+            .Should().StartWith(["$match", "$project", "$group"]);
+
+        // A join before the page that follows it adds its alias to what it kept.
+        Kinds(await Compile("""[{ "project": { "flag": 0 } }, { "resolve": { "path": "customerId", "as": "cust" } }, { "match": { "cust.name": { "eq": "x" } } }, { "page": { "limit": 5 } }]"""))
+            .Should().StartWith(["$match", "$project", "$lookup"]);
+
+        // A page of thousands orders whole documents in the server's sort memory: its projection stays first.
+        var report = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "project": { "number": 1 } }, { "page": { "limit": 1001 } }]""", BindHost.Context(BindHost.Options(options => options.Limits.MaxPageSize = 5_000)));
+
+        Kinds(MongoCompiler.Compile(report, Options)).Should().Equal("$match", "$project", "$sort", "$limit");
+
+        // Contract 1 pipelines are what they were: the stages in the order written.
+        var legacy = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "project": { "number": 1 } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""", BindHost.Context(contract: 1));
+        var written = MongoCompiler.Compile(legacy, Options with { AsWritten = true });
+
+        Kinds(written).Should().Equal("$match", "$project", "$sort", "$limit");
+        written.LateProjections.Should().BeEmpty();
     }
 
     [Fact]
@@ -259,13 +322,13 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Projection_is_inclusion_with_the_key_by_default_or_exclusion()
     {
-        (await Compile("""[{ "project": { "number": 1, "shipTo.city": 1, "qrCode": 1 } }]""")).PageStages[1]
+        (await Compile("""[{ "project": { "number": 1, "shipTo.city": 1, "qrCode": 1 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("""{ $project: { Number: 1, "ShipTo.City": 1, QRCode: 1 } }"""));
-        (await Compile("""[{ "project": { "number": 1, "id": 0 } }]""")).PageStages[1]
+        (await Compile("""[{ "project": { "number": 1, "id": 0 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "the key the cursor and the tie-breaker read survives a projection that drops it");
-        (await Compile("""[{ "project": { "addon": 0, "items": 0 } }]""")).PageStages[1]
+        (await Compile("""[{ "project": { "addon": 0, "items": 0 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0, Items: 0 } }"));
-        (await Compile("""[{ "project": { "addon": 0, "id": 0 } }]""")).PageStages[1]
+        (await Compile("""[{ "project": { "addon": 0, "id": 0 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0 } }"), "an exclusion that names the key keeps it for the same reason");
 
         (await Compile("""[{ "project": { "number": 1, "id": 0 } }]""")).KeyKeptAgainstProjection
@@ -275,11 +338,11 @@ public class GoldenPipelineTests
     [Fact]
     public async Task A_projection_keeps_the_reference_member_a_remote_resolve_reads()
     {
-        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact": 1 } }]""")).PageStages[1]
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact": 1 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "the resolver keys the page rows on the member after the aggregate");
-        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contactNumber": 1, "contact.name": 1 } }]""")).PageStages[1]
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contactNumber": 1, "contact.name": 1 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1, ContactNumber: 1 } }"), "a kept member is not added twice");
-        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0, "addon": 0 } }]""")).PageStages[1]
+        (await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0, "addon": 0 } }]""")).PageStages[^1]
             .ShouldBeBson(BsonDocument.Parse("{ $project: { Addon: 0 } }"), "an exclusion of the member is not emitted");
 
         var nothingLeft = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "contactNumber": 0 } }]""");
@@ -293,7 +356,7 @@ public class GoldenPipelineTests
         var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1 } }]""");
 
         compiled.KeyedResolves.Should().BeEmpty("the row does not carry the alias, so there is nothing to ask the owner for");
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "no reference member is kept for a resolve that does not run");
+        compiled.PageStages[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"), "no reference member is kept for a resolve that does not run");
     }
 
     [Fact]
@@ -357,8 +420,8 @@ public class GoldenPipelineTests
 
         compiled.Bound.PagingMode.Should().Be(PagingMode.Keyset);
         compiled.KeyKeptAgainstProjection.Should().BeTrue();
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"));
-        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("{ $sort: { _id: 1 } }"));
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $sort: { _id: 1 } }"));
+        compiled.PageStages[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 1 } }"));
 
         var id = ObjectId.GenerateNewId();
         var cursor = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["Number"] = "n" });

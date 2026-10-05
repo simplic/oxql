@@ -55,7 +55,8 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"JOIN_AFTER_PAGE","message":"'lastAttempt' is joined after the page is taken, for the page's rows only.","stage":1,"path":"lastAttempt","params":{"alias":"lastAttempt","kind":"lookup"},"basis":"advisory"}
+      {"code":"JOIN_AFTER_PAGE","message":"'lastAttempt' is joined after the page is taken, for the page's rows only.","stage":1,"path":"lastAttempt","params":{"alias":"lastAttempt","kind":"lookup"},"basis":"advisory"},
+      {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":2,"basis":"advisory"}
     ],
     "entry": {
       "shape": {

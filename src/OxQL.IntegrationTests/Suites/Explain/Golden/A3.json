@@ -53,6 +53,7 @@
       {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null},"basis":"advisory"},
       {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
       {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"},"basis":"advisory"},
+      {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":2,"basis":"advisory"},
       {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000},"basis":"advisory"}
     ],
     "entry": {

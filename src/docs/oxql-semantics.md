@@ -283,9 +283,18 @@ included, as it always has; a cursor of one contract is never one of the other.
   typed, so a `long` above 2^53, a decimal or a GUID continue exactly. The engine keeps the sort
   fields and the key in storage through any projection so the cursor can read them; the row
   leaves out what the projection did not ask for.
-- After `group` or `unwind` the cursor carries a position in the total order of the table above.
-  It is not bounded by `Limits:MaxOffset`. A row inserted or deleted before the position between
-  two pages shifts the page (a row may repeat or be skipped); the entity's rows do not have that.
+- After `unwind` the cursor carries the last row's sort values, its `id` and the position of the
+  element in each unwound collection; after `group` the last group's sort values, which end in
+  the group's keys. The next page starts after them by value, at any depth, and a row or group
+  written or deleted before the position between two pages moves nothing. Where the order of the
+  groups is not total (a `project` dropped a key before the sort, the only sort stands before the
+  group, an `unwind` follows the group, or one group is all there is) the cursor counts rows
+  instead, and a row inserted or deleted before the position shifts the page; the cursor is opaque
+  either way. Contract 1 counts rows after `group` and `unwind`, as it always has.
+- A cursor's position is sent to the database as the null-aware predicate over every field of the
+  order and, where the leading sort field holds a value, as one range on that field beside it
+  (`k >= v` ascending; "not above `v`" descending, which keeps the nulls that follow): the rows
+  before the position fail one comparison, and an index on the sort is bounded by one range.
 - A contract 2 cursor carries the number of rows the pages up to it served. It is what a later
   page's count is known by without counting (below).
 - **Sorting on a local join alias.** A keyset cursor's condition is merged into the leading
@@ -308,12 +317,21 @@ lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
   `CountCap`. The step has its own time limit (`Count:BudgetMs`, or the request's `budgetMs`) and
   its own cancellation: the page never waits for it longer than that limit, counted from when
   both were sent, and its timeout or failure is `state: "unknown"`, never a refusal. A page that
-  ends the list does not wait for it at all. When the request ends, however it ends, the step is
-  stopped.
-- `limit: 0` with `count` runs no page. Steps of `StepRows × 10^k` rows run one after another,
-  each under what is left of the budget; a step that finds no more than its bound is exact. A
-  further step runs only when the time of the last one, times the growth of the bound, fits what
-  is left. Work is at most 1.11 times the last step.
+  ends the list does not wait for it at all and stops it at once; the database ends a stopped
+  command when it next looks, within about half a second, so only a long count is cut short. When
+  the request ends, however it ends, the step is stopped. A step that found more than its bound
+  answers `atLeast` the bound, `stoppedBy: "step"`: neither the cap nor the time stopped it, and
+  the count alone goes further (`stoppedBy: "cap"` when the bound is the request's `upTo` or the
+  host's `CountCap`).
+- Beside a page of groups the count is not sent with the page: counting the groups computes every
+  group, which is what the page does, and a page of groups that is not full is its own exact
+  count. The count is sent once the page has come back full, under the same limits.
+- `limit: 0` with `count` runs no page. A first step of `StepRows` rows proves a lower bound
+  whatever follows and is cheap where matches are dense. The next step is sized to what the time
+  left is predicted to reach, from what the first took (a scan is linear in what it reads): for a
+  count the database answers quickly that is the ceiling at once, two commands in all. A step
+  that finds no more than its bound is exact. A further step is sent only when ten times the last
+  one is predicted to fit; otherwise the last bound is the answer (`stoppedBy: "budget"`).
 - After `unwind` a count counts element rows, after `group` groups.
 - A count is as expensive as the rows it has to find: cheap where matches are dense, a scan of
   the organisation's rows where they are sparse. That is why the count beside a page is one
@@ -347,6 +365,35 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
 - The sort fields, the entity key and the key a remote `resolve` or a late join reads survive
   every projection in storage and are dropped from the row when not asked for, so projecting
   them away never changes the rows, the cursor or the join.
+- **Where the engine places a stage (contract 2).** The rows and their order are what the stages
+  as written answer; where a stage runs is the engine's, and explain says it (`plan`, and a note at
+  the stage). Contract 1 pipelines are emitted in the order written.
+  - *A projection runs after the page is taken* (`PROJECT_AFTER_PAGE`), wherever it was written,
+    when every stage after it only filters, orders or cuts the rows or joins after the page. The
+    database then orders whole documents and cuts the page's rows to their columns, instead of
+    cutting every candidate row first (measured: 42 to 55 % of a sorted block without an index).
+    A filter or sort written after a projection reads only what it kept, which holds the same
+    values before it. It stays where it was written before an `unwind`, a `group` or a join that
+    runs before the page, and for a page above 1 000 rows (the database would hold that many whole
+    documents in its sort memory).
+  - *The parents are ordered and cut before their unwind* (`SORT_BEFORE_UNWIND`) when the page's
+    order is the parents' order (every sort field before the key is a member of the entity, the
+    default order included) and every row kept yields a row of the page. The unwind and the page's
+    own sort then see a page's worth of rows: `limit + 1` of them, one more after a cursor (the
+    row the position lies in may have none left). Each parent yields a row because rows whose
+    collection is missing, null or empty are dropped where the unwind would drop them, and what
+    filters after the unwind is asked before it as well.
+  - *What is asked of the element after an unwind is asked of the collection before it*
+    (`UNWIND_PREFILTER`): the conditions on paths under the alias, as one "some element passes
+    them all" (`$elemMatch`), so a row without such an element is not unwound, for the page and
+    for the count. Not before an unwind with `preserveNull` (the row it keeps has no element to
+    pass anything) or `flatten`.
+  - *The element is written under its alias after the page is taken*: until then filters and the
+    paging sort read it where the unwind left it. The three unwind placements apply to a request
+    with one `unwind`; with several, the stages run as written and the page is still by value.
+  - *A join through a collection keeps one key per element on the page*, not the elements: the
+    keyed fetch reads each element's reference (and what selects its cases); the rest of the
+    collection is fetched only when the projection asks for it.
 - **Late joins.** A `lookup` or local `resolve` that no later `match`, `sort`, `unwind`, `group`
   or `resolve` reads, that no `group` follows, and whose alias every later `project` passes on
   runs after the page is taken, on the page's rows alone. A projection passes the alias on when it

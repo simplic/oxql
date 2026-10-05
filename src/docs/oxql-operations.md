@@ -69,7 +69,7 @@ the listed status.
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
@@ -136,6 +136,39 @@ stage's effective `onMissing`:
 | `REGEX_UNANCHORED` | — | a `regex` that does not start with `^` or `\A` scans every value |
 | `DECIMAL_TEXT_EXCLUDED` | — | an ordered comparison on a decimal covered the Decimal128 rows only; rows stored as text are outside it |
 
+### Where the time went
+
+Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `desc="<commands> cmd /
+<round trips> rt"`, `ours` = `total` − `db`, `bind`, `compile`, `convert`, and `resolve`, `remote`,
+`count`, `net` where they occurred), and a request that asks (`"timing": true`, or the header
+`X-OxQL-Timing`) the breakdown as the `timing` member; the members are listed in
+[`oxql-query-syntax.md`](oxql-query-syntax.md#where-the-time-went). What a host should know:
+
+- The split is always recorded (a timestamp pair per phase and per command); only the `bytes` of
+  a command are measured on request, and that measuring is taken out of the request's total.
+- Every command the engine sends goes through a decorator of the host's `IAggregateRunner`
+  (`TimedAggregateRunner`), so a host that registers its own runner is measured too. The engine's
+  `MongoAggregateRunner` also says when the command's own reply arrived, how many `getMore`s
+  followed and the driver's round-trip time; another runner leaves those out.
+- The owner queries a host runs for its own join targets are the request's own commands
+  (`kind: "resolve"`). Another service's owner is asked for its timing only when the origin's
+  request asked for the breakdown; it travels back in the owner's answer (`timing` on each result of
+  the internal batch) and is listed under `resolve.owners[].timing`.
+- The log line of a request carries `dbMs`, `dbCommands`, `oursMs` and `convertMs` beside
+  `elapsedMs`, so the split is in the logs without any client.
+- **Browsers.** A page on another origin reads the header only when it is exposed. The engine's
+  controller names `Server-Timing` in `Access-Control-Expose-Headers` on an answer to a request
+  that carries `Origin`. A host whose CORS policy sets exposed headers itself
+  (`WithExposedHeaders`) replaces that value and must name `Server-Timing` there; a gateway that
+  answers CORS in front of the service must expose it as well. The browser's own resource timing
+  of a cross-origin request (transfer, sizes) needs `Timing-Allow-Origin` from the host or the
+  gateway; the engine does not send it.
+- **Content coding.** The answers of `query` and `batch` are written in the coding the caller
+  accepts (`Accept-Encoding`: Brotli, else gzip, at the fastest level) when the body is at least
+  1 KB, with `Vary: Accept-Encoding` either way; a refusal is not coded. A page of 100 rows with
+  14 columns (51 KB) is 7.7 KB in Brotli and costs 0.06 ms to code. The body and its coded form are
+  held in pooled segments, never in one array.
+
 ### Batch
 
 `POST /oxql/batch` answers 200 with `{ "results": [ … ] }`, one entry per query in order, unless
@@ -185,7 +218,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:RegexMaxLength` | 200 | binder | `REGEX_TOO_LONG` | yes | a `regex` under a remote alias is checked by the owner |
 | `Limits:MaxLookupLimit` | 100 | binder: the largest lookup `limit` and the default when none is given; the most targets an `elements: "all"` alias holds | `LOOKUP_LIMIT_EXCEEDED`; diagnostics `LOOKUP_TRUNCATED`, `RESOLVE_TRUNCATED` | yes | — |
 | `Limits:MaxFlattenDepth` | 5, clamped to 1–12 | compiler: the levels an `unwind` with `flatten` descends | diagnostic `UNWIND_DEPTH_TRUNCATED` | yes | — |
-| `Count:StepRows` | 1 000 | binder: the rows the count step beside a contract 2 page counts (`page.count`), and the first step of a count-only request, each ten times the one before | above it the answer is a lower bound (`stoppedBy: "budget"`) | no | — |
+| `Count:StepRows` | 1 000 | binder: the rows the count step beside a contract 2 page counts (`page.count`), and the first step of a count-only request, whose next step is sized to the time left | above it the answer is a lower bound (`stoppedBy: "step"` beside a page) | no | — |
 | `Count:BudgetMs` / `Count:MaxBudgetMs` | 500 / 5 000 | the time a contract 2 count has when the request names none, and the most a request may name with `page.count.budgetMs` (a larger one is clamped): the count step's own `maxTimeMS`, the longest an answer waits for it, and the budget of a count-only ladder | `pageInfo.count` `unknown` / `timeout`, or a lower bound `stoppedBy: "budget"` / `"time"`; never a refusal | no | — |
 | `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without a `cursor` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
@@ -194,7 +227,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Execution:ChainTimeoutMs` | 6 000, never above `MaxTimeMs` | keyed fetch: one owner call carrying continued stages or a typed, item, converted or element-wise resolve; the time left less 50 ms, at most this | `RESOLVE_TIMEOUT` | no | the owner budgets its own owner calls from what is left of it, so time bounds the whole chain |
 | `Execution:BatchConcurrency` | 4, clamped to 1–16 | how many queries of one internal batch run at once, at the owner and at a host answering its own targets; `1` runs them one after another | — | no | each query in flight holds a connection (two with a count); a public batch always runs one query after another |
 | `Execution:AllowDiskUse` | `true` | aggregate option | 422 `QUERY_TOO_EXPENSIVE` when `false` | no | — |
-| `Execution:SlowQueryMs` | 1 000 (`0` off) | warning log line for a slower request | — | no | every aggregate of a request carries the request's correlation id as its `comment` (cut at 128 characters), at every owner the request reaches, so a command in the database's profiler or slow-query log is found from the log line and back; the page's cursor batch is its limit plus one (at most 10 000), so a page arrives without a `getMore` unless it exceeds 16 MB |
+| `Execution:SlowQueryMs` | 1 000 (`0` off) | warning log line for a slower request | — | no | every aggregate of a request carries the request's correlation id as its `comment` (cut at 128 characters), at every owner the request reaches, so a command in the database's profiler or slow-query log is found from the log line and back; the page's cursor batch is its limit plus two (at most 10 000): one above what the pipeline's own `$limit` lets through, so the first reply closes the cursor and no `getMore` follows unless the page exceeds 16 MB |
 | `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | the owner-fetch cache: resolved rows (remote and in-process targets) and semi-join ids, per organisation; the budget holds per mode (rows, ids) | — | no | an owner's change is seen by callers within the TTL |
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
@@ -649,6 +682,12 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   internal calls only: a contract 2 request has neither a count cap to hit silently nor an offset),
   `LOOKUP_LIMIT`, `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path
   first exists, and a later group gives the name to another thing; `params` `path`, `alias`),
+  `PROJECT_AFTER_PAGE` (the projection at this stage runs after the page is taken, on the page's
+  rows), `SORT_BEFORE_UNWIND` (the rows are ordered and cut to what the page can reach before the
+  unwind at this stage; `params` `path`, `alias`), `UNWIND_PREFILTER` (what is asked of the element
+  after the unwind is asked of the collection before it; `params` `path`, `alias`, `paths`) — the
+  three say where the engine places a stage of a contract 2 request (see
+  [`oxql-semantics.md`](oxql-semantics.md)); the rows are those of the request as written,
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),
@@ -888,9 +927,15 @@ in their variables, never share an entry. The query hashed is the one sent, so w
 dropped for the target: once a drop is forgotten the query asks the path again and is another entry,
 and no row fetched without a path answers a request that no longer knows the path was dropped. The paths of the projection are hashed as a set, in ordinal
 order: two requests that name the same paths under an alias in another order share their entries. A key the owner answered as not found is kept for
-`Cache:NegativeResolveTtlSeconds` (10 s); a strict request reads past such entries. An answer that
-carried owner diagnostics for continued stages, and keys of a cut answer, are not cached. The
-semi-join's ids are keyed by organisation and the first-page owner query.
+`Cache:NegativeResolveTtlSeconds` (10 s); a strict request reads past such entries. What an owner
+reported about the rows it answered for the stages it continued (a tour whose vehicle no record
+holds, say) is kept with those rows, cut to them, when the report lists its rows in full and says
+what the data says of them (`not_found`, `excluded`, `ambiguous`, `invalid_key`,
+`reference_null`): the same page again is answered from the cache with the same diagnostic. Such
+an answer is kept for the negative lifetime and is not read by a strict request either. A report
+of anything else (an owner that did not answer, a list the owner cut, a truncation that only
+counts rows) leaves the chunk unkept, and so do the keys of a cut answer. The semi-join's ids are
+keyed by organisation and the first-page owner query.
 
 **Contract header hint.** A request without `X-OxQL-Contract: 2` is contract 1 while
 `Compat:Enabled` is on, which is the likeliest mistake when a query is pasted into a report data

@@ -21,8 +21,9 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 }
 ```
 
-- A request carries `entityType`, `variables`, `filter`, `pipeline` and `strict`. Any other top-level member
-  is `UNKNOWN_REQUEST_MEMBER` under contract 2. `filter` is described under
+- A request carries `entityType`, `variables`, `filter`, `pipeline`, `strict` and `timing`. Any other top-level member
+  is `UNKNOWN_REQUEST_MEMBER` under contract 2. `timing: true` asks for the `timing` member of the
+  answer (see [Response](#response)); it changes no row and is no part of a cursor. `filter` is described under
   [The request's `filter`](#the-requests-filter). The member `keyedBy`
   exists only on the internal route an owner is called through (see
   [`oxql-operations.md`](oxql-operations.md#keyed-fetch-and-remote-continuation)); on the public
@@ -661,7 +662,7 @@ Every answer says what the engine knows of the number of matching rows under `pa
 
 ```jsonc
 { "state": "exact",   "value": 412 }
-{ "state": "atLeast", "value": 1000, "stoppedBy": "budget", "ms": 3 }
+{ "state": "atLeast", "value": 1000, "stoppedBy": "step", "ms": 3 }
 { "state": "unknown", "reason": "timeout", "ms": 500 }
 ```
 
@@ -669,7 +670,7 @@ Every answer says what the engine knows of the number of matching rows under `pa
 |---|---|
 | `state: "exact"` | every matching row was counted, or the list was walked to its end; `value` is the count |
 | `state: "atLeast"` | a proven lower bound: `value` rows were found and more exist or may exist |
-| `stoppedBy` (with `atLeast`) | `page`: only the rows the pages served, and the one that told a next page exists, are known. `cap`: the request's `upTo` or the host's `CountCap` was reached; counting on would go no further. `budget`: the next step did not fit the time (beside a page the count is one step). `time`: a step ran out of time; the bound is what the step before it proved |
+| `stoppedBy` (with `atLeast`) | `page`: only the rows the pages served, and the one that told a next page exists, are known. `step`: the count beside a page is one step of `Count:StepRows` rows and found more; the count alone goes further. `cap`: the request's `upTo` or the host's `CountCap` was reached; counting on would go no further. `budget`: a further step of the count alone was predicted not to fit the time left and was not sent. `time`: a step ran out of time; the bound is what the step before it proved |
 | `state: "unknown"` | the count that was asked for did not finish; `reason` is `timeout` or `failed` |
 | `ms` | the time spent counting, when a count step was waited for |
 
@@ -685,18 +686,22 @@ counts up to `Count:StepRows` rows (1 000), lowered by `upTo` and by the host's 
 (100 000), within `Count:BudgetMs` (500; `budgetMs` sets the request's own, at most
 `Count:MaxBudgetMs` 5 000). Up to its bound the step is `exact`; above it the answer is `atLeast`
 the bound, stopped by `cap` when the bound is the request's `upTo` or the host's cap and by
-`budget` otherwise. The step never fails the rows and holds them back no longer than its
+`step` otherwise. The step never fails the rows and holds them back no longer than its
 budget: a step that times out or fails leaves `unknown`, and the rows are answered as they are.
+Beside a page of groups the count is sent only when the page comes back full: a page of groups
+that is not full is its own exact count.
 A bound below what the pages already served gives way to the rows served plus one. No diagnostic
 repeats any of this (`TOTAL_COUNT_CAPPED` is contract 1's).
 
 `limit: 0` with `count` is the count alone: no page is read, `items` is empty, `hasNextPage` is
 false and there is no cursor (the answer says nothing of pages). It takes no `cursor`, and
 `limit: 0` without `count` is `INVALID_PAGE_LIMIT` (`params` `limit: 0`, `needs: "count"`). The
-count climbs a ladder within its budget: step *k* counts up to `StepRows × 10^k` rows, up to
-`upTo` or the host's `CountCap`; a step that finds no more rows than its bound is `exact` and
-ends the ladder. The next step runs only when its predicted time (the last step's, times the
-growth of the bound) fits what is left of the budget; otherwise the answer is `atLeast` the last
+count runs in steps within its budget: a first step of `StepRows` rows, which is `exact` when it
+finds no more and proves a lower bound otherwise; then a step sized to what the time left is
+predicted to reach, from what the first took, up to `upTo` or the host's `CountCap` (for a count
+the database answers quickly that is the ceiling at once: two commands in all). A step that
+finds no more rows than its bound is `exact`. A further step is sent only when ten times the last
+one is predicted to fit what is left of the budget; otherwise the answer is `atLeast` the last
 bound, `stoppedBy: "budget"`. Each step's own time limit is what is left of the budget; a step
 that runs out leaves the bound before it, `stoppedBy: "time"`, and a first step that does leaves
 `unknown`. A list shows its first page at once and asks for the count alone beside it.
@@ -766,6 +771,55 @@ A diagnostic about references names the rows it met, by their index in `items`, 
 `count` is every affected slot, `truncated` says the list was cut, `element` appears only under
 `elements`. The outcomes are explained in
 [`oxql-semantics.md`](oxql-semantics.md#outcomes-and-data-loss).
+
+### Where the time went
+
+Every answer of `query` and `batch` carries a `Server-Timing` header: the total up to the first
+byte of the body, the time the request waited for the database with its commands and round trips,
+and the rest, which is the host's own (`ours` = `total` − `db`), with its parts. Durations are
+milliseconds.
+
+```
+Server-Timing: total;dur=51.3, db;dur=47.6;desc="1 cmd / 1 rt", ours;dur=3.7, bind;dur=0.11, compile;dur=0.05, convert;dur=0.64, net;dur=0.8;desc="est"
+```
+
+`resolve` (the keyed joins, with their owner calls and cache hits), `remote` (the time waited
+for other services' owners) and `count` (the time finished rows waited for their count) appear
+when they occurred; `net` is the estimated network part of `db` (round trips × the driver's
+measured round-trip time).
+
+A request that asks (`"timing": true`, or the request header `X-OxQL-Timing: 1`) also gets the
+breakdown as `timing`, the last member of the answer:
+
+```jsonc
+"timing": {
+  "totalMs": 50.29, "oursMs": 2.69,              // totalMs − db.ms = oursMs, always
+  "parseMs": 0.15,                               // reading and binding the body, before the engine took the request
+  "bindMs": 0.11, "addonMs": 0.56, "compileMs": 0.05,
+  "db": { "ms": 47.6, "commands": 1, "roundTrips": 1, "rttMs": 0.8, "networkEstimateMs": 0.8,
+          "list": [ { "kind": "page", "collection": "transport.shipment", "ms": 47.6, "firstBatchMs": 47.59, "drainMs": 0.01,
+                      "docs": 101, "bytes": 45322, "getMores": 0, "parallelWith": null } ] },
+  "resolve": { "ms": 0, "calls": 0, "cacheHits": 0, "remoteMs": 0, "owners": [] },
+  "countWaitMs": 0, "convertMs": 0.64, "rows": 100, "build": "Release" }
+```
+
+- `db.ms` is the time with at least one command in flight: commands sent together count once.
+  A command's `ms` is what the driver saw (the server's execution, the network, reading the
+  reply); the server alone is found in the database's profiler by the command's `comment`, the
+  request's correlation id.
+- `db.list[]`: `kind` is `page`, `count`, `countRung` (a step of the count alone), `probe` (a
+  strict request's truncation check) or `resolve` (an owner query this host ran for a join target
+  of its own); `collection` is the entity read; `docs` the documents returned and `bytes` their
+  size as BSON; `getMores` the further round trips; `parallelWith` the index of the first earlier
+  command still in flight when this one left, or null. `discarded: true` marks a command whose
+  answer was not used (a count the page made needless); `failed: true` one that ended without an
+  answer; `running: true` one that had not ended.
+- `resolve.owners[]`: one entry per join target: `service`, `entity`, `remote` (another service's
+  owner), `ms` of the calls that carried its keys, `keys` asked, `cacheHits`. An owner of another
+  service that was asked answers with its own `timing` per query (`timing: [ … ]`), so the
+  database's share at that owner is known here. `resolve.remoteMs` is the time waited for other
+  services; it is part of `oursMs`.
+- In a batch each query asks for itself and carries its own `timing`; the header is the sum.
 
 ## Refusal
 

@@ -344,7 +344,7 @@ public class ConformanceFixesTests
     [Fact]
     public async Task C13_the_members_each_stage_does_have_still_bind()
     {
-        var page = await Bound("""[{ "page": { "limit": 5, "offset": 10, "includeTotalCount": true } }]""");
+        var page = await Bound("""[{ "page": { "limit": 5, "offset": 10, "includeTotalCount": true } }]""", BindHost.Context() with { Internal = true });
 
         page.Page.Limit.Should().Be(5);
         page.Page.Offset.Should().Be(10);

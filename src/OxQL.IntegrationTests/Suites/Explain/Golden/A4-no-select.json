@@ -154,7 +154,6 @@
       {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":1,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'clerk' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"createUserId","params":{"alias":"clerk","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'clerk' is joined after the page is taken, for the page's rows only.","stage":1,"path":"clerk","params":{"alias":"clerk","kind":"resolve"}},
-      {"code":"OFFSET_PAGING","message":"After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.","stage":2,"params":{"maxOffset":5000}},
       {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'lineShipment' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'lineShipment' is joined after the page is taken, for the page's rows only.","stage":4,"path":"lineShipment","params":{"alias":"lineShipment","kind":"resolve"}},
@@ -237,7 +236,7 @@
         ],
         "creates": ["item","position"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -263,7 +262,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -296,7 +295,7 @@
         ],
         "creates": ["lineShipment"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -330,7 +329,7 @@
         ],
         "creates": ["deliveringTour"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -367,7 +366,7 @@
         ],
         "creates": ["tourVehicle"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -406,7 +405,7 @@
         ],
         "creates": ["driver"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -447,7 +446,7 @@
         ],
         "creates": ["lineTour"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -522,7 +521,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -559,7 +558,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -594,7 +593,7 @@
         "reads": [],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -886,7 +885,7 @@
       }
     },
     "result": {
-      "paging": "offset",
+      "paging": "cursor",
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
         {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},

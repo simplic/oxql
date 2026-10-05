@@ -219,32 +219,6 @@ public sealed class LabClient
         return new Walk(items, cursors.Count + 1, cursors, last);
     }
 
-    /// <summary>Walks the same query by offset instead, <paramref name="rows"/> rows in pages of <paramref name="limit"/>.</summary>
-    public async Task<Walk> OffsetWalkAsync(string entityType, object stages, int limit, int rows)
-    {
-        var before = Json.Node(stages) as JsonArray ?? throw new ArgumentException("The stages are a JSON array.", nameof(stages));
-        var items = new List<JsonObject>();
-        var pages = 0;
-        WireAnswer? last = null;
-
-        for (var offset = 0; offset < rows; offset += limit)
-        {
-            var pipeline = (JsonArray)before.DeepClone();
-            var page = new JsonObject { ["limit"] = limit };
-
-            if (offset > 0)
-                page["offset"] = offset;
-
-            pipeline.Add(new JsonObject { ["page"] = page });
-            last = await SendAsync(entityType, pipeline);
-            last.ShouldBeOk($"the offset walk at {offset}");
-            items.AddRange(last.Items.OfType<JsonObject>());
-            pages++;
-        }
-
-        return new Walk(items, pages, [], last ?? throw new ArgumentOutOfRangeException(nameof(rows)));
-    }
-
     public override string ToString() => $"{Service}{(Who.Organisation is { } organisation ? " as " + organisation : "")} (contract {Who.Contract?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"})";
 }
 

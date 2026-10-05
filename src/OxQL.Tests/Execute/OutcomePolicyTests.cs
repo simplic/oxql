@@ -417,7 +417,6 @@ public class OutcomePolicyTests
         Wire(error.Params).ToJsonString().Should().Be("""{"limit":1,"max":5000}""");
 
         (await SuccessAsync(engine, """[{ "page": { "limit": 1 } }]""")).PageInfo.HasNextPage.Should().BeTrue("outside strict a page is a page");
-        (await SuccessAsync(engine, """[{ "page": { "limit": 1, "offset": 0 } }]""", strict: true)).PageInfo.HasNextPage.Should().BeTrue("a request that pages is not a report");
         (await SuccessAsync(engine, """[{ "page": { "limit": 2 } }]""", strict: true)).Items.Should().HaveCount(2);
     }
 

@@ -177,12 +177,10 @@ public class ExplainNotesTests
     }
 
     [Fact]
-    public async Task Offset_paging_is_said_at_the_stage_that_causes_it()
+    public async Task Contract_2_pages_by_its_cursor_and_says_nothing_of_an_offset()
     {
-        Single(await NotesAsync("""[{ "match": { "number": { "exists": true } } }, { "unwind": { "path": "lines", "as": "line" } }]"""), Notes.OffsetPaging)
-            .Should().Match<Diagnostic>(note => note.Stage == 1 && (int)note.Params!["maxOffset"]! == BindHost.Options().Limits.MaxOffset);
-
-        (await NotesAsync("[]")).Should().NotContain(note => note.Code == Notes.OffsetPaging);
+        (await NotesAsync("""[{ "match": { "number": { "exists": true } } }, { "unwind": { "path": "lines", "as": "line" } }]"""))
+            .Should().NotContain(note => note.Code == Notes.OffsetPaging, "the cursor is the only address of a contract 2 page (DG2 M4)");
     }
 
     [Fact]
@@ -197,7 +195,7 @@ public class ExplainNotesTests
         Single(strict, Notes.MissingPolicy).Params!["onMissing"].Should().Be("refuse", "strict defaults onMissing to refuse");
         Single(strict, Notes.ReportPage).Params!["max"].Should().Be(Math.Max(BindHost.Options().Limits.MaxPageSize, BindHost.Options().Limits.MaxReportPageSize));
 
-        (await NotesAsync("""[{ "page": { "limit": 10, "offset": 0 } }]""", strict: true)).Should().NotContain(note => note.Code == Notes.ReportPage, "a page that jumps is no report page");
+        (await NotesAsync("""[{ "page": { "limit": 10 } }]""")).Should().NotContain(note => note.Code == Notes.ReportPage, "a request that is not strict has no report page");
     }
 
     [Fact]

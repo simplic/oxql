@@ -19,6 +19,10 @@ public sealed record PageStage
     [JsonPropertyName("offset")]
     public int? Offset { get; init; }
 
+    /// <summary>Whether the caller wrote <c>offset</c>, whatever its value: the public contract 2 route does not have the member.</summary>
+    [JsonIgnore]
+    public bool OffsetWritten { get; init; }
+
     /// <summary>Whether to count the matching rows, up to the count cap. True as well when the member is a number.</summary>
     [JsonPropertyName("includeTotalCount")]
     public bool IncludeTotalCount { get; init; }
@@ -57,7 +61,7 @@ internal sealed class PageStageConverter : JsonConverter<PageStage>
             {
                 case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
                 case "cursor": stage = stage with { Cursor = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null }; break;
-                case "offset": stage = stage with { Offset = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
+                case "offset": stage = stage with { Offset = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null, OffsetWritten = true }; break;
                 case "includeTotalCount":
                     stage = property.Value.ValueKind switch
                     {

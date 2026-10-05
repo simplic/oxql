@@ -195,7 +195,7 @@ public class GroupOrderTests
     }
 
     [Fact]
-    public async Task N53_AC29_grouped_output_pages_by_offset_behind_the_cursor_with_no_group_repeated_and_none_dropped()
+    public async Task N53_AC29_grouped_output_pages_behind_the_cursor_with_no_group_repeated_and_none_dropped()
     {
         var expected = Truncation.Buckets(Corpus.Rows(Corpus.Shipment).Select(row => Corpus.Date(row, "loadStart")!.Value), "day", "Europe/Berlin").Select(bucket => $"{bucket.Key}:{bucket.Count}").ToList();
         expected.Should().HaveCountGreaterThan(6);
@@ -206,14 +206,6 @@ public class GroupOrderTests
 
         walk.Pages.Should().Be((expected.Count + 2) / 3);
         walk.Items.Select(item => $"{item["day"]}:{Number(item["total"])}").Should().Equal(expected);
-
-        // The cursor carries an offset: the same slices come back from a bare offset.
-        for (var offset = 0; offset < expected.Count; offset += 3)
-        {
-            var sliced = await client.SendAsync(Corpus.Shipment, $$"""[{{BerlinDays}}, { "sort": [{ "day": "asc" }] }, { "page": { "limit": 3, "offset": {{offset}} } }]""");
-            sliced.ShouldBeOk();
-            sliced.Items.Select(item => $"{item!["day"]}:{Number(item["total"])}").Should().Equal(expected.Skip(offset).Take(3), $"offset {offset}");
-        }
     }
 
     [Fact]
@@ -422,7 +414,7 @@ public class GroupOrderTests
     public async Task D03b_the_same_grouped_page_over_tied_values_answers_the_same_groups_every_time()
     {
         var client = await Transport();
-        const string Query = """[{ "group": { "by": [{ "path": "templateName", "as": "name" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "total": "desc" }] }, { "page": { "limit": 50, "offset": 1000 } }]""";
+        const string Query = """[{ "group": { "by": [{ "path": "templateName", "as": "name" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "total": "desc" }] }, { "page": { "limit": 50 } }]""";
 
         var first = await client.SendAsync(Corpus.Template, Query);
         var second = await client.SendAsync(Corpus.Template, Query);

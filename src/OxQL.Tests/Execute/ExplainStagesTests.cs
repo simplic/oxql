@@ -467,7 +467,7 @@ public class ExplainStagesTests
 
         var unwound = (await ExplainAsync("""[{ "unwind": { "path": "lines", "as": "line", "includeIndex": "at" } }, { "project": { "number": 1, "line.customerId": 1, "at": 1 } }]""")).Result!;
 
-        unwound.Paging.Should().Be("offset");
+        unwound.Paging.Should().Be("cursor");
         unwound.Columns.Select(column => (column.Path, column.Root)).Should().Equal(("id", ""), ("number", ""), ("line.customerId", "line"), ("at", ""));
     }
 

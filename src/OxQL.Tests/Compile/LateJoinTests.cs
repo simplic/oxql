@@ -93,9 +93,9 @@ public class LateJoinTests
     [Fact]
     public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_offset_page()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "offset": 10 } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$sort", "$unset", "$skip", "$limit", "$lookup", "$set", "$unset");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$sort", "$unset", "$limit", "$lookup", "$set", "$unset");
     }
 
     [Fact]

@@ -3581,10 +3581,29 @@ public sealed class Binder
 
         // ---- page ----------------------------------------------------------------------------
 
+        /// <summary>The members of a page stage on the public contract 2 route.</summary>
+        private const string PublicPageMembers = "limit, cursor, includeTotalCount";
+
         private void BindPage(PageStage stage, int index)
         {
-            if (!CheckStageMembers(stage.Unknown, "page", "limit, offset, cursor, includeTotalCount", index))
+            // The public contract 2 page is addressed by a cursor alone (DG2 M4). Contract 1 keeps its
+            // offset, and so does an internal call: a semi-join walks its owner's ids by offset.
+            var cursorOnly = contract2 && !context.Internal;
+
+            if (!CheckStageMembers(stage.Unknown, "page", cursorOnly ? PublicPageMembers : "limit, offset, cursor, includeTotalCount", index))
                 return;
+
+            if (cursorOnly && stage.OffsetWritten)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownStageMember,
+                    Message = $"'offset' is not a member of page; page carries {PublicPageMembers}. A page continues from the 'nextCursor' of the page before it.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "page", ["member"] = "offset", ["reason"] = "removed", ["use"] = "cursor" },
+                });
+                return;
+            }
 
             if (page is not null)
             {
@@ -3657,7 +3676,7 @@ public sealed class Binder
         /// <summary>Where a larger page is available: a strict contract 2 request without cursor or offset reads up to <c>MaxReportPageSize</c>.</summary>
         private string ReportPageNote() =>
             contract2 && options.Limits.MaxReportPageSize > options.Limits.MaxPageSize
-                ? $" A strict request without cursor or offset may ask for up to {options.Limits.MaxReportPageSize}."
+                ? $" A strict request without {(context.Internal ? "cursor or offset" : "a cursor")} may ask for up to {options.Limits.MaxReportPageSize}."
                 : "";
 
         // ---- helpers -------------------------------------------------------------------------

@@ -261,7 +261,8 @@ public static class Notes
             collector.Add(CountCap, PageIndex(request), null, $"The total count stops at {cap}; above it the count is the cap (TOTAL_COUNT_CAPPED).", new() { ["cap"] = cap });
         }
 
-        if (bound.PagingMode == PagingMode.Offset)
+        // Contract 2 addresses every page by its cursor; what the cursor hides is not the caller's to plan by.
+        if (bound.PagingMode == PagingMode.Offset && contract != 2)
         {
             var reason = bound.Stages.Select((stage, position) => (stage, position)).FirstOrDefault(pair => pair.stage is BoundStage.Unwind or BoundStage.Group);
 

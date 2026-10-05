@@ -213,7 +213,6 @@
       {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":2,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null}},
       {"code":"MISSING_POLICY","message":"A reference of 'clerk' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":2,"path":"createUserId","params":{"alias":"clerk","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
       {"code":"JOIN_AFTER_PAGE","message":"'clerk' is joined after the page is taken, for the page's rows only.","stage":2,"path":"clerk","params":{"alias":"clerk","kind":"resolve"}},
-      {"code":"OFFSET_PAGING","message":"After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.","stage":3,"params":{"maxOffset":5000}},
       {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing refuses the request (onMissing refuse, strict); not_found lose data and refuse under strict.","stage":5,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"refuse","strict":true,"dataLoss":["not_found"]}},
       {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":5,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
       {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":6,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
@@ -334,7 +333,7 @@
         ],
         "creates": ["item","position"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -362,7 +361,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -395,7 +394,7 @@
         ],
         "creates": ["erpLine"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -432,7 +431,7 @@
         ],
         "creates": ["sourceLine","sourceParent"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -472,7 +471,7 @@
         ],
         "creates": ["lastAttempt"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -515,7 +514,7 @@
         ],
         "creates": ["lineShipment"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -559,7 +558,7 @@
         ],
         "creates": ["deliveringTour"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -606,7 +605,7 @@
         ],
         "creates": ["tourVehicle"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -655,7 +654,7 @@
         ],
         "creates": ["driver"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -706,7 +705,7 @@
         ],
         "creates": ["lineTour"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -813,7 +812,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","recipientContact.address.companyName","recipientContact.id","recipientContact.primaryEmailAddress.email","recipientContact.primaryPhoneNumber.number","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -860,7 +859,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","recipientContact.address.companyName","recipientContact.id","recipientContact.primaryEmailAddress.email","recipientContact.primaryPhoneNumber.number","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -905,7 +904,7 @@
         "reads": [],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["clerk.address.firstName","clerk.address.lastName","clerk.id","clerk.primaryEmailAddress.email","clerk.userId","date","deliveringTour.id","deliveringTour.number","driver.address.firstName","driver.address.lastName","driver.id","driver.primaryEmailAddress.email","dueDate","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","invoiceRecipient","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","lineShipment.deliveryAddress","lineShipment.deliveryNoteNumber","lineShipment.effectiveDeliveryEnd","lineShipment.id","lineShipment.items.weightNotes.number","lineShipment.items.weightNotes.quantity","lineShipment.loadAddress","lineShipment.referenceNumber","lineShipment.shipmentNumber","lineTour.actions","lineTour.endDateTime","lineTour.id","lineTour.number","lineTour.startDateTime","number","position","recipientContact.address.companyName","recipientContact.id","recipientContact.primaryEmailAddress.email","recipientContact.primaryPhoneNumber.number","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber","taxKeyTotalPrices","termsOfPayment.formattedText","totalPriceGross","totalPriceNet","tourVehicle.id","tourVehicle.matchCode","tourVehicle.registrationPlate.registrationIdentifier"],
@@ -1426,7 +1425,7 @@
       }
     },
     "result": {
-      "paging": "offset",
+      "paging": "cursor",
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
         {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},

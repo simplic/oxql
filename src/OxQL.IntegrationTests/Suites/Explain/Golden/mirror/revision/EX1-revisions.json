@@ -132,7 +132,7 @@
         ],
         "creates": ["item","position"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -156,7 +156,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -185,7 +185,7 @@
         ],
         "creates": ["erpLine"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -218,7 +218,7 @@
         ],
         "creates": ["sourceLine","sourceParent"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -254,7 +254,7 @@
         ],
         "creates": ["deliveringTour"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -293,7 +293,7 @@
         ],
         "creates": ["shipmentVehicle"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -578,7 +578,7 @@
       }
     },
     "result": {
-      "paging": "offset",
+      "paging": "cursor",
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
         {"path":"organizationId","kind":"guid","nullable":false,"root":"","present":"always"},

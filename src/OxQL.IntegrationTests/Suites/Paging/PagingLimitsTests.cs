@@ -143,13 +143,12 @@ public class PagingLimitsTests
     }
 
     [Fact]
-    public async Task U11_max_offset_5000_is_served_and_5001_is_refused_with_the_number()
+    public async Task U11_max_offset_bounds_no_contract_2_page_because_a_page_has_no_offset()
     {
         var client = await Transport();
 
         (await client.SendAsync(Corpus.Template, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": 1, "offset": {{Limit("maxOffset")}} } }]"""))
-            .ShouldHaveIds(Corpus.PageOf(Corpus.SortedIds(Corpus.Template, "id"), limit: 1, offset: Limit("maxOffset")));
-        ShouldRefuseAt(await client.SendAsync(Corpus.Template, $$"""[{ "page": { "limit": 1, "offset": {{Limit("maxOffset") + 1}} } }]"""), "MAX_OFFSET_EXCEEDED", Limit("maxOffset"));
+            .ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400);
     }
 
     // ── U3 · U4 · U5 · U6 · U7 · U8 · U15 — stage counts ───────────────────────────────────

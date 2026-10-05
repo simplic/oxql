@@ -484,7 +484,9 @@ public class StageRulesTests
     [Fact]
     public async Task Page_is_once_and_last_with_a_default_size()
     {
-        var bound = await Bound("""[{ "page": { "limit": 25, "offset": 50, "includeTotalCount": true } }]""");
+        // An internal call keeps the offset and the boolean count a semi-join walks its owner's ids by.
+        var internalCall = BindHost.Context() with { Internal = true };
+        var bound = await Bound("""[{ "page": { "limit": 25, "offset": 50, "includeTotalCount": true } }]""", internalCall);
 
         bound.Page.Limit.Should().Be(25);
         bound.Page.Offset.Should().Be(50);
@@ -495,12 +497,28 @@ public class StageRulesTests
 
         await Error("""[{ "page": { "limit": 0 } }]""", Codes.InvalidPageLimit);
         await Error("""[{ "page": { "limit": 501 } }]""", Codes.PageSizeExceeded);
-        await Error("""[{ "page": { "offset": 5001 } }]""", Codes.MaxOffsetExceeded);
-        await Error("""[{ "page": { "offset": -1 } }]""", Codes.InvalidPageLimit);
+        await Error("""[{ "page": { "offset": 5001 } }]""", Codes.MaxOffsetExceeded, internalCall);
+        await Error("""[{ "page": { "offset": -1 } }]""", Codes.InvalidPageLimit, internalCall);
         await Error("""[{ "page": {} }, { "page": {} }]""", Codes.MultiplePageStages);
         (await Error("""[{ "page": {} }, { "match": {} }]""", Codes.StageAfterPage)).Stage.Should().Be(1);
         await Error("""[{ "page": { "cursor": "garbage" } }]""", Codes.CursorInvalid);
-        await Error("""[{ "page": { "cursor": "a.b", "offset": 1 } }]""", Codes.InvalidPageLimit);
+        await Error("""[{ "page": { "cursor": "a.b", "offset": 1 } }]""", Codes.InvalidPageLimit, internalCall);
+    }
+
+    /// <summary>DG2 M4: the public contract 2 page is addressed by its cursor alone; contract 1 keeps its offset.</summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("50")]
+    [InlineData("null")]
+    [InlineData("\"x\"")]
+    public async Task An_offset_is_not_a_member_of_a_contract_2_page(string offset)
+    {
+        var error = await Error($$"""[{ "page": { "limit": 25, "offset": {{offset}} } }]""", Codes.UnknownStageMember);
+
+        error.Stage.Should().Be(0);
+        System.Text.Json.JsonSerializer.Serialize(error.Params).Should().Be("""{"stage":"page","member":"offset","reason":"removed","use":"cursor"}""");
+
+        (await Bound("""[{ "page": { "limit": 25, "offset": 50 } }]""", BindHost.Context(contract: 1))).Page.Offset.Should().Be(50, "contract 1 pages by offset as it always has");
     }
 
     [Fact]

@@ -648,7 +648,7 @@ public sealed class ExplainTypes
 
         return new ExplainShape
         {
-            Paging = shape.IsRootShape ? "cursor" : "offset",
+            Paging = context.Contract == 2 || shape.IsRootShape ? "cursor" : "offset",
             Grouped = shape.Grouped,
             Unwound = shape.Unwound
                 .Select(key => key.Split('|', 2))

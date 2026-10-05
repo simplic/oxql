@@ -53,7 +53,7 @@ public class RefusalsServerTests
     private static Case Template(string id, string code, string why, string pipeline) =>
         new(id, code, 400, "validation_error", why, LabService.Transport, Corpus.Template, pipeline);
 
-    /// <summary>The 76 provocations of the legacy table, in its order.</summary>
+    /// <summary>The 75 provocations of the legacy table (76 less the cursor-with-offset case contract 2 lost with its offset, DG2 M4), in its order.</summary>
     public static readonly IReadOnlyList<Case> Table =
     [
         // entity
@@ -136,12 +136,11 @@ public class RefusalsServerTests
         Staff("V43", "MAX_CONDITIONS_EXCEEDED", "201 leaf conditions, one over maxConditions", $$"""[{ "match": { "and": [{{Repeat(201, i => $$"""{ "matchCode": { "neq": "x{{i}}" } }""")}}] } }, {{Page1}}]"""),
         Staff("V44", "MAX_VARIABLES_EXCEEDED", "65 variables, one over maxVariables", $$"""[{ "match": { "matchCode": { "eq": { "$var": "v0" } } } }, {{Page1}}]""", $"{{ {Repeat(65, i => $"\"v{i}\": \"x\"")} }}"),
         Staff("V45", "INVALID_PAGE_LIMIT", "limit: 0", """[{ "page": { "limit": 0 } }]"""),
-        Staff("V45.offset", "INVALID_PAGE_LIMIT", "offset: -1", """[{ "page": { "limit": 1, "offset": -1 } }]"""),
-        Staff("V45.cursor-offset", "INVALID_PAGE_LIMIT", "a cursor and an offset in the same page stage", """[{ "page": { "limit": 1, "offset": 1, "cursor": "anything" } }]"""),
+        Staff("V45.offset", "UNKNOWN_STAGE_MEMBER", "offset: 1, which a contract 2 page does not have (DG2 M4)", """[{ "page": { "limit": 1, "offset": 1 } }]"""),
         Staff("V46", "PAGE_SIZE_EXCEEDED", "limit: 501, one over maxPageSize", """[{ "page": { "limit": 501 } }]"""),
         new("V47", "LOOKUP_LIMIT_EXCEEDED", 400, "validation_error", "lookup.limit 101, one over maxLookupLimit, on a declared backward reference",
             LabService.Fleet, Corpus.Vehicle, $$"""[{ "lookup": { "path": "vehicle.id", "from": "fleet.equipment", "as": "eq", "limit": 101 } }, {{Page1}}]"""),
-        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset", """[{ "page": { "limit": 1, "offset": 5001 } }]"""),
+        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset, under contract 1 (a contract 2 page has no offset, DG2 M4)", """[{ "page": { "limit": 1, "offset": 5001 } }]""") with { ContractOne = true },
         new("V50", "REQUEST_TOO_LARGE", 413, "validation_error", "a body above maxRequestBytes (262 144)", LabService.Staff, Corpus.Employee,
             $$"""[{ "match": { "or": [{{Repeat(4000, i => $$"""{ "matchCode": { "eq": "{{new string('x', 60)}}{{i}}" } }""")}}] } }, {{Page1}}]"""),
 
@@ -197,9 +196,9 @@ public class RefusalsServerTests
     }
 
     [Fact]
-    public void Va_the_table_carries_the_legacy_76_provocations_with_unique_ids()
+    public void Va_the_table_carries_the_legacy_provocations_with_unique_ids()
     {
-        Table.Should().HaveCount(76);
+        Table.Should().HaveCount(75);
         Table.Select(row => row.Id).Should().OnlyHaveUniqueItems();
         Table.Select(row => row.Code).Distinct().Should().HaveCount(52, "the legacy table provoked 52 distinct codes; two more lived in the batch battery and six were out of the old rig's reach");
     }

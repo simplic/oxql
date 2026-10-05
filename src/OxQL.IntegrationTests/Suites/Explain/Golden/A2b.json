@@ -108,7 +108,6 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"OFFSET_PAGING","message":"After an unwind or a group the rows page by offset, up to offset 5000; rows written between two pages may repeat or be skipped.","stage":1,"params":{"maxOffset":5000}},
       {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing refuses the request (onMissing refuse, strict); not_found lose data and refuse under strict.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"refuse","strict":true,"dataLoss":["not_found"]}},
       {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
       {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the select, the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
@@ -161,7 +160,7 @@
         ],
         "creates": ["item","position"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -185,7 +184,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -214,7 +213,7 @@
         ],
         "creates": ["erpLine"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -247,7 +246,7 @@
         ],
         "creates": ["sourceLine","sourceParent"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -283,7 +282,7 @@
         ],
         "creates": ["lastAttempt"],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "roots": {
@@ -327,7 +326,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["date","erpLine","id","item.quantity","item.text","item.totalPriceNet","lastAttempt","number","position","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
@@ -360,7 +359,7 @@
         ],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["date","erpLine","id","item.quantity","item.text","item.totalPriceNet","lastAttempt","number","position","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
@@ -391,7 +390,7 @@
         "reads": [],
         "creates": [],
         "shape": {
-          "paging": "offset",
+          "paging": "cursor",
           "grouped": false,
           "unwound": ["items"],
           "projection": ["date","erpLine","id","item.quantity","item.text","item.totalPriceNet","lastAttempt","number","position","sourceLine","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
@@ -645,7 +644,7 @@
       }
     },
     "result": {
-      "paging": "offset",
+      "paging": "cursor",
       "columns": [
         {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
         {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},

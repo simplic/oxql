@@ -397,7 +397,7 @@ public sealed partial class MongoQueryEngine
         if (trace is not null)
             result = new ExplainShapeResult
             {
-                Paging = trace.Final.IsRootShape ? "cursor" : "offset",
+                Paging = context.Contract == 2 || trace.Final.IsRootShape ? "cursor" : "offset",
                 Columns = draft.Bound is { } bound ? Columns(bound, trace, alias => OwnerShows(draft, alias)) : [],
             };
 

@@ -174,9 +174,9 @@ public class StrictRequestBindTests
     }
 
     [Fact]
-    public async Task A_strict_page_that_jumps_by_an_offset_stays_under_the_page_size()
+    public async Task A_strict_page_that_continues_from_a_cursor_stays_under_the_page_size()
     {
-        var errors = await ErrorsAsync(""" "strict": true, """, """[{ "page": { "limit": 501, "offset": 10 } }]""");
+        var errors = await ErrorsAsync(""" "strict": true, """, """[{ "page": { "limit": 501, "cursor": "a.b" } }]""");
 
         errors.Should().ContainSingle().Which.Code.Should().Be(Codes.PageSizeExceeded);
     }
@@ -191,7 +191,7 @@ public class StrictRequestBindTests
         var error = errors.Should().ContainSingle().Which;
 
         error.Code.Should().Be(Codes.PageSizeExceeded);
-        error.Message.Should().Be("The page limit 501 exceeds the maximum of 500. A strict request without cursor or offset may ask for up to 5000.");
+        error.Message.Should().Be("The page limit 501 exceeds the maximum of 500. A strict request without a cursor may ask for up to 5000.");
     }
 
     [Fact]

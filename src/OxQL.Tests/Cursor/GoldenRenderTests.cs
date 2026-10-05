@@ -165,7 +165,7 @@ public class GoldenRenderTests(ITestOutputHelper output)
         if (contract == 1)
             parsed = Compat.Rewrite(parsed).Request;
 
-        var outcome = await BindHost.BindAsync(BindHost.Probe, parsed, BindHost.Context(contract: contract));
+        var outcome = await BindHost.BindAsync(BindHost.Probe, parsed, BindHost.Context(contract: contract) with { Internal = contract == 2 });
 
         outcome.Should().BeOfType<BindOutcome.Bound>($"the golden request should bind; got: {BindHost.Describe(outcome)}");
 

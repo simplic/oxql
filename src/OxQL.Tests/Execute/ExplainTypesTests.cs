@@ -183,7 +183,7 @@ public class ExplainTypesTests
         result.ShapeAt(3).Roots.ToJsonString().Should().Be(
             """{"":"t:rc.invoice","line":"t:rc.invoice#lines","c":"t:rc.customer","bl":"t:rc.shipment#billingLines","sh":"t:rc.shipment","ct":"t:crm.contact"}""");
         result.ShapeAt(0).Unwound.Should().Equal("lines");
-        result.ShapeAt(0).Paging.Should().Be("offset");
+        result.ShapeAt(0).Paging.Should().Be("cursor");
         result.Entry.Shape.Paging.Should().Be("cursor");
 
         result.Type("t:rc.invoice#lines").Should().Match<JsonObject>(type => type["entity"]!.GetValue<string>() == Invoice && type["item"]!.GetValue<string>() == "lines");

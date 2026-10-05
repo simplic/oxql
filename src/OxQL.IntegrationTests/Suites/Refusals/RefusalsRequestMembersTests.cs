@@ -70,10 +70,10 @@ public class RefusalsRequestMembersTests
         (await staff.QueryAsync(Body("""  "strict": true, """, $$"""[{ "page": { "limit": {{report + 1}} } }]""")))
             .ShouldRefuse("PAGE_SIZE_EXCEEDED", 400)["message"]!.GetValue<string>().Should().Contain("report page maximum");
 
-        (await staff.QueryAsync(Body("""  "strict": true, """, $$"""[{ "page": { "limit": {{maxPage + 1}}, "offset": 1 } }]""")))
+        (await staff.QueryAsync(Body("""  "strict": true, """, $$"""[{ "page": { "limit": {{maxPage + 1}}, "cursor": "a.b" } }]""")))
             .ShouldRefuse("PAGE_SIZE_EXCEEDED", 400);
 
         (await staff.QueryAsync(Body("", $$"""[{ "page": { "limit": {{maxPage + 1}} } }]""")))
-            .ShouldRefuse("PAGE_SIZE_EXCEEDED", 400)["message"]!.GetValue<string>().Should().Contain("A strict request without cursor or offset");
+            .ShouldRefuse("PAGE_SIZE_EXCEEDED", 400)["message"]!.GetValue<string>().Should().Contain("A strict request without a cursor");
     }
 }

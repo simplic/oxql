@@ -213,7 +213,7 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Unwind_with_alias_and_index_then_offset_paging()
     {
-        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "items.quantity": "desc" }] }, { "page": { "limit": 10, "offset": 20 } }]""");
+        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "items.quantity": "desc" }] }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -321,7 +321,7 @@ public class GoldenPipelineTests
     {
         // No sort of the caller's: $skip over $unwind output nothing ordered repeats and drops
         // rows between pages, so the binder supplies the key and the compiler completes it.
-        var compiled = await Compile("""[{ "unwind": { "path": "items" } }, { "page": { "limit": 10, "offset": 20 } }]""");
+        var compiled = await Compile("""[{ "unwind": { "path": "items" } }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",

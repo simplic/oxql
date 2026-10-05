@@ -63,7 +63,7 @@ public class PerfBench(ITestOutputHelper output)
             coding.AppendLine("| run | request | body bytes | br bytes | br ms | gzip bytes | gzip ms |").AppendLine("|---|---|---|---|---|---|---|");
 
         if (!File.Exists(file))
-            text.AppendLine("| run | request | wall p50 ms | wall p95 ms | db p50 ms | ours p50 ms | aggregates | getMores | rows | body bytes |").AppendLine("|---|---|---|---|---|---|---|---|---|---|");
+            text.AppendLine("| run | request | wall p50 ms | wall p95 ms | db p50 ms | ours p50 ms | aggregates | getMores | rows | body bytes | Server-Timing ours p50 ms | of it convert |").AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|");
 
         foreach (var each in cases.Where(each => only is null || each.Name.Contains(only, StringComparison.OrdinalIgnoreCase)))
         {
@@ -75,6 +75,8 @@ public class PerfBench(ITestOutputHelper output)
             var wall = new List<double>();
             var database = new List<double>();
             var ours = new List<double>();
+            var engine = new List<double>();
+            var convert = new List<double>();
             CommandBatch commands = new([]);
             WireAnswer answer = null!;
 
@@ -95,12 +97,19 @@ public class PerfBench(ITestOutputHelper output)
                 wall.Add(took);
                 database.Add(spent);
                 ours.Add(took - Math.Min(took, spent));
+
+                // The engine's own account of the request, where it gives one (the Server-Timing header).
+                if (answer.Headers.TryGetValue("Server-Timing", out var header))
+                {
+                    engine.Add(Metric(header, "ours"));
+                    convert.Add(Metric(header, "convert"));
+                }
             }
 
             answer.ShouldBeOk(each.Name);
 
             var line = string.Create(CultureInfo.InvariantCulture,
-                $"| {label} | {each.Name} | {Percentile(wall, 0.5):F1} | {Percentile(wall, 0.95):F1} | {Percentile(database, 0.5):F1} | {Percentile(ours, 0.5):F1} | {commands.Count("aggregate")} | {commands.Count("getMore")} | {answer.Items.Count} | {Encoding.UTF8.GetByteCount(answer.Text)} |");
+                $"| {label} | {each.Name} | {Percentile(wall, 0.5):F1} | {Percentile(wall, 0.95):F1} | {Percentile(database, 0.5):F1} | {Percentile(ours, 0.5):F1} | {commands.Count("aggregate")} | {commands.Count("getMore")} | {answer.Items.Count} | {Encoding.UTF8.GetByteCount(answer.Text)} | {(engine.Count == 0 ? "" : Percentile(engine, 0.5).ToString("F2", CultureInfo.InvariantCulture))} | {(convert.Count == 0 ? "" : Percentile(convert, 0.5).ToString("F2", CultureInfo.InvariantCulture))} |");
 
             output.WriteLine(line);
             text.AppendLine(line);
@@ -211,6 +220,11 @@ public class PerfBench(ITestOutputHelper output)
             Of("join shipment → tour → vehicle", Joined(""", { "resolve": { "path": "tour.resource.id", "as": "vehicle", "target": "fleet.vehicle", "onMissing": "null" } }""", """ "tour.number": 1, "vehicle.matchCode": 1 """)),
         ];
     }
+
+    /// <summary>The duration of one metric of a <c>Server-Timing</c> value; 0 when it is not there.</summary>
+    private static double Metric(string header, string name) =>
+        header.Split(", ").Select(metric => metric.Split(';')).FirstOrDefault(parts => parts[0] == name) is { } found
+        && double.TryParse(found.FirstOrDefault(part => part.StartsWith("dur=", StringComparison.Ordinal))?[4..], NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) ? duration : 0;
 
     private static int Number(string variable, int otherwise) =>
         int.TryParse(Environment.GetEnvironmentVariable(variable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0 ? value : otherwise;

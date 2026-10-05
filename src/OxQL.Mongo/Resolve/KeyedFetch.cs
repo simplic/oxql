@@ -853,6 +853,12 @@ public sealed class KeyedFetch
                 .Select(drop => new DroppedSelectPath(drop.Target.UnionJoinOf(drop.Alias)!.OriginIndex, drop.Alias, drop.Target.Entity, drop.Path, Parent: false, Branch: true)))
             .ToList();
 
+        // What each owner cost, for the request's timing: the keys asked, the keys the cache answered, the time of the calls.
+        if (context.Timing is { } timing)
+            foreach (var target in targets.Where(target => target.OwnerKeys > 0 || target.CacheHits > 0))
+                timing.Called(target.Service == SelfService ? compiled.Bound.Entity.Namespace : target.Service, target.TargetName, target.Service != SelfService,
+                    target.OwnerKeys, target.CacheHits, target.OwnerMs, target.OwnerTimings);
+
         return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Dropped = dropped, Calls = calls, CacheHits = cacheHits };
     }
 
@@ -874,7 +880,36 @@ public sealed class KeyedFetch
             var sent = group.ToList();
             var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
 
-            return new OwnerCall(group.Key, sent, await CallSharedAsync(owner, group.Key, sent.Select(entry => entry.Query).ToList(), deadline, sent.Any(entry => entry.Target.Chain), context, cancellationToken).ConfigureAwait(false));
+            var isRemote = group.Key != SelfService;
+
+            // Another service's owner is asked for its own timing when this request's was asked for:
+            // the database's share at the owner is then known here. This host's own targets are
+            // measured in this request's collector as they run.
+            var queries = isRemote && context.Timing is { Detailed: true }
+                ? sent.Select(entry => entry.Query with { Timing = true }).ToList()
+                : sent.Select(entry => entry.Query).ToList();
+            var since = QueryTiming.Now;
+            var outcome = await CallSharedAsync(owner, group.Key, queries, deadline, sent.Any(entry => entry.Target.Chain), context, cancellationToken).ConfigureAwait(false);
+            var took = System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalMilliseconds;
+
+            if (isRemote)
+                context.Timing?.Remote(since);
+
+            lock (sends)
+            {
+                foreach (var target in sent.Select(entry => entry.Target).Distinct())
+                    target.OwnerMs += took;
+
+                for (var index = 0; index < sent.Count; index++)
+                {
+                    sent[index].Target.OwnerKeys += sent[index].Keys.Count;
+
+                    if (index < outcome.Results.Count && outcome.Results[index] is JsonObject answered && answered["timing"] is JsonObject measured)
+                        sent[index].Target.OwnerTimings.Add(measured);
+                }
+            }
+
+            return new OwnerCall(group.Key, sent, outcome);
         }).ToList();
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -1410,6 +1445,15 @@ public sealed class KeyedFetch
 
         /// <summary>The keys of a chunk the owner answered only in part; their answers are not kept.</summary>
         public HashSet<string> Uncached { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The time the owner calls that carried this target's queries took, in milliseconds; the keys they asked; the owner's own timing of each query where it was asked for.</summary>
+        public double OwnerMs { get; set; }
+
+        /// <inheritdoc cref="OwnerMs"/>
+        public int OwnerKeys { get; set; }
+
+        /// <inheritdoc cref="OwnerMs"/>
+        public List<JsonObject> OwnerTimings { get; } = [];
 
         public List<string> Misses { get; } = [];
 

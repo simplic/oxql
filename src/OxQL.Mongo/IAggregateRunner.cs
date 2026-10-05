@@ -84,6 +84,43 @@ public sealed class MongoAggregateRunner : IAggregateRunner
 
         using var cursor = await collection.AggregateAsync(definition, aggregateOptions, cancellationToken).ConfigureAwait(false);
 
-        return await cursor.ToListAsync(cancellationToken).ConfigureAwait(false);
+        // Nobody measures this aggregate: read it as the driver does.
+        if (AggregateRunStats.Current is not { } stats)
+            return await cursor.ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        // The command's own reply is here; every batch after the first cost a getMore.
+        stats.FirstBatch = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        var rows = new List<BsonDocument>();
+        var batches = 0;
+
+        while (await cursor.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+        {
+            batches++;
+            rows.AddRange(cursor.Current);
+        }
+
+        stats.GetMores = Math.Max(0, batches - 1);
+        stats.RoundTripMs = RoundTripMs();
+
+        return rows;
+    }
+
+    /// <summary>The round-trip time the driver's heartbeat last measured to the server it reads from; null while it knows none.</summary>
+    private double? RoundTripMs()
+    {
+        try
+        {
+            var servers = client.Cluster.Description.Servers.Where(server => server.State == MongoDB.Driver.Core.Servers.ServerState.Connected).ToList();
+            var chosen = servers.FirstOrDefault(server => server.Type is MongoDB.Driver.Core.Servers.ServerType.ReplicaSetPrimary or MongoDB.Driver.Core.Servers.ServerType.Standalone or MongoDB.Driver.Core.Servers.ServerType.ShardRouter)
+                ?? servers.FirstOrDefault();
+
+            return chosen?.AverageRoundTripTime.TotalMilliseconds;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException or NotSupportedException)
+        {
+            // A client that is not a driver's own (a test's) has no cluster to ask.
+            return null;
+        }
     }
 }

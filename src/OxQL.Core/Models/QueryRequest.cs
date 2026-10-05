@@ -58,6 +58,15 @@ public sealed record QueryRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public KeyedByMember? KeyedBy { get; init; }
 
+    /// <summary>
+    /// Whether the answer carries where its time went (the <c>timing</c> member beside <c>pageInfo</c>):
+    /// the database commands with what each returned, the owners asked, and this host's own share. The
+    /// header <c>X-OxQL-Timing</c> asks the same. It changes no row and is no part of a cursor.
+    /// </summary>
+    [JsonPropertyName("timing")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Timing { get; init; }
+
     /// <summary>Whether the request is strict: <see cref="Strict"/> written as true.</summary>
     [JsonIgnore]
     public bool IsStrict => Strict == true;

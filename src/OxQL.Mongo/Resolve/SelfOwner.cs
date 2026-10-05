@@ -42,6 +42,8 @@ public sealed class SelfOwner(IQueryEngine engine, RequestContext context) : IRe
             Internal = true,
             Contract = 2,
             AddonSource = SerialAddonSource.Of(context.AddonSource),
+            // The owner queries this host runs for itself are part of the request they serve: their commands are its commands.
+            Timing = context.Timing?.Nested(),
             BatchShare = context.BatchShare ?? (request.Queries.Count > 1 ? new BatchFlights() : null),
         };
         var deadline = request.MaxTimeMs is { } ceiling and > 0 ? DateTime.UtcNow.AddMilliseconds(ceiling) : (DateTime?)null;

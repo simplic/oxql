@@ -62,6 +62,12 @@ public sealed record RequestContext
     public Func<Engine.ExplainOwnerAdmission>? ExplainOwnerGate { get; init; }
 
     /// <summary>
+    /// Where the request's time goes (<see cref="Engine.QueryTiming"/>). A host that started the clock
+    /// before it read the body sets it; otherwise the engine starts one when it takes the request.
+    /// </summary>
+    public Engine.QueryTiming? Timing { get; init; }
+
+    /// <summary>
     /// What the queries of one batch that run side by side share (<see cref="Engine.BatchFlights"/>);
     /// null for a request that is none of them. The batch that runs them sets it. A host never sets it.
     /// </summary>

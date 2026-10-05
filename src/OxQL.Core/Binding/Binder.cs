@@ -43,7 +43,7 @@ public sealed class Binder
     /// The top-level members a request carries. An internal call may also carry <c>keyedBy</c>
     /// (<see cref="InternalRequestMembers"/>); the public route never names it.
     /// </summary>
-    public const string RequestMembers = "entityType, variables, filter, pipeline, strict";
+    public const string RequestMembers = "entityType, variables, filter, pipeline, strict, timing";
 
     /// <summary>The top-level members a request carries on an internal call (<see cref="RequestContext.Internal"/>).</summary>
     public const string InternalRequestMembers = RequestMembers + ", keyedBy";
@@ -1279,7 +1279,10 @@ public sealed class Binder
             if (!target.Extendable || addons.ContainsKey(target.Id))
                 return;
 
+            var reading = Engine.QueryTiming.Now;
+
             addons[target.Id] = await context.AddonSource.ForEntityAsync(target.Id, context.Organisation!.Value, cancellationToken);
+            context.Timing?.Addon(reading);
         }
 
         // ---- match ---------------------------------------------------------------------------

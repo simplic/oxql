@@ -28,7 +28,7 @@ public class RefusalsRequestMembersTests
         var refused = await staff.QueryAsync(Body("""  "strictly": true, """, """[{ "page": { "limit": 1 } }]"""));
 
         refused.ShouldRefuse("UNKNOWN_REQUEST_MEMBER", 400)["message"]!.GetValue<string>()
-            .Should().Be("'strictly' is not a member of a request; a request carries entityType, variables, filter, pipeline, strict.");
+            .Should().Be("'strictly' is not a member of a request; a request carries entityType, variables, filter, pipeline, strict, timing.");
         refused.ErrorCodes.Should().Equal(["UNKNOWN_REQUEST_MEMBER"]);
     }
 

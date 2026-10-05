@@ -28,4 +28,8 @@ public sealed record BatchResponse
     /// <summary>The outcomes.</summary>
     [JsonPropertyName("results")]
     public required IReadOnlyList<JsonNode?> Results { get; init; }
+
+    /// <summary>The collectors the queries were measured with, for the host's <c>Server-Timing</c> header; never part of the body.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<Engine.QueryTiming> Measured { get; init; } = [];
 }

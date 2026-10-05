@@ -48,7 +48,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            QueryOutcome.Success success => new CompressedJsonResult(success.Result),
+            QueryOutcome.Success success => Timed(success.Result.Measured is { } measured ? [measured] : [], new CompressedJsonResult(success.Result)),
             QueryOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -69,7 +69,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            BatchOutcome.Success success => new CompressedJsonResult(success.Response),
+            BatchOutcome.Success success => Timed(success.Response.Measured, new CompressedJsonResult(success.Response)),
             BatchOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -245,6 +245,29 @@ public class OxQLController : ControllerBase
         }
 
         return new CompressedJsonResult(result);
+    }
+
+    /// <summary>
+    /// The answer under its <c>Server-Timing</c> header: where the time went up to here, the first
+    /// byte of the body (total, the database with its commands and round trips, this host's own
+    /// share and its parts). A browser on another origin reads the header only when it is exposed:
+    /// the header is named in <c>Access-Control-Expose-Headers</c> for a request that carries an
+    /// <c>Origin</c>, beside what the host's CORS policy exposes.
+    /// </summary>
+    private IActionResult Timed(IReadOnlyList<QueryTiming> measured, IActionResult answer)
+    {
+        if (measured.Count == 0)
+            return answer;
+
+        foreach (var timing in measured)
+            timing.Stop();
+
+        Response.Headers[QueryTiming.ServerTimingHeader] = QueryTiming.ServerTiming(measured);
+
+        if (Request.Headers.ContainsKey(Microsoft.Net.Http.Headers.HeaderNames.Origin))
+            Response.Headers.Append(Microsoft.Net.Http.Headers.HeaderNames.AccessControlExposeHeaders, QueryTiming.ServerTimingHeader);
+
+        return answer;
     }
 
     private Refusal Log(Refusal refusal)

@@ -157,6 +157,18 @@ public sealed record QueryResult
     [JsonPropertyName("diagnostics")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<Diagnostic>? Diagnostics { get; init; }
+
+    /// <summary>
+    /// Where the request's time went (<see cref="QueryTiming.ToJson"/>); only when the request asked
+    /// for it (<c>"timing": true</c>, or the header <c>X-OxQL-Timing</c>).
+    /// </summary>
+    [JsonPropertyName("timing")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Timing { get; init; }
+
+    /// <summary>The collector the answer was measured with, for the host's <c>Server-Timing</c> header; never part of the body.</summary>
+    [JsonIgnore]
+    public QueryTiming? Measured { get; init; }
 }
 
 /// <summary>Why a request was aborted: the reason class, an HTTP status by that class, and the details.</summary>

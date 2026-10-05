@@ -37,6 +37,9 @@ public sealed class RequestSizeFilter(OxQLOptions options, ILogger<RequestSizeFi
     /// <inheritdoc/>
     public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
     {
+        // The request's clock starts here, before the body is read: reading and binding it is part of its time.
+        context.HttpContext.Items[QueryTiming.StartItem] = System.Diagnostics.Stopwatch.GetTimestamp();
+
         // An explain route takes the tighter of the two caps (Explain:MaxRequestBytes).
         var max = context.ActionDescriptor.EndpointMetadata.OfType<ExplainBodyAttribute>().Any()
             ? Math.Min(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes)

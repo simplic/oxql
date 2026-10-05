@@ -23,7 +23,7 @@ namespace OxQL.Mongo;
 public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 {
     private readonly IEntityModelProvider models;
-    private readonly IAggregateRunner runner;
+    private readonly TimedAggregateRunner runner;
     private readonly CursorCodec cursors;
     private readonly OxQLOptions options;
     private readonly KeyedFetch fetch;
@@ -49,7 +49,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         ExplainForwardCache? explainCache = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
-        this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
+        this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
@@ -77,14 +77,28 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     public async Task<QueryOutcome> ExecuteAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
-        context = Reaching(context);
+
+        // Where the time goes is always recorded; a host that started the clock earlier hands its collector in.
+        var timing = context.Timing ?? new QueryTiming();
+
+        if (request.Timing == true)
+            timing.Detail = true;
+
+        context = Reaching(context) with { Timing = timing };
+
+        var binds = QueryTiming.Now;
         var binding = await new Binder(models.Model, cursors).BindAsync(request, context, cancellationToken);
+
+        timing.Bind(binds);
 
         if (binding is BindOutcome.Failed failed)
             return QueryOutcome.Of(failed.Refusal);
 
         var bound = ((BindOutcome.Bound)binding).Pipeline;
+        var compiling = QueryTiming.Now;
         var compiled = MongoCompiler.Compile(bound, CompileOptionsFor(context));
+
+        timing.Compile(compiling);
 
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
@@ -97,9 +111,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The semi-joins fill their slots before the page runs; without the ids the filter cannot be evaluated.
         if (compiled.SemiJoins.Count > 0)
         {
+            var asking = QueryTiming.Now;
             var (refused, semiJoinCalls) = await fetch.ByConditionCountedAsync(compiled, context, Remaining(compiled, timer), cancellationToken).ConfigureAwait(false);
 
+            timing.Resolved(asking);
             resolveCalls += semiJoinCalls;
+            timing.ResolveCalls = resolveCalls;
 
             if (refused is not null)
             {
@@ -115,12 +132,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             Log(compiled, timer, 0, false, known is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, 0);
 
-            return QueryOutcome.Of(new QueryResult
+            return QueryOutcome.Of(Timed(new QueryResult
             {
                 Items = [],
                 PageInfo = new PageInfo { HasNextPage = false, Count = known },
                 Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
-            });
+            }, timing));
         }
 
         IReadOnlyList<BsonDocument> rows;
@@ -157,15 +174,15 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             // page exists, and room for one more. A batch of exactly what the pipeline's own $limit lets
             // through leaves the cursor open (the server has not seen its end yet), and the driver then
             // sends a getMore that returns nothing; one above it, the first reply closes the cursor.
-            pageTask = runner.AggregateAsync(bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 2 }, aggregates.Token);
+            pageTask = runner.AggregateAsync(QueryTiming.Page, timing, bound.Entity, compiled.PageStages, runOptions with { BatchSize = compiled.Limit + 2 }, aggregates.Token);
             if (step is not null && !countAfterPage)
             {
                 countTimer = Stopwatch.StartNew();
-                countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
+                countTask = runner.AggregateAsync(QueryTiming.Count, timing, bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
             }
             else if (step is null && compiled.CountStages is not null)
             {
-                countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages, runOptions, aggregates.Token);
+                countTask = runner.AggregateAsync(QueryTiming.Count, timing, bound.Entity, compiled.CountStages, runOptions, aggregates.Token);
             }
 
             // Whatever ends this request before the count is read (the caller giving up while the
@@ -177,7 +194,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             if (strict)
                 foreach (var probe in compiled.TruncationProbes)
                 {
-                    probeTasks.Add(runner.AggregateAsync(bound.Entity, probe.Stages, runOptions, aggregates.Token));
+                    probeTasks.Add(runner.AggregateAsync(QueryTiming.Probe, timing, bound.Entity, probe.Stages, runOptions, aggregates.Token));
                     Observe(probeTasks[^1]);
                 }
 
@@ -234,13 +251,16 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // the request ends. The driver gives up the connection and the server ends the command when
         // it next looks (about half a second at most), so only a long count is cut short by it.
         if (!hasNextPage && step is not null)
+        {
             counting.Cancel();
+            timing.Discard(QueryTiming.Count);
+        }
 
         // The groups are counted only now that the page has come back full, under the step's own time.
         if (hasNextPage && countAfterPage && page.Count > 0)
         {
             countTimer = Stopwatch.StartNew();
-            countTask = runner.AggregateAsync(bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step!.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
+            countTask = runner.AggregateAsync(QueryTiming.Count, timing, bound.Entity, compiled.CountStages!, runOptions with { MaxTimeMs = Math.Clamp(step!.BudgetMs, 1, runOptions.MaxTimeMs) }, counting.Token);
             Observe(countTask);
         }
         var losses = new List<Diagnostic>();
@@ -306,10 +326,14 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         if (compiled.KeyedResolves.Count > 0)
         {
+            var joining = QueryTiming.Now;
             var resolution = await fetch.ByKeysAsync(compiled, page, context, Remaining(compiled, timer), strict, cancellationToken).ConfigureAwait(false);
 
+            timing.Resolved(joining);
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;
+            timing.ResolveCalls = resolveCalls;
+            timing.ResolveCacheHits = cacheHits;
 
             if (resolution.Refusal is not null)
             {
@@ -360,6 +384,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var nextCursor = hasNextPage && page.Count > 0 ? cursors.Encode(NextCursor(compiled, page[^1], served)) : null;
         var items = new List<JsonNode?>(page.Count);
         var unfit = new List<string>();
+        var converting = QueryTiming.Now;
 
         // Contract 1 rows come back as the driver returned them, through the v1 converter; a key
         // the compiler kept against the caller's projection is theirs to lose again, and the
@@ -382,6 +407,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             }
         }
 
+        timing.Convert(converting);
+        timing.Rows = items.Count;
+
         // Stored values outside their kind's range travel verbatim; said once per request, by
         // path and never by value.
         if (unfit.Count > 0)
@@ -402,8 +430,20 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         Log(compiled, timer, page.Count, timedOut, capped == true || countInfo is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, cacheHits);
 
-        return QueryOutcome.Of(result);
+        return QueryOutcome.Of(Timed(result, timing));
     }
+
+    /// <summary>
+    /// The answer with where its time went: the collector for the host's <c>Server-Timing</c> header,
+    /// and the breakdown as the <c>timing</c> member when the request asked for it. A request this
+    /// host runs for itself inside another (a local join target's owner query) is part of that
+    /// request's timing and carries none of its own.
+    /// </summary>
+    private static QueryResult Timed(QueryResult result, QueryTiming timing) => result with
+    {
+        Measured = timing,
+        Timing = timing.Detail ? timing.ToJson() : null,
+    };
 
     /// <summary>A further step of a count is sent only when one this many times the last is predicted to fit the time left.</summary>
     private const int LadderFactor = 10;
@@ -440,7 +480,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 if (left < 1)
                     throw new TimeoutException();
 
-                var rows = await runner.AggregateAsync(bound.Entity, [.. stages, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
+                var rows = await runner.AggregateAsync(QueryTiming.CountRung, context.Timing, bound.Entity, [.. stages, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
                 var found = rows is { Count: > 0 } && rows[0].TryGetValue("n", out var n) ? n.ToInt64() : 0;
                 var ms = (long)timer.Elapsed.TotalMilliseconds;
 
@@ -512,6 +552,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         if (step is null || countTask is null || countTimer is null)
             return walked;
 
+        var waiting = QueryTiming.Now;
+
         try
         {
             var left = TimeSpan.FromMilliseconds(step.BudgetMs) - countTimer.Elapsed;
@@ -540,6 +582,10 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 logger.LogWarning(exception, "OxQL count step failed; the rows are answered without a count. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
 
             return new CountInfo { State = CountInfo.Unknown, Reason = timeout ? CountInfo.Timeout : CountInfo.Failed, Ms = (long)countTimer.Elapsed.TotalMilliseconds };
+        }
+        finally
+        {
+            context.Timing?.CountWait(waiting);
         }
     }
 
@@ -732,12 +778,18 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var elapsed = timer.Elapsed.TotalMilliseconds;
         var outcome = refusal?.Type ?? "ok";
 
+        var spent = context.Timing?.Summary() ?? default;
+
         logger.LogInformation(
-            "OxQL {Entity} stages={Stages} rows={Rows} elapsedMs={ElapsedMs} timedOut={TimedOut} countCapped={CountCapped} resolveCalls={ResolveCalls} resolveCacheHits={ResolveCacheHits} compat={Compat} user={UserId} org={OrganisationId} correlation={CorrelationId} outcome={Outcome}",
+            "OxQL {Entity} stages={Stages} rows={Rows} elapsedMs={ElapsedMs} dbMs={DbMs} dbCommands={DbCommands} oursMs={OursMs} convertMs={ConvertMs} timedOut={TimedOut} countCapped={CountCapped} resolveCalls={ResolveCalls} resolveCacheHits={ResolveCacheHits} compat={Compat} user={UserId} org={OrganisationId} correlation={CorrelationId} outcome={Outcome}",
             bound.Entity.Id,
             stages,
             rows,
             elapsed,
+            spent.DbMs,
+            spent.Commands,
+            Math.Max(0, Math.Round(elapsed - spent.DbMs, 2)),
+            spent.ConvertMs,
             timedOut,
             countCapped,
             resolveCalls,

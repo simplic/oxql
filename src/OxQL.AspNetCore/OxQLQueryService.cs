@@ -87,8 +87,9 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
-        // The queries of a batch that run side by side share the context their batch read once.
-        var context = shared is null ? await ContextAsync(maxTimeMs, internalCall, cancellationToken) : shared with { MaxTimeMs = maxTimeMs };
+        // The queries of a batch that run side by side share the context their batch read once;
+        // each is measured on its own, from when it starts.
+        var context = shared is null ? await ContextAsync(maxTimeMs, internalCall, cancellationToken) : shared with { MaxTimeMs = maxTimeMs, Timing = Measuring(httpContextAccessor?.HttpContext) };
 
         if (context.Contract == 1)
         {
@@ -157,12 +158,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 async () => ((await ContextAsync(null, internalCall, cancellationToken)) with { AddonSource = SerialAddonSource.Of(addons), BatchShare = new BatchFlights() }, null),
                 cancellationToken).ConfigureAwait(false);
 
+        var measured = new System.Collections.Concurrent.ConcurrentQueue<QueryTiming>();
+
         var results = await BatchRun.RunAsync(batch.Queries, degree, async (query, token) =>
         {
             var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
             var outcome = unscoped is not null && query is not null
                 ? QueryOutcome.Of(unscoped)
                 : await ExecuteAsync(query!, left, internalCall, shared, token).ConfigureAwait(false);
+
+            if (outcome is QueryOutcome.Success { Result.Measured: { } timing })
+                measured.Enqueue(timing);
 
             return outcome switch
             {
@@ -172,7 +178,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
             };
         }, cancellationToken).ConfigureAwait(false);
 
-        return new BatchOutcome.Success(new BatchResponse { Results = [.. results] });
+        return new BatchOutcome.Success(new BatchResponse { Results = [.. results], Measured = [.. measured] });
     }
 
     /// <inheritdoc/>
@@ -376,6 +382,35 @@ public sealed class OxQLQueryService : IOxQLQueryService
             CorrelationId = LogText.Of(scope.CorrelationId(httpContext)),
             MaxTimeMs = maxTimeMs,
             Internal = internalCall,
+            Timing = Measuring(httpContext),
+        };
+    }
+
+    /// <summary>
+    /// The collector of a query: started when the host's filter took the request
+    /// (<see cref="QueryTiming.StartItem"/>) for the first query the request runs, which waited for
+    /// the body to be read, and now for every further one (the later queries of a batch); with the
+    /// breakdown switched on when the caller's <see cref="QueryTiming.Header"/> asks for it.
+    /// </summary>
+    private static QueryTiming Measuring(HttpContext? httpContext)
+    {
+        long? started = null;
+
+        if (httpContext is not null)
+        {
+            lock (httpContext.Items)
+            {
+                if (httpContext.Items.TryGetValue(QueryTiming.StartItem, out var taken) && taken is long at)
+                {
+                    started = at;
+                    httpContext.Items.Remove(QueryTiming.StartItem);
+                }
+            }
+        }
+
+        return new QueryTiming(started)
+        {
+            Detail = httpContext is not null && httpContext.Request.Headers.TryGetValue(QueryTiming.Header, out var asked) && QueryTiming.Asked(asked.FirstOrDefault()),
         };
     }
 

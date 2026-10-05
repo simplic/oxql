@@ -141,7 +141,8 @@ public sealed record CompiledQuery
 /// before the unwind, so the unwind and the page's own sort see a page's worth of parents instead of
 /// every candidate row. It holds when the order of the page is the parents' order (every sort field
 /// before the key is a member of the entity) and every row kept yields a row of the page (each has
-/// an element, and what filters after the unwind is applied before it as well).</item>
+/// an element, and what filters after the unwind is applied before it as well). It also holds when
+/// the element's position follows those members before the key (<see cref="IndexAscending"/>).</item>
 /// <item><paramref name="Prefiltered"/>: the paths under the alias whose conditions, written after
 /// the unwind, are also asked of the collection before it ("some element passes them all"), so a
 /// row without such an element is not unwound. Empty when there is none.</item>
@@ -150,7 +151,18 @@ public sealed record CompiledQuery
 /// unwind left it.</item>
 /// </list>
 /// </summary>
-public sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate);
+public sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate)
+{
+    /// <summary>
+    /// Set where the parents are cut first although the sort names the unwind's position
+    /// (<c>includeIndex</c>) before the key: the direction of that position. The rows of parents that
+    /// tie on the members before it then interleave by position, so the parents are ordered by those
+    /// members, then by the first position each still has a row at, then by the key; the page's first
+    /// rows lie in the first parents of that order (<see cref="MongoCompiler.PlaceUnwind"/>). Null where
+    /// the key stands before the position, and the order within a parent needs no such care.
+    /// </summary>
+    public bool? IndexAscending { get; init; }
+}
 
 /// <summary>Where a join that runs is emitted (<see cref="MongoCompiler.PhaseOf(BoundPipeline, int, string, bool)"/>).</summary>
 public enum JoinPhase
@@ -346,8 +358,13 @@ public static class MongoCompiler
 
         // Parents first: a parent the position lies in or before passes the leading match, where an
         // index on the sort bounds it; the rows of the parent the position lies in are cut after the unwind.
-        if (position is not null && unwinding is { ParentsFirst: true })
+        if (position is not null && unwinding is { ParentsFirst: true, IndexAscending: null })
             keyset = KeysetConjuncts(Legs(position, ParentFields(sortFields), key: true, []), !options.AsWritten, inclusive: true);
+
+        // The position stands before the key: every parent that ties with the position's on the members
+        // before it may still have a row to come, so the bound is on those members alone.
+        if (position is not null && unwinding is { ParentsFirst: true, IndexAscending: not null })
+            keyset = LeadingFields(sortFields) is { Count: > 0 } leading ? KeysetConjuncts(Legs(position, leading, key: false, []), !options.AsWritten, inclusive: true) : null;
 
         stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset))));
 
@@ -505,8 +522,17 @@ public static class MongoCompiler
                     // that tells a next page exists, and one more for the parent a cursor's position lies in).
                     if (placed is { ParentsFirst: true })
                     {
-                        stages.Add(Sort(ParentFields(sortFields), tieBreak: true));
-                        stages.Add(new BsonDocument("$limit", (long)page.Limit + 1 + (position is null ? 0 : 1) + (page.Cursor is { Mode: PagingMode.Offset } skipped ? skipped.Offset : page.Offset)));
+                        var reach = (long)page.Limit + 1 + (position is null ? 0 : 1) + (page.Cursor is { Mode: PagingMode.Offset } skipped ? skipped.Offset : page.Offset);
+
+                        if (placed.IndexAscending is { } indexAscending)
+                        {
+                            stages.AddRange(ParentsByPosition(unwind, sortFields, indexAscending, position, reach));
+                        }
+                        else
+                        {
+                            stages.Add(Sort(ParentFields(sortFields), tieBreak: true));
+                            stages.Add(new BsonDocument("$limit", reach));
+                        }
 
                         // The joins written before the unwind that only the display reads: once per parent kept.
                         stages.AddRange(parentJoins);
@@ -754,15 +780,110 @@ public static class MongoCompiler
         // a member of the entity, and not the collection), the rows are paged by value, nothing
         // between the unwind and the page reshapes or joins the rows, and every parent kept yields a
         // row of the page: what filters after the unwind is asked before it as well, exactly.
-        var parentsFirst = !grouped && !reshaped && !sortsCollection
+        var cuttable = !grouped && !reshaped && !sortsCollection
             && bound.PagingMode == PagingMode.Keyset && bound.Sort is not null
             && filter.Exact
-            && (filter.Element.Count == 0 || unwind is { PreserveNull: false, Flatten: null })
-            && sortFields.TakeWhile(field => !IsKey(field)).All(field => IsOfEntity(field.Path));
+            && (filter.Element.Count == 0 || unwind is { PreserveNull: false, Flatten: null });
+
+        // The element's position after the parents' members and before the key (`number, position`):
+        // within one parent it is the order the elements have anyway, but two parents that tie on the
+        // members interleave by it. The parents are still cut first where every parent's rows stand at
+        // the positions 0, 1, 2 … without a gap (no row kept without an element, no flattening, no
+        // condition on the element), ordered by the first position each has a row left at.
+        var leading = LeadingFields(sortFields);
+        var rest = sortFields.Skip(leading.Count).ToList();
+        var byPosition = rest.Count > 0 && unwind.IncludeIndex is { } indexed && rest[0].Path.Storage == indexed && !IsOfEntity(rest[0].Path)
+            && (rest.Count == 1 || IsKey(rest[1]))
+            && unwind is { PreserveNull: false, Flatten: null } && filter.Element.Count == 0;
+
+        var parentsFirst = cuttable && (byPosition || rest.Count == 0 || IsKey(rest[0]));
 
         var prefiltered = unwind is { PreserveNull: false, Flatten: null, As: not null } ? filter.ElementPaths : [];
 
-        return parentsFirst || renameLate || prefiltered.Count > 0 ? new UnwindPlacement(at, parentsFirst, prefiltered, renameLate) : null;
+        return parentsFirst || renameLate || prefiltered.Count > 0
+            ? new UnwindPlacement(at, parentsFirst, prefiltered, renameLate) { IndexAscending = parentsFirst && byPosition ? rest[0].Ascending : null }
+            : null;
+    }
+
+    /// <summary>The sort fields that are members of the entity's own row, up to the first that is not or is the key.</summary>
+    private static List<BoundSortField> LeadingFields(IReadOnlyList<BoundSortField> sortFields) =>
+        sortFields.TakeWhile(field => !IsKey(field) && IsOfEntity(field.Path)).ToList();
+
+    /// <summary>The field the parents of a page ordered by position are numbered in; no row keeps it.</summary>
+    private const string ReservedFirst = Aliases.ReservedPrefix + "oxFirst";
+
+    /// <summary>
+    /// The order and the cut of the parents of a page sorted by the entity's members, then the
+    /// position of the element, then the key (<see cref="UnwindPlacement.IndexAscending"/>).
+    /// <para>
+    /// The rows of the parents that tie on the members interleave: all their rows at one position
+    /// before any at the next, by the key within a position. A parent's rows stand at the positions
+    /// 0 … n − 1 without a gap, so its rows still to come start at one position, its first: 0
+    /// ascending and n − 1 descending on a first page; after a cursor's position <c>(members, p, key)</c>
+    /// a parent that ties with it on the members starts at <c>p</c> when its key comes after the
+    /// position's, else one position further, and has no row left when that lies outside its
+    /// collection. Ordered by the members, that first position and the key, a parent stands before
+    /// every parent whose first row to come follows its own, so the first <c>n</c> rows of the page lie
+    /// in the first <c>n</c> parents: each parent before a row's own has a row to come that precedes it.
+    /// </para>
+    /// </summary>
+    private static List<BsonDocument> ParentsByPosition(BoundStage.Unwind unwind, IReadOnlyList<BoundSortField> sortFields, bool ascending, CursorPayload? position, long reach)
+    {
+        var leading = LeadingFields(sortFields);
+        var keyAscending = sortFields.FirstOrDefault(IsKey)?.Ascending ?? true;
+        var order = new BsonDocument();
+
+        foreach (var field in leading)
+            order[field.Path.Storage!] = field.Ascending ? 1 : -1;
+
+        // Ascending on a first page every parent starts at position 0: the members and the key order them.
+        if (ascending && position is null)
+        {
+            order[KeyStorage] = keyAscending ? 1 : -1;
+
+            return [new BsonDocument("$sort", order), new BsonDocument("$limit", reach)];
+        }
+
+        var collection = "$" + unwind.Path.Storage;
+        var size = new BsonDocument("$cond", new BsonArray { new BsonDocument("$isArray", collection), new BsonDocument("$size", collection), 0 });
+        BsonValue last = new BsonDocument("$subtract", new BsonArray { size, 1 });
+        BsonValue first = ascending ? 0 : last;
+        var stages = new List<BsonDocument>();
+
+        if (position is not null)
+        {
+            BsonValue At(string wire) => position.Fields.FirstOrDefault(value => value.Wire == wire)?.Value ?? BsonNull.Value;
+
+            // A value of the position is data, never a field path or an operator.
+            static BsonDocument Literal(BsonValue value) => new("$literal", value);
+
+            var at = At(unwind.IncludeIndex!) is { IsNumeric: true } number ? number.ToInt64() : 0;
+            var ties = leading
+                .Select(field => (BsonValue)new BsonDocument("$eq", new BsonArray { new BsonDocument("$ifNull", new BsonArray { "$" + field.Path.Storage, BsonNull.Value }), Literal(At(field.Path.Wire) is { IsBsonNull: false, IsBsonUndefined: false } value ? value : BsonNull.Value) }))
+                .ToList();
+            BsonValue tied = ties.Count switch { 0 => true, 1 => ties[0], _ => new BsonDocument("$and", new BsonArray(ties)) };
+            var later = new BsonDocument(keyAscending ? "$gt" : "$lt", new BsonArray { "$" + KeyStorage, Literal(At(KeyStorage)) });
+            BsonValue next = new BsonDocument("$cond", new BsonArray { later, at, ascending ? at + 1 : at - 1 });
+
+            first = new BsonDocument("$cond", new BsonArray { tied, ascending ? next : new BsonDocument("$min", new BsonArray { last, next }), first });
+        }
+
+        stages.Add(new BsonDocument("$set", new BsonDocument(ReservedFirst, first)));
+
+        // A parent the position has passed has no row left: ascending its first lies beyond its collection, descending before it.
+        if (position is not null)
+            stages.Add(new BsonDocument("$match", ascending
+                ? new BsonDocument("$expr", new BsonDocument("$lt", new BsonArray { "$" + ReservedFirst, size }))
+                : new BsonDocument(ReservedFirst, new BsonDocument("$gte", 0))));
+
+        order[ReservedFirst] = ascending ? 1 : -1;
+        order[KeyStorage] = keyAscending ? 1 : -1;
+
+        stages.Add(new BsonDocument("$sort", order));
+        stages.Add(new BsonDocument("$limit", reach));
+        stages.Add(new BsonDocument("$unset", ReservedFirst));
+
+        return stages;
     }
 
     /// <summary>Whether a sort field is the entity's key, from which on the order lies within one parent.</summary>

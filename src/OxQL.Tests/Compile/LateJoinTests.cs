@@ -124,7 +124,7 @@ public class LateJoinTests
         // The same for a lookup whose projection names paths under its alias, and its count never runs the join.
         var narrowed = MongoCompiler.Compile(await BindHost.BoundAsync(OxQL.TestCases.LateJoinCases.Model, OxQL.TestCases.LateJoinCases.Parent, """
             [{ "match": { "name": { "eq": "x" } } }, { "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag", "includeIndex": "at" } },
-             { "project": { "name": 1, "tag": 1, "at": 1, "children.title": 1 } }, { "sort": [{ "at": "desc" }] }, { "page": { "limit": 5, "count": true } }]
+             { "project": { "name": 1, "tag": 1, "at": 1, "children.title": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5, "count": true } }]
             """), Options);
 
         Kinds(narrowed.PageStages).Should().Equal("$match", "$match", "$lookup", "$set", "$unwind", "$sort", "$limit", "$set", "$unset", "$project");

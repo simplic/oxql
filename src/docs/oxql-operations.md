@@ -688,7 +688,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   first exists, and a later group gives the name to another thing; `params` `path`, `alias`),
   `PROJECT_AFTER_PAGE` (the projection at this stage runs after the page is taken, on the page's
   rows), `SORT_BEFORE_UNWIND` (the rows are ordered and cut to what the page can reach before the
-  unwind at this stage; `params` `path`, `alias`), `UNWIND_PREFILTER` (what is asked of the element
+  unwind at this stage, also when the sort names the element's position after the parents'
+  members; `params` `path`, `alias`), `UNWIND_PREFILTER` (what is asked of the element
   after the unwind is asked of the collection before it; `params` `path`, `alias`, `paths`) — the
   three say where the engine places a stage of a contract 2 request (see
   [`oxql-semantics.md`](oxql-semantics.md)); the rows are those of the request as written,

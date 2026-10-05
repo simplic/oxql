@@ -75,6 +75,21 @@ public class ShapeDifferentialTests
         { "unwind-flatten-match", Corpus.Transaction, """[ { "unwind": { "path": "items", "flatten": "items", "as": "item", "includeIndex": "position" } }, { "match": { "item.text": { "neq": null } } }, { "project": { "number": 1, "position": 1, "item.text": 1 } } ]""" },
         { "unwind-lookup-alias", Corpus.Shipment, """[ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts" } }, { "unwind": { "path": "attempts", "as": "attempt", "includeIndex": "n" } }, { "match": { "attempt.text": { "neq": null } } }, { "project": { "shipmentNumber": 1, "n": 1, "attempt.text": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
         { "unwind-then-late-join", Corpus.Shipment, $$"""[ {{Items}}, { "resolve": { "path": "department.id", "as": "dep", "onMissing": "null" } }, { "project": { "shipmentNumber": 1, "position": 1, "item.text": 1 } }, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
+        // ---- the position after the parents' members and before the key: parents that tie interleave by it ----
+        { "unwind-sort-parent-then-position", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" }, { "position": "asc" } ] } ]""" },
+        { "unwind-sort-parent-then-position-desc", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "status.name": "asc" }, { "position": "desc" } ] } ]""" },
+        { "unwind-sort-parent-desc-then-position", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "loadStart": "desc" }, { "position": "asc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-two-parents-then-position", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "status.name": "desc" }, { "referenceNumber": "asc" }, { "position": "asc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-parent-position-key-desc", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "referenceNumber": "desc" }, { "position": "asc" }, { "id": "desc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-parent-position-desc-key-desc", Corpus.Shipment, $$"""[ {{Items}}, { "sort": [ { "referenceNumber": "asc" }, { "position": "desc" }, { "id": "desc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-position-asc", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "position": "asc" } ] } ]""" },
+        { "unwind-sort-position-match-parent", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "status.name": { "neq": "Planned" } } }, { "sort": [ { "referenceNumber": "asc" }, { "position": "asc" } ] }, {{ItemColumns}} ]""" },
+        { "unwind-sort-position-match-element", Corpus.Shipment, $$"""[ {{Items}}, { "match": { "item.orderNumber": { "gte": 1 } } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" }, { "position": "asc" } ] } ]""" },
+        { "unwind-sort-position-preserve-null", Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position", "preserveNull": true } }, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" }, { "position": "asc" } ] } ]""" },
+        { "unwind-sort-position-then-element", Corpus.Shipment, $$"""[ {{Items}}, {{ItemColumns}}, { "sort": [ { "shipmentNumber": "asc" }, { "position": "asc" }, { "item.text": "desc" } ] } ]""" },
+        { "unwind-scalars-sort-parent-then-position", Corpus.Shipment, """[ { "unwind": { "path": "status.roles", "as": "role", "includeIndex": "at" } }, { "sort": [ { "referenceNumber": "asc" }, { "at": "desc" } ] }, { "project": { "shipmentNumber": 1, "role": 1, "at": 1 } } ]""" },
+        { "unwind-lookup-before-sort-parent-then-position", Corpus.Shipment, $$"""[ {{Latest}}, {{Items}}, {{ItemAndLatest}}, { "sort": [ { "shipmentNumber": "asc" }, { "position": "asc" } ] } ]""" },
+
         // ---- a join written before the unwind: on the parents cut first, or where it was written; never once per element ----
         { "unwind-lookup-before-sort-parent", Corpus.Shipment, $$"""[ {{Latest}}, {{Items}}, {{ItemAndLatest}}, { "sort": [ { "shipmentNumber": "asc" } ] } ]""" },
         { "unwind-lookup-before-default-order", Corpus.Shipment, $$"""[ {{Latest}}, {{Items}}, {{ItemAndLatest}} ]""" },
@@ -148,6 +163,9 @@ public class ShapeDifferentialTests
         "unwind-default-order", "unwind-sort-parent-desc", "unwind-sort-two-parents", "unwind-sort-element", "unwind-sort-key-then-position-desc",
         "unwind-match-element", "unwind-match-parent-and-element", "unwind-preserve-null-sorted", "unwind-two", "unwind-lookup-alias",
         "unwind-lookup-before-sort-parent", "unwind-lookup-before-sort-position", "unwind-lookup-before-match-element",
+        "unwind-sort-parent-then-position", "unwind-sort-parent-then-position-desc", "unwind-sort-parent-desc-then-position", "unwind-sort-two-parents-then-position",
+        "unwind-sort-parent-position-key-desc", "unwind-sort-parent-position-desc-key-desc", "unwind-sort-position-asc", "unwind-sort-position", "unwind-sort-position-match-parent",
+        "unwind-scalars-sort-parent-then-position", "unwind-lookup-before-sort-parent-then-position",
         "group-one-key", "group-sorted-by-aggregate",
     ];
 

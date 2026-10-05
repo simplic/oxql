@@ -482,6 +482,78 @@ public class GoldenPipelineTests
     }
 
     [Fact]
+    public async Task The_position_after_the_parents_members_does_not_keep_the_parents_from_being_cut_first()
+    {
+        // `number, position`: within a parent the position is the order its elements have anyway. Ascending on
+        // a first page every parent starts at position 0, so the members and the key order the parents.
+        const string Pipeline = """[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "number": "asc" }, { "at": "asc" }] }, { "page": { "limit": 10 } }]""";
+        var compiled = await Compile(Pipeline);
+
+        ShouldBe(compiled.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            """{ $match: { Items: { $nin: [null, []] } } }""",
+            """{ $sort: { Number: 1, _id: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "at" } }""",
+            """{ $sort: { Number: 1, at: 1, _id: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
+        compiled.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, [], RenameLate: true) { IndexAscending = true });
+
+        // After a position (number, at, key): the parents from that number on; of those that tie on the number, the
+        // ones with a row left, each numbered by the first position it has one at (the position's own when its key
+        // comes later, else the next); ordered by the number, that position and the key.
+        var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
+        var payload = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["Number"] = "$n", ["at"] = 3 }, served: 10);
+        var next = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(payload)}}" }"""));
+        const string Size = """{ $cond: [ { $isArray: "$Items" }, { $size: "$Items" }, 0 ] }""";
+
+        ShouldBe(next.PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "$n" } } ] } }""",
+            """{ $match: { Items: { $nin: [null, []] } } }""",
+            $$"""{ $set: { __oxFirst: { $cond: [ { $eq: [ { $ifNull: [ "$Number", null ] }, { $literal: "$n" } ] }, { $cond: [ { $gt: [ "$_id", { $literal: {{id.ToJson()}} } ] }, NumberLong(3), NumberLong(4) ] }, 0 ] } } }""",
+            $$"""{ $match: { $expr: { $lt: [ "$__oxFirst", {{Size}} ] } } }""",
+            """{ $sort: { Number: 1, __oxFirst: 1, _id: 1 } }""",
+            "{ $limit: 12 }",
+            """{ $unset: "__oxFirst" }""",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "at" } }""",
+            $$"""{ $match: { $and: [ { Number: { $gte: "$n" } }, { $or: [ { Number: "$n", at: 3, _id: { $gt: {{id.ToJson()}} } }, { Number: "$n", at: { $gt: 3 } }, { Number: { $gt: "$n" } } ] } ] } }""",
+            """{ $sort: { Number: 1, at: 1, _id: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
+
+        // Descending the first row of a parent is its last element: the parents are ordered by how many they hold.
+        var descending = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "number": "asc" }, { "at": "desc" }, { "id": "desc" }] }, { "page": { "limit": 10 } }]""");
+
+        ShouldBe(descending.PageStages.Skip(2).Take(4).ToList(),
+            $$"""{ $set: { __oxFirst: { $subtract: [ {{Size}}, 1 ] } } }""",
+            """{ $sort: { Number: 1, __oxFirst: -1, _id: -1 } }""",
+            "{ $limit: 11 }",
+            """{ $unset: "__oxFirst" }""");
+        descending.Unwind!.IndexAscending.Should().BeFalse();
+
+        // The position alone: every parent ties, so the key orders them and nothing bounds a later page but the position.
+        var alone = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "at": "asc" }] }, { "page": { "limit": 10 } }]""");
+
+        ShouldBe(alone.PageStages.Take(4).ToList(), $"{{ $match: {OrgJson} }}", """{ $match: { Items: { $nin: [null, []] } } }""", """{ $sort: { _id: 1 } }""", "{ $limit: 11 }");
+    }
+
+    [Theory]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at", "preserveNull": true } }, { "sort": [{ "number": "asc" }, { "at": "asc" }] }""", "a row kept without an element stands at no position")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "item.quantity": { "gt": 2 } } }, { "sort": [{ "number": "asc" }, { "at": "asc" }] }""", "the rows of a parent no longer stand at every position from the first")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "number": "asc" }, { "at": "asc" }, { "item.quantity": "asc" }] }""", "what follows the position is not the key")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "item.quantity": "asc" }, { "at": "asc" }] }""", "the order is the elements'")]
+    public async Task The_parents_are_not_cut_first_by_position_where_the_rows_could_differ(string stages, string because)
+    {
+        var compiled = await Compile($$"""[{{stages}}, { "page": { "limit": 10 } }]""");
+
+        (compiled.Unwind?.ParentsFirst ?? false).Should().BeFalse(because);
+        compiled.Unwind?.IndexAscending.Should().BeNull(because);
+    }
+
+    [Fact]
     public async Task What_is_asked_of_the_element_after_an_unwind_is_asked_of_the_collection_before_it()
     {
         var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2 }, "number": { "neq": "x" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");

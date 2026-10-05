@@ -383,6 +383,20 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     row the position lies in may have none left). Each parent yields a row because rows whose
     collection is missing, null or empty are dropped where the unwind would drop them, and what
     filters after the unwind is asked before it as well.
+    The position of the element (`includeIndex`) after the parents' members and before the key
+    (`shipmentNumber, position`, or `position` alone) does not prevent it. Within one parent that
+    is the order its elements have anyway; the rows of two parents that tie on the members
+    interleave by it (all their rows at one position before any at the next), so the parents are
+    ordered by the members, then by the first position each still has a row at, then by the key:
+    position 0 ascending and the last element descending on a first page, and after a cursor's
+    position the position's own for a tying parent whose key comes later, else the next one (a
+    parent with no row left is dropped). The first `n` rows of the page then lie in the first `n`
+    parents. It needs every parent's rows to stand at the positions 0, 1, 2 … without a gap, so it
+    is not applied with `preserveNull`, with `flatten`, with a condition on the element, or when
+    something other than the key follows the position; the rows are then ordered after the unwind
+    as before. Measured on 25 000 shipments without an index: `shipmentNumber, position` 121 → 68 ms
+    for a first block (what `shipmentNumber` alone takes) and 173 → 158 ms for block 31 (there the
+    first position of every candidate parent is computed before they are ordered).
   - *What is asked of the element after an unwind is asked of the collection before it*
     (`UNWIND_PREFILTER`): the conditions on paths under the alias, as one "some element passes
     them all" (`$elemMatch`), so a row without such an element is not unwound, for the page and

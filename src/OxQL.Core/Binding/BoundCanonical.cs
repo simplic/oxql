@@ -11,6 +11,13 @@ namespace OxQL.Core.Binding;
 /// The canonical JSON form of a bound pipeline: what explain shows and what the cursor is
 /// fingerprinted over (without the page). Storage paths and typed operands are inside it, so
 /// two requests that bind to the same storage work have the same fingerprint.
+/// <para>
+/// A contract 2 cursor is fingerprinted over what decides which rows there are and in which order
+/// (DG2 M6): the stages a filter, a sort, an unwind or a group reads. What only shapes the row is
+/// left out (<see cref="DisplayOnly"/>): the trailing projection, a join nothing but the row's
+/// display reads, and every <c>select</c>. Showing or hiding a column keeps a cursor valid.
+/// Contract 1 fingerprints the whole form, as it always has.
+/// </para>
 /// </summary>
 public static class BoundCanonical
 {
@@ -21,15 +28,29 @@ public static class BoundCanonical
     /// The internal <c>keyedBy</c> is written only when the request carried it, so every other
     /// request renders as before.
     /// </remarks>
-    public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode, BoundKeyedBy? keyedBy = null)
+    public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode, BoundKeyedBy? keyedBy = null) =>
+        Render(scope, stages, page, mode, keyedBy, contract2: false, rows: false);
+
+    /// <summary>
+    /// The canonical JSON of the stages. <paramref name="contract2"/> writes the page as contract 2 has
+    /// it (<c>limit</c>, <c>cursor</c>, <c>count</c>; an internal call's <c>offset</c> and
+    /// <c>includeTotalCount</c> only when it carries them). <paramref name="rows"/> is the form a
+    /// contract 2 cursor is fingerprinted over: no <c>select</c> of any join.
+    /// </summary>
+    public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode, BoundKeyedBy? keyedBy, bool contract2, bool rows = false)
     {
         var node = new JsonObject
         {
             ["entity"] = scope.Entity.Id,
             ["scope"] = new JsonObject { ["path"] = scope.OrganisationStorage, ["organisation"] = scope.Organisation.ToString() },
-            ["stages"] = new JsonArray(stages.Select(stage => (JsonNode)RenderStage(stage)).ToArray()),
+            ["stages"] = new JsonArray(stages.Select(stage => (JsonNode)(rows ? WithoutSelects(RenderStage(stage, contract2)) : RenderStage(stage, contract2))).ToArray()),
             ["paging"] = mode == PagingMode.Keyset ? "keyset" : "offset",
         };
+
+        // A contract 2 cursor is of another form than a contract 1 cursor of the same stages: it
+        // carries the rows served, and is cut to what decides the rows.
+        if (rows)
+            node["cursor"] = "rows";
 
         if (keyedBy is not null)
             node["keyedBy"] = new JsonObject
@@ -48,7 +69,15 @@ public static class BoundCanonical
         if (keyedBy?.KeyAlias is not null)
             node["keyedBy"]!["rows"] = "entity";
 
-        if (page is not null)
+        if (page is not null && contract2)
+        {
+            var rendered = RenderPage(page);
+
+            rendered.Insert(1, "cursor", page.Cursor is null ? null : "…");
+            node["page"] = rendered;
+        }
+        else if (page is not null)
+        {
             node["page"] = new JsonObject
             {
                 ["limit"] = page.Limit,
@@ -56,6 +85,27 @@ public static class BoundCanonical
                 ["cursor"] = page.Cursor is null ? null : "…",
                 ["includeTotalCount"] = IncludeTotalCount(page),
             };
+        }
+
+        return node;
+    }
+
+    /// <summary>
+    /// A contract 2 page: its limit (0 for a count-only request) and the count step it asked for.
+    /// An internal call's <c>offset</c> and <c>includeTotalCount</c> are written only when it carries them.
+    /// </summary>
+    private static JsonObject RenderPage(BoundStage.Page page)
+    {
+        var node = new JsonObject { ["limit"] = page.CountOnly ? 0 : page.Limit };
+
+        if (page.Offset != 0)
+            node["offset"] = page.Offset;
+
+        if (page.IncludeTotalCount)
+            node["includeTotalCount"] = IncludeTotalCount(page);
+
+        if (page.Count is { } count)
+            node["count"] = new JsonObject { ["rows"] = count.Rows, ["upTo"] = count.Ceiling, ["budgetMs"] = count.BudgetMs };
 
         return node;
     }
@@ -68,7 +118,107 @@ public static class BoundCanonical
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
     }
 
-    private static JsonObject RenderStage(BoundStage stage) => stage switch
+    /// <summary>
+    /// The fingerprint of a contract 2 cursor (DG2 M6): SHA-256 over the canonical form without the
+    /// page, without the stages that only shape the row (<see cref="DisplayOnly"/>) and without any
+    /// join's <c>select</c>.
+    /// </summary>
+    public static string RowsFingerprint(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, IReadOnlyList<PathRead> reads, PagingMode mode, BoundKeyedBy? keyedBy = null)
+    {
+        var shaping = DisplayOnly(stages, reads);
+        var text = Render(scope, stages.Where(stage => stage is not BoundStage.Page && !shaping.Contains(stage)).ToList(), null, mode, keyedBy, contract2: true, rows: true).ToJsonString();
+
+        return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
+
+    /// <summary>
+    /// The stages that decide neither which rows there are nor their order (DG2 M6):
+    /// <list type="bullet">
+    /// <item>a join (<c>lookup</c>, <c>resolve</c>) whose alias, owning row and outcome no stage reads
+    /// but a projection: nothing matches, sorts, unwinds, groups or joins on it, so it only fills the
+    /// row. The read ledger says so (<paramref name="reads"/>): a join read for anything but
+    /// <c>project</c> stays in;</item>
+    /// <item>a projection that only such joins, sorts and the page follow: the row's last cut.</item>
+    /// </list>
+    /// A stage continued at an owner stays in: what it reads is the owner's to know.
+    /// </summary>
+    public static IReadOnlySet<BoundStage> DisplayOnly(IReadOnlyList<BoundStage> stages, IReadOnlyList<PathRead> reads)
+    {
+        ArgumentNullException.ThrowIfNull(stages);
+        ArgumentNullException.ThrowIfNull(reads);
+
+        var shaping = new HashSet<BoundStage>(ReferenceEqualityComparer.Instance);
+        var read = new HashSet<string>(StringComparer.Ordinal);
+
+        // What a stage other than a projection reads: the join it loads from, and the root it names.
+        foreach (var entry in reads.Where(entry => entry.Use != ReadUse.Project))
+        {
+            if (entry.Alias is { } alias)
+                read.Add(alias);
+
+            read.Add(entry.Path.Split('.', 2)[0]);
+        }
+
+        // A continued stage names its anchor, and the aliases it adds are read like any other.
+        foreach (var continued in stages.OfType<ContinuedStage>())
+            read.Add(continued.Anchor);
+
+        foreach (var stage in stages)
+        {
+            IEnumerable<string?> aliases = stage switch
+            {
+                BoundStage.Lookup lookup => [lookup.As],
+                BoundStage.Resolve resolve => [resolve.As, resolve.ParentAs, resolve.OutcomeAs],
+                _ => [],
+            };
+
+            if (stage is (BoundStage.Lookup or BoundStage.Resolve) && !aliases.Any(alias => alias is not null && read.Contains(alias)))
+                shaping.Add(stage);
+        }
+
+        for (var index = stages.Count - 1; index >= 0; index--)
+        {
+            var stage = stages[index];
+
+            if (stage is BoundStage.Project)
+                shaping.Add(stage);
+            else if (stage is not (BoundStage.Sort or BoundStage.Page) && !shaping.Contains(stage))
+                break;
+        }
+
+        return shaping;
+    }
+
+    /// <summary>A rendered stage without the <c>select</c> and <c>parentSelect</c> of its join, at any depth: what a join loads never decides a row.</summary>
+    private static JsonObject WithoutSelects(JsonObject stage)
+    {
+        static void Strip(JsonNode? node)
+        {
+            switch (node)
+            {
+                case JsonObject item:
+                    item.Remove("select");
+                    item.Remove("parentSelect");
+
+                    foreach (var member in item.ToList())
+                        if (member.Key is not ("filter" or "match"))
+                            Strip(member.Value);
+                    break;
+
+                case JsonArray list:
+                    foreach (var element in list)
+                        Strip(element);
+                    break;
+            }
+        }
+
+        if (stage["lookup"] is not null || stage["resolve"] is not null)
+            Strip(stage);
+
+        return stage;
+    }
+
+    private static JsonObject RenderStage(BoundStage stage, bool contract2 = false) => stage switch
     {
         BoundStage.Match match => new JsonObject { ["match"] = RenderCondition(match.Condition) },
         BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
@@ -117,6 +267,7 @@ public static class BoundCanonical
                 ["caseSensitive"] = !field.IgnoreCase,
             }).ToArray()),
         },
+        BoundStage.Page page when contract2 => new JsonObject { ["page"] = RenderPage(page) },
         BoundStage.Page page => new JsonObject
         {
             ["page"] = new JsonObject { ["limit"] = page.Limit, ["offset"] = page.Offset, ["includeTotalCount"] = IncludeTotalCount(page) },

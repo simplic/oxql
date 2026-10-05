@@ -27,10 +27,10 @@
     },
     {
       "page": {
-        "includeTotalCount": true
+        "count": true
       }
     }
   ],
-  "fingerprint": "sha256:af07258d49269d00b93ca3b2fff8bba69d3ff93a4d5ad4fc6d033fbfac45547b",
-  "canonical": "{\"entity\":\"probe.customer\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"lookup\":{\"from\":\"probe.order\",\"localField\":\"_id\",\"foreignField\":\"CustomerId\",\"as\":\"orders\",\"select\":[\"_id\",\"Number\"],\"filter\":{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":true,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},\"limit\":5}},{\"match\":{\"path\":\"orders.Number\",\"op\":\"eq\",\"operand\":\"x\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}},{\"page\":{\"limit\":100,\"offset\":0,\"includeTotalCount\":true}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"offset\":0,\"cursor\":null,\"includeTotalCount\":true}}"
+  "fingerprint": "sha256:9d2f683adfef47c2cad829f4d76f6c6fc8ddb0fec623e3a5527a1bc7ac67ec5d",
+  "canonical": "{\"entity\":\"probe.customer\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"lookup\":{\"from\":\"probe.order\",\"localField\":\"_id\",\"foreignField\":\"CustomerId\",\"as\":\"orders\",\"select\":[\"_id\",\"Number\"],\"filter\":{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":true,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},\"limit\":5}},{\"match\":{\"path\":\"orders.Number\",\"op\":\"eq\",\"operand\":\"x\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}},{\"page\":{\"limit\":100,\"count\":{\"rows\":1000,\"upTo\":100000,\"budgetMs\":500}}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"cursor\":null,\"count\":{\"rows\":1000,\"upTo\":100000,\"budgetMs\":500}}}"
 }

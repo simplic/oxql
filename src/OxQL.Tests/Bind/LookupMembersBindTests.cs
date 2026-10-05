@@ -244,7 +244,18 @@ public class LookupMembersBindTests
             """.Trim());
         first.Canonical.Should().Contain("\"limit\":1,\"first\":true}");
         on.Canonical.Should().Contain("\"localField\":\"cust._id\"").And.Contain("\"on\":\"cust\"");
-        new[] { plain.Fingerprint, sorted.Fingerprint, first.Fingerprint }.Should().OnlyHaveUniqueItems();
+
+        // Nothing but the row's display reads these lookups, so how they sort or cut their children
+        // decides no row: one cursor fits all three (DG2 M6). Read by a match, each is its own query.
+        new[] { plain.Fingerprint, sorted.Fingerprint, first.Fingerprint }.Distinct().Should().ContainSingle();
+
+        const string Read = """, { "match": { "orders.number": { "eq": "x" } } }]""";
+        var read = new List<string>();
+
+        foreach (var members in new[] { "", """, "sort": [{ "when": "desc" }]""", """, "first": true""" })
+            read.Add((await BindHost.BoundAsync(BindHost.Probe, Customer, $$"""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders"{{members}} } }{{Read}}""")).Fingerprint);
+
+        read.Should().OnlyHaveUniqueItems().And.NotContain(plain.Fingerprint);
         on.Canonical.Should().NotContain("\"stage\"", "the stage index is bound-only");
     }
 }

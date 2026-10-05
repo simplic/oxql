@@ -870,7 +870,11 @@ public sealed class Binder
         public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
         {
             var mode = shape.IsRootShape ? PagingMode.Keyset : PagingMode.Offset;
-            var fingerprint = BoundCanonical.Fingerprint(scope, stages, mode, keyedByBound);
+            // A contract 2 cursor is bound to what decides the rows and their order (DG2 M6); contract 1
+            // fingerprints the whole bound form, as it always has.
+            var fingerprint = contract2
+                ? BoundCanonical.RowsFingerprint(scope, stages, reads, mode, keyedByBound)
+                : BoundCanonical.Fingerprint(scope, stages, mode, keyedByBound);
 
             // The cursor is verified against the finished fingerprint; explain ignores it.
             if (decodeCursor && pageIndex >= 0 && request.Pipeline![pageIndex].Page!.Cursor is { } cursor)
@@ -899,7 +903,7 @@ public sealed class Binder
                 PagingMode = mode,
                 Diagnostics = diagnostics,
                 Fingerprint = fingerprint,
-                Canonical = BoundCanonical.Render(scope, stages, page, mode, keyedByBound).ToJsonString(),
+                Canonical = BoundCanonical.Render(scope, stages, page, mode, keyedByBound, contract2).ToJsonString(),
                 HasSemiJoin = hasSemiJoin,
                 KeyedBy = keyedByBound,
                 Collated = collated,

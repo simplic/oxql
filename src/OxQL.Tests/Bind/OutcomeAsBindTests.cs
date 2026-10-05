@@ -191,7 +191,15 @@ public class OutcomeAsBindTests
 
         JsonNode.Parse(with.Canonical)!["stages"]![0]!["resolve"]!["outcomeAs"]!.GetValue<string>().Should().Be("customerOutcome");
         JsonNode.Parse(without.Canonical)!["stages"]![0]!["resolve"]!.AsObject().ContainsKey("outcomeAs").Should().BeFalse("a resolve without one renders as it did");
-        with.Fingerprint.Should().NotBe(without.Fingerprint, "the row has one more member: a cursor of the other request is not this one's");
+
+        // The outcome nothing reads is one more member of the row and decides none: a cursor of the
+        // request without it fits (DG2 M6). A condition on it makes it part of which rows there are.
+        with.Fingerprint.Should().Be(without.Fingerprint);
+
+        var filtered = await BoundAsync($$"""[{{Customer}}, { "match": { "customerOutcome": { "eq": "resolved" } } }]""");
+        var filteredOther = await BoundAsync($$"""[{{Customer}}, { "match": { "customerOutcome": { "neq": "resolved" } } }]""");
+
+        filtered.Fingerprint.Should().NotBe(with.Fingerprint).And.NotBe(filteredOther.Fingerprint);
 
         JsonSerializer.Serialize(JsonSerializer.Deserialize<ResolveStage>("""{"path":"p","as":"a","outcomeAs":"o"}""", OxQLJson.Wire), OxQLJson.Wire)
             .Should().Be("""{"path":"p","as":"a","outcomeAs":"o"}""");

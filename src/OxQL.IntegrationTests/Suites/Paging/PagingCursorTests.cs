@@ -288,7 +288,6 @@ public class PagingCursorTests
             ("other direction", Corpus.Template, client, $$"""[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("added match", Corpus.Template, client, $$"""[{ "match": { "isDeleted": { "eq": false } } }, { "sort": [{ "templateName": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("other entity", Corpus.Shipment, client, $$"""[{ "sort": [{ "shipmentNumber": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
-            ("added projection", Corpus.Template, client, $$"""[{ "sort": [{ "templateName": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("other organisation", Corpus.Template, client.As(Org.B), $$"""[{ "sort": [{ "templateName": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
         };
 
@@ -298,6 +297,45 @@ public class PagingCursorTests
             answer.ShouldRefuse("CURSOR_INVALID", 400, why);
             answer.ErrorCodes.Should().Equal(["CURSOR_INVALID"], why);
         }
+    }
+
+    /// <summary>
+    /// DG2 M6: a cursor is bound to what decides the rows and their order, not to what the row shows.
+    /// A walk goes on through a changed projection and through a join nothing but the display reads;
+    /// a join a filter reads, like any filter, is another query.
+    /// </summary>
+    [Fact]
+    public async Task P29b_a_cursor_survives_a_changed_projection_and_a_display_only_join_and_no_change_of_filter_or_sort()
+    {
+        const string Sort = """{ "sort": [{ "shipmentNumber": "asc" }, { "id": "asc" }] }""";
+        const string Join = """{ "resolve": { "path": "department.id", "as": "creator" } }""";
+        var expected = Corpus.Sorted(Corpus.Shipment, [("shipmentNumber", false), ("id", false)]).Select(row => Guid.Parse(row.WireId)).ToList();
+        expected.Count.Should().BeGreaterThan(12);
+        var client = await Transport();
+
+        string Page(string cursor) => $$"""{ "page": { "limit": 3, "cursor": "{{cursor}}" } }""";
+
+        var first = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "page": { "limit": 3 } }]""");
+        first.ShouldHaveIds(expected.Take(3));
+
+        // A projection appears, changes, and goes again; a display-only join comes and goes.
+        var projected = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "project": { "id": 1, "shipmentNumber": 1 } }, {{Page(first.NextCursor!)}}]""");
+        projected.ShouldHaveIds(expected.Skip(3).Take(3), "a projection was added");
+        projected.Items[0]!.AsObject().Select(member => member.Key).Should().Equal("id", "shipmentNumber");
+
+        var other = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "project": { "id": 1, "status": 1 } }, {{Page(projected.NextCursor!)}}]""");
+        other.ShouldHaveIds(expected.Skip(6).Take(3), "another column is shown");
+
+        var joined = await client.SendAsync(Corpus.Shipment, $$"""[{{Join}}, {{Sort}}, { "project": { "id": 1, "creator.id": 1 } }, {{Page(other.NextCursor!)}}]""");
+        joined.ShouldHaveIds(expected.Skip(9).Take(3), "a join only the row's display reads was added");
+
+        var bare = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, {{Page(joined.NextCursor!)}}]""");
+        bare.ShouldHaveIds(expected.Skip(12).Take(3), "the join and the projection are gone again");
+        bare.ShouldCount("atLeast", 16, "page", because: "the cursor carried the rows served through every change");
+
+        // What decides the rows still binds the cursor: a join a filter reads, and a projection a later stage follows.
+        (await client.SendAsync(Corpus.Shipment, $$"""[{{Join}}, { "match": { "creator.id": { "exists": true } } }, {{Sort}}, {{Page(first.NextCursor!)}}]""")).ShouldRefuse("CURSOR_INVALID", 400, "a filter reads the join");
+        (await client.SendAsync(Corpus.Shipment, $$"""[{ "project": { "id": 1, "shipmentNumber": 1 } }, { "match": { "shipmentNumber": { "exists": true } } }, {{Sort}}, {{Page(first.NextCursor!)}}]""")).ShouldRefuse("CURSOR_INVALID", 400, "a match follows the projection");
     }
 
     [Fact]

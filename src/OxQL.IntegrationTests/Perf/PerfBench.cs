@@ -16,7 +16,8 @@ namespace OxQL.IntegrationTests.Perf;
 /// and the time those commands took as the driver saw them. It runs only when asked:
 /// <list type="bullet">
 /// <item><c>OXQL_PERF=&lt;file&gt;</c> runs it and appends one Markdown table row per request to that file, and to
-/// <c>&lt;file&gt;.coding.md</c> what the content coding of each answer costs and saves;</item>
+/// <c>&lt;file&gt;.coding.md</c> what the content coding of each answer costs and saves, and to
+/// <c>&lt;file&gt;.timing.md</c> the engine's own breakdown of one run of each request;</item>
 /// <item><c>OXQL_PERF_LABEL</c> names the run in the table (a commit, "before", "after");</item>
 /// <item><c>OXQL_PERF_ROWS</c> is the number of shipments (25 000);</item>
 /// <item><c>OXQL_PERF_RUNS</c> is the number of measured runs per request (15, after 3 warm ones);</item>
@@ -58,6 +59,7 @@ public class PerfBench(ITestOutputHelper output)
         var cases = await CasesAsync(client, rows);
         var text = new StringBuilder();
         var coding = new StringBuilder();
+        var samples = new StringBuilder().AppendLine(CultureInfo.InvariantCulture, $"## {label}").AppendLine();
 
         if (!File.Exists(file + ".coding.md"))
             coding.AppendLine("| run | request | body bytes | br bytes | br ms | gzip bytes | gzip ms |").AppendLine("|---|---|---|---|---|---|---|");
@@ -114,7 +116,16 @@ public class PerfBench(ITestOutputHelper output)
             output.WriteLine(line);
             text.AppendLine(line);
             coding.AppendLine(Coding(label, each.Name, Encoding.UTF8.GetBytes(answer.Text)));
+
+            // The engine's breakdown of one more run of the request, with its Server-Timing header.
+            var detailed = await each.Send(client.WithHeader("X-OxQL-Timing", "1"));
+
+            samples.AppendLine(CultureInfo.InvariantCulture, $"### {each.Name}").AppendLine()
+                .AppendLine(CultureInfo.InvariantCulture, $"`Server-Timing: {(detailed.Headers.TryGetValue("Server-Timing", out var said) ? said : "")}`").AppendLine()
+                .AppendLine("```json").AppendLine(detailed.Body?["timing"]?.ToJsonString() ?? "null").AppendLine("```").AppendLine();
         }
+
+        await File.AppendAllTextAsync(file + ".timing.md", samples.ToString());
 
         await File.AppendAllTextAsync(file, text.ToString());
         await File.AppendAllTextAsync(file + ".coding.md", coding.ToString());

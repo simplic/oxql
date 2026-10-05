@@ -777,7 +777,17 @@ public sealed class Shape
     }
 
     /// <summary>Whether a wire path survives the projection (and every unwind that dropped its collection) at this shape.</summary>
-    public bool IsVisible(string wire)
+    public bool IsVisible(string wire) =>
+        LazyInitializer.EnsureInitialized(ref visibility, static () => new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal))
+            .GetOrAdd(wire, static (path, shape) => shape.Visible(path), this);
+
+    /// <summary>
+    /// What <see cref="IsVisible"/> answered, by path: a shape does not change, and the row encoder
+    /// asks the same few paths for every row of a page.
+    /// </summary>
+    private System.Collections.Concurrent.ConcurrentDictionary<string, bool>? visibility;
+
+    private bool Visible(string wire)
     {
         if (UnsetBy(wire) is not null)
             return false;

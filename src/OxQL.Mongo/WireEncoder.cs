@@ -181,7 +181,8 @@ public static class WireEncoder
         if (!member.Stored || member.StorageName is null || !document.TryGetValue(member.StorageName, out var value))
             return;
 
-        var wire = wirePrefix + member.WireName;
+        // A member of the row itself is its own wire path: nothing is concatenated for it.
+        var wire = wirePrefix.Length == 0 ? member.WireName : wirePrefix + member.WireName;
 
         if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
             return;
@@ -192,7 +193,8 @@ public static class WireEncoder
         if (root != Shape.ImplicitRoot && Shown(shape, root) is { } shown && (shape.IsRemoved(wire) || !RootOutput.Shows(shown, wire[(root.Length + 1)..])))
             return;
 
-        var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(root, WithoutRoot(wire, root)))
+        // Only a shape that unwound something has a member to read as its element.
+        var memberShape = shape.Unwound.Count > 0 && shape.Unwound.Contains(Shape.UnwoundKey(root, WithoutRoot(wire, root)))
             ? ElementShapeOf(member)
             : member;
 

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
@@ -87,6 +88,174 @@ public static class WireCompression
 
         await response.Body.WriteAsync(body, response.HttpContext.RequestAborted).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Serialises <paramref name="value"/> and writes it to <paramref name="response"/> as
+    /// <see cref="WriteJsonAsync(HttpResponse, byte[], Func{string, byte[]}?)"/> writes a finished body:
+    /// in the coding the caller accepts, with <c>Vary</c> and the length. The body and its coded form
+    /// are held in pooled segments, never in one array: a page of rows is often larger than what the
+    /// runtime keeps out of its large object heap, and an answer must not cost a collection of it.
+    /// </summary>
+    public static async Task WriteJsonAsync(HttpResponse response, object value, JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(value);
+
+        using var body = new PooledBody();
+
+        await using (var writer = new Utf8JsonWriter(body, new JsonWriterOptions { Encoder = options.Encoder, Indented = options.WriteIndented, SkipValidation = true }))
+            JsonSerializer.Serialize(writer, value, value.GetType(), options);
+
+        var encoding = EncodingFor(response.HttpContext.Request, checked((int)Math.Min(body.Length, int.MaxValue)));
+
+        response.ContentType = "application/json; charset=utf-8";
+        response.Headers.Append(HeaderNames.Vary, HeaderNames.AcceptEncoding);
+
+        if (encoding is null)
+        {
+            response.ContentLength = body.Length;
+            await body.CopyToAsync(response.Body, response.HttpContext.RequestAborted).ConfigureAwait(false);
+
+            return;
+        }
+
+        using var packed = new PooledBody();
+
+        await using (Stream coder = encoding == Brotli ? new BrotliStream(packed.AsStream(), CompressionLevel.Fastest, leaveOpen: true) : new GZipStream(packed.AsStream(), CompressionLevel.Fastest, leaveOpen: true))
+            body.CopyTo(coder);
+
+        response.Headers.ContentEncoding = encoding;
+        response.ContentLength = packed.Length;
+
+        await packed.CopyToAsync(response.Body, response.HttpContext.RequestAborted).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// A body written into rented segments, each below the size the runtime allocates on its large
+/// object heap, and returned to the pool on disposal.
+/// </summary>
+internal sealed class PooledBody : IBufferWriter<byte>, IDisposable
+{
+    /// <summary>The size of a segment: under the 85 000 bytes from which an array is a large object.</summary>
+    private const int SegmentBytes = 64 * 1024;
+
+    private readonly List<(byte[] Buffer, int Written)> full = [];
+    private byte[]? current;
+    private int written;
+
+    /// <summary>The bytes written so far.</summary>
+    public long Length { get; private set; }
+
+    /// <inheritdoc/>
+    public void Advance(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        if (current is null || count > current.Length - written)
+            throw new InvalidOperationException("More was written than the segment asked for holds.");
+
+        written += count;
+        Length += count;
+    }
+
+    /// <inheritdoc/>
+    public Memory<byte> GetMemory(int sizeHint = 0) => Segment(sizeHint).AsMemory(written);
+
+    /// <inheritdoc/>
+    public Span<byte> GetSpan(int sizeHint = 0) => Segment(sizeHint).AsSpan(written);
+
+    private byte[] Segment(int sizeHint)
+    {
+        var needed = Math.Max(1, sizeHint);
+
+        if (current is not null && current.Length - written >= needed)
+            return current;
+
+        if (current is not null)
+            full.Add((current, written));
+
+        current = ArrayPool<byte>.Shared.Rent(Math.Max(SegmentBytes, needed));
+        written = 0;
+
+        return current;
+    }
+
+    private IEnumerable<ReadOnlyMemory<byte>> Segments()
+    {
+        foreach (var (buffer, count) in full)
+            yield return buffer.AsMemory(0, count);
+
+        if (current is not null && written > 0)
+            yield return current.AsMemory(0, written);
+    }
+
+    /// <summary>Writes the body to <paramref name="target"/>.</summary>
+    public async Task CopyToAsync(Stream target, CancellationToken cancellationToken)
+    {
+        foreach (var segment in Segments())
+            await target.WriteAsync(segment, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes the body to <paramref name="target"/>.</summary>
+    public void CopyTo(Stream target)
+    {
+        foreach (var segment in Segments())
+            target.Write(segment.Span);
+    }
+
+    /// <summary>A write-only stream over this body, for a coder to write into.</summary>
+    public Stream AsStream() => new Writer(this);
+
+    public void Dispose()
+    {
+        foreach (var (buffer, _) in full)
+            ArrayPool<byte>.Shared.Return(buffer);
+
+        if (current is not null)
+            ArrayPool<byte>.Shared.Return(current);
+
+        full.Clear();
+        current = null;
+    }
+
+    private sealed class Writer(PooledBody body) : Stream
+    {
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => body.Length;
+
+        public override long Position { get => body.Length; set => throw new NotSupportedException(); }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            while (buffer.Length > 0)
+            {
+                var span = body.GetSpan();
+                var take = Math.Min(span.Length, buffer.Length);
+
+                buffer[..take].CopyTo(span);
+                body.Advance(take);
+                buffer = buffer[take..];
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -107,6 +276,6 @@ public sealed class CompressedJsonResult(object value) : IActionResult
 
         context.HttpContext.Response.StatusCode = StatusCodes.Status200OK;
 
-        return WireCompression.WriteJsonAsync(context.HttpContext.Response, JsonSerializer.SerializeToUtf8Bytes(Value, Value.GetType(), options));
+        return WireCompression.WriteJsonAsync(context.HttpContext.Response, Value, options);
     }
 }

@@ -774,8 +774,15 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private void Log(CompiledQuery compiled, Stopwatch timer, int rows, bool timedOut, bool countCapped, RequestContext context, Refusal? refusal, int resolveCalls, int resolveCacheHits)
     {
         var bound = compiled.Bound;
-        var stages = string.Join(",", bound.Stages.Select(stage => stage.GetType().Name.ToLowerInvariant()));
         var elapsed = timer.Elapsed.TotalMilliseconds;
+        var threshold = options.Execution.EffectiveSlowQueryMs;
+        var slow = threshold > 0 && elapsed > threshold;
+
+        // Nobody reads the line: nothing is built for it.
+        if (!slow && !logger.IsEnabled(LogLevel.Information))
+            return;
+
+        var stages = string.Join(",", bound.Stages.Select(stage => stage.GetType().Name.ToLowerInvariant()));
         var outcome = refusal?.Type ?? "ok";
 
         var spent = context.Timing?.Summary() ?? default;
@@ -803,9 +810,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A request over the slow-query threshold is said once more, at warning level, with
         // what shaped it: the stage kinds and the flags an operator can act on, never an
         // operand. The time is the whole request's, remote resolves and the count included.
-        var threshold = options.Execution.EffectiveSlowQueryMs;
-
-        if (threshold > 0 && elapsed > threshold)
+        if (slow)
             logger.LogWarning(
                 "OxQL slow query {Entity} stages={Stages} elapsedMs={ElapsedMs} thresholdMs={ThresholdMs} rows={Rows} regex={Regex} unboundedSort={UnboundedSort} count={Count} remote={Remote} outcome={Outcome} org={OrganisationId} correlation={CorrelationId}",
                 bound.Entity.Id,

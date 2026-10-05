@@ -280,15 +280,11 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
             (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "first": "{{path}}" } } } }""")).Should().Be(functions.Contains("first"), $"{id}: first of '{path}'");
             (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "sum": "{{path}}" } } } }""")).Should().Be(functions.Contains("sum"), $"{id}: sum of '{path}'");
             // A condition on another service's member is asked of its owner (a semi-join), and it is the owner's
-            // binder that admits the operator: a run it refuses is refused (422), whatever this host's shape allows.
-            // Explain does not send the semi-join to the owner, so the owner's binder is asked here.
+            // binder that admits the operator. Explain has the owner bind the query a run sends it, so explain's
+            // own verdict is asked here; ExplainConditionFleetTests holds that verdict against real runs.
             var why = answer.Result.Capabilities![column.Can!]!["why"]?["filter"]?.GetValue<string>();
-            var owner = why == "semiJoin" ? answer.Result.Subjects!.Select(subject => subject!.AsObject())
-                .FirstOrDefault(subject => subject["root"]!.GetValue<string>() == column.Root && subject["remote"]?.GetValue<bool>() == true && subject["entity"] is not null)?["entity"]!.GetValue<string>() : null;
 
-            async Task<bool> Admits(string condition) => owner is null
-                ? await Binds($$"""{ "match": { "{{path}}": {{condition}} } }""")
-                : (await Explained(new JsonObject { ["entityType"] = owner, ["pipeline"] = new JsonArray(JsonNode.Parse($$"""{ "match": { "{{path[(column.Root.Length + 1)..]}}": {{condition}} } }""")) })).Valid;
+            Task<bool> Admits(string condition) => Binds($$"""{ "match": { "{{path}}": {{condition}} } }""");
 
             why.Should().NotBe("ownerKind", $"{id}: every owner answered, so '{path}' admits what its kind does");
             (await Admits("""{ "exists": true }""")).Should().Be(operators.Contains("exists"), $"{id}: '{path}' exists");
@@ -359,6 +355,62 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         sizes.Gzip.Should().BeLessThanOrEqualTo(Math.Min(gzip, MaxGzipBytes), "T4: and within its gzipped size");
         first.Types.Select(type => type.Value!["members"]).Should().OnlyContain(members => members == null, "the default answer writes no member row");
         first.FlagSets.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The reference query with a condition at each of two owners (the request's <c>filter</c>, as a grid
+    /// writes it): the conditions are checked at their owners in the calls those owners are asked in
+    /// anyway, so the explain costs no owner call more, and the answer stays within the budgets of T4.
+    /// </summary>
+    [Fact]
+    public async Task T4_conditions_at_owners_cost_no_owner_call_more_and_the_answer_stays_within_its_budgets()
+    {
+        var plain = ReportScenarios.Request("A5");
+        var filtered = plain.DeepClone().AsObject();
+
+        filtered["filter"] = JsonNode.Parse("""[ { "id": "recipient", "where": { "recipientContact.address.companyName": { "contains": "a" } } }, { "id": "clerk", "where": { "clerk.address.lastName": { "startsWith": "M" } } } ]""");
+
+        ExplainRequest Of(JsonObject request) => JsonSerializer.Deserialize<ExplainRequest>(request.ToJsonString(), OxQLJson.Wire)!;
+
+        var without = new InProcessFleet();
+        var bare = await without.ExplainAsync(Of(plain));
+        var fleet = new InProcessFleet();
+        var cold = Stopwatch.StartNew();
+        var first = await fleet.ExplainAsync(Of(filtered));
+        cold.Stop();
+
+        first.Valid.Should().BeTrue(Errors(first));
+        first.Cache.Complete.Should().BeTrue();
+        first.Executable.Should().Be(Basis.Yes);
+
+        int Calls(ExplainResult answer) => answer.Owners.Sum(owner => owner["calls"]!.GetValue<int>());
+
+        Calls(first).Should().Be(Calls(bare), "a condition rides in the call its owner is asked in for its target");
+        Calls(first).Should().BeLessThanOrEqualTo(8);
+        fleet.Calls.Count.Should().Be(without.Calls.Count + 2, "two checks more, one per condition, in those calls");
+
+        for (var warmup = 0; warmup < 20; warmup++)
+            await fleet.ExplainAsync(Of(filtered));
+
+        var runs = new List<double>();
+
+        for (var run = 0; run < 25; run++)
+        {
+            var timer = Stopwatch.StartNew();
+
+            await fleet.ExplainAsync(Of(filtered));
+            runs.Add(timer.Elapsed.TotalMilliseconds);
+        }
+
+        var sizes = Sizes(first);
+        var before = Sizes(bare);
+        var median = runs.Order().ElementAt(runs.Count / 2);
+
+        output.WriteLine($"A5 with a condition at each of two owners: raw {sizes.Raw} B (without {before.Raw}), gzip {sizes.Gzip} B (without {before.Gzip}), warm median {median:F2} ms (min {runs.Min():F2}), cold {cold.Elapsed.TotalMilliseconds:F1} ms, owner calls (cold) {Calls(first)} (without {Calls(bare)}), checks bound at owners {fleet.Calls.Count} (without {without.Calls.Count})");
+
+        median.Should().BeLessThanOrEqualTo(MaxWarmMs, "T4: warm, the server answers within 10 ms");
+        sizes.Raw.Should().BeLessThanOrEqualTo(MaxRawBytes, "T4: the answer stays within its raw size");
+        sizes.Gzip.Should().BeLessThanOrEqualTo(MaxGzipBytes, "T4: and within its gzipped size");
     }
 
     private static (int Raw, int Gzip) Sizes(ExplainResult answer)

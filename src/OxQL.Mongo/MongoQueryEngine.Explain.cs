@@ -113,10 +113,11 @@ public sealed partial class MongoQueryEngine
         draft.Strict = strict;
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
-        // as a run does, within the explain budget (RL-3). The cached tier asks no owner anything: it
-        // plans by the facts already known.
+        // as a run does, within the explain budget (RL-3): those of the keyed stages' owners and of the
+        // semi-joins', whose page they size. The cached tier asks no owner anything: it plans by the
+        // facts already known.
         if (request.Remote != ExplainRequest.RemoteCached)
-            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled.KeyedResolves, owners.Remaining, cancellationToken).ConfigureAwait(false);
+            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled, owners.Remaining, cancellationToken).ConfigureAwait(false);
 
         draft.Indexes = Notes.CallerIndexes(bound, request.Query);
         draft.Notes.AddRange(Notes.Of(bound, request.Query, draft.Indexes, strict, context.Contract, options));
@@ -143,8 +144,10 @@ public sealed partial class MongoQueryEngine
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }], cancellationToken).ConfigureAwait(false));
 
         // The remote check (DESIGN §4.3): the owner queries of every keyed stage are bound by their
-        // owners' internal explain; an owner error there is this request's, at the caller's stage.
-        var (checkErrors, checkNotes) = await owners.CheckAsync(bound, strict, cancellationToken).ConfigureAwait(false);
+        // owners' internal explain; an owner error there is this request's, at the caller's stage. So
+        // are the conditions a run asks owners before the page (the semi-joins): each owner binds the
+        // query the run sends it first, in the same call.
+        var (checkErrors, checkNotes) = await owners.CheckAsync(bound, strict, KeyedFetch.ConditionChecks(compiled, options, remote), cancellationToken).ConfigureAwait(false);
 
         draft.Notes.AddRange(checkNotes);
 
@@ -153,6 +156,8 @@ public sealed partial class MongoQueryEngine
             foreach (var error in checkErrors)
                 if (error.Stage is { } at)
                     draft.Failed.Add(at);
+                else if (error.Filter is { } entry)
+                    draft.FailedFilters.Add(entry);
 
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false, checkErrors, cancellationToken).ConfigureAwait(false));
         }
@@ -224,6 +229,9 @@ public sealed partial class MongoQueryEngine
 
         /// <summary>The caller stages an error of the remote check lies at.</summary>
         public HashSet<int> Failed { get; } = [];
+
+        /// <summary>The entries of the request's <c>filter</c> an error of the remote check lies at, by label (id, or index).</summary>
+        public HashSet<object> FailedFilters { get; } = [];
 
         /// <summary>Per caller stage that is a join that runs: its executor, phase, the service that runs it and the owner it is sent to.</summary>
         public Dictionary<int, (string Executor, string Phase, string Host, string? Owner, bool Remote)> Placements { get; } = [];
@@ -477,7 +485,7 @@ public sealed partial class MongoQueryEngine
             Notes = Ordered(notes).Select(Based).ToList(),
             Entry = entry,
             Stages = stages,
-            Filter = FiltersOf(request.Query, trace),
+            Filter = FiltersOf(request.Query, trace, draft.FailedFilters),
             Aliases = aliases,
             Types = draft.Types.Types,
             Rules = draft.Types.Rules,
@@ -583,12 +591,13 @@ public sealed partial class MongoQueryEngine
     /// The entries of the request's <c>filter</c> as the binder placed them (DG2 M1), one per entry in
     /// order; null when the request carries none or was not read as contract 2.
     /// </summary>
-    private static List<ExplainFilter>? FiltersOf(QueryRequest query, BindTrace? trace) =>
+    private static List<ExplainFilter>? FiltersOf(QueryRequest query, BindTrace? trace, HashSet<object> refused) =>
         query.Filter is null || trace is null || trace.Filters.Count == 0 && query.Filter.Value.ValueKind != JsonValueKind.Array ? null
         : trace.Filters.Select(filter => new ExplainFilter
         {
             Id = filter.Id,
-            Status = filter.Failed ? "error" : "ok",
+            // An entry fails for what this host binds, or for a condition of it an owner refused.
+            Status = filter.Failed || refused.Contains(filter.Label) ? "error" : "ok",
             Placed = filter.Placed.Select(placement => ExplainFilterPlacement.At(placement.Boundary, placement.Paths, placement.Having)).ToList(),
         }).ToList();
 

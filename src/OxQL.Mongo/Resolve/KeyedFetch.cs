@@ -165,6 +165,15 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
     public Action<OwnerFetchCache> Keep { get; init; } = _ => { };
 }
 
+/// <summary>
+/// One semi-join condition checked at its owner's internal explain (explain is what a run does): the
+/// path the caller wrote (<c>&lt;alias&gt;.&lt;member&gt;</c>), the alias, the owner's service and
+/// target entity, the query a run sends the owner first for it, and where the caller wrote the
+/// condition: the caller's stage, or the label of the entry of the request's <c>filter</c> (its id, or
+/// its index), which has no stage.
+/// </summary>
+public sealed record ConditionCheck(string Path, string Alias, string Service, string Target, QueryRequest Query, int? Stage, object? Filter);
+
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
 public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
 
@@ -451,7 +460,7 @@ public sealed class KeyedFetch
 
         // One page size for the phase: the smallest page any owner asked answers, so no owner
         // refuses a page as too large (RE-13).
-        var pageSize = Math.Max(1, Math.Min(slots.Select(slot => PageOf(options, client, ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(), cap));
+        var pageSize = ConditionPage(slots, options, client);
         var lastOffset = (cap / pageSize) * pageSize;
 
         foreach (var slot in slots)
@@ -590,6 +599,58 @@ public sealed class KeyedFetch
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The page a semi-join asks its owners for: the smallest page any owner of <paramref name="slots"/>
+    /// answers (this host's <c>MaxPageSize</c>, or an owner's own when its facts say it is smaller), and
+    /// no more than <c>MaxSemiJoinIds</c>. One size for the phase, so no owner refuses a page as too large.
+    /// </summary>
+    public static int ConditionPage(IReadOnlyList<SemiJoinSlot> slots, OxQLOptions options, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(options);
+
+        return Math.Max(1, Math.Min(
+            slots.Select(slot => PageOf(options, client, ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(),
+            options.Limits.MaxSemiJoinIds));
+    }
+
+    /// <summary>
+    /// The semi-joins of a compiled request as explain checks them at their owners (explain is what a
+    /// run does): per condition under another service's alias, the owner's service and the very query a
+    /// run sends first (<see cref="OwnerQueryBuilder.ByCondition"/>: the condition relative to the
+    /// target, the target field projected, the first page with its count, at the page size a run takes,
+    /// <see cref="ConditionPage"/>), and where the caller wrote the condition: the caller's stage, or
+    /// the entry of the request's <c>filter</c>. Nothing is sent here; an owner binds the query and
+    /// never runs it.
+    /// </summary>
+    public static IReadOnlyList<ConditionCheck> ConditionChecks(CompiledQuery compiled, OxQLOptions options, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (compiled.SemiJoins.Count == 0)
+            return [];
+
+        var pageSize = ConditionPage(compiled.SemiJoins, options, client);
+
+        return compiled.SemiJoins.Select(slot =>
+        {
+            var target = OwnerQueryBuilder.TargetOf(slot);
+            var written = WrittenAt(compiled.Bound, slot);
+
+            return new ConditionCheck(slot.Leaf.Path.Wire, slot.Leaf.Path.Root.StoragePrefix, ServiceKeyOf(target), target,
+                OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true), written.Stage, written.Filter);
+        }).ToList();
+    }
+
+    /// <summary>The services a compiled request's semi-joins ask.</summary>
+    public static IEnumerable<string> ConditionServices(CompiledQuery compiled)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+
+        return compiled.SemiJoins.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))).Distinct(StringComparer.Ordinal);
     }
 
     /// <summary>What is still to fetch for one slot and what has arrived.</summary>
@@ -3034,6 +3095,19 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
+    /// Reads the facts of every owner a run of <paramref name="compiled"/> asks before it plans: those of
+    /// its keyed stages' remote targets and those of its semi-joins, whose page is sized by them
+    /// (<see cref="ConditionPage"/>).
+    /// </summary>
+    public static Task ReadOwnerFactsAsync(IRemoteQueryClient? client, CompiledQuery compiled, TimeSpan slice, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+
+        return ReadOwnersAsync(client, compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)).Concat(ConditionServices(compiled)), slice, cancellationToken);
+    }
+
+    /// <summary>
     /// Asks the client for each owner's facts before anything is sized or gated by them (RS-4): a
     /// client that has not read an owner's shallow health yet may read it now. Bounded by the time
     /// left; a client that does not answer in time leaves the facts unknown, as they were.
@@ -3092,13 +3166,19 @@ public sealed class KeyedFetch
     }
 
     /// <summary>The caller's index of the match stage carrying a semi-join leaf.</summary>
-    private static int? StageIndexOf(BoundPipeline bound, SemiJoinSlot slot)
+    private static int? StageIndexOf(BoundPipeline bound, SemiJoinSlot slot) => WrittenAt(bound, slot).Stage;
+
+    /// <summary>
+    /// Where the caller wrote a semi-join's condition: the caller's index of the match stage that
+    /// carries it, or, for a condition of the request's <c>filter</c> (which has no stage), the entry's label.
+    /// </summary>
+    private static (int? Stage, object? Filter) WrittenAt(BoundPipeline bound, SemiJoinSlot slot)
     {
         for (var position = 0; position < bound.Stages.Count; position++)
             if (bound.Stages[position] is BoundStage.Match match && Contains(match.Condition, slot.Leaf))
-                return bound.CallerIndexOf(position);
+                return (bound.CallerIndexOf(position), bound.FilterOf(match));
 
-        return null;
+        return (null, null);
     }
 
     private static bool Contains(BoundCondition condition, BoundCondition.Leaf leaf) => condition switch

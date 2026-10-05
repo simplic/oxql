@@ -124,7 +124,8 @@ public static class Basis
     /// <summary>
     /// The errors of one answer with their basis: each its code's, an error under an addon bag the
     /// organisation's (<paramref name="addon"/> answers its key and the state of its definition, or
-    /// null), and <c>RESOLVE_REFUSED</c> beside the errors it wraps the strongest of them.
+    /// null; an owner's error says it itself, with <c>params.addon</c> beside <c>params.owner</c>), and
+    /// <c>RESOLVE_REFUSED</c> beside the errors it wraps the strongest of them.
     /// </summary>
     public static IReadOnlyList<QueryValidationError> Of(IReadOnlyList<QueryValidationError> errors, Func<QueryValidationError, (string Key, string State)?> addon)
     {
@@ -142,6 +143,11 @@ public static class Basis
 
                 return error with { Basis = Organisation, Params = parameters };
             }
+
+            // An owner's error under its own addon bag: the owner said whose it is to change (its
+            // params.addon), and this host's row holds no member of the owner's to ask about.
+            if (DependsOnDefinition(error.Code) && error.Params is { } said && said.ContainsKey("owner") && said.TryGetValue("addon", out var theirs) && theirs is not null)
+                return error with { Basis = Organisation };
 
             return error with { Basis = OfCode.TryGetValue(error.Code, out var basis) ? basis : Data };
         }).ToList();

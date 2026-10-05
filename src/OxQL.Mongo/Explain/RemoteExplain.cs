@@ -181,7 +181,8 @@ public sealed class ExplainOwnerUse(string service, string? via)
 
 /// <summary>
 /// One explain's calls to owners (DESIGN §4.1, §4.3): the check of the parts of the query continued at
-/// them, which also answers the types of their targets, and the catalog lookups of their entities, over
+/// them, which also answers the types of their targets, the check of the conditions a run asks them
+/// before the page (the semi-joins), and the catalog lookups of their entities, over
 /// <see cref="IRemoteQueryClient.ExplainAsync"/>, answers read through the <see cref="ExplainForwardCache"/>.
 /// <para>
 /// The calls are bounded so that an explain is never a way to load a service (improvement plan §3.E
@@ -486,9 +487,21 @@ public sealed class RemoteExplain : IExplainOwners
     /// first round, as a run drops it, so a warm explain needs one round.
     /// </para>
     /// </summary>
-    public async Task<(List<QueryValidationError> Errors, List<Diagnostic> Notes)> CheckAsync(BoundPipeline bound, bool strict, CancellationToken cancellationToken)
+    /// <remarks>
+    /// With it goes the check of the request's semi-joins (<paramref name="conditions"/>,
+    /// <see cref="KeyedFetch.ConditionChecks"/>): a condition on a member of another service's rows is
+    /// bound by that owner when the query runs, before the page, so explain has the owner bind the
+    /// query the run sends it first. The conditions ride in the first round, in the one call their
+    /// owner is asked in anyway; no round and no call per condition is added. What the owner refuses
+    /// is this request's error where the caller wrote the condition (its match stage, or its entry of
+    /// the request's <c>filter</c>), under the path the caller wrote, with the owner's code and params
+    /// and <c>params.owner</c>. A condition no owner was asked for (not kept under the cached tier,
+    /// unreachable, a limit) is noted unchecked and the answer is not complete: never valid by silence.
+    /// </remarks>
+    public async Task<(List<QueryValidationError> Errors, List<Diagnostic> Notes)> CheckAsync(BoundPipeline bound, bool strict, IReadOnlyList<ConditionCheck> conditions, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(conditions);
 
         var errors = new List<QueryValidationError>();
         var notes = new List<Diagnostic>();
@@ -501,7 +514,26 @@ public sealed class RemoteExplain : IExplainOwners
             .ToList();
         var asked = stages.SelectMany(stage => stage.Checks.Select(check => new Asked(stage.Resolve, check))).ToList();
 
-        var first = await RoundAsync(asked.Select(each => AskOf(each, each.Sent)).ToList(), 0, cancellationToken).ConfigureAwait(false);
+        // The conditions asked of owners before the page: each distinct owner query once, however many
+        // conditions of the request are that query.
+        var conditionAsks = new List<(Ask Ask, List<ConditionCheck> Of)>();
+        var sameQuery = new Dictionary<string, List<ConditionCheck>>(StringComparer.Ordinal);
+
+        foreach (var condition in conditions)
+        {
+            var query = condition.Service + "|" + JsonSerializer.Serialize(condition.Query, OxQLJson.Wire);
+
+            if (sameQuery.TryGetValue(query, out var same))
+            {
+                same.Add(condition);
+                continue;
+            }
+
+            conditionAsks.Add((AskOf(condition), sameQuery[query] = [condition]));
+        }
+
+        // One round carries both: an owner is asked once for everything the request has it bind.
+        var first = await RoundAsync([.. asked.Select(each => AskOf(each, each.Sent)), .. conditionAsks.Select(each => each.Ask)], 0, cancellationToken).ConfigureAwait(false);
 
         for (var index = 0; index < asked.Count; index++)
         {
@@ -637,7 +669,111 @@ public sealed class RemoteExplain : IExplainOwners
                     check.Keep(drops);
         }
 
+        for (var index = 0; index < conditionAsks.Count; index++)
+        {
+            var (answer, reason) = first[asked.Count + index];
+
+            if (answer is not null)
+                OwnerFaults.Scrubbed(answer);
+
+            foreach (var condition in conditionAsks[index].Of)
+                Judge(condition, answer, reason, errors, notes);
+        }
+
         return (errors, notes);
+    }
+
+    /// <summary>
+    /// The explain request a semi-join's owner query travels in: the query a run sends first for the
+    /// condition, bound and never run. Only the verdict is asked for: no shape, no types.
+    /// </summary>
+    private Ask AskOf(ConditionCheck condition) => new(condition.Service, new ExplainRequest
+    {
+        Query = condition.Query,
+        Remote = cachedOnly ? ExplainRequest.RemoteCached : ExplainRequest.RemoteCheck,
+        Include = [ExplainRequest.IncludeNotes],
+        IsEnvelope = true,
+        Slim = true,
+    }, condition.Target, condition.Stage, Nests: false)
+    {
+        Filter = condition.Stage is null ? condition.Filter : null,
+    };
+
+    /// <summary>
+    /// What an owner's answer to a semi-join's query means for the request (explain is what a run does:
+    /// a run the owner refuses is 422 <c>RESOLVE_REFUSED</c> with the owner's errors). Every error of
+    /// the answer is this request's, where the caller wrote the condition: one at the owner query's
+    /// match (its stage 0) under the path the caller wrote, <c>&lt;alias&gt;.&lt;owner path&gt;</c>;
+    /// one at the stages this host added (the projection of the target field, the page) at the
+    /// condition's path, since the run is refused for it all the same. <c>params</c> are the owner's,
+    /// with <c>params.owner</c> saying where the owner saw it. No answer is a note, and the answer
+    /// is then not complete.
+    /// </summary>
+    private void Judge(ConditionCheck condition, JsonObject? answer, string? reason, List<QueryValidationError> errors, List<Diagnostic> notes)
+    {
+        if (answer is null)
+        {
+            Complete = false;
+
+            // A limit says so itself (EXPLAIN_LIMIT), once per limit and service.
+            if (reason != Limit)
+                notes.Add(Unchecked(condition, reason ?? Unsupported));
+
+            return;
+        }
+
+        foreach (var error in answer["errors"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            var ownerStage = error["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : (int?)null;
+            var ownerPath = error["path"] is JsonValue named && named.TryGetValue<string>(out var text) ? text : null;
+            var parameters = error["params"] is JsonObject written
+                ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            parameters["owner"] = new Dictionary<string, object?>
+            {
+                ["service"] = condition.Service,
+                ["entity"] = condition.Target,
+                ["target"] = condition.Target,
+                ["stage"] = ownerStage,
+                ["path"] = ownerPath,
+            };
+
+            var mapped = new QueryValidationError
+            {
+                Code = error["code"]?.ToString() ?? Codes.InternalError,
+                Message = error["message"]?.ToString() ?? "",
+                Stage = condition.Stage,
+                Filter = condition.Stage is null ? condition.Filter : null,
+                // The owner query's match is the caller's condition, its path relative to the target.
+                Path = ownerStage is null or 0 && ownerPath is { Length: > 0 } ? condition.Alias + "." + ownerPath : condition.Path,
+                Params = parameters,
+            };
+
+            if (!errors.Any(other => other.Code == mapped.Code && other.Stage == mapped.Stage && Equals(other.Filter, mapped.Filter) && other.Path == mapped.Path))
+                errors.Add(mapped);
+        }
+
+        // What the owner itself could not check or left out is missing here too.
+        if (answer["notes"] is JsonArray ownerNotes)
+            foreach (var note in ownerNotes.OfType<JsonObject>().Where(note => note["code"]?.GetValue<string>() is Notes.RemoteUnchecked or Notes.ExplainLimit))
+            {
+                Complete = false;
+                notes.Add(new Diagnostic
+                {
+                    Code = note["code"]!.GetValue<string>(),
+                    Message = note["message"]?.GetValue<string>() ?? "",
+                    Stage = condition.Stage,
+                    Filter = condition.Stage is null ? condition.Filter : null,
+                    Path = condition.Path,
+                    Params = note["params"] is JsonObject parameters
+                        ? parameters.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+                        : null,
+                });
+            }
+
+        if (!IsWhole(answer))
+            Complete = false;
     }
 
     /// <summary>The explain request one owner query travels in: the run's query, asked for what this explain was asked for.</summary>
@@ -946,7 +1082,11 @@ public sealed class RemoteExplain : IExplainOwners
     /// <param name="Target">The target the request speaks of.</param>
     /// <param name="Stage">The caller's stage a note about it lies at.</param>
     /// <param name="Nests">Whether the owner may have to ask owners of its own for it: a query that carries continued stages, or a lookup of an entity the owner reaches for this host.</param>
-    private sealed record Ask(string Service, ExplainRequest Request, string Target, int? Stage, bool Nests);
+    private sealed record Ask(string Service, ExplainRequest Request, string Target, int? Stage, bool Nests)
+    {
+        /// <summary>The entry of the request's <c>filter</c> a note about it lies at, for a condition written there (it has no stage).</summary>
+        public object? Filter { get; init; }
+    }
 
     /// <summary>
     /// One round of an explain (improvement plan §3.E): the requests this host explains itself, in order;
@@ -1012,7 +1152,7 @@ public sealed class RemoteExplain : IExplainOwners
             {
                 use ??= Use(ask.Service, null);
                 use.Reason ??= Limit;
-                results[index] = Limited("ownerRate", refusedNow.Max, ask.Service, ask.Target, ask.Stage, refusedNow.RetryAfterSeconds);
+                results[index] = Limited("ownerRate", refusedNow.Max, ask.Service, ask.Target, ask.Stage, refusedNow.RetryAfterSeconds, ask.Filter);
                 continue;
             }
 
@@ -1039,7 +1179,7 @@ public sealed class RemoteExplain : IExplainOwners
             // fire a hair before the elapsed time reaches the budget).
             if (spent || remaining <= TimeSpan.Zero)
             {
-                var late = OutOfTime(use ?? Use(service, null), service, head.Target, head.Stage);
+                var late = OutOfTime(use ?? Use(service, null), service, head.Target, head.Stage, head.Filter);
 
                 foreach (var index in indexes)
                     results[index] = late;
@@ -1049,8 +1189,8 @@ public sealed class RemoteExplain : IExplainOwners
 
             // A service is counted once it is called: one the cache answered, or the cached tier left out, takes no place.
             var refused = use is not { Calls: > 0 } && uses.Count(each => each.Via is null && each.Calls > 0) + sending.Count(group => group.Use.Calls == 0) >= maxServices
-                ? Limited("ownerServices", maxServices, service, head.Target, head.Stage)
-                : pool.CallsLeft <= 0 ? Limited("ownerCalls", maxCalls, service, head.Target, head.Stage)
+                ? Limited("ownerServices", maxServices, service, head.Target, head.Stage, filter: head.Filter)
+                : pool.CallsLeft <= 0 ? Limited("ownerCalls", maxCalls, service, head.Target, head.Stage, filter: head.Filter)
                 : ((JsonObject?, string?)?)null;
 
             if (refused is { } limited)
@@ -1064,7 +1204,7 @@ public sealed class RemoteExplain : IExplainOwners
             // What exceeds a batch is left out: one call per service and round, never a second.
             foreach (var index in indexes.Skip(maxChecks).ToList())
             {
-                results[index] = Limited("checks", maxChecks, service, asks[index].Target, asks[index].Stage);
+                results[index] = Limited("checks", maxChecks, service, asks[index].Target, asks[index].Stage, filter: asks[index].Filter);
                 indexes.Remove(index);
             }
 
@@ -1100,11 +1240,11 @@ public sealed class RemoteExplain : IExplainOwners
                 (JsonObject?, string?) failed;
 
                 if (outcome.Failure is ExplainOwnerPool.NoCalls or ExplainOwnerPool.TooManyChecks)
-                    failed = Limited(outcome.Failure == ExplainOwnerPool.NoCalls ? "ownerCalls" : "checks", outcome.Failure == ExplainOwnerPool.NoCalls ? maxCalls : maxChecks, use.Service, head.Target, head.Stage);
+                    failed = Limited(outcome.Failure == ExplainOwnerPool.NoCalls ? "ownerCalls" : "checks", outcome.Failure == ExplainOwnerPool.NoCalls ? maxCalls : maxChecks, use.Service, head.Target, head.Stage, filter: head.Filter);
                 else if (outcome.Failure == Timeout)
                 {
                     Spend();
-                    failed = OutOfTime(use, use.Service, head.Target, head.Stage);
+                    failed = OutOfTime(use, use.Service, head.Target, head.Stage, head.Filter);
                 }
                 else
                 {
@@ -1220,7 +1360,7 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>A part the time ran out before: the explain's own wall time is a limit, the owners' budget an unchecked part.</summary>
-    private (JsonObject? Answer, string? Reason) OutOfTime(ExplainOwnerUse use, string service, string target, int? stage)
+    private (JsonObject? Answer, string? Reason) OutOfTime(ExplainOwnerUse use, string service, string target, int? stage, object? filter = null)
     {
         use.Answered ??= false;
 
@@ -1233,11 +1373,11 @@ public sealed class RemoteExplain : IExplainOwners
 
         use.Reason ??= Limit;
 
-        return Limited("time", wallMs, service, target, stage);
+        return Limited("time", wallMs, service, target, stage, filter: filter);
     }
 
     /// <summary>A part a limit left out: noted once per limit and service, never retried.</summary>
-    private (JsonObject? Answer, string? Reason) Limited(string limit, int max, string service, string target, int? stage, int? retryAfter = null)
+    private (JsonObject? Answer, string? Reason) Limited(string limit, int max, string service, string target, int? stage, int? retryAfter = null, object? filter = null)
     {
         Complete = false;
 
@@ -1254,6 +1394,7 @@ public sealed class RemoteExplain : IExplainOwners
                     _ => $"This explain had {max} ms left of the time an explain may take; what '{service}' binds for '{target}' was not checked.",
                 },
                 Stage = stage,
+                Filter = stage is null ? filter : null,
                 Params = retryAfter is null
                     ? new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target }
                     : new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target, ["retryAfter"] = retryAfter },
@@ -1275,6 +1416,19 @@ public sealed class RemoteExplain : IExplainOwners
         for (var each = this; each is not null; each = each.origin)
             each.spent = true;
     }
+
+    /// <summary>A semi-join's condition no owner was asked for: where the caller wrote it, with its path.</summary>
+    private static Diagnostic Unchecked(ConditionCheck condition, string reason) => new()
+    {
+        Code = Notes.RemoteUnchecked,
+        Message = reason == Cached
+            ? $"The condition on '{condition.Path}' was not asked of '{condition.Service}', the owner of '{condition.Target}': this explain answers from the owner answers already kept (remote \"cached\"), and none is kept for it. Explain with remote \"check\" to ask the owner."
+            : $"The condition on '{condition.Path}' could not be checked at '{condition.Service}', the owner of '{condition.Target}' ({reason}); the owner binds it when the query runs.",
+        Stage = condition.Stage,
+        Filter = condition.Stage is null ? condition.Filter : null,
+        Path = condition.Path,
+        Params = new Dictionary<string, object?> { ["service"] = condition.Service, ["target"] = condition.Target, ["reason"] = reason, ["condition"] = condition.Path },
+    };
 
     private static Diagnostic Unchecked(OwnerCheck check, string reason) => new()
     {

@@ -38,4 +38,13 @@ public sealed record QueryValidationError
     [JsonPropertyName("params")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, object?>? Params { get; init; }
+
+    /// <summary>
+    /// Only in an explain answer: what would have to change for the request to run
+    /// (<c>request</c>, <c>model</c>, <c>limits</c>, <c>organisation</c>, <c>owner</c>, <c>data</c>,
+    /// <c>advisory</c>; see <c>Basis</c>). Absent on a run's answer.
+    /// </summary>
+    [JsonPropertyName("basis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Basis { get; init; }
 }

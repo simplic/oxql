@@ -88,6 +88,7 @@
   "status": 200,
   "answer": {
     "valid": true,
+    "executable": "yes",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -101,17 +102,17 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing refuses the request (onMissing refuse, strict); not_found lose data and refuse under strict.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"refuse","strict":true,"dataLoss":["not_found"]}},
-      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'referenceNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"referenceNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
-      {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":5,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]}},
-      {"code":"ONLY_FOR_VARIANTS","message":"'item.totalPriceNet' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":5,"path":"item.totalPriceNet","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]}},
-      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 5000, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","stage":7,"params":{"limit":5000,"max":5000}}
+      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing refuses the request (onMissing refuse, strict); not_found lose data and refuse under strict.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"refuse","strict":true,"dataLoss":["not_found"]},"basis":"advisory"},
+      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'referenceNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"referenceNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":5,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.totalPriceNet' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":5,"path":"item.totalPriceNet","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 5000, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","stage":7,"params":{"limit":5000,"max":5000},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -122,7 +123,12 @@
           "": "t:ledger.transaction"
         },
         "rules": {},
-        "flags": {}
+        "flags": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -172,6 +178,23 @@
             "": "o:1",
             "item": "o:2",
             "position": "o:3"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false,
+              "flatten": true
+            }
           }
         }
       },
@@ -2001,31 +2024,167 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false,
+          "flatten": true
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "erpLine",
+          "entity": "ledger.billing_line",
+          "key": "erpLine.id",
+          "nullable": true,
+          "many": false
+        },
+        {
+          "root": "sourceParent",
+          "entities": ["transport.shipment","transport.tour"],
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "position",
+          "direction": "asc"
+        },
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
-        {"path":"item.text","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored"},
-        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
-        {"path":"item.quantity","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant"},
-        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
-        {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined"},
-        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.quantity.quantityUnit","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.quantity.value","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.singlePrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.status","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceLine.type","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:3"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored","can":"c:2"},
+        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:4"},
+        {"path":"item.quantity","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:5"},
+        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always","can":"c:4"},
+        {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:1"},
+        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:1"},
+        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:2"},
+        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:2"},
+        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.quantity.quantityUnit","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.quantity.value","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.singlePrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.status","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.type","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:7"},
+        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:5": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:6": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "owner",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        },
+        "c:7": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "notInRow",
+            "sort": "notInRow",
+            "group": "notInRow",
+            "values": "notInRow",
+            "aggregate": "notInRow"
+          }
+        }
+      }
     },
     "owners": [
       {

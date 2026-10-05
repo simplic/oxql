@@ -65,6 +65,7 @@
   "status": 200,
   "answer": {
     "valid": false,
+    "executable": "never",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -76,19 +77,19 @@
       "complete": true
     },
     "errors": [
-      {"code":"UNKNOWN_PATH","message":"'tours.tourId' is not a path of transport.tour.","stage":5,"path":"sourceParent.tours.tourId","params":{"reason":"notAMember","entity":"transport.tour","owner":{"service":"transport","entity":"transport.tour","target":"transport.tour#billingLines","stage":0,"path":"tours.tourId"}}}
+      {"code":"UNKNOWN_PATH","message":"'tours.tourId' is not a path of transport.tour.","stage":5,"path":"sourceParent.tours.tourId","params":{"reason":"notAMember","entity":"transport.tour","owner":{"service":"transport","entity":"transport.tour","target":"transport.tour#billingLines","stage":0,"path":"tours.tourId"}},"basis":"model"}
     ],
     "diagnostics": [],
     "notes": [
-      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"null","strict":false,"dataLoss":["not_found"]}},
-      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true}},
-      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true}},
-      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"deliveringTour","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}}
+      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing leaves the alias null (onMissing null); not_found lose data.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"null","strict":false,"dataLoss":["not_found"]},"basis":"advisory"},
+      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'sourceLine' at its owner, which binds and runs it.","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"sourceLine","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null); ambiguous, not_found, invalid_key, owner_unanswered lose data. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"sourceParent.tours.tourId","params":{"alias":"deliveringTour","onMissing":"null","strict":false,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -98,7 +99,12 @@
         "roots": {
           "": "t:ledger.transaction"
         },
-        "rules": {}
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -142,6 +148,23 @@
             "": "r:1",
             "item": "r:2",
             "position": "r:3"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false,
+              "flatten": true
+            }
           }
         }
       },
@@ -536,17 +559,115 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false,
+          "flatten": true
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "sourceParent",
+          "entities": ["transport.shipment","transport.tour"],
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        },
+        {
+          "path": "position",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always"},
-        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined"},
-        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined"},
-        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always","can":"c:2"},
+        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:3"},
+        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:4"},
+        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:3"},
+        {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:3"},
+        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:3"},
+        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined","can":"c:3"},
+        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined","can":"c:3"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "owner",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "notInRow",
+            "sort": "notInRow",
+            "group": "notInRow",
+            "values": "notInRow",
+            "aggregate": "notInRow"
+          }
+        }
+      }
     },
     "owners": [
       {

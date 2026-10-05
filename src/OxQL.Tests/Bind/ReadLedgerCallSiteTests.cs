@@ -52,10 +52,11 @@ public partial class ReadLedgerCallSiteTests
     /// </summary>
     private static readonly IReadOnlyDictionary<string, (int Calls, string Why)> NotTheBinder = new Dictionary<string, (int, string)>(StringComparer.Ordinal)
     {
+        ["OxQL.Core/Binding/ExplainFacts.cs"] = (5, "explain describes rows: what an unwound path was, whether an element has a key, what may be done with a path at a boundary, whether a snapshot copy sorts"),
         ["OxQL.Core/Binding/ExplainTypes.cs"] = (17, "explain describes shapes: the flags of a member at a stage, a catalog entry, an item's element"),
         ["OxQL.Core/Binding/Shape.cs"] = (2, "a path under a keyed alias is checked against each target's own shape"),
         ["OxQL.Mongo/Explain/RemoteExplain.cs"] = (2, "whether a local target of a union has a path its remote targets' owners lack"),
-        ["OxQL.Mongo/MongoQueryEngine.Explain.cs"] = (1, "the kind of a result column under an alias, read off the final shape"),
+        ["OxQL.Mongo/MongoQueryEngine.Explain.cs"] = (2, "the kind of a result column under an alias, read off the final shape; whether an error's path lies under an addon bag"),
     };
 
     [Fact]

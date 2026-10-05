@@ -230,12 +230,69 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         answer.Catalog[1]["type"]!.GetValue<string>().Should().Be("t:fleet.vehicle");
     }
 
+    // ---- M7: what a column can is what the binder accepts (DG2) -----------------------------------------
+
+    public static TheoryData<string> Reference => new(ExplainGolden.Cases.Keys);
+
+    /// <summary>
+    /// For every reference query and every column of its answer (one per root and distinct answer):
+    /// a stage that uses the column the way <c>can</c> allows binds, and one that uses it a way
+    /// <c>can</c> refuses does not. The stage is written where a grid writes it, before the page.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Reference))]
+    public async Task M7_what_a_column_can_is_what_the_binder_accepts_for_it(string id)
+    {
+        var fleet = new InProcessFleet();
+        var query = ExplainGolden.Cases[id]();
+
+        async Task<ExplainResult> Explained(JsonObject request) =>
+            await fleet.ExplainAsync(JsonSerializer.Deserialize<ExplainRequest>(request.ToJsonString(), OxQLJson.Wire)!);
+
+        async Task<bool> Binds(string stage)
+        {
+            var changed = query.DeepClone().AsObject();
+            var pipeline = changed["pipeline"]!.AsArray();
+            var page = pipeline.Count > 0 && pipeline[^1]!.AsObject().ContainsKey("page") ? pipeline.Count - 1 : pipeline.Count;
+
+            pipeline.Insert(page, JsonNode.Parse(stage));
+
+            return (await Explained(changed)).Valid;
+        }
+
+        var answer = await Explained(query);
+
+        // A reference query an owner refuses has no final row to ask about.
+        if (!answer.Valid)
+            return;
+
+        var checkedColumns = 0;
+
+        foreach (var column in answer.Result!.Columns.DistinctBy(column => (column.Root, column.Can)))
+        {
+            var can = answer.Result.Capabilities![column.Can!]!["can"]!.AsObject();
+            var path = column.Path;
+            var functions = can["aggregate"]!.AsArray().Select(function => function!.GetValue<string>()).ToList();
+            var operators = can["filter"]!.AsArray().Select(op => op!.GetValue<string>()).ToList();
+
+            (await Binds($$"""{ "sort": [ { "{{path}}": "asc" } ] }""")).Should().Be(can["sort"]!.GetValue<bool>(), $"{id}: sort by '{path}'");
+            (await Binds($$"""{ "group": { "by": [ { "path": "{{path}}", "as": "k" } ], "fields": { "n": { "count": true } } } }""")).Should().Be(can["group"]!.GetValue<bool>(), $"{id}: group by '{path}'");
+            (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "first": "{{path}}" } } } }""")).Should().Be(functions.Contains("first"), $"{id}: first of '{path}'");
+            (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "sum": "{{path}}" } } } }""")).Should().Be(functions.Contains("sum"), $"{id}: sum of '{path}'");
+            (await Binds($$"""{ "match": { "{{path}}": { "exists": true } } }""")).Should().Be(operators.Contains("exists"), $"{id}: '{path}' exists");
+            (await Binds($$"""{ "match": { "{{path}}": { "contains": "x" } } }""")).Should().Be(operators.Contains("contains"), $"{id}: '{path}' contains");
+            checkedColumns++;
+        }
+
+        checkedColumns.Should().BePositive();
+    }
+
     // ---- T4: the budgets of the reference query ---------------------------------------------------------
 
     [Theory]
-    [InlineData("EX1-source-chain", 24_600, 3_500)]
-    [InlineData("A4", 30_500, 3_900)]
-    [InlineData("A5", 50_400, 5_800)]
+    [InlineData("EX1-source-chain", 28_200, 3_950)]
+    [InlineData("A4", 35_400, 4_550)]
+    [InlineData("A5", 57_000, 6_500)]
     public async Task T4_the_reference_answer_stays_within_its_time_budget_and_its_size_budget(string id, int raw, int gzip)
     {
         var fleet = new InProcessFleet();
@@ -281,9 +338,10 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         median.Should().BeLessThanOrEqualTo(MaxWarmMs, "T4: warm, the server answers within 10 ms");
 
         // The answer names its types and says where their members stand; the members are the schema
-        // documents'. Measured: the reference chain 22.5 KB raw and 3.4 KB gzipped (79.8 and 10.4 with the
-        // member rows in it), A4 26.3 and 3.7 (72.8 and 9.3), A5 with 16 stages and 14 aliases 43.6 and 5.5
-        // (107.8 and 12.8). The budget is 60 KB raw and 10 KB gzipped; the ceilings here are what was
+        // documents'. Measured (DG2: the requests project the paths their joins show, and the answer says
+        // what a row is, its order, its subjects and what each column can): the reference chain 27.4 KB raw
+        // and 3.8 KB gzipped (86.7 and 11.2 with the member rows in it), A4 34.3 and 4.4 (84.2 and 10.8), A5
+        // with 16 stages and 14 aliases 55.3 and 6.3 (124.9 and 14.9). The budget is 60 KB raw and 10 KB gzipped; the ceilings here are what was
         // measured plus three percent, so that a member that creeps back in fails.
         sizes.Raw.Should().BeLessThanOrEqualTo(Math.Min(raw, MaxRawBytes), "T4: the answer stays within its raw size");
         sizes.Gzip.Should().BeLessThanOrEqualTo(Math.Min(gzip, MaxGzipBytes), "T4: and within its gzipped size");

@@ -123,7 +123,7 @@ public class FilterPlacementTests
         var note = explained.Notes.Should().ContainSingle(each => each.Code == Notes.FilterBindsEarlier).Subject;
 
         note.Message.Should().StartWith("The condition on 'number' runs before the group of stage 0");
-        JsonSerializer.Serialize(note with { Message = "" }, BindHost.Json).Should().Be("""{"code":"FILTER_BINDS_EARLIER","message":"","stage":0,"path":"number","filter":"early","params":{"path":"number","alias":"number"}}""");
+        JsonSerializer.Serialize(note with { Message = "" }, BindHost.Json).Should().Be("""{"code":"FILTER_BINDS_EARLIER","message":"","stage":0,"path":"number","filter":"early","params":{"path":"number","alias":"number"},"basis":"advisory"}""");
     }
 
     [Fact]

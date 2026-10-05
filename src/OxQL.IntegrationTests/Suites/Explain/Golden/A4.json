@@ -138,6 +138,7 @@
   "status": 200,
   "answer": {
     "valid": true,
+    "executable": "yes",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -151,24 +152,24 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'clerk' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"createUserId","params":{"alias":"clerk","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'clerk' is joined after the page is taken, for the page's rows only.","stage":1,"path":"clerk","params":{"alias":"clerk","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'lineShipment' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'lineShipment' is joined after the page is taken, for the page's rows only.","stage":4,"path":"lineShipment","params":{"alias":"lineShipment","kind":"resolve"}},
-      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":5,"path":"lineShipment.tours.tourId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"lineShipment.tours.tourId","params":{"alias":"deliveringTour","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'tourVehicle' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"tourVehicle","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"lineShipment","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'driver' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"driver","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"OWNER_BINDS","message":"'lineTour' comes from another service; its owner binds the filter and every path under the alias.","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","services":["transport"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'lineTour' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'lineTour' is joined after the page is taken, for the page's rows only.","stage":8,"path":"lineTour","params":{"alias":"lineTour","kind":"resolve"}},
-      {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":9,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]}},
-      {"code":"ONLY_FOR_VARIANTS","message":"'item.totalPriceNet' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":9,"path":"item.totalPriceNet","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]}},
-      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 5000, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","stage":11,"params":{"limit":5000,"max":5000}}
+      {"code":"OWNER_BINDS","message":"'clerk' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"createUserId","params":{"alias":"clerk","services":["staff"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'clerk' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"createUserId","params":{"alias":"clerk","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'clerk' is joined after the page is taken, for the page's rows only.","stage":1,"path":"clerk","params":{"alias":"clerk","kind":"resolve"},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"'lineShipment' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'lineShipment' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"item.references.referenceId","params":{"alias":"lineShipment","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'lineShipment' is joined after the page is taken, for the page's rows only.","stage":4,"path":"lineShipment","params":{"alias":"lineShipment","kind":"resolve"},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":5,"path":"lineShipment.tours.tourId","params":{"alias":"lineShipment","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'deliveringTour' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":5,"path":"lineShipment.tours.tourId","params":{"alias":"deliveringTour","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"lineShipment","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'tourVehicle' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":6,"path":"deliveringTour.resource.id","params":{"alias":"tourVehicle","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"This resolve continues under 'lineShipment' at its owner, which binds and runs it.","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"lineShipment","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'driver' that resolves to nothing leaves the alias null; only an owner that fails is reported (onMissing null, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":7,"path":"deliveringTour.attachedResources.resource.id","params":{"alias":"driver","onMissing":"null","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"'lineTour' comes from another service; its owner binds the filter and every path under the alias.","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'lineTour' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":8,"path":"item.references.referenceId","params":{"alias":"lineTour","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'lineTour' is joined after the page is taken, for the page's rows only.","stage":8,"path":"lineTour","params":{"alias":"lineTour","kind":"resolve"},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":9,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.totalPriceNet' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":9,"path":"item.totalPriceNet","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 5000, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","stage":11,"params":{"limit":5000,"max":5000},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -178,7 +179,12 @@
         "roots": {
           "": "t:ledger.transaction"
         },
-        "rules": {}
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -251,6 +257,23 @@
             "clerk": "r:1",
             "item": "r:3",
             "position": "r:4"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false,
+              "flatten": true
+            }
           }
         }
       },
@@ -890,56 +913,231 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false,
+          "flatten": true
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "clerk",
+          "entity": "staff.employee",
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        },
+        {
+          "root": "lineShipment",
+          "entity": "transport.shipment",
+          "key": "lineShipment.id",
+          "nullable": true,
+          "many": false,
+          "remote": true
+        },
+        {
+          "root": "tourVehicle",
+          "entity": "fleet.vehicle",
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        },
+        {
+          "root": "driver",
+          "entity": "staff.employee",
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        },
+        {
+          "root": "lineTour",
+          "entity": "transport.tour",
+          "key": "lineTour.id",
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "position",
+          "direction": "asc"
+        },
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
-        {"path":"termsOfPayment.formattedText","kind":"string","nullable":true,"root":"termsOfPayment","present":"ifStored"},
-        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"dueDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
-        {"path":"totalPriceGross","kind":"decimal","nullable":false,"root":"","present":"always"},
-        {"path":"totalPriceNet","kind":"decimal","nullable":false,"root":"","present":"always"},
-        {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always"},
-        {"path":"clerk.address.firstName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
-        {"path":"clerk.address.lastName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
-        {"path":"clerk.id","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
-        {"path":"clerk.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
-        {"path":"clerk.userId","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined"},
-        {"path":"item.text","kind":"string","nullable":true,"stage":2,"root":"item","present":"ifStored"},
-        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":2,"root":"item","present":"ifVariant"},
-        {"path":"item.quantity","kind":"object","nullable":true,"stage":2,"root":"item","present":"ifVariant"},
-        {"path":"position","kind":"int","nullable":false,"stage":2,"root":"","present":"always"},
-        {"path":"lineShipment.deliveryAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.deliveryNoteNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.effectiveDeliveryEnd","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.id","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.items.weightNotes.number","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.items.weightNotes.quantity","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.loadAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"lineShipment.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined"},
-        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined"},
-        {"path":"tourVehicle.id","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
-        {"path":"tourVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
-        {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined"},
-        {"path":"driver.address.firstName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
-        {"path":"driver.address.lastName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
-        {"path":"driver.id","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
-        {"path":"driver.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined"},
-        {"path":"lineTour.actions","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.endDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.id","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.number","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"},
-        {"path":"lineTour.startDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:3"},
+        {"path":"termsOfPayment.formattedText","kind":"string","nullable":true,"root":"termsOfPayment","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:4"},
+        {"path":"dueDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:3"},
+        {"path":"totalPriceGross","kind":"decimal","nullable":false,"root":"","present":"always","can":"c:5"},
+        {"path":"totalPriceNet","kind":"decimal","nullable":false,"root":"","present":"always","can":"c:5"},
+        {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always","can":"c:6"},
+        {"path":"clerk.address.firstName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined","can":"c:7"},
+        {"path":"clerk.address.lastName","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined","can":"c:7"},
+        {"path":"clerk.id","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined","can":"c:7"},
+        {"path":"clerk.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined","can":"c:7"},
+        {"path":"clerk.userId","kind":"unknown","nullable":true,"stage":1,"root":"clerk","present":"ifJoined","can":"c:7"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":2,"root":"item","present":"ifStored","can":"c:2"},
+        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":2,"root":"item","present":"ifVariant","can":"c:5"},
+        {"path":"item.quantity","kind":"object","nullable":true,"stage":2,"root":"item","present":"ifVariant","can":"c:4"},
+        {"path":"position","kind":"int","nullable":false,"stage":2,"root":"","present":"always","can":"c:5"},
+        {"path":"lineShipment.deliveryAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.deliveryNoteNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.effectiveDeliveryEnd","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.id","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.items.weightNotes.number","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.items.weightNotes.quantity","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.loadAddress","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"lineShipment.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"lineShipment","present":"ifJoined","can":"c:8"},
+        {"path":"deliveringTour.id","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined","can":"c:8"},
+        {"path":"deliveringTour.number","kind":"unknown","nullable":true,"stage":5,"root":"deliveringTour","present":"ifJoined","can":"c:8"},
+        {"path":"tourVehicle.id","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined","can":"c:8"},
+        {"path":"tourVehicle.matchCode","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined","can":"c:8"},
+        {"path":"tourVehicle.registrationPlate.registrationIdentifier","kind":"unknown","nullable":true,"stage":6,"root":"tourVehicle","present":"ifJoined","can":"c:8"},
+        {"path":"driver.address.firstName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined","can":"c:8"},
+        {"path":"driver.address.lastName","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined","can":"c:8"},
+        {"path":"driver.id","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined","can":"c:8"},
+        {"path":"driver.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":7,"root":"driver","present":"ifJoined","can":"c:8"},
+        {"path":"lineTour.actions","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined","can":"c:8"},
+        {"path":"lineTour.endDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined","can":"c:8"},
+        {"path":"lineTour.id","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined","can":"c:8"},
+        {"path":"lineTour.number","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined","can":"c:8"},
+        {"path":"lineTour.startDateTime","kind":"unknown","nullable":true,"stage":8,"root":"lineTour","present":"ifJoined","can":"c:8"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:5": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:6": {
+          "can": {
+            "filter": ["exists","any"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:7": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "semiJoin",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        },
+        "c:8": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "owner",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        }
+      }
     },
     "owners": [
       {

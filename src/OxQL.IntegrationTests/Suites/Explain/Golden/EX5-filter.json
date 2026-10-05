@@ -69,6 +69,7 @@
   "status": 200,
   "answer": {
     "valid": true,
+    "executable": "yes",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -82,10 +83,10 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"TEXT_FOLDS","message":"'sort' on 'number' folds case and accents (collation de, strength 1).","stage":2,"path":"number","params":{"locale":"de","strength":1,"op":"sort"}},
-      {"code":"NEQ_MATCHES_ABSENT","message":"'neq' on 'isDeleted' also matches rows where the member is absent or null.","path":"isDeleted","filter":"removeDeleted","params":{"op":"neq"}},
-      {"code":"PATTERN_FOLDS","message":"'contains' on 'item.text' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.","path":"item.text","filter":"col:text","params":{"locale":"de","strength":1,"op":"contains","accents":true}},
-      {"code":"TEXT_FOLDS","message":"'startsWith' on 'number' folds case and accents (collation de, strength 1).","path":"number","filter":"preset:first","params":{"locale":"de","strength":1,"op":"startsWith"}}
+      {"code":"TEXT_FOLDS","message":"'sort' on 'number' folds case and accents (collation de, strength 1).","stage":2,"path":"number","params":{"locale":"de","strength":1,"op":"sort"},"basis":"advisory"},
+      {"code":"NEQ_MATCHES_ABSENT","message":"'neq' on 'isDeleted' also matches rows where the member is absent or null.","path":"isDeleted","filter":"removeDeleted","params":{"op":"neq"},"basis":"advisory"},
+      {"code":"PATTERN_FOLDS","message":"'contains' on 'item.text' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.","path":"item.text","filter":"col:text","params":{"locale":"de","strength":1,"op":"contains","accents":true},"basis":"advisory"},
+      {"code":"TEXT_FOLDS","message":"'startsWith' on 'number' folds case and accents (collation de, strength 1).","path":"number","filter":"preset:first","params":{"locale":"de","strength":1,"op":"startsWith"},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -95,7 +96,12 @@
         "roots": {
           "": "t:ledger.transaction"
         },
-        "rules": {}
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -121,6 +127,22 @@
             "": "r:1",
             "item": "r:2",
             "position": "r:3"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false
+            }
           }
         }
       },
@@ -280,12 +302,82 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        }
+      ],
+      "order": [
+        {
+          "path": "number",
+          "direction": "asc"
+        },
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        },
+        {
+          "path": "position",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"item.text","kind":"string","nullable":true,"stage":0,"root":"item","present":"ifStored"},
-        {"path":"position","kind":"int","nullable":false,"stage":0,"root":"","present":"always"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":0,"root":"item","present":"ifStored","can":"c:2"},
+        {"path":"position","kind":"int","nullable":false,"stage":0,"root":"","present":"always","can":"c:3"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        }
+      }
     },
     "owners": [],
     "catalog": []

@@ -339,8 +339,14 @@ public sealed partial class MongoQueryEngine
         {
             string? OwnerType(string alias) => draft.OwnerTypes.GetValueOrDefault(alias);
 
+            // What a row is, said at the entry and then where a stage changes it (an unwind, a group).
+            var identity = ExplainFacts.Identity(request.Query, trace, 0);
+
             if (shapes)
-                entry = new ExplainEntry { Shape = await draft.Types.ShapeAsync(trace.Stages.Count > 0 ? trace.Stages[0].Before : trace.Final, OwnerType).ConfigureAwait(false) };
+                entry = new ExplainEntry
+                {
+                    Shape = await draft.Types.ShapeAsync(trace.Stages.Count > 0 ? trace.Stages[0].Before : trace.Final, OwnerType).ConfigureAwait(false) with { Identity = identity },
+                };
 
             // The ledger, by stage: what the binder recorded, and for a stage continued at an owner what
             // that owner bound it with.
@@ -349,6 +355,10 @@ public sealed partial class MongoQueryEngine
             foreach (var stage in trace.Stages)
             {
                 var status = stage.Status == StageStatus.Error || draft.Failed.Contains(stage.Index) ? "error" : stage.Status == StageStatus.Skipped ? "skipped" : "ok";
+                var after = ExplainFacts.Identity(request.Query, trace, stage.Index + 1);
+                var changed = after.ToJsonString() != identity.ToJsonString();
+
+                identity = after;
 
                 stages.Add(new ExplainStage
                 {
@@ -362,7 +372,9 @@ public sealed partial class MongoQueryEngine
                         : null,
                     Reads = ReadsOf(draft, stage.Index, reads.GetValueOrDefault(stage.Index) ?? []),
                     Creates = creates.TryGetValue(stage.Index, out var created) ? created : [],
-                    Shape = shapes ? await draft.Types.ShapeAsync(stage.After, OwnerType).ConfigureAwait(false) : null,
+                    Shape = shapes
+                        ? await draft.Types.ShapeAsync(stage.After, OwnerType).ConfigureAwait(false) with { Identity = changed ? after : null }
+                        : null,
                 });
             }
         }
@@ -395,11 +407,33 @@ public sealed partial class MongoQueryEngine
         ExplainShapeResult? result = null;
 
         if (trace is not null)
+        {
+            var columns = draft.Bound is { } bound ? Columns(bound, trace, alias => OwnerShows(draft, alias)) : [];
+            var capabilities = new JsonObject();
+
+            // What may be done with each column at the last boundary; equal answers are written once.
+            if (draft.Bound is { } final)
+                columns = columns.Select(column =>
+                {
+                    var capability = ExplainFacts.Can(final.FinalShape, column.Path);
+
+                    return column with
+                    {
+                        Can = Capability(capabilities, capability),
+                        SortVia = capability.Can["sort"]!.GetValue<bool>() ? null : ExplainFacts.SortVia(final, column.Path),
+                    };
+                }).ToList();
+
             result = new ExplainShapeResult
             {
                 Paging = context.Contract == 2 || trace.Final.IsRootShape ? "cursor" : "offset",
-                Columns = draft.Bound is { } bound ? Columns(bound, trace, alias => OwnerShows(draft, alias)) : [],
+                Identity = ExplainFacts.Identity(request.Query, trace, int.MaxValue),
+                Subjects = draft.Bound is null ? null : ExplainFacts.Subjects(draft.Bound),
+                Order = draft.Bound is null ? null : ExplainFacts.Order(draft.Bound, request.Query),
+                Columns = columns,
+                Capabilities = capabilities.Count == 0 ? null : capabilities,
             };
+        }
 
         var answer = new ExplainResult
         {
@@ -414,9 +448,9 @@ public sealed partial class MongoQueryEngine
                     .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
                 Complete = complete,
             },
-            Errors = errors,
-            Diagnostics = draft.Binding.Diagnostics,
-            Notes = Ordered(notes),
+            Errors = Basis.Of(errors, error => AddonOf(trace, error)),
+            Diagnostics = draft.Binding.Diagnostics.Select(Based).ToList(),
+            Notes = Ordered(notes).Select(Based).ToList(),
             Entry = entry,
             Stages = stages,
             Filter = FiltersOf(request.Query, trace),
@@ -431,16 +465,86 @@ public sealed partial class MongoQueryEngine
             Advisory = valid ? draft.Advisory : null,
         };
 
+        // The verdict is part of what is measured; a trimmed answer says it again, being incomplete then.
+        answer = answer with { Executable = Basis.Executable(answer.Errors, answer.Cache.Complete) };
+
         // An answer far below the cap by what it holds is not measured: a member row is some 60 bytes; a
         // catalog's rows, the descriptions and a plan are the caller's to ask for and are measured.
         if (answer.Plan is not null || catalog.Count > 0 || request.IncludesDocs || draft.Types.MemberCount * 200L + 100_000 > context.Options.Explain.MaxAnswerBytes)
             answer = Trimmed(answer, notes, context.Options.Explain.MaxAnswerBytes);
+
+        // The verdict and the basis of every note, once nothing is added or trimmed any more.
+        answer = answer with
+        {
+            Notes = answer.Notes.Select(Based).ToList(),
+            Executable = Basis.Executable(answer.Errors, answer.Cache.Complete),
+        };
 
         // An owner answering an origin says what the origin reads, and nothing it would throw away.
         if (request.Slim && context.Internal)
             return Slim(answer);
 
         return answer with { Etag = EtagOf(request, answer, context) };
+    }
+
+    /// <summary>A note or diagnostic with its basis.</summary>
+    private static Diagnostic Based(Diagnostic note) => note with { Basis = Basis.Of(note) };
+
+    /// <summary>The id of one <c>{ can, why? }</c> among the distinct ones of the answer.</summary>
+    private static string Capability(JsonObject capabilities, (JsonObject Can, JsonObject? Why) capability)
+    {
+        var entry = new JsonObject { ["can"] = capability.Can };
+
+        if (capability.Why is not null)
+            entry["why"] = capability.Why;
+
+        var text = entry.ToJsonString();
+
+        foreach (var (id, known) in capabilities)
+            if (known!.ToJsonString() == text)
+                return id;
+
+        var next = "c:" + (capabilities.Count + 1);
+
+        capabilities[next] = entry;
+
+        return next;
+    }
+
+    /// <summary>
+    /// The addon key an error's path names and the state of its definition for the asking organisation
+    /// (<c>defined</c>, <c>undefined</c>, <c>retired</c>, <c>object</c>), or null when the path does not
+    /// lie under an addon bag: such an error is the organisation's to change, not the model's.
+    /// </summary>
+    private static (string Key, string State)? AddonOf(BindTrace? trace, QueryValidationError error)
+    {
+        if (trace is null || error.Path is not { Length: > 0 } path)
+            return null;
+
+        // The row the path was read on: before its stage; a condition of the request's filter, wherever it resolves.
+        foreach (var shape in error.Stage is { } at ? new[] { trace.ShapeAt(at) } : [trace.Entry, trace.Final])
+        {
+            // not a read: what an error's path is, to say whose it is to change
+            if (shape.Resolve(path, PathUsage.Project).Path is not { Path: { IsAddonRoot: true } bag, Entity: { } entity } resolved)
+                continue;
+
+            var name = bag.Wire[(bag.Wire.LastIndexOf('.') + 1)..];
+            var start = ("." + path).LastIndexOf("." + name + ".", StringComparison.Ordinal);
+
+            if (start < 0)
+                continue;
+
+            var key = path[(start + name.Length + 1)..];
+
+            if (resolved.Addon is not null)
+                return (key, "defined");
+
+            var definitions = shape.Addons.TryGetValue(entity.Id, out var known) ? known.Where(definition => definition.Path == key).ToList() : [];
+
+            return (key, definitions.Count == 0 ? "undefined" : definitions.Any(definition => !definition.Retired) ? "object" : "retired");
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -466,6 +570,7 @@ public sealed partial class MongoQueryEngine
 
     private static ExplainResult Slim(ExplainResult answer) => answer with
     {
+        Executable = null,
         Filter = null,
         Diagnostics = [],
         Notes = answer.Notes.Where(IsAboutTheAnswer).ToList(),

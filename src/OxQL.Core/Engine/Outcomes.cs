@@ -36,6 +36,15 @@ public sealed record Diagnostic
     [JsonPropertyName("params")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, object?>? Params { get; init; }
+
+    /// <summary>
+    /// Only in an explain answer: what would have to change for the request to run
+    /// (<c>request</c>, <c>model</c>, <c>limits</c>, <c>organisation</c>, <c>owner</c>, <c>data</c>,
+    /// <c>advisory</c>; see <c>Basis</c>). Absent on a run's answer.
+    /// </summary>
+    [JsonPropertyName("basis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Basis { get; init; }
 }
 
 /// <summary>Paging metadata.</summary>
@@ -686,6 +695,16 @@ public sealed record ExplainResult
     [JsonPropertyName("valid")]
     public required bool Valid { get; init; }
 
+    /// <summary>
+    /// Whether the request can run, by what would have to change for it to (<c>Basis</c>):
+    /// <c>never</c> with an error whose basis is the request, the model or a limit; <c>unknown</c>
+    /// with no such error and either another error or an answer that is not complete
+    /// (<see cref="ExplainCache.Complete"/>); <c>yes</c> when it binds and every part was checked.
+    /// </summary>
+    [JsonPropertyName("executable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Executable { get; init; }
+
     /// <summary>The contract the request was read as: 1 without the contract header while compatibility is on, 2 otherwise.</summary>
     [JsonPropertyName("contract")]
     public required int Contract { get; init; }
@@ -1024,6 +1043,16 @@ public sealed record ExplainShape
     [JsonPropertyName("flags")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public JsonObject? Flags { get; init; }
+
+    /// <summary>
+    /// What one row is here and what identifies it: <c>kind</c> (<c>entity</c>, <c>element</c>,
+    /// <c>bucket</c>, <c>single</c>) with the entity and its key, the unwound element, or the group's
+    /// keys (<c>ExplainFacts.Identity</c>). Written on the entry shape and on the shape of a stage
+    /// that changes it (an unwind, a group); absent on a stage's shape, it is the one before.
+    /// </summary>
+    [JsonPropertyName("identity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Identity { get; init; }
 }
 
 /// <summary>The final shape of the query.</summary>
@@ -1033,9 +1062,39 @@ public sealed record ExplainShapeResult
     [JsonPropertyName("paging")]
     public required string Paging { get; init; }
 
+    /// <summary>What one row of the answer is and what identifies it (<see cref="ExplainShape.Identity"/>, for the final shape).</summary>
+    [JsonPropertyName("identity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Identity { get; init; }
+
+    /// <summary>
+    /// The entities a row holds, for what acts on an entity rather than on a row: the row's own
+    /// record and every alias that holds records (<c>ExplainFacts.Subjects</c>). Absent for a request that does not bind.
+    /// </summary>
+    [JsonPropertyName("subjects")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonArray? Subjects { get; init; }
+
+    /// <summary>
+    /// The total order the page is taken in, tie-breakers included and marked
+    /// (<c>ExplainFacts.Order</c>). Absent for a request that does not bind.
+    /// </summary>
+    [JsonPropertyName("order")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonArray? Order { get; init; }
+
     /// <summary>The final shape's visible members and roots. The outcomes a join may have are its alias's (<c>aliases.*.outcome</c>).</summary>
     [JsonPropertyName("columns")]
     public required IReadOnlyList<ExplainColumn> Columns { get; init; }
+
+    /// <summary>
+    /// The distinct <c>{ can, why? }</c> of the columns, by id (<c>c:n</c>): what may be done with a
+    /// column at the last boundary and why not (<c>ExplainFacts.Can</c>). A column names its entry
+    /// (<see cref="ExplainColumn.Can"/>), so equal answers are written once.
+    /// </summary>
+    [JsonPropertyName("capabilities")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Capabilities { get; init; }
 }
 
 /// <summary>One visible member or root of the final shape.</summary>
@@ -1077,6 +1136,19 @@ public sealed record ExplainColumn
     /// <summary>When a row carries the key: <see cref="Always"/>, <see cref="IfJoined"/>, <see cref="IfVariant"/> or <see cref="IfStored"/>.</summary>
     [JsonPropertyName("present")]
     public string Present { get; init; } = Always;
+
+    /// <summary>The id (<c>c:n</c>) of what may be done with the column, in <see cref="ExplainShapeResult.Capabilities"/>.</summary>
+    [JsonPropertyName("can")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Can { get; init; }
+
+    /// <summary>
+    /// For a column of a join that cannot order the page: the path of the same member in a copy of the
+    /// joined record the row embeds (<c>snapshotOf</c>), which can. The caller's to choose, never applied by the engine.
+    /// </summary>
+    [JsonPropertyName("sortVia")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SortVia { get; init; }
 }
 
 /// <summary>The plan of a valid request (<c>include: ["plan"]</c>).</summary>

@@ -41,6 +41,7 @@
   "status": 200,
   "answer": {
     "valid": true,
+    "executable": "yes",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -54,7 +55,7 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"JOIN_AFTER_PAGE","message":"'lastAttempt' is joined after the page is taken, for the page's rows only.","stage":1,"path":"lastAttempt","params":{"alias":"lastAttempt","kind":"lookup"}}
+      {"code":"JOIN_AFTER_PAGE","message":"'lastAttempt' is joined after the page is taken, for the page's rows only.","stage":1,"path":"lastAttempt","params":{"alias":"lastAttempt","kind":"lookup"},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -64,7 +65,12 @@
         "roots": {
           "": "t:transport.shipment"
         },
-        "rules": {}
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "transport.shipment",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -177,14 +183,85 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "entity",
+        "entity": "transport.shipment",
+        "key": ["id"]
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "transport.shipment",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "lastAttempt",
+          "entity": "transport.delivery_attempt",
+          "key": "lastAttempt.id",
+          "nullable": true,
+          "many": false
+        }
+      ],
+      "order": [
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"shipmentNumber","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"lastAttempt.dateTime","kind":"dateTime","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
-        {"path":"lastAttempt.id","kind":"guid","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
-        {"path":"lastAttempt.status","kind":"object","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"},
-        {"path":"lastAttempt.text","kind":"string","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"shipmentNumber","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"lastAttempt.dateTime","kind":"dateTime","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:3"},
+        {"path":"lastAttempt.id","kind":"guid","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:1"},
+        {"path":"lastAttempt.status","kind":"object","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:4"},
+        {"path":"lastAttempt.text","kind":"string","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:2"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        }
+      }
     },
     "owners": [],
     "catalog": []

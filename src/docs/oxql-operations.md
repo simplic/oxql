@@ -567,6 +567,61 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner did not answer; a keyed alias or a remote lookup's that holds an array of rows is one
   `array` column. The
   outcomes a join may have are its alias's (`aliases.<alias>.outcome`).
+- **`executable` and `basis`** (for an editor's save rule). Every error, diagnostic and note of an
+  explain answer carries `basis`: what would have to change for the request to run. `request`:
+  wrong as written, on any service and any data. `model`: against the model of the service that
+  binds it, at the revision the answer names (an owner's own error keeps the basis it has at the
+  owner). `limits`: above a configured limit of the binding host. `organisation`: the path lies
+  under an addon bag and the code (`NOT_FILTERABLE`, `NOT_SORTABLE`, `INVALID_OPERAND`,
+  `UNKNOWN_ENUM_MEMBER`) depends on the organisation's definition; the error then carries
+  `params.addon { key, state }`, `state` one of `undefined`, `retired`, `object`, `defined`.
+  `owner`: a part could not be checked (`RESOLVE_UNAVAILABLE`; the notes `REMOTE_UNCHECKED`,
+  `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). `data`: only a run can tell (never an explain error).
+  `advisory`: the query runs. `RESOLVE_REFUSED` beside the errors it wraps has the strongest of
+  theirs. The top-level `executable` is derived: `never` with an error whose basis is `request`,
+  `model` or `limits`; `unknown` with no such error and another error or `cache.complete: false`;
+  `yes` when the request binds and every part was checked. The table of every code is
+  `OxQL.Core.Binding.Basis`; a test holds it complete. A run's refusal carries no `basis`.
+- **`identity`** (on `result`, on `entry.shape`, and on the shape of a stage that changes it): what
+  one row is and what identifies it. `kind: "entity"`: one record of `entity`, identified by the row
+  paths in `key`. `kind: "element"`: one element of a collection of that record; `element` is
+  `{ collection, alias, key?, index?, item: { entity, path }, orParent, flatten? }`: `key` the
+  element's own key member where it has one (`<alias>.id`), `index` the member the unwind names
+  with `includeIndex`, `item` the collection as the schema document names it (its
+  `items[].aliases` are there), `orParent` for `preserveNull` (a record without elements is kept
+  once, alias and index null). With several unwinds `element` is the last and `elements` lists
+  all in order. An unwound lookup alias makes the row one child record: `entity` and `key` are the
+  child's (`alias` the root it sits under) and `parent { entity, key }` is the record it was looked
+  up from. `kind: "bucket"`: `bucket.keys` are the group's key aliases. `kind: "single"`: a group
+  over no key. A join never changes the identity. A stage shape without `identity` has the one of
+  the boundary before it.
+- **`result.subjects`**: the entities a row holds, for what acts on an entity rather than on a row:
+  `{ root, entity | entities, key, nullable, many, remote? }`, the row's own record under root
+  `""` and every alias that holds records of an entity (an inline or keyed `resolve`, a `lookup`,
+  an owning row `parentAs`, an alias a continued stage adds). `entities` for a union. `key` is the
+  row path of the record's key, `null` where only the owner knows its name (read it from that
+  service's schema document); the row carries it only when the projection names it. An alias that
+  holds elements of an item collection is no subject. Empty after a `group`.
+- **`result.order`**: the total order the page is taken in, as the server sorts:
+  `[{ path, direction, tieBreak? }]`, the caller's fields first, then what completes them marked
+  `tieBreak: true`: the entity key; after an unwind the key and one position per unwind (`path` the
+  `includeIndex` member, else `{ positionOf: "<collection>" }`); after a group the keys the sort
+  does not name. Empty for one row.
+- **`result.capabilities` and a column's `can`**: per column what may be done with it at the last
+  boundary, written once per distinct answer: `capabilities["c:n"] = { can: { filter: [operators],
+  sort, group, aggregate: [functions], values }, why?: { filter?, sort?, group?, values?,
+  aggregate? } }`, and each column carries `can: "c:n"`. `values` says that the distinct values can
+  be asked for (a `group` by the path binds). `why` gives one reason per refused use, from a closed
+  list: `owner` (another service's rows), `joinedAfterPage`, `underCollection`, `notScalar`,
+  `notStored`, `unknownKind`, `addonUndefined`, `notInRow`, `notApplicable`; and `filter: "semiJoin"`
+  where a condition is allowed and runs as a semi-join at the owner. `sortVia` on a column of a join
+  that cannot order the page names the same member in a copy of the joined record the row embeds
+  (`snapshotOf`), when that path sorts; the engine never applies it. **A member that is no result
+  column** has the same answer by rule: `can.filter` is its flag set's `operators`, `can.sort` its
+  `sortable`, `can.group` and `can.values` its `groupable` (the flags of its type, with the stage's
+  rule or override set), and `can.aggregate` is every function for a number and all but `sum` and
+  `avg` otherwise, wherever the member is in the row before the page and not under a collection
+  that is not unwound (`ExplainFacts.CanOf`; the tests hold `can` equal to what the binder accepts).
 - **`owners`**: each owner service once, in pipeline order, this host among them when it answers a
   keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this
   host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,

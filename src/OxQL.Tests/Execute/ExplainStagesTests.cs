@@ -211,7 +211,7 @@ public class ExplainStagesTests
 
         json.Select(pair => pair.Key).Should().Equal(["index", "kind", "status", "reads", "creates", "shape"], "a stage that is no join has no placement");
         json["reads"]!.ToJsonString().Should().Be("""[{"path":"number","use":"match"}]""", "the read ledger: what the stage reads off the row, and no alias for a path of the entity row");
-        json["shape"]!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "grouped", "unwound", "roots", "rules", "flags"], "no projection ran, nothing left the row, and the overrides were asked for with the types");
+        json["shape"]!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "grouped", "unwound", "roots", "rules", "flags"], "no projection ran, nothing left the row, the overrides were asked for with the types, and a row is what it was at the entry");
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public class ExplainStagesTests
         explain.Alias("c")["outcome"]!.ToJsonString().Should().Be("""{"values":["not_found"]}""");
         explain.Alias("c")["stage"]!.GetValue<int>().Should().Be(0);
         explain.Alias("r")["outcome"]!.ToJsonString().Should().Be("""{"values":["ambiguous","not_found","invalid_key","owner_unanswered"]}""");
-        JsonSerializer.SerializeToNode(explain.Result, OxQLJson.Wire)!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "columns"], "a join's outcomes are its alias's, said once");
+        JsonSerializer.SerializeToNode(explain.Result, OxQLJson.Wire)!.AsObject().Select(pair => pair.Key).Should().Equal(["paging", "identity", "subjects", "order", "columns", "capabilities"], "a join's outcomes are its alias's, said once");
     }
 
     // ---- the remote check of the paths the caller wrote under a remote alias -----------------------

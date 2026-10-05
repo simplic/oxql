@@ -36,6 +36,7 @@
   "status": 200,
   "answer": {
     "valid": true,
+    "executable": "yes",
     "contract": 2,
     "engine": {
       "contract": 2,
@@ -49,10 +50,10 @@
     "errors": [],
     "diagnostics": [],
     "notes": [
-      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null}},
-      {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]}},
-      {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"}},
-      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000}}
+      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"},"basis":"advisory"},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000},"basis":"advisory"}
     ],
     "entry": {
       "shape": {
@@ -62,7 +63,12 @@
         "roots": {
           "": "t:ledger.transaction"
         },
-        "rules": {}
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
       }
     },
     "stages": [
@@ -201,22 +207,101 @@
     },
     "result": {
       "paging": "cursor",
+      "identity": {
+        "kind": "entity",
+        "entity": "ledger.transaction",
+        "key": ["id"]
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "recipientContact",
+          "entity": "directory.contact",
+          "key": "recipientContact.id",
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
       "columns": [
-        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always"},
-        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored"},
-        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored"},
-        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
-        {"path":"recipientContact.id","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
-        {"path":"recipientContact.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"},
-        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined"}
-      ]
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:3"},
+        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"},
+        {"path":"recipientContact.id","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"},
+        {"path":"recipientContact.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"},
+        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "semiJoin",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        }
+      }
     },
     "owners": [
       {

@@ -52,7 +52,12 @@ public class JoinsLoadInferenceFleetTests
         var explained = await ledger.ExplainHereAsync(request);
 
         explained.Body!["valid"]!.GetValue<bool>().Should().BeFalse(explained.Text);
-        explained.Body["errors"]!.AsArray().Select(error => error!.ToJsonString()).Should().Equal([refused.ToJsonString()], "explain answers the error the run refuses with");
+var error = explained.Body["errors"]!.AsArray().Should().ContainSingle().Subject!.DeepClone().AsObject();
+
+        error["basis"]!.GetValue<string>().Should().Be("request", "wrong as written: no service and no data make it run");
+        error.Remove("basis");
+        error.ToJsonString().Should().Be(refused.ToJsonString(), "explain answers the error the run refuses with");
+        explained.Body["executable"]!.GetValue<string>().Should().Be("never");
     }
 
     [Theory]

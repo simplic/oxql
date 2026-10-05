@@ -606,6 +606,33 @@ public class GoldenPipelineTests
     }
 
     [Fact]
+    public async Task A_page_of_groups_ordered_by_a_floating_point_aggregate_leaves_the_group_it_continues_from_out_by_its_keys()
+    {
+        // A sum of doubles is computed anew for every page: the last group's may come out a digit off the
+        // value its cursor carries, and then lie after its own position. Its keys say it was served.
+        const string Pipeline = """[{ "group": { "by": [{ "path": "state", "as": "st" }, { "path": "number", "as": "no" }], "fields": { "total": { "sum": "ratio" } } } }, { "sort": [{ "total": "desc" }] }, { "page": { "limit": 2 } }]""";
+        var first = await Compile(Pipeline);
+        var cursor = BindHost.Cursors.Encode(MongoQueryEngine.NextCursor(first, new BsonDocument { ["total"] = 0.30000000000000004, ["st"] = 1, ["no"] = BsonNull.Value }));
+        var next = await Compile(Pipeline.Replace("""{ "limit": 2 }""", $$"""{ "limit": 2, "cursor": "{{cursor}}" }"""));
+
+        first.Bound.PagingMode.Should().Be(PagingMode.Keyset);
+        next.PageStages[^3].ShouldBeBson(BsonDocument.Parse("""
+            { $match: { $and: [
+                { total: { $not: { $gt: 0.30000000000000004 } } },
+                { $or: [ { total: 0.30000000000000004, st: 1, no: { $ne: null } }, { total: 0.30000000000000004, st: { $gt: 1 } }, { total: { $lt: 0.30000000000000004 } }, { total: null } ] },
+                { $nor: [ { st: 1, no: null } ] } ] } }
+            """), "the range, the position by value, and the served group by its keys");
+        next.PageStages[^2].ShouldBeBson(BsonDocument.Parse("""{ $sort: { total: -1, st: 1, no: 1 } }"""));
+
+        // A count is exact however often it is computed: its page continues by value alone, as before.
+        const string Counted = """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 2 } }]""";
+        var counted = await Compile(Counted);
+        var after = BindHost.Cursors.Encode(MongoQueryEngine.NextCursor(counted, new BsonDocument { ["n"] = 3, ["st"] = 1 }));
+
+        (await Compile(Counted.Replace("""{ "limit": 2 }""", $$"""{ "limit": 2, "cursor": "{{after}}" }"""))).PageStages[^3].ToJson().Should().NotContain("$nor");
+    }
+
+    [Fact]
     public async Task A_keyset_cursor_survives_a_projection_that_drops_the_key()
     {
         // Without the key the sort reads a member that is not there and the cursor is built from

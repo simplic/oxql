@@ -106,6 +106,53 @@ public class PagingByValueTests
         walked.Pages.Should().Be(5);
     }
 
+    /// <summary>
+    /// A page of groups ordered by a sum of floating-point values continues from the last group's sum,
+    /// which the server computes anew for the next page. When it comes out different (here by a row
+    /// written into that group between the pages; in the field by the order the terms are added in,
+    /// which is the server's), the group may lie after its own position. It was served: it is not
+    /// answered again.
+    /// </summary>
+    [Theory]
+    [InlineData("desc", 0.25)]
+    [InlineData("asc", -0.25)]
+    public async Task A_group_whose_floating_point_aggregate_moved_past_its_position_between_two_pages_is_not_answered_again(string direction, double moved)
+    {
+        await using var fleet = await CorpusFleet.CreateAsync("paging_by_value_float_" + direction, [LabService.Transport]);
+        var shipments = (await fleet.Fleet.DatabaseAsync(LabService.Transport)).GetCollection<BsonDocument>(Corpus.Entity(Corpus.Shipment).Collection);
+        var client = fleet.Client(LabService.Transport, Org.C);
+
+        StoredShipment Weighed(int n, string reference, double weight)
+        {
+            var shipment = Shipment(n, $"S-{n:D3}", 0);
+
+            shipment.ReferenceNumber = reference;
+            shipment.ActualWeight = new Quantity { Value = weight };
+
+            return shipment;
+        }
+
+        // Six groups whose sums are 1.1 apart, two shipments each.
+        await shipments.InsertManyAsync(Enumerable.Range(0, 12).Select(n => Weighed(n + 1, "g-" + (n % 6), 0.1 + 0.55 * (n % 6)).ToBsonDocument()));
+
+        var stages = $$"""{ "group": { "by": [ { "path": "referenceNumber", "as": "reference" } ], "fields": { "weight": { "sum": "actualWeight.value" } } } }, { "sort": [ { "weight": "{{direction}}" } ] }""";
+        var whole = (await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 100 } } ]""")).Items.Select(item => item!["reference"]!.GetValue<string>()).ToList();
+
+        whole.Should().HaveCount(6);
+
+        var first = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3 } } ]""");
+
+        first.Items.Select(item => item!["reference"]!.GetValue<string>()).Should().Equal(whole.Take(3));
+
+        // The last group served gets a little lighter (or heavier): by value it now lies after the position it was served at.
+        await shipments.InsertOneAsync(Weighed(50, whole[2], -moved).ToBsonDocument());
+
+        var second = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "cursor": "{{first.NextCursor}}" } } ]""");
+
+        second.ShouldBeOk();
+        second.Items.Select(item => item!["reference"]!.GetValue<string>()).Should().Equal(whole.Skip(3), "the groups after the last one served; the one served is not answered again though its sum moved past the position");
+    }
+
     [Fact]
     public async Task A_group_that_appears_before_the_position_between_two_pages_moves_no_group()
     {

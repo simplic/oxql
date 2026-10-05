@@ -273,6 +273,98 @@ public class PageCountTests
         watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
+    /// <summary>A runner whose count runs until it is cancelled, and says when and how it ended.</summary>
+    private sealed class HeldCountRunner(int pageRows, Func<CancellationToken, Task>? beforePage = null) : IAggregateRunner
+    {
+        private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when the count's own token is cancelled.</summary>
+        public Task CountCancelled => cancelled.Task;
+
+        public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
+        {
+            if (stages.Count > 0 && stages[^1].Contains("$count"))
+            {
+                // Kept registered: it runs inside the cancellation itself, so the test reads it without a race.
+                cancellationToken.Register(() => cancelled.TrySetResult());
+
+                started.TrySetResult();
+
+                // As a command at the database: it ends only when its time is up or it is cancelled.
+                await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken);
+
+                return [new BsonDocument("n", 1)];
+            }
+
+            // The page is answered only once the count is running beside it.
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+
+            if (beforePage is not null)
+                await beforePage(cancellationToken);
+
+            return Enumerable.Range(0, pageRows).Select(index => new BsonDocument { ["_id"] = new BsonBinaryData(new Guid(index + 1, 0, 0, new byte[8]), GuidRepresentation.Standard), ["Number"] = "n" + index }).ToList();
+        }
+    }
+
+    private static MongoQueryEngine Engine(IAggregateRunner runner) => new(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
+
+    [Fact]
+    public async Task A_count_still_running_when_the_page_shows_no_next_one_is_cancelled_and_not_left_to_its_time_limit()
+    {
+        var runner = new HeldCountRunner(pageRows: 4);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await Run(Engine(runner), """{ "limit": 5, "count": true }""");
+
+        Wire(result.PageInfo.Count).Should().Be("""{"state":"exact","value":4}""", "a page without a next one is its own count");
+        runner.CountCancelled.IsCompleted.Should().BeTrue("the step is stopped when the page shows it is not needed, before the answer leaves");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5), "nothing waits for the step");
+    }
+
+    [Fact]
+    public async Task A_count_that_outlives_its_budget_is_cancelled_when_the_answer_leaves()
+    {
+        var runner = new HeldCountRunner(pageRows: 6);
+        var result = await Run(Engine(runner), """{ "limit": 5, "count": { "budgetMs": 40 } }""");
+
+        Wire(result.PageInfo.Count).Should().Be("""{"state":"unknown","reason":"timeout"}""");
+        result.Items.Should().HaveCount(5, "the rows are answered whatever became of the count");
+        runner.CountCancelled.IsCompleted.Should().BeTrue("however the request ends, its count is stopped: it holds no connection after the answer");
+    }
+
+    [Fact]
+    public async Task A_page_that_fails_and_a_caller_that_gives_up_stop_the_count_as_well()
+    {
+        // The page fails: the request is refused, and the count beside it is cancelled.
+        var failing = new HeldCountRunner(pageRows: 0, beforePage: _ => throw new TimeoutException("the page ran out of time"));
+        var outcome = await Engine(failing).ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5, "count": true } }]"""), BindHost.Context());
+
+        outcome.Should().BeOfType<QueryOutcome.Refused>();
+        failing.CountCancelled.IsCompleted.Should().BeTrue("a failed page leaves no count running");
+
+        // The caller gives up while both run: the cancellation reaches the count.
+        var held = new HeldCountRunner(pageRows: 6, beforePage: token => Task.Delay(TimeSpan.FromSeconds(60), token));
+        using var caller = new CancellationTokenSource();
+        var running = Engine(new CancelWhenCounting(held, caller)).ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5, "count": true } }]"""), BindHost.Context(), caller.Token);
+
+        await FluentActions.Awaiting(() => running).Should().ThrowAsync<OperationCanceledException>();
+        await held.CountCancelled.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>Cancels the caller's token once the count is running, then lets the runner behind it answer.</summary>
+    private sealed class CancelWhenCounting(IAggregateRunner inner, CancellationTokenSource caller) : IAggregateRunner
+    {
+        public Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
+        {
+            var running = inner.AggregateAsync(entity, stages, options, cancellationToken);
+
+            if (stages.Count > 0 && stages[^1].Contains("$count"))
+                caller.CancelAfter(TimeSpan.FromMilliseconds(20));
+
+            return running;
+        }
+    }
+
     [Fact]
     public async Task A_step_that_does_not_finish_in_its_budget_leaves_the_count_unknown_and_the_rows_as_they_are()
     {

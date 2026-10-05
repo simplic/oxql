@@ -291,6 +291,15 @@ included, as it always has; a cursor of one contract is never one of the other.
   group, an `unwind` follows the group, or one group is all there is) the cursor counts rows
   instead, and a row inserted or deleted before the position shifts the page; the cursor is opaque
   either way. Contract 1 counts rows after `group` and `unwind`, as it always has.
+- A page of groups ordered by a `sum` or an `avg` of floating-point values (kind `double`)
+  continues from a value the database computes anew for the next page, in an order of addition
+  that is its own, so the last group's value may come out a digit off the one its cursor carries
+  (or moved, when a row of that group was written in between) and then lie after its own
+  position. The group the position names is therefore also left out by its keys: it was served
+  and is never answered again. What cannot be held is another group whose value moves across
+  the position between two pages: it is answered twice or not at all, as any row whose sort value
+  is rewritten between two pages is. A `count`, a `min`/`max` and a sum of `int`, `long` or
+  `decimal` values are exact however often they are computed.
 - A cursor's position is sent to the database as the null-aware predicate over every field of the
   order and, where the leading sort field holds a value, as one range on that field beside it
   (`k >= v` ascending; "not above `v`" descending, which keeps the nulls that follow): the rows

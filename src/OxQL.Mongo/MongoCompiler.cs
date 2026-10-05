@@ -345,6 +345,21 @@ public static class MongoCompiler
         var keyset = position is null || unwoundPaging ? null
             : KeysetConjuncts(grouped ? Legs(position, sortFields, key: false, []) : KeysetFrom(position, sortFields), !options.AsWritten);
 
+        // A sum or an average of floating-point values is computed anew for every page, and the order
+        // its terms are added in is the server's: the last group's value may differ from the one its
+        // cursor was minted from in the last digit, and then lie after the position it stood at. The
+        // group the position names was served, whatever its value is now: it is left out by its keys.
+        if (grouped && keyset is not null && position is not null && bound.Stages.OfType<BoundStage.Group>().LastOrDefault() is { Keys.Count: > 0 } paged
+            && sortFields.Any(field => field.Path.Kind == Kind.Double && !paged.Keys.Any(key => key.As == field.Path.Storage)))
+        {
+            var served = new BsonDocument();
+
+            foreach (var key in paged.Keys)
+                served[key.As] = position.Fields.FirstOrDefault(value => value.Wire == sortFields.First(field => field.Path.Storage == key.As).Path.Wire)?.Value is { IsBsonNull: false, IsBsonUndefined: false } value ? value : BsonNull.Value;
+
+            keyset.Add(new BsonDocument("$nor", new BsonArray { served }));
+        }
+
         // A sort path under a local resolve alias has no value before the join writes it, and a
         // group's keys and aggregates none before the group, so the keyset condition on them is
         // evaluated right before the paging sort instead, where every sort path holds the value

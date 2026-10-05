@@ -172,7 +172,31 @@ internal static class ExplainGolden
         ["EX3-union-join"] = () => JsonNode.Parse(UnionJoin)!.AsObject(),
         // Every kind of join naming its outcome (§3.O): inline, remote, continued for one target, a union join.
         ["EX4-outcomes"] = () => JsonNode.Parse(Joins.JoinsOutcomeAsTests.Chain(ReportSeed.TransactionId))!.AsObject(),
+        // DG2: the request's filter, placed by the engine around an unwind, with a count beside the page.
+        ["EX5-filter"] = () => JsonNode.Parse(FilterPlaced)!.AsObject(),
     }.AsReadOnly();
+
+    /// <summary>
+    /// A grid's request (DG2 M1, M2, M3): three filter entries the engine places around an unwind, the
+    /// entity's own condition at the entry, the element's after the unwind, an <c>or</c> over both as one
+    /// unit at the later point, and a page that asks for a count.
+    /// </summary>
+    private const string FilterPlaced = """
+        {
+          "entityType": "ledger.transaction",
+          "filter": [
+            { "id": "removeDeleted", "where": { "isDeleted": { "neq": true } } },
+            { "id": "col:text", "where": { "item.text": { "contains": "a" } } },
+            { "id": "preset:first", "where": { "or": [ { "number": { "startsWith": "R" } }, { "position": { "eq": 0 } } ] } }
+          ],
+          "pipeline": [
+            { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } },
+            { "project": { "number": 1, "position": 1, "item.text": 1 } },
+            { "sort": [ { "number": "asc" } ] },
+            { "page": { "limit": 100, "count": true } }
+          ]
+        }
+        """;
 
     /// <summary>
     /// EXAMPLE-CASE steps 1–7 on the fleet: the invoice by variable, one row per line, billing lines

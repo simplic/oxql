@@ -329,8 +329,8 @@ public class ConformanceFixesTests
     [Theory]
     [InlineData("""{ "page": { "limit": 5, "skip": 10 } }""", "skip")]
     [InlineData("""{ "page": { "limit": 5, "includeCount": true } }""", "includeCount")]
-    [InlineData("""{ "unwind": { "path": "items", "preserveNulls": true } }""", "preserveNulls")]
-    [InlineData("""{ "unwind": { "path": "items", "includeArrayIndex": "i" } }""", "includeArrayIndex")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "preserveNulls": true } }""", "preserveNulls")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeArrayIndex": "i" } }""", "includeArrayIndex")]
     [InlineData("""{ "group": { "by": [], "fields": {}, "having": {} } }""", "having")]
     [InlineData("""{ "group": { "by": [{ "path": "state", "as": "s", "trunc": {} }], "fields": {} } }""", "trunc")]
     public async Task C13_a_stage_member_the_engine_does_not_have_is_refused(string stage, string member)

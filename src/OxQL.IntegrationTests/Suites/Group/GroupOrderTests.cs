@@ -361,13 +361,13 @@ public class GroupOrderTests
     }
 
     [Fact]
-    public async Task AC25b_after_an_unwind_the_collection_path_names_the_element_and_push_is_flat()
+    public async Task AC25b_after_an_unwind_the_alias_names_the_element_and_push_is_flat()
     {
         var expected = Items().GroupBy(item => item.Status).OrderBy(group => group.Key, Comparer<string>.Create(Order.CompareCollated)).ToList();
 
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
-            [ { "unwind": { "path": "items" } },
-              { "group": { "by": [{ "path": "items.status.name", "as": "status" }], "fields": { "total": { "count": true }, "quantity": { "sum": "items.quantity.value" }, "everyText": { "push": "items.text" } } } },
+            [ { "unwind": { "path": "items", "as": "item" } },
+              { "group": { "by": [{ "path": "item.status.name", "as": "status" }], "fields": { "total": { "count": true }, "quantity": { "sum": "item.quantity.value" }, "everyText": { "push": "item.text" } } } },
               { "sort": [{ "status": "asc" }] },
               { "page": { "limit": 10, "count": true } } ]
             """);

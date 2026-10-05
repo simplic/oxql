@@ -216,7 +216,7 @@ public class JoinsContinuationTests
     {
         var refused = await (await LedgerClient()).SendAsync(ReportSeed.Transaction, """
             [ { "resolve": { "path": "invoiceRecipient.address.id", "as": "recipientContact" } },
-              { "unwind": { "path": "recipientContact.tags" } } ]
+              { "unwind": { "path": "recipientContact.tags", "as": "tag" } } ]
             """);
 
         refused.ShouldRefuse("NOT_CONTINUABLE", 400)["stage"]!.GetValue<int>().Should().Be(1);

@@ -199,6 +199,15 @@ public class LateJoinExecutionTests
             // Every expression reads the row as it came in, as the server's $set does.
             foreach (var field in set)
             {
+                // A field path copies the value, as an unwind's alias does; a path the row lacks leaves the field out.
+                if (field.Value is BsonString reference)
+                {
+                    if (Get(row, reference.Value[1..]) is { } value)
+                        Set(copy, field.Name, value.DeepClone());
+
+                    continue;
+                }
+
                 var expression = field.Value.AsBsonDocument.GetElement(0);
                 var operands = expression.Value.AsBsonArray;
 

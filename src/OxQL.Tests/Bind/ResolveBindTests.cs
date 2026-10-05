@@ -108,10 +108,10 @@ public class ResolveBindTests
 
         error.Message.Should().Contain("'lines'").And.Contain("'lines.parts'");
 
-        var unwound = await ResolveAsync("""[{ "unwind": { "path": "lines" } }, { "resolve": { "path": "lines.parts.customerId", "as": "c", "elements": "all" } }]""");
+        var unwound = await ResolveAsync("""[{ "unwind": { "path": "lines", "as": "line" } }, { "resolve": { "path": "line.parts.customerId", "as": "c", "elements": "all" } }]""");
 
         unwound.Elements.Should().Be(ResolveElements.All);
-        unwound.CollectionStorage.Should().Be("Lines.Parts");
+        unwound.CollectionStorage.Should().Be("line.Parts", "the element is under the unwind's alias, and the collection has left the row");
     }
 
     [Fact]

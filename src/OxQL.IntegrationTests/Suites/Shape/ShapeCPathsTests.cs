@@ -306,7 +306,7 @@ public class ShapeCPathsTests
     [Fact]
     public async Task C24_a_path_under_an_unwind_index_alias_is_refused_the_index_is_a_scalar()
     {
-        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "includeIndex": "position" } }, { "match": { "position.x": { "eq": 1 } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "position.x", 1);
+        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "match": { "position.x": { "eq": 1 } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "position.x", 1);
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public class ShapeCPathsTests
     [Theory]
     [InlineData("""{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.orderNumber": { "eq": 1 } } }""", "item.orderNumber")]
     [InlineData("""{ "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "item.orderNumber": "asc" } ] }""", "item.orderNumber")]
-    [InlineData("""{ "unwind": { "path": "items", "includeIndex": "at" } }, { "match": { "at": { "eq": 0 } } }""", "at")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "at": { "eq": 0 } } }""", "at")]
     public async Task Cfold2_an_inclusion_projection_before_an_unwind_makes_the_aliases_it_writes_unaddressable(string stages, string path)
     {
         Refused(await Send(Corpus.Shipment, $$"""[ { "project": { "items.orderNumber": 1 } }, {{stages}}, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", path, 2);
@@ -334,7 +334,7 @@ public class ShapeCPathsTests
         var expected = Corpus.Rows(Corpus.Shipment).SelectMany(row => Corpus.Elements(row, "items").Select((_, index) => (row.Id, index)))
             .OrderBy(entry => entry.index).ThenBy(entry => entry.Id.ToString("D"), StringComparer.Ordinal).Take(3).ToList();
 
-        var works = await Send(Corpus.Shipment, """[ { "unwind": { "path": "items", "includeIndex": "at" } }, { "project": { "at": 1, "items.orderNumber": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 3 } } ]""");
+        var works = await Send(Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "project": { "at": 1, "item.orderNumber": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 3 } } ]""");
 
         works.ShouldHaveIds(expected.Select(entry => entry.Id));
         works.Values("at").Select(value => value!.GetValue<int>()).Should().Equal(expected.Select(entry => entry.index));
@@ -345,11 +345,11 @@ public class ShapeCPathsTests
     {
         var expected = Corpus.Rows(Corpus.Shipment).SelectMany(row => Corpus.Elements(row, "items").Select(_ => row.Id)).Take(3).ToList();
 
-        var kept = await Send(Corpus.Shipment, """[ { "project": { "items.orderNumber": 1 } }, { "unwind": { "path": "items" } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3 } } ]""");
+        var kept = await Send(Corpus.Shipment, """[ { "project": { "items.orderNumber": 1 } }, { "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3 } } ]""");
         kept.ShouldHaveIds(expected);
 
         foreach (var stage in new[] { """{ "project": { "status.name": 1 } }""", """{ "project": { "items": 0 } }""" })
-            Refused(await Send(Corpus.Shipment, $$"""[ {{stage}}, { "unwind": { "path": "items" } }, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", "items", 1);
+            Refused(await Send(Corpus.Shipment, $$"""[ {{stage}}, { "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", "items", 1);
     }
 
     [Fact]

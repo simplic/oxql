@@ -224,7 +224,7 @@ public static class BoundCanonical
         BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
         BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve => new JsonObject { ["lookup"] = RenderRemoteLookup(resolve, remoteLookup) },
         BoundStage.Resolve resolve => new JsonObject { ["resolve"] = RenderResolve(resolve) },
-        BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind) },
+        BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind, contract2) },
         BoundStage.Group group => new JsonObject
         {
             ["group"] = new JsonObject
@@ -456,7 +456,7 @@ public static class BoundCanonical
     /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an
     /// unwind without it renders without it and its cursors stay valid.
     /// </summary>
-    private static JsonObject RenderUnwind(BoundStage.Unwind unwind)
+    private static JsonObject RenderUnwind(BoundStage.Unwind unwind, bool contract2)
     {
         var node = new JsonObject
         {
@@ -472,8 +472,9 @@ public static class BoundCanonical
             node["flattenDepth"] = flatten.Depth;
         }
 
-        // Written only when the collection leaves the row, so every other unwind renders as before.
-        if (!unwind.KeepPath)
+        // A contract 2 unwind always takes its collection out of the row (DG2 M2), so it has nothing
+        // to say; the member is written for an unwind that had the choice and made it.
+        if (!unwind.KeepPath && !contract2)
             node["keepPath"] = false;
 
         return node;

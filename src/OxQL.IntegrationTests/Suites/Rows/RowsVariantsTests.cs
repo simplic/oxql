@@ -191,7 +191,7 @@ public class RowsVariantsTests
 
         (await Refused("""[ { "match": { "lead": { "is": "Whale" } } } ]""", Codes.UnknownVariant)).Message
             .Should().Be("'Whale' is not a variant of 'lead'; its variants are Bird, Fish, Shark.");
-        (await Refused("""[ { "unwind": { "path": "creatures", "flatten": "name" } } ]""", Codes.FlattenNotRecursive)).Path
+        (await Refused("""[ { "unwind": { "path": "creatures", "as": "creature", "flatten": "name" } } ]""", Codes.FlattenNotRecursive)).Path
             .Should().Be("creatures.name");
     }
 

@@ -167,9 +167,9 @@ public class PagingLimitsTests
     [Fact]
     public async Task U05_max_unwind_stages_five_unwinds_run_and_six_are_refused()
     {
-        string[] paths = ["items", "items.weightNotes", "documents", "tags", "billingLines", "billingLines.costCenters"];
+        string[] paths = ["items", "u0.weightNotes", "documents", "tags", "billingLines", "u4.costCenters"];
         var client = await Transport();
-        string Unwinds(int count) => Repeat(count, index => $$"""{ "unwind": { "path": "{{paths[index]}}" } }""");
+        string Unwinds(int count) => Repeat(count, index => $$"""{ "unwind": { "path": "{{paths[index]}}", "as": "u{{index}}" } }""");
 
         (await client.SendAsync(Corpus.Shipment, $$"""[{{Unwinds(Limit("maxUnwindStages"))}}, { "page": { "limit": 1 } }]""")).ShouldBeOk();
         ShouldRefuseAt(await client.SendAsync(Corpus.Shipment, $$"""[{{Unwinds(Limit("maxUnwindStages") + 1)}}, { "page": { "limit": 1 } }]"""), "MAX_UNWIND_STAGES_EXCEEDED", Limit("maxUnwindStages"));

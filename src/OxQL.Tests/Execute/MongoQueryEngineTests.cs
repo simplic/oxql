@@ -370,7 +370,8 @@ public class MongoQueryEngineTests
         var result = await Success(engine, """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }]""");
         var item = result.Items.Single()!.AsObject();
 
-        item["items"]!["quantity"]!.GetValue<int>().Should().Be(2, "after the unwind the path means the element");
+        item["it"]!["quantity"]!.GetValue<int>().Should().Be(2, "the element is under the alias");
+        item.AsObject().ContainsKey("items").Should().BeFalse("the collection left the row");
         item["it"]!["id"]!.GetValue<string>().Should().Be(Id3.ToString());
         item["i"]!.GetValue<int>().Should().Be(0, "the index is an int");
         item["cust"]!["name"]!.GetValue<string>().Should().Be("Acme");

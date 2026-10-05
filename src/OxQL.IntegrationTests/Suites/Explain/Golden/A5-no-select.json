@@ -343,6 +343,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -371,6 +372,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -405,6 +407,7 @@
             "position": "k:int",
             "erpLine": "t:ledger.billing_line"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -444,6 +447,7 @@
             "sourceLine": "u:sourceLine",
             "sourceParent": "u:sourceParent"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -485,6 +489,7 @@
             "sourceParent": "u:sourceParent",
             "lastAttempt": "t:transport.delivery_attempt"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -529,6 +534,7 @@
             "lastAttempt": "t:transport.delivery_attempt",
             "lineShipment": "t:transport.shipment"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -574,6 +580,7 @@
             "lineShipment": "t:transport.shipment",
             "deliveringTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -622,6 +629,7 @@
             "deliveringTour": "t:transport.tour",
             "tourVehicle": "t:fleet.vehicle"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -672,6 +680,7 @@
             "tourVehicle": "t:fleet.vehicle",
             "driver": "t:staff.employee"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -724,6 +733,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -832,6 +842,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -879,6 +890,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",
@@ -924,6 +936,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "recipientContact": "r:1",

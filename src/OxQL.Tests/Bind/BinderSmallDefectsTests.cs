@@ -27,7 +27,7 @@ public class BinderSmallDefectsTests
     [Fact]
     public async Task Flatten_null_is_the_member_left_out()
     {
-        var bound = await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "unwind": { "path": "lines", "flatten": null } }]""");
+        var bound = await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "unwind": { "path": "lines", "as": "line", "flatten": null } }]""");
 
         bound.Stages.OfType<BoundStage.Unwind>().Single().Flatten.Should().BeNull();
     }

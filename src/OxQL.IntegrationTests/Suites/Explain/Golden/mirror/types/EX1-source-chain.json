@@ -197,6 +197,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -226,6 +227,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -261,6 +263,7 @@
             "position": "k:int",
             "erpLine": "t:ledger.billing_line"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -302,6 +305,7 @@
             "sourceLine": "u:sourceLine",
             "sourceParent": "u:sourceParent"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -347,6 +351,7 @@
             "sourceParent": "u:sourceParent",
             "deliveringTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -396,6 +401,7 @@
             "deliveringTour": "t:transport.tour",
             "shipmentVehicle": "t:fleet.vehicle"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -448,6 +454,7 @@
             "shipmentVehicle": "t:fleet.vehicle",
             "tourVehicle": "t:fleet.vehicle"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -502,6 +509,7 @@
             "tourVehicle": "t:fleet.vehicle",
             "lastAttempt": "t:transport.delivery_attempt"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -563,6 +571,7 @@
             "tourVehicle": "t:fleet.vehicle",
             "lastAttempt": "t:transport.delivery_attempt"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -614,6 +623,7 @@
             "tourVehicle": "t:fleet.vehicle",
             "lastAttempt": "t:transport.delivery_attempt"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -2249,18 +2259,13 @@
       },
       "o:1": {
         "~": {
-          "66800": "42800",
-          "4408c3": "588c3",
-          "440800": "40800",
-          "6408c3": "1588c3",
-          "4408ff": "588ff",
-          "4c1fff": "d9fff"
+          "66800": null,
+          "4408c3": null,
+          "440800": null,
+          "6408c3": null,
+          "4408ff": null,
+          "4c1fff": null
         },
-        "items.costCenters": "64800",
-        "items.costObjects": "64800",
-        "items.assignedTransactionItems": "66800",
-        "items.references": "64800",
-        "items.items": "66800",
         "taxKeyTotalPrices.taxKey": "4c1fff",
         "taxKeyTotalPrices.totalPrice": "4408ff",
         "defaultCostCenters.id": "4408c3",

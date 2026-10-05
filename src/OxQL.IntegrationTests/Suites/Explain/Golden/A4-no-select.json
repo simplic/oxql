@@ -245,6 +245,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -271,6 +272,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -305,6 +307,7 @@
             "position": "k:int",
             "lineShipment": "t:transport.shipment"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -340,6 +343,7 @@
             "lineShipment": "t:transport.shipment",
             "deliveringTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -378,6 +382,7 @@
             "deliveringTour": "t:transport.tour",
             "tourVehicle": "t:fleet.vehicle"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -418,6 +423,7 @@
             "tourVehicle": "t:fleet.vehicle",
             "driver": "t:staff.employee"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -460,6 +466,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -536,6 +543,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -573,6 +581,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",
@@ -608,6 +617,7 @@
             "driver": "t:staff.employee",
             "lineTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:2",
             "clerk": "r:1",

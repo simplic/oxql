@@ -62,13 +62,9 @@ public class ExplainByReferenceTests
         { "converted keys", Invoice, """[{ "resolve": { "path": "billing.referenceId", "as": "b" } }, { "resolve": { "path": "shipmentKey", "as": "s" } }]""", 2 },
         { "a variant's reference", Invoice, """[{ "resolve": { "path": "slot.holderId", "as": "holder" } }]""", 2 },
         { "nested unwinds without the path", Invoice, """
-            [{ "unwind": { "path": "lines", "as": "line", "keepPath": false, "includeIndex": "at" } },
+            [{ "unwind": { "path": "lines", "as": "line", "includeIndex": "at" } },
              { "unwind": { "path": "line.parts", "as": "part" } },
              { "resolve": { "path": "part.customerId", "as": "pc" } }]
-            """, 2 },
-        { "nested unwinds with the path", Invoice, """
-            [{ "unwind": { "path": "lines" } },
-             { "unwind": { "path": "lines.parts" } }]
             """, 2 },
         { "an inclusion", Invoice, """
             [{ "resolve": { "path": "customerId", "as": "c", "select": ["name"] } },

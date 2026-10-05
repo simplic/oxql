@@ -177,7 +177,10 @@ public class ShapeHCollectionsTests
     [Fact]
     public async Task H14_any_on_a_collection_that_has_already_been_unwound_is_refused()
     {
-        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items" } }, { "match": { "items": { "any": { "orderNumber": { "eq": 1 } } } } }, {{FullPage}} ]"""), "ANY_NOT_APPLICABLE", "items", 1);
+        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "item": { "any": { "orderNumber": { "eq": 1 } } } } }, {{FullPage}} ]"""), "ANY_NOT_APPLICABLE", "item", 1);
+
+        // The collection itself is not in the row after the unwind: 'any' on it names nothing (DG2 M2).
+        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "items": { "any": { "orderNumber": { "eq": 1 } } } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "items", 1);
     }
 
     [Fact]
@@ -269,14 +272,14 @@ public class ShapeHCollectionsTests
     [Fact]
     public async Task H20_a_nested_collection_is_unwindable_only_after_its_parent()
     {
-        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "billingLines.references" } }, {{FullPage}} ]"""), "UNWIND_ORDER", "billingLines.references", 0);
+        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "billingLines.references", "as": "reference" } }, {{FullPage}} ]"""), "UNWIND_ORDER", "billingLines.references", 0);
 
         var expected = Corpus.Rows(Corpus.Shipment)
             .SelectMany(row => Corpus.Elements(row, "billingLines").OfType<BsonDocument>()
                 .SelectMany(line => line.GetValue("References", new BsonArray()).AsBsonArray.Select(_ => row.Id))).ToList();
         expected.Should().HaveCount(3);
 
-        var ordered = await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "billingLines" } }, { "unwind": { "path": "billingLines.references" } }, { "project": { "id": 1 } }, {{FullPage}} ]""");
+        var ordered = await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "billingLines", "as": "billingLine" } }, { "unwind": { "path": "billingLine.references", "as": "reference" } }, { "project": { "id": 1 } }, {{FullPage}} ]""");
         ordered.ShouldHaveIds(expected);
     }
 

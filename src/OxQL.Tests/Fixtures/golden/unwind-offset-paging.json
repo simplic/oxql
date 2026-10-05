@@ -1,5 +1,5 @@
 {
-  "description": "An unwind with alias, index and preserveNull, then offset paging.",
+  "description": "An unwind with alias, index and preserveNull, then the page (the collection leaves the row, DG2 M2).",
   "entity": "probe.order",
   "pipeline": [
     {
@@ -13,7 +13,7 @@
     {
       "sort": [
         {
-          "items.quantity": "desc"
+          "it.quantity": "desc"
         }
       ]
     },
@@ -23,6 +23,6 @@
       }
     }
   ],
-  "fingerprint": "sha256:2983bf3ff4073f0690f56892194766c6865cde2a45b95dcef9baf8725f1f8f61",
-  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"unwind\":{\"path\":\"Items\",\"as\":\"it\",\"preserveNull\":true,\"includeIndex\":\"i\"}},{\"sort\":[{\"path\":\"Items.Quantity\",\"direction\":\"desc\",\"caseSensitive\":true}]},{\"page\":{\"limit\":10}}],\"paging\":\"offset\",\"page\":{\"limit\":10,\"cursor\":null}}"
+  "fingerprint": "sha256:d834b30b29868a3d68ebf1da476ebe92c4a645a13c505d301fdabc755c92eec9",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"unwind\":{\"path\":\"Items\",\"as\":\"it\",\"preserveNull\":true,\"includeIndex\":\"i\"}},{\"sort\":[{\"path\":\"it.Quantity\",\"direction\":\"desc\",\"caseSensitive\":true}]},{\"page\":{\"limit\":10}}],\"paging\":\"offset\",\"page\":{\"limit\":10,\"cursor\":null}}"
 }

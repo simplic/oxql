@@ -176,7 +176,7 @@ public class VariantBindingTests
     public async Task Flatten_descends_as_deep_as_the_host_allows()
     {
         var context = BindHost.Context(BindHost.Options(options => options.Limits.MaxFlattenDepth = 3));
-        var bound = await Bound("""[ { "unwind": { "path": "nodes", "flatten": "children" } } ]""", context);
+        var bound = await Bound("""[ { "unwind": { "path": "nodes", "as": "node", "flatten": "children" } } ]""", context);
 
         bound.Stages.OfType<BoundStage.Unwind>().Single().Flatten!.Depth.Should().Be(3);
     }
@@ -187,7 +187,7 @@ public class VariantBindingTests
     [InlineData("pets", "name", "'name' is not a collection of the same items as 'pets'; flatten follows a member that nests the same kind of element.")]
     public async Task Flatten_on_a_member_that_does_not_nest_the_same_items_is_refused(string path, string flatten, string message)
     {
-        var error = await Error($$"""[ { "unwind": { "path": "{{path}}", "flatten": "{{flatten}}" } } ]""", Codes.FlattenNotRecursive);
+        var error = await Error($$"""[ { "unwind": { "path": "{{path}}", "as": "element", "flatten": "{{flatten}}" } } ]""", Codes.FlattenNotRecursive);
 
         error.Message.Should().Be(message);
         error.Path.Should().Be($"{path}.{flatten}");
@@ -196,7 +196,7 @@ public class VariantBindingTests
     [Fact]
     public async Task Flatten_on_a_member_the_element_does_not_have_is_an_unknown_path()
     {
-        var error = await Error("""[ { "unwind": { "path": "nodes", "flatten": "branches" } } ]""", Codes.UnknownPath);
+        var error = await Error("""[ { "unwind": { "path": "nodes", "as": "node", "flatten": "branches" } } ]""", Codes.UnknownPath);
 
         error.Message.Should().Be("'branches' is not a member of the elements of 'nodes'.");
     }

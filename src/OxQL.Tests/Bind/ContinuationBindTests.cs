@@ -300,7 +300,7 @@ public class ContinuationBindTests
     }
 
     [Theory]
-    [InlineData("""{ "unwind": { "path": "r.lines" } }""", "'unwind'")]
+    [InlineData("""{ "unwind": { "path": "r.lines", "as": "line" } }""", "'unwind'")]
     [InlineData("""{ "group": { "by": [{ "path": "r.name", "as": "n" }], "fields": { "k": { "count": true } } } }""", "'group'")]
     public async Task An_unwind_or_a_group_under_a_keyed_or_remote_alias_is_NOT_CONTINUABLE(string stage, string kind)
     {

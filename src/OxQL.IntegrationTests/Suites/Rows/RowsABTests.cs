@@ -310,7 +310,7 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB17_an_unwound_row_carries_the_element_under_the_alias_plus_the_index_and_the_element_replaces_the_array()
+    public async Task AB17_an_unwound_row_carries_the_element_under_the_alias_plus_the_index_and_not_the_array()
     {
         var expected = Corpus.Rows(Corpus.Shipment).SelectMany(row => Corpus.Elements(row, "items").Select((_, index) => (row.Id, index))).ToList();
 
@@ -327,9 +327,9 @@ public partial class RowsABTests
         aliased.Items.Should().OnlyContain(row => row!["it"] is JsonObject);
         aliased.Values("ix").Select(value => value!.GetValue<int>()).Should().Equal(expected.Select(entry => entry.index), "the index is the element's position, not a counter");
 
-        var plain = await (await Lab.ClientAsync(LabService.Transport)).SendAsync(Corpus.Shipment, """[ { "unwind": { "path": "items" } }, { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "items.orderNumber": 1 } }, { "page": { "limit": 500 } } ]""");
+        var plain = await (await Lab.ClientAsync(LabService.Transport)).SendAsync(Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "item.orderNumber": 1 } }, { "page": { "limit": 500 } } ]""");
         plain.ShouldHaveIds(expected.Select(entry => entry.Id));
-        plain.Items.Should().OnlyContain(row => row!["items"] is JsonObject, "unaliased, the element still replaces the array at the original path");
+        plain.Items.Should().OnlyContain(row => row!["item"] is JsonObject && !row.AsObject().ContainsKey("items"), "the element is under the alias and the array has left the row (DG2 M2)");
     }
 
     [Fact]

@@ -383,7 +383,7 @@ public class PagingSortTests
         var expectedParents = Corpus.IdsOf(parents.Order(Comparer<CorpusRow>.Create(Corpus.CompareIds)));
         var expectedRows = parents.Sum(row => Corpus.Elements(row, "items").Count);
 
-        var answer = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""");
+        var answer = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""");
 
         answer.ShouldBeOk();
         var ids = answer.Ids();

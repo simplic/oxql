@@ -383,7 +383,7 @@ public class StageRulesTests
         (await Error("""[{ "match": { "tags": { "any": { "x": { "eq": 1 } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("scalars");
         (await Error("""[{ "match": { "items.stops": { "any": { "city": { "eq": "x" } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("outer");
         (await Error("""[{ "match": { "shipTo": { "any": { "city": { "eq": "x" } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("not a collection");
-        await Error("""[{ "unwind": { "path": "items" } }, { "match": { "items": { "any": { "quantity": { "gt": 1 } } } } }]""", Codes.AnyNotApplicable);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item": { "any": { "quantity": { "gt": 1 } } } } }]""", Codes.AnyNotApplicable);
         await Error("""[{ "match": { "items": { "any": { "nothing": { "gt": 1 } } } } }]""", Codes.UnknownPath);
     }
 
@@ -400,26 +400,25 @@ public class StageRulesTests
     [Fact]
     public async Task Unwind_needs_a_collection_at_the_current_shape_and_the_outer_one_first()
     {
-        var bound = await Bound("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }, { "unwind": { "path": "items.stops" } }, { "match": { "items.quantity": { "gt": 1 }, "it.quantity": { "gt": 2 }, "items.stops.city": { "eq": "x" }, "i": { "gte": 1 }, "it": { "exists": true } } }, { "sort": [{ "items.quantity": "asc" }, { "it.stops.city": "desc" }] }]""");
+        var bound = await Bound("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }, { "unwind": { "path": "it.stops", "as": "stop" } }, { "match": { "it.quantity": { "gt": 1, "lt": 9 }, "stop.city": { "eq": "x" }, "i": { "gte": 1 }, "it": { "exists": true } } }, { "sort": [{ "it.quantity": "asc" }, { "stop.city": "desc" }] }]""");
         var and = (BoundCondition.And)((BoundStage.Match)bound.Stages[2]).Condition;
 
         var leaves = and.Conditions.Cast<BoundCondition.Leaf>().ToList();
 
-        leaves[0].Path.Storage.Should().Be("Items.Quantity");
         leaves[0].Path.CollectionAncestors.Should().Be(0, "the array is unwound");
         leaves[1].Path.Storage.Should().Be("it.Quantity");
-        leaves[2].Path.Storage.Should().Be("Items.Stops.City");
+        leaves[2].Path.Storage.Should().Be("stop.City");
         leaves[2].Path.CollectionAncestors.Should().Be(0);
         leaves[3].Path.Storage.Should().Be("i");
         leaves[3].Path.Kind.Should().Be(Kind.Int);
         leaves[4].Path.Kind.Should().Be(Kind.Object);
         bound.PagingMode.Should().Be(PagingMode.Offset);
 
-        (await Error("""[{ "unwind": { "path": "items.stops" } }]""", Codes.UnwindOrder)).Path.Should().Be("items.stops");
-        await Error("""[{ "unwind": { "path": "shipTo" } }]""", Codes.NotACollection);
-        await Error("""[{ "unwind": { "path": "items" } }, { "unwind": { "path": "items" } }]""", Codes.NotACollection);
+        (await Error("""[{ "unwind": { "path": "items.stops", "as": "stop" } }]""", Codes.UnwindOrder)).Path.Should().Be("items.stops");
+        await Error("""[{ "unwind": { "path": "shipTo", "as": "shipToRow" } }]""", Codes.NotACollection);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item", "as": "itemRow" } }]""", Codes.NotACollection);
         await Error("""[{ "unwind": { "path": "items", "as": "number" } }]""", Codes.AliasCollision);
-        await Error("""[{ "unwind": { "path": "items", "as": "it" } }, { "unwind": { "path": "items.stops", "as": "it" } }]""", Codes.AliasCollision);
+        await Error("""[{ "unwind": { "path": "items", "as": "it" } }, { "unwind": { "path": "it.stops", "as": "it" } }]""", Codes.AliasCollision);
         await Error("""[{ "unwind": { "path": "items", "as": "bad name" } }]""", Codes.InvalidAlias);
         await Error("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "it" } }]""", Codes.AliasCollision);
     }
@@ -573,7 +572,7 @@ public class StageRulesTests
 
         await Error("""[{ "match": {} }, { "match": {} }, { "match": {} }]""", Codes.MaxPipelineStagesExceeded, context);
         await Error("""[{ "match": { "count": { "gt": 1, "lt": 5 }, "flag": { "eq": true } } }]""", Codes.MaxConditionsExceeded, context);
-        await Error("""[{ "unwind": { "path": "items" } }, { "unwind": { "path": "items.stops" } }]""", Codes.MaxUnwindStagesExceeded, context);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.stops", "as": "stop" } }]""", Codes.MaxUnwindStagesExceeded, context);
     }
 
     // ---- joins (§6, §11) ---------------------------------------------------------------------

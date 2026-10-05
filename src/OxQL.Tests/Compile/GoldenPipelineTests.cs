@@ -213,13 +213,14 @@ public class GoldenPipelineTests
     [Fact]
     public async Task Unwind_with_alias_and_index_then_offset_paging()
     {
-        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "items.quantity": "desc" }] }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
+        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i", "preserveNull": true } }, { "sort": [{ "it.quantity": "desc" }] }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: true, includeArrayIndex: "i" } }""",
             """{ $set: { it: "$Items" } }""",
-            """{ $sort: { "Items.Quantity": -1, _id: 1, i: 1 } }""",
+            """{ $unset: "Items" }""",
+            """{ $sort: { "it.Quantity": -1, _id: 1, i: 1 } }""",
             "{ $skip: 20 }",
             "{ $limit: 11 }");
         compiled.PagingMode.Should().Be(PagingMode.Offset);
@@ -321,11 +322,13 @@ public class GoldenPipelineTests
     {
         // No sort of the caller's: $skip over $unwind output nothing ordered repeats and drops
         // rows between pages, so the binder supplies the key and the compiler completes it.
-        var compiled = await Compile("""[{ "unwind": { "path": "items" } }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
+        var compiled = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 10, "offset": 20 } }]""", context: BindHost.Context() with { Internal = true });
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""",
             """{ $sort: { _id: 1, __oxIx0: 1 } }""",
             """{ $unset: ["__oxIx0"] }""",
             "{ $skip: 20 }",

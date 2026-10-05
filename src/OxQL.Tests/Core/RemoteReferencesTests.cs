@@ -70,7 +70,7 @@ public class RemoteReferencesTests
     public async Task A_reference_in_a_collection_element_resolves_remotely_once_unwound()
     {
         var bound = await BindHost.BoundAsync(Model, Order,
-            """[{ "unwind": { "path": "lines" } }, { "resolve": { "path": "lines.contactNumber", "as": "contact" } }]""");
+            """[{ "unwind": { "path": "lines", "as": "line" } }, { "resolve": { "path": "line.contactNumber", "as": "contact" } }]""");
 
         bound.Stages.OfType<BoundStage.Resolve>().Should().ContainSingle()
             .Which.Should().Match<BoundStage.Resolve>(resolve => resolve.IsRemote && resolve.TargetEntity == "crm.contact");

@@ -456,7 +456,7 @@ public class PagingCursorTests
         groupedHead["o"]!.GetValue<int>().Should().Be(2);
         ((JsonArray)groupedHead["v"]!).Should().BeEmpty();
 
-        var unwound = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items" } }, { "page": { "limit": 5 } }]""");
+        var unwound = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 5 } }]""");
         unwound.ShouldBeOk();
         var unwoundHead = Cursors.Payload(unwound.NextCursor!);
         unwoundHead["m"]!.GetValue<string>().Should().Be("o");

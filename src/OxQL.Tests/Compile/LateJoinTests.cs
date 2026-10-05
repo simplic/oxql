@@ -93,9 +93,9 @@ public class LateJoinTests
     [Fact]
     public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_offset_page()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$sort", "$unset", "$limit", "$lookup", "$set", "$unset");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$set", "$unset", "$sort", "$unset", "$limit", "$lookup", "$set", "$unset");
     }
 
     [Fact]
@@ -201,9 +201,9 @@ public class LateJoinTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$match", "$project", "$sort", "$limit");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$project", "$sort", "$limit");
         compiled.PageStages[4].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
-        compiled.PageStages[5]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
+        compiled.PageStages[6]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
 
         var row = WireEncoder.Encode(new BsonDocument
         {
@@ -219,10 +219,10 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_a_later_unwind_reads_stays_before_the_unwind()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "count": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders", "as": "order" } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$unwind", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$sort", "$limit");
+        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$limit", "$count");
     }
 
     [Fact]

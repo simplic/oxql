@@ -122,14 +122,14 @@ internal static class LateJoinCases
         {
             "a lookup whose parent key an unsorted unwound page excludes",
             Parent,
-            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags" } }, { "project": { "id": 0, "tags": 1, "children": 1 } }, { "page": { "limit": 5 } }]""",
-            $$$"""[{"tags":"a","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tags":"b","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tags":"c","children":[{"id":"{{{WireId(12)}}}","title":"Child two"}]}]"""
+            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children": 1 } }, { "page": { "limit": 5 } }]""",
+            $$$"""[{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"}]"""
         },
         {
             "a lookup whose parent key a sorted unwound page excludes",
             Parent,
-            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags" } }, { "project": { "id": 0, "tags": 1, "children": 1 } }, { "sort": [{ "tags": "desc" }] }, { "page": { "limit": 5 } }]""",
-            $$$"""[{"tags":"c","children":[{"id":"{{{WireId(12)}}}","title":"Child two"}]},{"tags":"b","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]},{"tags":"a","children":[{"id":"{{{WireId(11)}}}","title":"Child one"}]}]"""
+            """[{ "lookup": { "from": "lj.child", "path": "parentId", "as": "children", "select": ["title"] } }, { "unwind": { "path": "tags", "as": "tag" } }, { "project": { "id": 0, "tag": 1, "children": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5 } }]""",
+            $$$"""[{"children":[{"id":"{{{WireId(12)}}}","title":"Child two"}],"tag":"c"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"b"},{"children":[{"id":"{{{WireId(11)}}}","title":"Child one"}],"tag":"a"}]"""
         },
     };
 }

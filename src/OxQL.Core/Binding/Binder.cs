@@ -2841,15 +2841,33 @@ public sealed class Binder
 
         // ---- unwind --------------------------------------------------------------------------
 
+        /// <summary>The members of a contract 2 unwind.</summary>
+        private const string UnwindMembers = "path, as, preserveNull, includeIndex, flatten";
+
         private void BindUnwind(UnwindStage unwind, int index)
         {
-            // flatten and keepPath are contract 2 members; under contract 1 they are ones the stage does not have.
+            // flatten is a contract 2 member; under contract 1 it is one the stage does not have, and so
+            // is keepPath, which no contract has any more.
             IReadOnlyList<string> unknown = contract2
                 ? unwind.Unknown
                 : [.. unwind.Unknown, .. unwind.Flatten is not null ? ["flatten"] : Array.Empty<string>(), .. unwind.KeepPathWritten ? ["keepPath"] : Array.Empty<string>()];
 
-            if (!CheckStageMembers(unknown, "unwind", contract2 ? "path, as, preserveNull, includeIndex, flatten, keepPath" : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null || unwind.KeepPathWritten)))
+            if (!CheckStageMembers(unknown, "unwind", contract2 ? UnwindMembers : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null || unwind.KeepPathWritten)))
                 return;
+
+            // Contract 2 has one unwind (DG2 M2): the element goes under 'as' and the collection leaves
+            // the row, so a path names one thing along the whole pipeline. There is nothing to choose.
+            if (contract2 && unwind.KeepPathWritten)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownStageMember,
+                    Message = $"'keepPath' is not a member of unwind; unwind carries {UnwindMembers}. An unwind always takes its collection out of the row; the element is under 'as'.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "unwind", ["member"] = "keepPath", ["reason"] = "removed" },
+                });
+                return;
+            }
 
             if (unwind.Path is null)
             {
@@ -2857,9 +2875,16 @@ public sealed class Binder
                 return;
             }
 
-            if (unwind.KeepPathInvalid)
+            if (contract2 && unwind.As is null)
             {
-                errors.Add(Error(Codes.InvalidOperand, "'keepPath' is true or false.", index, unwind.Path));
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidAlias,
+                    Message = $"An unwind names its element under 'as': after it, '{unwind.Path}' is not in the row any more and each row holds one element under that name.",
+                    Stage = index,
+                    Path = unwind.Path,
+                    Params = new Dictionary<string, object?> { ["stage"] = "unwind", ["member"] = "as", ["reason"] = "required" },
+                });
                 return;
             }
 
@@ -2918,24 +2943,22 @@ public sealed class Binder
                 ? firstSegment
                 : Shape.ImplicitRoot;
 
-            if (!unwind.KeepPath && alias is null)
-            {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' false takes '{unwind.Path}' out of the row once its element is under 'as'; without 'as' the element replaces '{unwind.Path}' in place, so there is nothing to drop.", index, unwind.Path));
-                return;
-            }
-
-            if (!unwind.KeepPath && path.Path is null)
-            {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' applies to a collection member; '{unwind.Path}' is a join alias, which an unwind without 'as' already replaces by its element.", index, unwind.Path));
-                return;
-            }
+            // Contract 1 unwinds in place, or beside the alias, as it always has.
+            var keepPath = !contract2;
 
             // A join bound earlier may read its keys off the page rows after the page is taken
-            // (a keyed resolve, a join after the page); the collection keepPath false removes
-            // before the page would take those keys with it and null every such alias.
-            if (!unwind.KeepPath && JoinReadingUnder(path.Storage) is { } reader)
+            // (a keyed resolve, a join after the page); the collection the unwind removes before
+            // the page would take those keys with it and null every such alias.
+            if (!keepPath && JoinReadingUnder(path.Storage) is { } reader)
             {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'keepPath' false would take '{unwind.Path}' out of the row, but the join '{reader}' of an earlier stage reads its keys from it; keep the collection (keepPath true), or join after the unwind through '{alias}'.", index, unwind.Path));
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnwindOrder,
+                    Message = $"The unwind takes '{unwind.Path}' out of the row, but the join '{reader}' of an earlier stage reads its keys from it; join after the unwind, through '{alias}'.",
+                    Stage = index,
+                    Path = unwind.Path,
+                    Params = new Dictionary<string, object?> { ["reason"] = "joinReadsCollection", ["join"] = reader, ["alias"] = alias },
+                });
                 return;
             }
 
@@ -2944,8 +2967,8 @@ public sealed class Binder
             if (unwind.Flatten is not null && (flatten = BindFlatten(unwind, path, index)) is null)
                 return;
 
-            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten, unwind.KeepPath));
-            shape = shape.WithUnwound(path, rootName, alias, indexAlias, unwind.KeepPath);
+            stages.Add(new BoundStage.Unwind(path, alias, unwind.PreserveNull, indexAlias, flatten, keepPath));
+            shape = shape.WithUnwound(path, rootName, alias, indexAlias, keepPath);
         }
 
         /// <summary>The alias of an earlier resolve or lookup whose reference or parent key lies in or under <paramref name="storage"/>, or null.</summary>

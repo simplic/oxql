@@ -78,7 +78,7 @@ public class LookupMembersBindTests
         bound.FinalShape.Roots["latest"].Should().BeOfType<ShapeNode.Entity>();
 
         await BindHost.ErrorAsync(BindHost.Probe, Customer,
-            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "unwind": { "path": "latest" } }]""", Codes.NotACollection);
+            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "latest", "first": true } }, { "unwind": { "path": "latest", "as": "latestRow" } }]""", Codes.NotACollection);
 
         // Every member of the child can be read under the alias: the lookup loads what a later stage reads.
         var sorted = await BindHost.BoundAsync(BindHost.Probe, Customer,
@@ -139,7 +139,7 @@ public class LookupMembersBindTests
     [Theory]
     [InlineData("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "orders", "as": "again" } }]""", "probe.customer", "the array of a lookup")]
     [InlineData("""[{ "unwind": { "path": "items", "as": "item" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "item", "as": "again" } }]""", "probe.order", "an unwound element")]
-    [InlineData("""[{ "unwind": { "path": "items", "includeIndex": "position" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "position", "as": "again" } }]""", "probe.order", "a scalar")]
+    [InlineData("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "position", "as": "again" } }]""", "probe.order", "a scalar")]
     [InlineData("""[{ "group": { "by": [{ "path": "number", "as": "num" }], "fields": { "n": { "count": true } } } }, { "lookup": { "from": "probe.order", "path": "customerId", "on": "n", "as": "again" } }]""", "probe.order", "a group output")]
     public async Task On_anything_but_an_entity_row_is_LOOKUP_ON_NOT_ENTITY(string pipeline, string entity, string what)
     {

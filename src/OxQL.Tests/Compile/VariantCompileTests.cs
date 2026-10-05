@@ -145,9 +145,9 @@ public class VariantCompileTests
     [Fact]
     public async Task The_count_pipeline_flattens_as_the_page_does()
     {
-        var compiled = await Compile("""[ { "unwind": { "path": "nodes", "flatten": "children" } }, { "page": { "count": true } } ]""");
+        var compiled = await Compile("""[ { "unwind": { "path": "nodes", "as": "node", "flatten": "children" } }, { "page": { "count": true } } ]""");
 
-        compiled.CountStages!.Select(stage => stage.GetElement(0).Name).Should().Equal("$match", "$set", "$set", "$unwind", "$limit", "$count");
+        compiled.CountStages!.Select(stage => stage.GetElement(0).Name).Should().Equal("$match", "$set", "$set", "$unwind", "$set", "$unset", "$limit", "$count");
     }
 
     [Fact]

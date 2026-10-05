@@ -456,13 +456,13 @@ public class JoinsLookupTests
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
               { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
-              { "unwind": { "path": "eq" } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "unwind": { "path": "eq", "as": "eqRow" } },
+              { "project": { "id": 1, "eqRow": 1 } },
               { "page": { "limit": 10 } } ]
             """);
 
         answer.ShouldHaveIds([parent.Id, parent.Id]);
-        answer.Items.Select(row => Guid.Parse(row!["eq"]!["id"]!.GetValue<string>())).Should().Equal(IdsOf(ChildrenOf(parent.Id)));
+        answer.Items.Select(row => Guid.Parse(row!["eqRow"]!["id"]!.GetValue<string>())).Should().Equal(IdsOf(ChildrenOf(parent.Id)));
     }
 
     [Fact]

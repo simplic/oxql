@@ -200,8 +200,8 @@ public class ExplainTypesTests
 
         result.Entry!.Shape.Flags!.Count.Should().Be(0, "at the entry every member has its type's own flags");
         result.OwnFlags("t:rc.invoice", "lines.customerId")["sortable"]!.GetValue<bool>().Should().BeFalse();
-        result.FlagsAt(0, "", "lines.customerId")!["sortable"]!.GetValue<bool>().Should().BeTrue("the collection is unwound: one element per row");
-        result.FlagsAt(0, "", "lines.customerId")!["underCollection"]!.GetValue<int>().Should().Be(0);
+        result.FlagsAt(0, "line", "customerId")!["sortable"]!.GetValue<bool>().Should().BeTrue("the collection is unwound: one element per row");
+        result.FlagsAt(0, "line", "customerId")!["underCollection"]!.GetValue<int>().Should().Be(0);
         result.FlagsAt(0, "", "number").Should().BeEquivalentTo(result.OwnFlags("t:rc.invoice", "number"), "a member the unwind does not touch keeps its own");
         result.ShapeAt(1).Flags![""]!.GetValue<string>().Should().Be(result.ShapeAt(0).Flags![""]!.GetValue<string>(), "the same overrides are one set, said once");
 

@@ -74,10 +74,10 @@ public class RefusalsServerTests
         Staff("V5.addon-undefined", "NOT_FILTERABLE", "a filter on an addon key with no definition", $$"""[{ "match": { "addon.undefinedKey": { "eq": "opaque" } } }, {{Page1}}]"""),
         Shipment("V6", "NOT_SORTABLE", "a sort on a path under a collection, unwound by nothing", $$"""[{ "sort": [{ "items.quantity.value": "asc" }] }, {{Page1}}]"""),
         Staff("V6.addon-undefined", "NOT_SORTABLE", "a sort on an addon key with no definition", $$"""[{ "sort": [{ "addon.undefinedKey": "asc" }] }, {{Page1}}]"""),
-        Shipment("V7", "NOT_A_COLLECTION", "unwind of a scalar", $$"""[{ "unwind": { "path": "shipmentNumber" } }, {{Page1}}]"""),
-        Shipment("V8", "UNWIND_ORDER", "the inner collection unwound before its outer one", $$"""[{ "unwind": { "path": "billingLines.references" } }, {{Page1}}]"""),
-        Shipment("V9", "ALIAS_COLLISION", "includeIndex equal to an existing member", $$"""[{ "unwind": { "path": "items", "includeIndex": "items" } }, {{Page1}}]"""),
-        Shipment("V10", "INVALID_ALIAS", "an alias that is not a plain identifier", $$"""[{ "unwind": { "path": "items", "includeIndex": "my-alias" } }, {{Page1}}]"""),
+        Shipment("V7", "NOT_A_COLLECTION", "unwind of a scalar", $$"""[{ "unwind": { "path": "shipmentNumber", "as": "shipmentNumberRow" } }, {{Page1}}]"""),
+        Shipment("V8", "UNWIND_ORDER", "the inner collection unwound before its outer one", $$"""[{ "unwind": { "path": "billingLines.references", "as": "reference" } }, {{Page1}}]"""),
+        Shipment("V9", "ALIAS_COLLISION", "includeIndex equal to an existing member", $$"""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "items" } }, {{Page1}}]"""),
+        Shipment("V10", "INVALID_ALIAS", "an alias that is not a plain identifier", $$"""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "my-alias" } }, {{Page1}}]"""),
         Template("V10.no-as", "INVALID_ALIAS", "a resolve with no as at all", $$"""[{ "resolve": { "path": "createUserId" } }, {{Page1}}]"""),
 
         // operand

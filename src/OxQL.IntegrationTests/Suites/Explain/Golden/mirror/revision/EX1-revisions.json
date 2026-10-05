@@ -140,6 +140,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -164,6 +165,7 @@
             "item": "t:ledger.transaction#items",
             "position": "k:int"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -194,6 +196,7 @@
             "position": "k:int",
             "erpLine": "t:ledger.billing_line"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -229,6 +232,7 @@
             "sourceLine": "u:sourceLine",
             "sourceParent": "u:sourceParent"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -266,6 +270,7 @@
             "sourceParent": "u:sourceParent",
             "deliveringTour": "t:transport.tour"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -306,6 +311,7 @@
             "deliveringTour": "t:transport.tour",
             "shipmentVehicle": "t:fleet.vehicle"
           },
+          "removed": ["items"],
           "rules": {
             "": "r:1",
             "item": "r:2",
@@ -672,38 +678,6 @@
         {"path":"representative.taxGroupId","kind":"guid","nullable":true,"root":"representative","present":"ifStored"},
         {"path":"representative.vatId","kind":"string","nullable":true,"root":"representative","present":"ifStored"},
         {"path":"representative.address","kind":"object","nullable":true,"root":"representative","present":"ifStored"},
-        {"path":"items.id","kind":"guid","nullable":false,"root":"items","present":"always"},
-        {"path":"items.type","kind":"object","nullable":true,"root":"items","present":"ifStored"},
-        {"path":"items.bookedFromTransactionId","kind":"guid","nullable":true,"root":"items","present":"ifStored"},
-        {"path":"items.transactionItemCollectionId","kind":"guid","nullable":true,"root":"items","present":"ifStored"},
-        {"path":"items.sortNumber","kind":"int","nullable":false,"root":"items","present":"always"},
-        {"path":"items.deserializationType","kind":"string","nullable":true,"root":"items","present":"ifStored"},
-        {"path":"items.text","kind":"string","nullable":true,"root":"items","present":"ifStored"},
-        {"path":"items.articleId","kind":"guid","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.inputPrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.taxRate","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.costCenters","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.costObjects","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.singlePrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.totalPrice","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.singlePriceNet","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.totalPriceNet","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.singlePriceGross","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.totalPriceGross","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.singlePriceVat","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.totalPriceVat","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.quantity","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.deltaValue","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.assignedTransactionItems","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.valueOperator","kind":"enum","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.amount","kind":"decimal","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.billingLineId","kind":"guid","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.priceUnit","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.reference","kind":"string","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.references","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.isManualBillingLine","kind":"bool","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.generalLedgerAccount","kind":"object","nullable":true,"root":"items","present":"ifVariant"},
-        {"path":"items.items","kind":"array","nullable":true,"root":"items","present":"ifVariant"},
         {"path":"convertState","kind":"enum","nullable":false,"root":"","present":"always"},
         {"path":"alternativePaymentDeadline","kind":"dateTime","nullable":true,"root":"","present":"ifStored"},
         {"path":"balance","kind":"decimal","nullable":true,"root":"","present":"ifStored"},

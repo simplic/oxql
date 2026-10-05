@@ -100,8 +100,8 @@ public class JoinsLookupMembersTests
     {
         var answer = await (await TransportClient()).SendAsync(ReportSeed.Shipment, """
             [ { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "as": "attempts", "limit": 1, "select": ["status.displayName"] } },
-              { "unwind": { "path": "attempts" } },
-              { "group": { "by": [ { "path": "attempts.status.displayName", "as": "status" } ], "fields": { "n": { "count": true } } } } ]
+              { "unwind": { "path": "attempts", "as": "attempt" } },
+              { "group": { "by": [ { "path": "attempt.status.displayName", "as": "status" } ], "fields": { "n": { "count": true } } } } ]
             """);
 
         answer.ShouldBeOk().ShouldHaveDiagnostic("LOOKUP_TRUNCATED")["params"]!["rows"]!.GetValue<int>().Should().Be(1, "one group holds the cut shipment's attempt");

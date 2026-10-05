@@ -221,19 +221,26 @@ public sealed class Shape
 
     /// <summary>
     /// The shape after unwinding <paramref name="path"/>, optionally under an alias and with an index
-    /// root. With <paramref name="keepPath"/> false (only with an alias, on a member collection) the
-    /// collection leaves the row: its element is under the alias only.
+    /// root. With <paramref name="keepPath"/> false (only with an alias; contract 2 always) the
+    /// collection leaves the row: its element is under the alias only. That holds for a member
+    /// collection and for a lookup's alias alike.
     /// </summary>
     public Shape WithUnwound(ResolvedPath path, string rootName, string? alias, string? indexAlias, bool keepPath = true)
     {
         var roots = new Dictionary<string, ShapeNode>(Roots, StringComparer.Ordinal);
         var unwound = new HashSet<string>(Unwound, StringComparer.Ordinal);
 
+        var dropped = Dropped;
+
         if (path.Root is ShapeNode.Array array && path.Path is null)
         {
             // Unwinding a lookup alias: the alias becomes one target row, and so does the name
-            // the unwind writes it under.
-            roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix) { Select = array.Select, Join = array.Join };
+            // the unwind writes it under. When the collection leaves the row the alias goes with it
+            // and only that name holds the row.
+            if (keepPath || alias is null)
+                roots[rootName] = new ShapeNode.Entity(array.Target, array.StoragePrefix) { Select = array.Select, Join = array.Join };
+            else
+                dropped = new HashSet<string>(Dropped, StringComparer.Ordinal) { rootName };
 
             if (alias is not null)
                 roots[alias] = new ShapeNode.Entity(array.Target, alias) { Select = array.Select, Join = array.Join };
@@ -251,10 +258,10 @@ public sealed class Shape
 
         var unset = Unset;
 
-        if (!keepPath && alias is not null && path.Path is not null)
+        if (!keepPath && alias is not null)
             unset = new Dictionary<string, string>(Unset, StringComparer.Ordinal) { [path.Wire] = alias };
 
-        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons, Dropped, unset);
+        return new Shape(Entity, roots, unwound, Grouped, Included, Excluded, Addons, dropped, unset);
     }
 
     /// <summary>The shape after a group: only the outputs, each rooted at its alias.</summary>
@@ -360,7 +367,7 @@ public sealed class Shape
 
         if (UnsetBy(wire) is { } unwound)
             return PathResolution.Fail(Codes.UnknownPath,
-                $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}', or set 'keepPath' to true on that unwind to keep '{unwound.Collection}'.",
+                $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}'.",
                 PathReasons.Unwound, ("collection", unwound.Collection), ("alias", unwound.Alias));
 
         if (!IsVisible(wire))

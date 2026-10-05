@@ -156,7 +156,7 @@ public class LookupMembersCompileTests
         projected.PageStages.Single(stage => stage.Contains("$project"))["$project"].AsBsonDocument.Names.Should().Contain("__oxLk0");
 
         var grouped = await Compile("""
-            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "unwind": { "path": "orders" } },
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "unwind": { "path": "orders", "as": "order" } },
              { "group": { "by": [{ "path": "name", "as": "name" }], "fields": { "n": { "count": true } } } }]
             """, Customer);
         var group = grouped.PageStages.Single(stage => stage.Contains("$group"))["$group"].AsBsonDocument;

@@ -201,10 +201,10 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task D04_after_an_unwind_with_keep_path_false_the_row_has_the_alias_and_not_the_collection()
+    public async Task D04_after_an_unwind_the_row_has_the_alias_and_not_the_collection()
     {
         var request = JsonSerializer.Deserialize<ExplainRequest>("""
-            { "query": { "entityType": "ledger.transaction", "pipeline": [ { "unwind": { "path": "items", "as": "item", "keepPath": false } } ] } }
+            { "query": { "entityType": "ledger.transaction", "pipeline": [ { "unwind": { "path": "items", "as": "item" } } ] } }
             """, OxQLJson.Wire)!;
 
         var answer = await new InProcessFleet().ExplainAsync(WithTypes(request));

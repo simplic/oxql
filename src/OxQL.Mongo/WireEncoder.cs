@@ -501,6 +501,29 @@ public static class WireEncoder
 
     private static string Iso(DateTime utc) => utc.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
 
+    /// <summary>Whether a document is the driver's wrapper of an object-typed value: exactly a type name under <c>_t</c> and the value under <c>_v</c>.</summary>
+    private static bool Wrapped(BsonDocument document, out string type, out BsonValue inner)
+    {
+        type = "";
+        inner = BsonNull.Value;
+
+        if (document.ElementCount != 2 || !document.TryGetValue("_t", out var named) || !named.IsString || !document.TryGetValue("_v", out var held))
+            return false;
+
+        type = named.AsString;
+        inner = held;
+
+        return true;
+    }
+
+    /// <summary>The decimal a wrapped value holds, as a Decimal128 or as the text an older serializer wrote; null when it is neither.</summary>
+    private static decimal? DecimalOf(BsonValue value) => value switch
+    {
+        BsonDecimal128 stored when TryDecimal(stored.Value, out var number) => number,
+        BsonString text when decimal.TryParse(text.Value, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var parsed) => parsed,
+        _ => null,
+    };
+
     /// <summary>
     /// A value the shape does not describe, rendered by its BSON type alone. It renders every
     /// value the database can hold: it is what the encoder falls back to, so it has nothing to
@@ -511,6 +534,12 @@ public static class WireEncoder
         switch (value.BsonType)
         {
             case BsonType.Document:
+                // What the driver writes for a value held as System.Object that BSON has no type of its
+                // own for (a decimal, a dictionary, a list in an addon bag): { _t: <type>, _v: <value> }.
+                // The row shows the value, never the wrapper; a decimal as every decimal travels.
+                if (Wrapped(value.AsBsonDocument, out var type, out var inner))
+                    return type == "System.Decimal" && DecimalOf(inner) is { } wrapped ? JsonValue.Create(DecimalText.Canonical(wrapped)) : Verbatim(inner);
+
                 var result = new JsonObject();
 
                 foreach (var element in value.AsBsonDocument)

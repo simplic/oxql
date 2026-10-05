@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -89,7 +90,7 @@ public class AddonBagTests
     }
 
     [Fact]
-    public async Task T16_a_wrapped_decimal_matches_at_the_key_the_wrapper_leaf_is_not_a_path_and_the_value_travels_back_wrapped()
+    public async Task T16_a_wrapped_decimal_matches_at_the_key_the_wrapper_leaf_is_not_a_path_and_the_value_travels_back_as_decimal_text()
     {
         var wrapped = Rows.Where(row => row.Stored["Addon"] is BsonDocument bag && bag.TryGetValue("zuschlag", out var value)
             && value is BsonDocument { } wrapper && wrapper["_t"] == Addons.DecimalDiscriminator).ToList();
@@ -114,8 +115,16 @@ public class AddonBagTests
         var projected = await client.SendAsync(Corpus.Conformance, """[{ "project": { "id": 1, "addon.zuschlag": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } }]""");
         projected.ShouldBeOk();
         var first = projected.Items[0]!["addon"]!["zuschlag"]!;
-        first["_t"]!.GetValue<string>().Should().Be(Addons.DecimalDiscriminator);
-        first["_v"]!.GetValue<string>().Should().Be(value);
+        first.GetValueKind().Should().Be(JsonValueKind.String, "the driver's { _t, _v } wrapper never reaches the wire: a decimal travels as canonical decimal text, like every decimal");
+        first.GetValue<string>().Should().Be(value);
+
+        // An aggregate over the defined decimal key reads the wrapped value: it sums what the rows show.
+        var summed = await client.SendAsync(Corpus.Conformance, """[{ "group": { "by": [], "fields": { "total": { "sum": "addon.zuschlag" }, "top": { "max": "addon.zuschlag" } } } }]""");
+        var total = wrapped.Sum(row => decimal.Parse(Order.NumberText(row.Stored["Addon"]["zuschlag"]["_v"]), CultureInfo.InvariantCulture));
+
+        summed.ShouldBeOk();
+        decimal.Parse(summed.Items[0]!["total"]!.GetValue<string>(), CultureInfo.InvariantCulture).Should().Be(total, "a sum over wrapped decimals is the sum of the values, exact");
+        decimal.Parse(summed.Items[0]!["top"]!.GetValue<string>(), CultureInfo.InvariantCulture).Should().Be(decimal.Parse(value, CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -191,7 +200,7 @@ public class AddonBagTests
         projected.ShouldHaveIds(Corpus.AllIds(Corpus.Conformance));
         projected.Values("addon.looseKey").Select(value => value?.GetValue<string>())
             .Should().Equal(Rows.Select(row => Corpus.Text(row, "addon.looseKey")));
-        Canonical(projected.Items[0]!["addon"]!["vincario"]).Should().Be(Canonical(Wire(Corpus.Row(Corpus.Conformance, "c-alpha").Stored["Addon"]["vincario"])), "an object-valued key is projected whole, wrapper included");
+        Canonical(projected.Items[0]!["addon"]!["vincario"]).Should().Be(Canonical(Wire(Corpus.Row(Corpus.Conformance, "c-alpha").Stored["Addon"]["vincario"])), "an object-valued key is projected whole, as the value the wrapper holds");
     }
 
     [Fact]
@@ -237,7 +246,7 @@ public class AddonBagTests
     }
 
     [Fact]
-    public async Task T24_the_bag_travels_verbatim_keys_as_stored_wrappers_kept_a_null_kept_and_an_empty_bag_an_empty_object()
+    public async Task T24_the_bag_travels_verbatim_keys_as_stored_wrappers_unwrapped_a_null_kept_and_an_empty_bag_an_empty_object()
     {
         var answer = await (await Conformance()).SendAsync(Corpus.Conformance, """[{ "project": { "id": 1, "addon": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } }]""");
 
@@ -407,6 +416,8 @@ public class AddonBagTests
         BsonDouble number => JsonValue.Create(number.Value),
         BsonInt64 number => Math.Abs(number.Value) < (1L << 53) ? JsonValue.Create(number.Value) : JsonValue.Create(number.Value.ToString(CultureInfo.InvariantCulture)),
         BsonDecimal128 number => JsonValue.Create(Order.NumberText(number)),
+        // The driver's wrapper of an object-typed value is never shown: the value it holds is.
+        BsonDocument { ElementCount: 2 } wrapper when wrapper.Contains("_t") && wrapper.Contains("_v") => Wire(wrapper["_v"]),
         BsonDocument document => new JsonObject(document.Select(element => KeyValuePair.Create(element.Name, Wire(element.Value)))),
         BsonArray array => new JsonArray(array.Select(Wire).ToArray()),
         _ => throw new NotSupportedException($"No wire form for {value.BsonType} in this suite."),

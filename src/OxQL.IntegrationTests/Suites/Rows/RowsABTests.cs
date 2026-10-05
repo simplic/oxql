@@ -367,8 +367,8 @@ public partial class RowsABTests
         foreach (var (bucket, rows) in answer.Items.Zip(buckets))
         {
             bucket!["k"]!.GetValue<bool>().Should().Be(rows.Key);
-            bucket["c"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "a count travels as a JSON number");
-            bucket["c"]!.GetValue<long>().Should().Be(rows.Count());
+            bucket["c"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "a count travels as a JSON number");
+            bucket["c"]!.GetValue<long>().Should().Be(rows.Count());
             bucket["cd"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "and so does a count of distinct values");
             bucket["cd"]!.GetValue<long>().Should().Be(rows.Count());
 
@@ -463,7 +463,7 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB13_the_addon_bag_reaches_the_caller_verbatim_wrappers_spaced_keys_nulls_and_undefined_keys_included()
+    public async Task AB13_the_addon_bag_reaches_the_caller_verbatim_spaced_keys_nulls_and_undefined_keys_included_and_wrappers_as_their_values()
     {
         var row = Corpus.Row(Corpus.Employee, "addon-rich");
         var stored = Corpus.ValueAt(row, "addon")!.AsBsonDocument;
@@ -476,8 +476,11 @@ public partial class RowsABTests
         bag["Ablieferbelege vorhanden"]!.GetValue<string>().Should().Be("ja", "a key with a space");
         bag.ContainsKey("nullKey").Should().BeTrue();
         bag["nullKey"].Should().BeNull("a null inside a bag");
-        bag["weight"]!["_t"]!.GetValue<string>().Should().Be(Addons.DecimalDiscriminator, "the driver's decimal wrapper is passed through");
-        bag["vincario"]!["_t"]!.GetValue<string>().Should().Be(Addons.DictionaryDiscriminator);
+        stored["weight"]["_t"].AsString.Should().Be(Addons.DecimalDiscriminator, "the bag holds the driver's decimal wrapper");
+        bag["weight"]!.GetValueKind().Should().Be(JsonValueKind.String, "which never reaches the wire: the decimal it holds travels as decimal text");
+        decimal.Parse(bag["weight"]!.GetValue<string>(), CultureInfo.InvariantCulture).Should().Be(Decimal128.ToDecimal(stored["weight"]["_v"].AsDecimal128));
+        stored["vincario"]["_t"].AsString.Should().Be(Addons.DictionaryDiscriminator);
+        bag["vincario"]!.AsObject().Select(member => member.Key).Should().Equal(stored["vincario"]["_v"].AsBsonDocument.Names, "a wrapped dictionary is the dictionary");
         bag["undefinedKey"]!.GetValue<string>().Should().Be("opaque", "a key with no definition is still projected");
         bag.ContainsKey("retiredKey").Should().BeFalse("a retired definition invents no key");
     }

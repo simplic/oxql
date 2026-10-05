@@ -1572,6 +1572,8 @@ public static class MongoCompiler
     /// <summary>Compiles a group expression.</summary>
     public static BsonValue Expression(BoundExpression expression) => expression switch
     {
+        // A decimal under the addon bag is written wrapped by the bag serializer: read the value it holds.
+        BoundExpression.Path { Unwrap: true } path => new BsonDocument("$ifNull", new BsonArray { "$" + path.Resolved.Storage + "._v", "$" + path.Resolved.Storage }),
         BoundExpression.Path path => "$" + path.Resolved.Storage,
         BoundExpression.Literal literal => new BsonDocument("$literal", literal.Value),
         BoundExpression.Arithmetic arithmetic => new BsonDocument(arithmetic.Operator switch

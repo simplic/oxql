@@ -249,6 +249,10 @@ public class Contract1PlannerTests
 
     private static string Classify(JsonNode? c1, JsonNode? c2)
     {
+        // What the addon bag's serializer wrapped ({ _t, _v }): contract 1 passes the wrapper through, contract 2 answers the value.
+        if (c1 is JsonObject { Count: 2 } wrapper && wrapper.ContainsKey("_t") && wrapper.ContainsKey("_v") && c2 is not JsonObject { Count: 2 })
+            return "unwrapped";
+
         if (c1 is JsonValue a && c2 is JsonValue b)
         {
             // A defined date addon key: contract 1 writes the stored midnight-UTC instant, contract 2 the day.
@@ -289,6 +293,14 @@ public class Contract1PlannerTests
 
         void Walk(string path, JsonNode? a, JsonNode? b)
         {
+            // A wrapped dictionary: contract 2 answers the dictionary the wrapper holds.
+            if (a is JsonObject { Count: 2 } held && held.ContainsKey("_t") && held.ContainsKey("_v") && b is JsonObject shown && !shown.ContainsKey("_t"))
+            {
+                differences.Add((path, "unwrapped", "wrapper", "value"));
+                Walk(path, held["_v"], b);
+                return;
+            }
+
             if (a is JsonObject left && b is JsonObject right)
             {
                 foreach (var key in left.Select(member => member.Key).Union(right.Select(member => member.Key)))
@@ -321,7 +333,9 @@ public class Contract1PlannerTests
             Walk("", Normalise(row1), row2);
 
         differences.Where(difference => difference.Category is "UNDECLARED" or "MEMBER-SET").Should().BeEmpty("contract 1 adds, drops or changes nothing beyond the declared encodings");
-        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "number-as-string", "date-only"]);
+        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "number-as-string", "date-only", "unwrapped"]);
+        differences.Where(difference => difference.Category == "unwrapped").Select(difference => difference.Path).Distinct().Should().BeSubsetOf(["addon.weight", "addon.vincario", "addon.vincario.ratio"],
+            "only what the bag's serializer wrapped, at any depth: contract 1 passes { _t, _v } through, contract 2 answers the value it holds");
         differences.Where(difference => difference.Category == "date-only").Select(difference => difference.Path).Distinct().Should().Equal(["addon.probationEnd"], "only a defined date addon key; the v1 converter writes it as the stored instant");
 
         // FC2, by design and documented: contract 1 renders an Int64 through the v1 converter as a

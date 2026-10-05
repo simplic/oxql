@@ -342,7 +342,7 @@ public class MongoQueryEngineTests
         item["priceList"]!["usd"]!["net"]!.GetValue<string>().Should().Be("5", "the array-of-documents dictionary is an object on the wire");
         item["addon"]!["SoloplanNr"]!.GetValue<long>().Should().Be(7, "the bag is verbatim");
         item["addon"]!["When"]!.GetValue<string>().Should().Be("2024-05-06T00:00:00Z");
-        item["addon"]!["Dec"]!["_v"]!.GetValue<string>().Should().Be("1");
+        item["addon"]!["Dec"]!.ToJsonString().Should().Be("\"1\"", "the driver's { _t, _v } wrapper of a decimal is read as the decimal: canonical text");
         item["renamed"]!.GetValue<string>().Should().Be("renamed", "the wire name, not the element name");
         item["qrCode"]!.GetValue<string>().Should().Be("qr");
         item["location"]!.AsArray().Should().HaveCount(2, "unknown members pass through verbatim");

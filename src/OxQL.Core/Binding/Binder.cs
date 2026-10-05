@@ -3506,7 +3506,7 @@ public sealed class Binder
 
                 // What the engine counts is a number of rows: an integer far inside what a JSON number holds
                 // exactly, so under contract 2 it is an int and travels as a JSON number. Contract 1 keeps its
-                // long, which travels as a string.
+                // long, which its own row converter writes.
                 if (function == "count")
                 {
                     fields.Add(new Aggregate(alias, function, null, Kind.Unknown, contract2 ? Kind.Int : Kind.Long, null));
@@ -3687,7 +3687,7 @@ public sealed class Binder
 
                 kind = path.Kind;
                 shapeDef = path.Shape;
-                return new BoundExpression.Path(path);
+                return new BoundExpression.Path(path) { Unwrap = contract2 && path is { Addon: not null, Kind: Kind.Decimal } };
             }
 
             if (expression.IsVar)

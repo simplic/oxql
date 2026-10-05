@@ -313,7 +313,15 @@ public abstract record BoundCondition
 /// <summary>A bound expression of a group aggregate.</summary>
 public abstract record BoundExpression
 {
-    public sealed record Path(ResolvedPath Resolved) : BoundExpression;
+    public sealed record Path(ResolvedPath Resolved) : BoundExpression
+    {
+        /// <summary>
+        /// Whether the value is read out of the wrapper the addon bag's serializer writes a decimal in
+        /// (<c>{ _t, _v }</c>): a defined <c>decimal</c> addon key under contract 2, so an aggregate over
+        /// it reads what a row shows. Not rendered: it follows from the path.
+        /// </summary>
+        public bool Unwrap { get; init; }
+    }
 
     public sealed record Literal(BsonValue Value) : BoundExpression;
 

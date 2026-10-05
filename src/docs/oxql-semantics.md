@@ -93,7 +93,7 @@ that representation. Where a fleet's data is not uniform, the options under
   arrays, so no digit is lost in a JavaScript caller. **A count is not a `long`**: `count` and
   `countDistinct` are an `int` and travel as a JSON number, as `pageInfo.count.value` and every
   count in a diagnostic do (a number of rows is far inside what a JSON number holds exactly;
-  contract 1 keeps its `long` and its string). An operand may be a JSON number or a digit string and
+  contract 1 keeps its `long`, written by its own row converter). An operand may be a JSON number or a digit string and
   is read exactly either way; a JavaScript caller sends a string, since its own numbers are not
   exact above 2^53. Cursor legs carry the value in extended JSON and are exact. Contract 1 rows
   are rendered by the v1 converter, which writes an Int64 as a JSON number: a v1 client reads
@@ -128,7 +128,14 @@ that representation. Where a fleet's data is not uniform, the options under
   (`1.02:00:00`), and a `gt` or a sort across that boundary, or across a negative value, does not.
 - **Addon keys** (`addon.<path>` of a defined key) always match tolerantly, whatever the options:
   a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
-  `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v`. An
+  `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes
+  a decimal as `{ _t: "System.Decimal", _v: <value> }`). A row never shows that wrapper: a value
+  the driver wrote as `{ _t, _v }` reads back as its `_v`, a decimal as canonical decimal text like
+  every `decimal` (`"261.8"`), whether the key is defined or not, also below a wrapped dictionary
+  or list. `sum`, `avg`, `min` and `max` over a defined `decimal` key read the wrapped value, so
+  they aggregate what the rows show. A sort by such a key orders the wrapped values among
+  themselves by number; rows that hold the plain number and rows that hold the wrapper are two
+  runs (BSON orders by type first), which only matters where one key was written both ways. An
   ordered comparison on a defined `decimal` key covers the numeric values only, with the same
   `DECIMAL_TEXT_EXCLUDED` diagnostic.
 
@@ -440,7 +447,7 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 | key over a path | the member's kind | as the member (`long` as a string, `date` as `YYYY-MM-DD`, enum as its number) |
 | key over `dateTrunc` | `dateTime` | ISO-8601 UTC instant |
 | `count`, `countDistinct` | `int` | a JSON number (`12`); a `sum`, `min` or `max` over such an alias in a later `group` is an `int` and a number too |
-| `sum` | the argument's kind | `int` and `double` a number, `long` and `decimal` a string; arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
+| `sum` | the argument's kind | `int` and `double` a number, `long` and `decimal` a string (a `decimal` sums in Decimal128 and reads back exactly; a `double` sums in binary floating point, so `0.1 + 0.2` is `0.30000000000000004`: the engine rounds nothing, the member's kind says which it is); arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
 | `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal` | a number, or a decimal string |
 | `min`, `max`, `first`, `last` | the argument's kind | as the member; an object by its members |
 | `push` | array of the argument's kind | each element in the member's encoding |

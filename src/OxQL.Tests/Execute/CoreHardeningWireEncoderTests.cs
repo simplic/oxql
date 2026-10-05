@@ -185,4 +185,34 @@ public class CoreHardeningWireEncoderTests
         bag["plain"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "an undefined key has no kind to encode by");
         bag["text"]!.GetValue<string>().Should().Be("2026-06-16");
     }
+
+    /// <summary>
+    /// DG2: what the driver writes for a value held as <c>System.Object</c> that BSON has no type of
+    /// its own for is <c>{ _t, _v }</c> (a decimal, a dictionary or a list in an addon bag). A row
+    /// shows the value, a decimal as canonical decimal text, at any depth; a document that merely has
+    /// such members among others is no wrapper and stays what it is.
+    /// </summary>
+    [Fact]
+    public void A_value_the_driver_wrapped_reads_back_as_the_value_and_a_wrapped_decimal_as_decimal_text()
+    {
+        static string Shown(BsonValue value) => WireEncoder.Verbatim(value)?.ToJsonString() ?? "null";
+
+        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = new BsonDecimal128(new Decimal128(261.80m)) }).Should().Be("\"261.8\"", "a Decimal128, canonical: no trailing zeros");
+        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = "12.50" }).Should().Be("\"12.5\"", "the text an older serializer wrote, canonical too");
+        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = "n/a" }).Should().Be("\"n/a\"", "text that is no decimal stays the text");
+        Shown(new BsonDocument { ["_t"] = "System.Guid", ["_v"] = "x" }).Should().Be("\"x\"", "any other wrapped scalar is its value");
+
+        var dictionary = new BsonDocument
+        {
+            ["_t"] = "System.Collections.Generic.Dictionary`2[System.String,System.Object]",
+            ["_v"] = new BsonDocument { ["make"] = "MAN", ["ratio"] = new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = new BsonDecimal128(new Decimal128(0.5m)) } },
+        };
+
+        Shown(dictionary).Should().Be("""{"make":"MAN","ratio":"0.5"}""", "a wrapped dictionary is the dictionary, and what it holds is unwrapped alike");
+        Shown(new BsonDocument { ["_t"] = "System.Collections.Generic.List`1[System.Object]", ["_v"] = new BsonArray { 1, dictionary } }).Should().Be("""[1,{"make":"MAN","ratio":"0.5"}]""");
+
+        Shown(new BsonDocument { ["_t"] = "x", ["_v"] = 1, ["other"] = 2 }).Should().Be("""{"_t":"x","_v":1,"other":2}""", "three members: no wrapper");
+        Shown(new BsonDocument { ["_t"] = 5, ["_v"] = 1 }).Should().Be("""{"_t":5,"_v":1}""", "a wrapper names its type");
+        Shown(new BsonDocument { ["_v"] = 1 }).Should().Be("""{"_v":1}""");
+    }
 }

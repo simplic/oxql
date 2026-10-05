@@ -66,7 +66,11 @@ public sealed class ExplainLease : IDisposable
 /// <list type="bullet">
 /// <item>The public route, per organisation and user: a token bucket of <c>Explain:RateBurst</c> refilled
 /// evenly at <c>Explain:RatePerMinute</c>, at most <c>Explain:MaxConcurrentPerUser</c> in flight, and
-/// at most <c>Explain:MaxConcurrentPerHost</c> in flight on the host whoever sends them.</item>
+/// at most <c>Explain:MaxConcurrentPerHost</c> in flight on the host whoever sends them. That admits
+/// an explain; what costs beyond its bind is charged when it costs: a second, tighter bucket
+/// (<c>Explain:OwnerRateBurst</c>, <c>OwnerRatePerMinute</c>) is charged when an explain is about to
+/// call its first owner (<see cref="ChargeOwner"/>), and an explain that finds it empty is answered
+/// from what is kept instead of refused.</item>
 /// <item>The internal route, per calling service: at most <c>Explain:MaxConcurrentPerCaller</c> in flight.</item>
 /// </list>
 /// One instance per host (<see cref="For"/>); the limits are read once, when it is built.
@@ -76,6 +80,7 @@ public sealed class ExplainRateLimiter : IDisposable
     private static readonly ConditionalWeakTable<OxQLOptions, ExplainRateLimiter> Hosts = [];
 
     private readonly PartitionedRateLimiter<string> tokens;
+    private readonly PartitionedRateLimiter<string> ownerTokens;
     private readonly PartitionedRateLimiter<string> perUser;
     private readonly PartitionedRateLimiter<string> perCaller;
     private readonly ConcurrencyLimiter perHost;
@@ -91,7 +96,11 @@ public sealed class ExplainRateLimiter : IDisposable
         var users = Math.Max(1, options.MaxConcurrentPerUser);
         var callers = Math.Max(1, options.MaxConcurrentPerCaller);
 
+        var ownerBurst = Math.Max(1, options.OwnerRateBurst);
+        var ownerPeriod = TimeSpan.FromMinutes(1) / Math.Max(1, options.OwnerRatePerMinute);
+
         tokens = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.Get(key, _ => new ManualTokenBucket(burst, period, time ?? TimeProvider.System)));
+        ownerTokens = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.Get(key, _ => new ManualTokenBucket(ownerBurst, ownerPeriod, time ?? TimeProvider.System)));
         perUser = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.GetConcurrencyLimiter(key, _ => new ConcurrencyLimiterOptions { PermitLimit = users, QueueLimit = 0 }));
         perCaller = PartitionedRateLimiter.Create<string, string>(key => RateLimitPartition.GetConcurrencyLimiter(key, _ => new ConcurrencyLimiterOptions { PermitLimit = callers, QueueLimit = 0 }));
         perHost = new ConcurrencyLimiter(new ConcurrencyLimiterOptions { PermitLimit = Math.Max(1, options.MaxConcurrentPerHost), QueueLimit = 0 });
@@ -128,6 +137,26 @@ public sealed class ExplainRateLimiter : IDisposable
             return Refused(held, "rate", options.RatePerMinute, token.TryGetMetadata(MetadataName.RetryAfter, out var retry) ? retry : TimeSpan.FromMinutes(1) / Math.Max(1, options.RatePerMinute));
 
         return new ExplainLease(held);
+    }
+
+    /// <summary>
+    /// Charges one explain of <paramref name="identity"/> that is about to call an owner
+    /// (<c>Explain:OwnerRatePerMinute</c>, <c>OwnerRateBurst</c>). An explain that binds here and asks
+    /// nobody is never charged; one that finds the bucket empty is not refused but answered from what
+    /// is kept (the engine's doing), so the answer says when a check is admitted again.
+    /// </summary>
+    public ExplainOwnerAdmission ChargeOwner(string identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        using var token = ownerTokens.AttemptAcquire(identity);
+
+        if (token.IsAcquired)
+            return new ExplainOwnerAdmission(true, options.OwnerRatePerMinute, 0);
+
+        var retry = token.TryGetMetadata(MetadataName.RetryAfter, out var after) ? after : TimeSpan.FromMinutes(1) / Math.Max(1, options.OwnerRatePerMinute);
+
+        return new ExplainOwnerAdmission(false, options.OwnerRatePerMinute, Math.Max(1, (int)Math.Ceiling(retry.TotalSeconds)));
     }
 
     /// <summary>Admits one internal explain of the calling service <paramref name="caller"/>, or says that it has too many in flight.</summary>
@@ -167,6 +196,7 @@ public sealed class ExplainRateLimiter : IDisposable
     public void Dispose()
     {
         tokens.Dispose();
+        ownerTokens.Dispose();
         perUser.Dispose();
         perCaller.Dispose();
         perHost.Dispose();
@@ -239,6 +269,9 @@ public sealed class ExplainRateLimiter : IDisposable
 /// </summary>
 public sealed class ExplainRateFilter(OxQLOptions options) : IAsyncResourceFilter
 {
+    /// <summary>The <c>HttpContext.Items</c> key under which the filter leaves the identity it admitted the explain for.</summary>
+    public const string IdentityItem = "OxQL.Explain.Identity";
+
     /// <inheritdoc/>
     public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
     {
@@ -258,6 +291,9 @@ public sealed class ExplainRateFilter(OxQLOptions options) : IAsyncResourceFilte
         var identity = organisation is null && user is null
             ? "address|" + httpContext.Connection.RemoteIpAddress
             : $"{organisation:N}|{user}";
+
+        // Who is asking, for what is charged later: the owner calls of this explain (ExplainRateLimiter.ChargeOwner).
+        httpContext.Items[IdentityItem] = identity;
 
         using var lease = ExplainRateLimiter.For(options).Acquire(identity);
 

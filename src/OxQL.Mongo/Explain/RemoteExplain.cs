@@ -981,6 +981,16 @@ public sealed class RemoteExplain : IExplainOwners
                 continue;
             }
 
+            // The first call to an owner is where an explain starts to cost its caller's owner rate: one
+            // that is not admitted asks nobody, as the cached tier asks nobody, and says when it may.
+            if (context.ExplainOwnerGate is { } admit && admit() is { Admitted: false } refusedNow)
+            {
+                use ??= Use(ask.Service, null);
+                use.Reason ??= Limit;
+                results[index] = Limited("ownerRate", refusedNow.Max, ask.Service, ask.Target, ask.Stage, refusedNow.RetryAfterSeconds);
+                continue;
+            }
+
             if (open.FirstOrDefault(group => group.Service == ask.Service) is { Indexes: { } indexes })
                 indexes.Add(index);
             else
@@ -1202,7 +1212,7 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>A part a limit left out: noted once per limit and service, never retried.</summary>
-    private (JsonObject? Answer, string? Reason) Limited(string limit, int max, string service, string target, int? stage)
+    private (JsonObject? Answer, string? Reason) Limited(string limit, int max, string service, string target, int? stage, int? retryAfter = null)
     {
         Complete = false;
 
@@ -1215,10 +1225,13 @@ public sealed class RemoteExplain : IExplainOwners
                     "ownerServices" => $"This explain asks at most {max} owner services; what '{service}' binds for '{target}' was not checked.",
                     "ownerCalls" => $"This explain causes at most {max} owner calls in all; what '{service}' binds for '{target}' was not checked.",
                     "checks" => $"One call to an owner carries at most {max} checks; what '{service}' binds for '{target}' was not checked.",
+                    "ownerRate" => $"At most {max} explains a minute of one user call owners; what '{service}' binds for '{target}' was not checked now and is answered from what is kept. A check is admitted again in {retryAfter} s.",
                     _ => $"This explain had {max} ms left of the time an explain may take; what '{service}' binds for '{target}' was not checked.",
                 },
                 Stage = stage,
-                Params = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target },
+                Params = retryAfter is null
+                    ? new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target }
+                    : new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["service"] = service, ["target"] = target, ["retryAfter"] = retryAfter },
             });
 
         return (null, Limit);

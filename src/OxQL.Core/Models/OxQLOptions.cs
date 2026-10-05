@@ -115,6 +115,8 @@ public sealed class OxQLOptions
         Explain.MaxBatchChecks = AtLeast(1, Explain.MaxBatchChecks, nameof(ExplainOptions.MaxBatchChecks), adjustments, "Explain");
         Explain.RatePerMinute = AtLeast(1, Explain.RatePerMinute, nameof(ExplainOptions.RatePerMinute), adjustments, "Explain");
         Explain.RateBurst = AtLeast(1, Explain.RateBurst, nameof(ExplainOptions.RateBurst), adjustments, "Explain");
+        Explain.OwnerRatePerMinute = AtLeast(1, Explain.OwnerRatePerMinute, nameof(ExplainOptions.OwnerRatePerMinute), adjustments, "Explain");
+        Explain.OwnerRateBurst = AtLeast(1, Explain.OwnerRateBurst, nameof(ExplainOptions.OwnerRateBurst), adjustments, "Explain");
         Explain.MaxConcurrentPerUser = AtLeast(1, Explain.MaxConcurrentPerUser, nameof(ExplainOptions.MaxConcurrentPerUser), adjustments, "Explain");
         Explain.MaxConcurrentPerHost = AtLeast(1, Explain.MaxConcurrentPerHost, nameof(ExplainOptions.MaxConcurrentPerHost), adjustments, "Explain");
         Explain.MaxConcurrentPerCaller = AtLeast(1, Explain.MaxConcurrentPerCaller, nameof(ExplainOptions.MaxConcurrentPerCaller), adjustments, "Explain");
@@ -245,11 +247,27 @@ public sealed class ExplainOptions
     /// </summary>
     public int MaxBatchChecks { get; set; } = 64;
 
-    /// <summary>The explains one user of one organisation may send per minute on the public route (a token bucket refilled evenly); more is 429 with <c>Retry-After</c> before any work.</summary>
-    public int RatePerMinute { get; set; } = 20;
+    /// <summary>
+    /// The explains one user of one organisation may send per minute on the public route (a token
+    /// bucket refilled evenly); more is 429 with <c>Retry-After</c> before any work. It admits; what an
+    /// explain costs beyond its own bind, the calls to owners, is charged apart (<see cref="OwnerRatePerMinute"/>).
+    /// </summary>
+    public int RatePerMinute { get; set; } = 120;
 
     /// <summary>The explains one user may send at once before the rate applies: the token bucket's size.</summary>
-    public int RateBurst { get; set; } = 5;
+    public int RateBurst { get; set; } = 30;
+
+    /// <summary>
+    /// The explains of one user of one organisation that may call owners, per minute (a token bucket
+    /// refilled evenly), charged when an explain is about to make its first owner call. An explain that
+    /// finds the bucket empty is never refused: it is answered as <c>remote: "cached"</c> answers,
+    /// from what is kept, with <c>cache.complete: false</c> and the note <c>EXPLAIN_LIMIT</c>
+    /// (<c>params.limit: "ownerRate"</c>, <c>retryAfter</c>).
+    /// </summary>
+    public int OwnerRatePerMinute { get; set; } = 20;
+
+    /// <summary>The explains one user may send at once that call owners before <see cref="OwnerRatePerMinute"/> applies: that bucket's size.</summary>
+    public int OwnerRateBurst { get; set; } = 5;
 
     /// <summary>The explains of one user in flight at once on the public route; one more is 429.</summary>
     public int MaxConcurrentPerUser { get; set; } = 2;

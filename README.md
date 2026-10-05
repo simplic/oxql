@@ -166,7 +166,8 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Explain:RemoteTimeoutMs` / `TimeoutMs` | 1 500 / 2 000 | explain's wait for owners in all / the wall time of one explain |
 | `Explain:DefaultShapeDepth` / `MaxTypeMembers` / `MaxAnswerBytes` | 2 / 300 / 262 144 | with `include: ["types"]`, levels of member rows listed / member rows per type; the size an answer is trimmed to |
 | `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | owner services one explain asks / owner calls it causes in all |
-| `Explain:RatePerMinute` / `RateBurst` / `MaxConcurrentPerUser` / `MaxConcurrentPerHost` / `MaxConcurrentPerCaller` | 20 / 5 / 2 / 8 / 4 | the rate and concurrency of explain, per user, per host and per calling service; more is 429 |
+| `Explain:RatePerMinute` / `RateBurst` / `MaxConcurrentPerUser` / `MaxConcurrentPerHost` / `MaxConcurrentPerCaller` | 120 / 30 / 2 / 8 / 4 | the rate and concurrency of explain, per user, per host and per calling service; more is 429 |
+| `Explain:OwnerRatePerMinute` / `OwnerRateBurst` | 20 / 5 | the explains of one user that may call owners, charged at the first owner call; over it an explain is answered from what is kept (`cache.complete: false`, note `EXPLAIN_LIMIT` `ownerRate`), never 429 |
 | `Limits:MaxPageSize` / `DefaultPageSize` | 500 / 100 | the page a request may ask for / gets without a limit (`DefaultPageSize` is clamped to `MaxPageSize`) |
 | `Limits:MaxPipelineStages` | 20 | caller stages; the engine's scope stage does not count |
 | `Limits:MaxLookupStages` / `MaxUnwindStages` / `MaxResolveStages` | 5 / 5 / 8 | resolve stages bound on this host; continued stages count at their owner |

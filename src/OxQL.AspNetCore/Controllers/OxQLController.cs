@@ -158,6 +158,8 @@ public class OxQLController : ControllerBase
             explainMaxBatchChecks = options.Explain.MaxBatchChecks,
             explainRatePerMinute = options.Explain.RatePerMinute,
             explainRateBurst = options.Explain.RateBurst,
+            explainOwnerRatePerMinute = options.Explain.OwnerRatePerMinute,
+            explainOwnerRateBurst = options.Explain.OwnerRateBurst,
             explainMaxConcurrentPerUser = options.Explain.MaxConcurrentPerUser,
             explainMaxConcurrentPerHost = options.Explain.MaxConcurrentPerHost,
             explainMaxConcurrentPerCaller = options.Explain.MaxConcurrentPerCaller,

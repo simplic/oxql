@@ -7,6 +7,12 @@ namespace OxQL.Core.Engine;
 public sealed record ExplainUnknownValue(string Member, string Value);
 
 /// <summary>
+/// Whether an explain may call owners now: <paramref name="Admitted"/>, and when it may not the rate
+/// that refused it (<paramref name="Max"/> per minute) and after how many seconds one is admitted again.
+/// </summary>
+public readonly record struct ExplainOwnerAdmission(bool Admitted, int Max, int RetryAfterSeconds);
+
+/// <summary>
 /// The cheap refusals of an explain (improvement plan §3.E protection): checked on the parsed body
 /// alone, before any model, binder or owner work, so an explain past its bounds costs a JSON parse
 /// and nothing else. More stages than <c>Explain.MaxStages</c>, more <c>catalog</c> entries than

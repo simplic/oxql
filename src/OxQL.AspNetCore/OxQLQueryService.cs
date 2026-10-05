@@ -206,6 +206,23 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         var context = await ContextAsync(null, internalCall, cancellationToken);
 
+        // The owner calls of a public explain are charged when the first is about to be made, once per
+        // request, to the identity the route admitted it for; an internal call is its origin's to pay.
+        if (!internalCall && httpContextAccessor?.HttpContext?.Items[Batch.ExplainRateFilter.IdentityItem] is string identity)
+        {
+            ExplainOwnerAdmission? charged = null;
+            var gate = new object();
+
+            context = context with
+            {
+                ExplainOwnerGate = () =>
+                {
+                    lock (gate)
+                        return charged ??= Batch.ExplainRateLimiter.For(options).ChargeOwner(identity);
+                },
+            };
+        }
+
         if (context.Contract == 1)
         {
             var rewrite = Compat(request.Query, context);

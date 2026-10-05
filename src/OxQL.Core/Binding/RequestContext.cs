@@ -53,6 +53,15 @@ public sealed record RequestContext
     public object? ExplainOwners { get; init; }
 
     /// <summary>
+    /// Asked once, when an explain is about to make its first call to an owner: whether its caller may
+    /// call owners now (<see cref="Engine.ExplainOwnerAdmission"/>). Null where nothing limits it: an
+    /// internal call, a host without a limiter. An explain that is not admitted asks no owner and
+    /// answers from what is kept, as <c>remote: "cached"</c> does. The host sets it (the public
+    /// explain route); it answers the same for every explain run on behalf of one request.
+    /// </summary>
+    public Func<Engine.ExplainOwnerAdmission>? ExplainOwnerGate { get; init; }
+
+    /// <summary>
     /// What the queries of one batch that run side by side share (<see cref="Engine.BatchFlights"/>);
     /// null for a request that is none of them. The batch that runs them sets it. A host never sets it.
     /// </summary>

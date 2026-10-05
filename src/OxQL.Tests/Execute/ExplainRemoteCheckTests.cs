@@ -161,6 +161,55 @@ public class ExplainRemoteCheckTests
     }
 
     [Fact]
+    public async Task An_explain_whose_owner_calls_are_not_admitted_asks_nobody_answers_what_is_kept_and_says_when_a_check_is_admitted_again()
+    {
+        var client = OwnerFleet.Client();
+        var engine = Engine(client);
+        var asked = 0;
+        var admitted = true;
+        var context = BindHost.Context() with { ExplainOwnerGate = () => { asked++; return new ExplainOwnerAdmission(admitted, 20, 3); } };
+
+        async Task<ExplainResult> Explained(string pipeline) =>
+            ((ExplainOutcome.Success)await engine.ExplainAsync(ExplainAnswer.Envelope($$"""{ "query": { "entityType": "{{Invoice}}", "pipeline": {{pipeline}} } }"""), context)).Result;
+
+        // A request that binds here and asks no owner never meets the gate.
+        (await Explained("""[{ "resolve": { "path": "customerId", "as": "c" } }]""")).Executable.Should().Be("yes");
+        asked.Should().Be(0, "nothing is charged for an explain that calls no owner");
+
+        // Admitted: the owner is asked, once, and the gate was asked once for the whole explain.
+        var first = await Explained(Continued);
+
+        first.Cache.Complete.Should().BeTrue();
+        client.ExplainCalls.Should().ContainSingle();
+        asked.Should().Be(1);
+
+        // The bucket is empty now. What is kept is still answered, and the gate is not even asked for it.
+        admitted = false;
+
+        var kept = await Explained(Continued);
+
+        kept.Cache.Complete.Should().BeTrue("the kept answer needs no owner call");
+        asked.Should().Be(1);
+
+        // Another query: its owner is not asked. The answer is the cached tier's, never a refusal.
+        var held = await Explained(Continued.Replace("\"co\"", "\"company\""));
+
+        client.ExplainCalls.Should().ContainSingle("no owner was called for it");
+        asked.Should().Be(2);
+        held.Valid.Should().BeTrue("a limit is never an error");
+        held.Cache.Complete.Should().BeFalse();
+        held.Executable.Should().Be("unknown");
+
+        var note = held.Notes.Should().ContainSingle(each => each.Code == Notes.ExplainLimit).Subject;
+
+        note.Basis.Should().Be(Basis.Owner);
+        note.Params!["limit"].Should().Be("ownerRate");
+        note.Params["max"].Should().Be(20);
+        note.Params["retryAfter"].Should().Be(3);
+        note.Params["service"].Should().Be("crm");
+    }
+
+    [Fact]
     public async Task Remote_cached_answers_what_a_check_kept_as_that_check_answered_it_and_never_asks_again()
     {
         var client = OwnerFleet.Client();

@@ -130,6 +130,8 @@ public sealed class FleetHost : IAsyncDisposable
         // The suites explain in bursts as one user; the limits of explain have tests of their own.
         new("OxQL:Explain:RatePerMinute", "600000"),
         new("OxQL:Explain:RateBurst", "100000"),
+        new("OxQL:Explain:OwnerRatePerMinute", "600000"),
+        new("OxQL:Explain:OwnerRateBurst", "100000"),
         new("OxQL:Explain:MaxConcurrentPerUser", "1000"),
         new("OxQL:Explain:MaxConcurrentPerHost", "1000"),
     ];

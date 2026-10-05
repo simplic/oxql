@@ -221,8 +221,10 @@ public class HostTests
         limits["explainMaxAnswerBytes"]!.GetValue<int>().Should().Be(262_144);
         limits["explainMaxTypeMembers"]!.GetValue<int>().Should().Be(300);
         limits["explainDefaultShapeDepth"]!.GetValue<int>().Should().Be(2);
-        limits["explainRatePerMinute"]!.GetValue<int>().Should().Be(20);
-        limits["explainRateBurst"]!.GetValue<int>().Should().Be(5);
+        limits["explainRatePerMinute"]!.GetValue<int>().Should().Be(120);
+        limits["explainRateBurst"]!.GetValue<int>().Should().Be(30);
+        limits["explainOwnerRatePerMinute"]!.GetValue<int>().Should().Be(20);
+        limits["explainOwnerRateBurst"]!.GetValue<int>().Should().Be(5);
         limits["explainMaxConcurrentPerUser"]!.GetValue<int>().Should().Be(2);
         limits["explainMaxConcurrentPerHost"]!.GetValue<int>().Should().Be(8);
         limits["explainMaxConcurrentPerCaller"]!.GetValue<int>().Should().Be(4);
@@ -233,7 +235,7 @@ public class HostTests
         limits["explainMaxStages"]!.GetValue<int>().Should().Be(30);
         limits["explainMaxCatalogEntries"]!.GetValue<int>().Should().Be(10);
         limits["explainMaxShapeDepth"]!.GetValue<int>().Should().Be(3);
-        limits.Count.Should().Be(42,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits.Count.Should().Be(44,"health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

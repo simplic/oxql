@@ -208,7 +208,8 @@ a caller checks a request against before sending it are also published in the sc
 | `Explain:MaxAnswerBytes` | 262 144 | the answer: over it the member rows (where asked for) keep their first level, then the plan goes | note `EXPLAIN_TRIMMED` | no | — |
 | `Explain:MaxOwnerServices` / `MaxOwnerCalls` | 4 / 8 | the distinct owner services one explain asks / the owner calls it causes in all, one per service and round, transitive ones included | note `EXPLAIN_LIMIT` (`ownerServices`, `ownerCalls`) | no | an internal explain carries the calls left; an owner starts none beyond them |
 | `Explain:MaxBatchChecks` | 64 | the checks one internal explain carries (`checks`): what one round of an origin's explain asks one owner | origin: note `EXPLAIN_LIMIT` (`checks`) for what exceeds it; owner: 400 `EXPLAIN_LIMIT` before anything is bound | no | — |
-| `Explain:RatePerMinute` / `RateBurst` | 20 / 5 | the public explain route, per organisation and user: a token bucket, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic |
+| `Explain:RatePerMinute` / `RateBurst` | 120 / 30 | the public explain route, per organisation and user: a token bucket that admits an explain, before the body is read | 429 `EXPLAIN_LIMIT` (`rate`) with `Retry-After` | no | separate from run traffic; an explain that binds here and asks no owner costs nothing else |
+| `Explain:OwnerRatePerMinute` / `OwnerRateBurst` | 20 / 5 | the same identity: a second token bucket, charged once when an explain is about to make its first call to an owner | never a refusal: the explain asks no owner and answers from what is kept (`cache.complete: false`, note `EXPLAIN_LIMIT` with `params.limit: "ownerRate"`, `max`, `retryAfter`) | no | an answer kept by an earlier check is served without a charge |
 | `Explain:MaxConcurrentPerUser` / `MaxConcurrentPerHost` | 2 / 8 | explains in flight on the public route, per user and per host | 429 `EXPLAIN_LIMIT` (`concurrentPerUser`, `concurrentPerHost`) | no | — |
 | `Explain:MaxConcurrentPerCaller` | 4 | internal explains in flight per calling service; the host of the internal route enforces it (the Simplic base package does) | 429 `EXPLAIN_LIMIT` (`concurrentPerCaller`) | no | the origin notes the part `REMOTE_UNCHECKED` |
 
@@ -248,7 +249,7 @@ Anonymous, always 200, and never waits for another service:
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
     "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
-    "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainMaxBatchChecks": 64, "explainRatePerMinute": 20, "explainRateBurst": 5,
+    "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainMaxBatchChecks": 64, "explainRatePerMinute": 120, "explainRateBurst": 30, "explainOwnerRatePerMinute": 20, "explainOwnerRateBurst": 5,
     "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
   "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
@@ -718,11 +719,22 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   than `Explain:MaxStages` stages, more than `MaxCatalogEntries` catalog entries, a `shape.depth`
   above `MaxShapeDepth`, or an unknown `include` or `remote` value is 400 `EXPLAIN_LIMIT`.
 - *Rate and concurrency*, on the public route, per organisation and user, before the body is read:
-  a token bucket of `Explain:RateBurst` (5) refilled at `RatePerMinute` (20), at most
+  a token bucket of `Explain:RateBurst` (30) refilled at `RatePerMinute` (120), at most
   `MaxConcurrentPerUser` (2) in flight, and at most `MaxConcurrentPerHost` (8) in flight on the host;
   more is 429 `rate_limited` with `Retry-After` and the code `EXPLAIN_LIMIT` (`params.limit`: `rate`,
   `concurrentPerUser`, `concurrentPerHost`). It is separate from run traffic and nothing waits. The
   internal route admits at most `MaxConcurrentPerCaller` (4) in flight per calling service.
+- *What costs is charged when it costs.* The admission bucket is generous because a bind at this
+  host is cheap (an editor explains on every settled edit). The calls to owners are what an explain
+  costs, and they have a bucket of their own, per organisation and user: `Explain:OwnerRateBurst`
+  (5) refilled at `OwnerRatePerMinute` (20), charged once per explain at the moment it is about to
+  send its first call to an owner (an answer kept from an earlier check is no call and no charge;
+  the owners' health facts a client reads once and keeps are not charged either). An explain that
+  finds this bucket empty is **never a 429**: it asks no owner and is answered as `remote:
+  "cached"` answers, 200 with what is kept, `cache.complete: false`, `executable: "unknown"` unless
+  an error of its own says `never`, and the note `EXPLAIN_LIMIT` (`basis: "owner"`, `params {
+  limit: "ownerRate", max, service, target, retryAfter }`, `retryAfter` in seconds). The next
+  settled edit after `retryAfter` checks again. An internal explain is its origin's to pay.
 - *Cost*, mid-way: at most `Explain:MaxOwnerServices` (4) distinct owner services and
   `MaxOwnerCalls` (8) owner calls in all, transitive ones included, where a call is one request to
   one service in one round (the first ask, and each ask-again of a union target), whatever number of

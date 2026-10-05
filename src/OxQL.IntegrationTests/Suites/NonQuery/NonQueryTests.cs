@@ -158,10 +158,10 @@ public class NonQueryTests
             ["explainMaxAnswerBytes"] = options.Explain.MaxAnswerBytes, ["explainMaxOwnerServices"] = options.Explain.MaxOwnerServices,
             ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls, ["explainMaxBatchChecks"] = options.Explain.MaxBatchChecks,
             // the rate and concurrency of explain, which the fleet's hosts raise for the suites
-            ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
+            ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainOwnerRatePerMinute"] = 600_000, ["explainOwnerRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
             ["explainMaxConcurrentPerHost"] = 1_000, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
         };
-        expected.Should().HaveCount(42);
+        expected.Should().HaveCount(44);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

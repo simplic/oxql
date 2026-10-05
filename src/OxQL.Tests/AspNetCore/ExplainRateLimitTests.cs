@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -8,6 +9,7 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Tests.Bind;
+using OxQL.Tests.Execute;
 using Xunit;
 
 namespace OxQL.Tests.AspNetCore;
@@ -31,10 +33,12 @@ public class ExplainRateLimitTests
         public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
     }
 
-    private static ExplainOptions Limits(int perMinute = 20, int burst = 5, int perUser = 2, int perHost = 8, int perCaller = 4) => new()
+    private static ExplainOptions Limits(int perMinute = 20, int burst = 5, int perUser = 2, int perHost = 8, int perCaller = 4, int ownersPerMinute = 20, int ownerBurst = 5) => new()
     {
         RatePerMinute = perMinute,
         RateBurst = burst,
+        OwnerRatePerMinute = ownersPerMinute,
+        OwnerRateBurst = ownerBurst,
         MaxConcurrentPerUser = perUser,
         MaxConcurrentPerHost = perHost,
         MaxConcurrentPerCaller = perCaller,
@@ -134,6 +138,83 @@ public class ExplainRateLimitTests
                 return model;
             }
         }
+    }
+
+    // ---- M9: what costs is charged when it costs ----------------------------------------------------------
+
+    [Fact]
+    public void By_default_a_hundred_explains_a_minute_are_admitted_and_only_those_that_call_owners_meet_the_tight_bucket()
+    {
+        var defaults = new ExplainOptions();
+
+        (defaults.RatePerMinute, defaults.RateBurst, defaults.OwnerRatePerMinute, defaults.OwnerRateBurst).Should().Be((120, 30, 20, 5));
+
+        var time = new ManualTime();
+        using var limiter = new ExplainRateLimiter(new ExplainOptions { MaxConcurrentPerUser = 100, MaxConcurrentPerHost = 100 }, time);
+
+        // An editor that explains on every settled edit: a hundred explains spread over one minute, none calling an owner.
+        for (var explain = 0; explain < 100; explain++)
+        {
+            using var lease = limiter.Acquire("org|alice");
+
+            lease.Acquired.Should().BeTrue($"explain {explain + 1} of a hundred in a minute is admitted");
+            time.Advance(TimeSpan.FromSeconds(0.6));
+        }
+    }
+
+    [Fact]
+    public void The_owner_bucket_is_charged_apart_refills_evenly_is_the_users_own_and_says_when_a_check_is_admitted_again()
+    {
+        var time = new ManualTime();
+        using var limiter = new ExplainRateLimiter(Limits(perUser: 100, perHost: 100), time);
+
+        for (var explain = 0; explain < 5; explain++)
+            limiter.ChargeOwner("org|alice").Should().Be(new ExplainOwnerAdmission(true, 20, 0), $"owner-calling explain {explain + 1} is within the burst of 5");
+
+        limiter.ChargeOwner("org|alice").Should().Be(new ExplainOwnerAdmission(false, 20, 3), "the sixth in a burst is not admitted: one token comes back every three seconds");
+        limiter.Acquire("org|alice").Acquired.Should().BeTrue("the explain itself is still admitted: only its owner calls are held back");
+        limiter.ChargeOwner("org|bob").Admitted.Should().BeTrue("the bucket is the user's");
+        limiter.ChargeOwner("other|alice").Admitted.Should().BeTrue("and the organisation's");
+
+        time.Advance(TimeSpan.FromSeconds(3));
+        limiter.ChargeOwner("org|alice").Admitted.Should().BeTrue("one token came back");
+        limiter.ChargeOwner("org|alice").Admitted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task At_the_host_an_explain_that_may_not_call_owners_now_is_answered_200_from_what_is_kept_and_never_429()
+    {
+        var owner = new FakeRemoteClient { Explains = (_, _) => new JsonObject { ["valid"] = true, ["errors"] = new JsonArray() } };
+        using var host = new SampleHost(options => { options.Explain.OwnerRateBurst = 1; options.Explain.OwnerRatePerMinute = 1; }, services => services.AddSingleton<IRemoteQueryClient>(owner));
+        var client = host.Client();
+
+        static string Query(string member) =>
+            $$"""{ "entityType": "probe.order", "pipeline": [ { "resolve": { "path": "contactNumber", "as": "contact" } }, { "project": { "number": 1, "contact.{{member}}": 1 } } ] }""";
+
+        var first = await client.PostAsync("/OxQL/explain", SampleHost.Json(Query("name")));
+        var checkedAnswer = await SampleHost.Body(first);
+
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        checkedAnswer!["notes"]!.AsArray().Should().NotContain(note => note!["code"]!.GetValue<string>() == Codes.ExplainLimit, "its owner was asked");
+        owner.ExplainCalls.Should().ContainSingle("the first owner-calling explain is within the burst of one");
+
+        // The owner bucket is empty; this explain would have to call the owner again.
+        var second = await client.PostAsync("/OxQL/explain", SampleHost.Json(Query("email")));
+        var held = await SampleHost.Body(second);
+
+        second.StatusCode.Should().Be(HttpStatusCode.OK, "an explain over the owner rate degrades, it is not refused");
+        held!["valid"]!.GetValue<bool>().Should().BeTrue();
+        held["cache"]!["complete"]!.GetValue<bool>().Should().BeFalse();
+        held["executable"]!.GetValue<string>().Should().Be("unknown");
+        held["notes"]!.AsArray().Single(note => note!["code"]!.GetValue<string>() == Codes.ExplainLimit)!["params"]!.ToJsonString()
+            .Should().Be("""{"limit":"ownerRate","max":1,"service":"crm","target":"crm.contact","retryAfter":60}""");
+        owner.ExplainCalls.Should().ContainSingle("no owner was called for it");
+
+        // An explain that asks no owner is not held back, and the kept answer of the first is still served.
+        (await SampleHost.Body(await client.PostAsync("/OxQL/explain", SampleHost.Json("""{ "entityType": "probe.order", "pipeline": [] }"""))))!["executable"]!.GetValue<string>().Should().Be("yes");
+        (await SampleHost.Body(await client.PostAsync("/OxQL/explain", SampleHost.Json(Query("name")))))!["notes"]!.AsArray()
+            .Should().NotContain(note => note!["code"]!.GetValue<string>() == Codes.ExplainLimit, "what the first check kept is answered without a call");
+        owner.ExplainCalls.Should().ContainSingle();
     }
 
     [Fact]

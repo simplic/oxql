@@ -96,7 +96,7 @@ public class RefusalsServerTests
         Staff("V16", "UNKNOWN_OPERATOR", "an operator the server has no spelling for ('like')", $$"""[{ "match": { "matchCode": { "like": "a" } } }, {{Page1}}]"""),
         Staff("V16.between", "UNKNOWN_OPERATOR", "'between' is client sugar and never reaches the wire", $$"""[{ "match": { "children": { "between": [1, 3] } } }, {{Page1}}]"""),
         Staff("V17", "EMPTY_LOGICAL_GROUP", "and: []", $$"""[{ "match": { "and": [] } }, {{Page1}}]"""),
-        Staff("V18", "OPTION_NOT_APPLICABLE", "ignoreCase on gt", $$"""[{ "match": { "matchCode": { "gt": "a", "options": { "ignoreCase": true } } } }, {{Page1}}]"""),
+        Staff("V18", "OPTION_NOT_APPLICABLE", "caseSensitive on gt", $$"""[{ "match": { "matchCode": { "gt": "a", "options": { "caseSensitive": false } } } }, {{Page1}}]"""),
         Staff("V18.unknown-option", "OPTION_NOT_APPLICABLE", "an option name the server does not know", $$"""[{ "match": { "matchCode": { "eq": "a", "options": { "nope": true } } } }, {{Page1}}]"""),
         Staff("V18.options-scalar", "OPTION_NOT_APPLICABLE", "options: 5, not an object at all", $$"""[{ "match": { "matchCode": { "eq": "a", "options": 5 } } }, {{Page1}}]"""),
         Staff("V19", "INVALID_REGEX", "a pattern .NET cannot compile", $$"""[{ "match": { "matchCode": { "regex": "a|*" } } }, {{Page1}}]"""),

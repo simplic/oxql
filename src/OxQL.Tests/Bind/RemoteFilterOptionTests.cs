@@ -43,7 +43,7 @@ public class RemoteFilterOptionTests
     {
         await BindHost.BoundAsync(ResolveModel.Model, Invoice, """
             [{ "resolve": { "path": "contactId", "as": "r", "select": ["name"], "filter": { "name": { "eq": "x", "options": { "caseSensitive": true } } } } },
-             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"], "filter": { "title": { "eq": "x", "options": { "ignoreCase": true } } } } }]
+             { "resolve": { "path": "r.companyId", "as": "co", "select": ["title"], "filter": { "title": { "eq": "x", "options": { "caseSensitive": false } } } } }]
             """);
     }
 }

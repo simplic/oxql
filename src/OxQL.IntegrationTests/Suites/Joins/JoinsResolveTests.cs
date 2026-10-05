@@ -498,7 +498,7 @@ public class JoinsResolveTests
               { "page": { "limit": 50, "includeTotalCount": true } } ]
             """);
 
-        (await Ask(""", "options": { "ignoreCase": true }""")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
+        (await Ask(""", "options": { "caseSensitive": false }""")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
         (await Ask("")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
         (await Ask(""", "options": { "caseSensitive": true }""")).ShouldHaveIds([]).ShouldHaveTotal(0);
     }

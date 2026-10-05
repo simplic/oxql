@@ -68,7 +68,7 @@ public class ChaosOwnerTests
     {
         var owner = new ChaosOwner();
         var both = OwnerQuery("W-1", "W-2", "W-3");
-        both["pipeline"]!.AsArray().Insert(1, JsonNode.Parse("""{ "match": { "and": [ { "name": { "contains": "widget t", "options": { "ignoreCase": true } } }, { "not": { "code": { "eq": "W-3" } } } ] } }"""));
+        both["pipeline"]!.AsArray().Insert(1, JsonNode.Parse("""{ "match": { "and": [ { "name": { "contains": "widget t", "options": { "caseSensitive": false } } }, { "not": { "code": { "eq": "W-3" } } } ] } }"""));
 
         var filtered = await Parsed(owner, new JsonObject { ["queries"] = new JsonArray(both) });
         var decoy = await Parsed(owner, JsonNode.Parse("""{ "queries": [ { "entityType": "owner.widget", "pipeline": [ { "match": { "id": { "in": ["W-1"] } } } ] } ] }"""));

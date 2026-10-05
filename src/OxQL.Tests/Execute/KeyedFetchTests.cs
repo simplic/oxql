@@ -266,7 +266,7 @@ public class KeyedFetchTests
 
     // ---- semi-join ------------------------------------------------------------------------
 
-    private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }, { "page": { "limit": 10, "includeTotalCount": true } }]""";
+    private const string SemiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }, { "page": { "limit": 10, "includeTotalCount": true } }]""";
 
     [Fact]
     public async Task A_semi_join_asks_the_owner_for_the_ids_and_substitutes_them_into_the_page_and_count_filters()
@@ -292,7 +292,7 @@ public class KeyedFetchTests
 
         ask.EntityType.Should().Be("vehicle.vehicle");
         ask.Pipeline[0].Match!.Condition!.Path.Should().Be("matchCode");
-        ask.Pipeline[0].Match!.Condition!.Options!.IgnoreCase.Should().BeTrue();
+        ask.Pipeline[0].Match!.Condition!.Options!.CaseSensitive.Should().BeFalse();
         ask.Pipeline[1].Project!.Fields.Keys.Should().Equal("id");
         ask.Pipeline[2].Page!.Limit.Should().Be(500, "the owner is asked page by page, never for more than a page ceiling at once");
         ask.Pipeline[2].Page!.Cursor.Should().BeNull();
@@ -461,9 +461,9 @@ public class KeyedFetchTests
     public async Task The_obsolete_resolver_and_cache_option_forward_to_the_keyed_fetch()
     {
 #pragma warning disable CS0618 // the aliases under test are obsolete by design
-        var options = BindHost.Options(o => o.Cache.ResolveCacheMaxEntries = 7);
+        var options = BindHost.Options(o => o.Cache.OwnerFetchCacheMaxEntries = 7);
 
-        options.Cache.OwnerFetchCacheMaxEntries.Should().Be(7, "the former option name writes the owner-fetch cache budget");
+        options.Cache.OwnerFetchCacheMaxEntries.Should().Be(7);
 
         var client = new FakeRemoteClient
         {

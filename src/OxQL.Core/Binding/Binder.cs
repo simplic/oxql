@@ -1195,8 +1195,8 @@ public sealed class Binder
         /// <summary>
         /// The case option of a condition, as the caller's choice: true to compare exactly,
         /// false to fold, null when nothing was written. <c>caseSensitive</c> is the option;
-        /// <c>ignoreCase</c> is its alias with the opposite sense, kept for one release. Under
-        /// contract 1 only <c>ignoreCase: true</c> means anything, as it always has.
+        /// <c>ignoreCase</c> is contract 1's, where only <c>ignoreCase: true</c> means anything, as it
+        /// always has; contract 2 refuses it.
         /// <para>
         /// The option applies to the comparisons a string can opt out of. A member that holds
         /// no text has nothing to fold; an ordered comparison orders under the collation of the
@@ -1230,6 +1230,20 @@ public sealed class Binder
 
             if (conditionOptions.IgnoreCase is not { } ignore)
                 return caseSensitive;
+
+            // Contract 2 has the one option (DG2 M12): the alias with the opposite sense is contract 1's.
+            if (contract2)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.OptionNotApplicable,
+                    Message = "'ignoreCase' is not an option under contract 2; a string comparison folds case unless it says 'caseSensitive: true'.",
+                    Stage = index,
+                    Path = condition.Path,
+                    Params = new Dictionary<string, object?> { ["option"] = "ignoreCase", ["reason"] = "removed", ["use"] = "caseSensitive" },
+                });
+                return caseSensitive;
+            }
 
             // `ignoreCase: false` restates the contract 1 default, and on a member without text
             // asks for the exact comparison it already makes; neither changes anything and
@@ -2491,7 +2505,7 @@ public sealed class Binder
 
                 if (node.Options?.Unknown is { Count: > 0 } unknown)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; an option is ignoreCase or caseSensitive, written true or false.", index, node.Path));
+                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; the option is caseSensitive, written true or false.", index, node.Path));
                     refused = true;
                 }
 

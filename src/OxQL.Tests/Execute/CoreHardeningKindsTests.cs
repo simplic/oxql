@@ -202,7 +202,7 @@ public class CoreHardeningKindsTests
     [InlineData("eq", "\"1\"", "{ Initial: 49 }")]
     public async Task A_case_insensitive_comparison_on_a_char_folds_its_case_by_code_point(string op, string operand, string expected)
     {
-        var pipeline = $$"""[{ "match": { "initial": { "{{op}}": {{operand}}, "options": { "ignoreCase": true } } } }]""";
+        var pipeline = $$"""[{ "match": { "initial": { "{{op}}": {{operand}}, "options": { "caseSensitive": false } } } }]""";
         var bound = await Bound(pipeline);
 
         Leaf(bound).IgnoreCase.Should().BeFalse("the fold replaces the pattern");
@@ -211,5 +211,5 @@ public class CoreHardeningKindsTests
 
     [Fact]
     public async Task A_case_insensitive_text_operator_on_a_char_is_still_refused() =>
-        await BindHost.ErrorAsync(BindHost.Probe, Order, """[{ "match": { "initial": { "contains": "a", "options": { "ignoreCase": true } } } }]""", Codes.InvalidOperand);
+        await BindHost.ErrorAsync(BindHost.Probe, Order, """[{ "match": { "initial": { "contains": "a", "options": { "caseSensitive": false } } } }]""", Codes.InvalidOperand);
 }

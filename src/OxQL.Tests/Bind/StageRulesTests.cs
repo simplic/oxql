@@ -335,18 +335,18 @@ public class StageRulesTests
     {
         foreach (var op in new[] { "eq", "neq", "contains", "startsWith", "endsWith" })
         {
-            var bound = await Bound($$"""[{ "match": { "number": { "{{op}}": "x", "options": { "ignoreCase": true } } } }]""");
+            var bound = await Bound($$"""[{ "match": { "number": { "{{op}}": "x", "options": { "caseSensitive": false } } } }]""");
 
             Leaf(bound).IgnoreCase.Should().BeTrue(op);
         }
 
-        var set = await Bound("""[{ "match": { "number": { "in": ["x"], "options": { "ignoreCase": true } } } }]""");
+        var set = await Bound("""[{ "match": { "number": { "in": ["x"], "options": { "caseSensitive": false } } } }]""");
 
         Leaf(set).IgnoreCase.Should().BeTrue();
 
-        (await Error("""[{ "match": { "count": { "eq": 1, "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable)).Path.Should().Be("count");
-        await Error("""[{ "match": { "number": { "regex": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
-        await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
+        (await Error("""[{ "match": { "count": { "eq": 1, "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable)).Path.Should().Be("count");
+        await Error("""[{ "match": { "number": { "regex": "x", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
+        await Error("""[{ "match": { "number": { "gt": "x", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
         (await Error("""[{ "match": { "number": { "eq": "x", "options": { "collation": "de" } } } }]""", Codes.OptionNotApplicable)).Message.Should().Contain("collation");
     }
 

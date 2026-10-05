@@ -192,7 +192,7 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
             return Owner.BatchesSince(mark)[0].Stage("match")!["name"]!["options"];
         }
 
-        (await OptionsSent("M-38-a", """, "options": { "ignoreCase": true }"""))!["ignoreCase"]!.GetValue<bool>().Should().BeTrue();
+        (await OptionsSent("M-38-a", """, "options": { "caseSensitive": false }"""))!["caseSensitive"]!.GetValue<bool>().Should().BeFalse();
         (await OptionsSent("M-38-b", """, "options": { "caseSensitive": true }"""))!["caseSensitive"]!.GetValue<bool>().Should().BeTrue();
         (await OptionsSent("M-38-c", "")).Should().BeNull("the owner binds under its own default when the caller wrote none");
     }

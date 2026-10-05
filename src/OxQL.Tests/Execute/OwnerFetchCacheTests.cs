@@ -112,7 +112,7 @@ public class OwnerFetchCacheTests
             """[{ "match": { "matchCode": { "eq": "V-2" } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
             """[{ "match": { "matchCode": { "neq": "V-1" } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
             """[{ "match": { "name": { "eq": "V-1" } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
-            """[{ "match": { "matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
+            """[{ "match": { "matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }, { "project": { "id": 1 } }, { "page": { "limit": 500 } }]""",
             """[{ "match": { "matchCode": { "eq": "V-1" } } }, { "project": { "number": 1 } }, { "page": { "limit": 500 } }]""",
         })
             OwnerFetchCache.KeyOf(organisation, BindHost.Request("vehicle.vehicle", other)).Should().NotBe(OwnerFetchCache.KeyOf(organisation, query), other);

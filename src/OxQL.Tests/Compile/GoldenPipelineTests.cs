@@ -119,12 +119,12 @@ public class GoldenPipelineTests
     {
         var compiled = await Compile("""
             [{ "match": { "or": [
-                { "number": { "eq": "a.b", "options": { "ignoreCase": true } } },
-                { "number": { "neq": "a", "options": { "ignoreCase": true } } },
-                { "number": { "in": ["a", "b"], "options": { "ignoreCase": true } } },
-                { "number": { "contains": "a", "options": { "ignoreCase": true } } },
-                { "number": { "startsWith": "a", "options": { "ignoreCase": true } } },
-                { "number": { "endsWith": "a", "options": { "ignoreCase": true } } },
+                { "number": { "eq": "a.b", "options": { "caseSensitive": false } } },
+                { "number": { "neq": "a", "options": { "caseSensitive": false } } },
+                { "number": { "in": ["a", "b"], "options": { "caseSensitive": false } } },
+                { "number": { "contains": "a", "options": { "caseSensitive": false } } },
+                { "number": { "startsWith": "a", "options": { "caseSensitive": false } } },
+                { "number": { "endsWith": "a", "options": { "caseSensitive": false } } },
                 { "number": { "startsWith": "a" } },
                 { "number": { "regex": "^a" } } ] } }]
             """);

@@ -124,7 +124,7 @@ public sealed record ChaosRequest(DateTimeOffset At, string Method, string Path,
 /// <b>The entity.</b> <c>owner.widget</c> is keyed on <c>code</c>. It also carries a member named
 /// <c>id</c> that holds a different widget's code: a join on the wrong member succeeds and returns
 /// the wrong widget rather than nothing. Every <c>match</c> stage of a query is applied (leaves with
-/// several operators, <c>and</c>/<c>or</c>/<c>not</c>, <c>options.ignoreCase</c>); a path it does not have
+/// several operators, <c>and</c>/<c>or</c>/<c>not</c>, <c>options.caseSensitive: false</c>); a path it does not have
 /// is refused with <c>UNKNOWN_PATH</c>, an unknown entity with <c>UNKNOWN_ENTITY</c>. Projection
 /// (<c>$default</c> expands to the key and display, <c>code</c> and <c>name</c>), sort on
 /// <c>code</c>/<c>id</c>/<c>name</c>, and <c>page</c> offset/limit/includeTotalCount are honoured.
@@ -558,7 +558,7 @@ public sealed class ChaosOwner : HttpMessageHandler
         if (!Members.Contains(path))
             throw new RefusedException("UNKNOWN_PATH", $"'{path}' is not a path of owner.widget.", path);
 
-        var ignoreCase = operators?["options"]?["ignoreCase"]?.GetValue<bool>() == true;
+        var ignoreCase = operators?["options"]?["caseSensitive"]?.GetValue<bool>() == false;
         string? Fold(string? value) => ignoreCase ? value?.ToLowerInvariant() : value;
         var actual = Fold(row.Member(path)?.GetValue<string>());
 

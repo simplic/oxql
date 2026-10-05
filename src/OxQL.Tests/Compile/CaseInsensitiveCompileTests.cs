@@ -103,7 +103,7 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task An_exact_comparison_on_its_own_is_the_plain_form_without_a_collation()
     {
-        var compiled = await Compile("""[{ "match": { "number": { "eq": "a.b", "options": { "caseSensitive": true } }, "note": { "startsWith": "a", "options": { "ignoreCase": false } } } }]""");
+        var compiled = await Compile("""[{ "match": { "number": { "eq": "a.b", "options": { "caseSensitive": true } }, "note": { "startsWith": "a", "options": { "caseSensitive": true } } } }]""");
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { $and: [ { Number: 'a.b' }, { Note: /^a/ } ] } }"));
         compiled.Collation.Should().BeNull();

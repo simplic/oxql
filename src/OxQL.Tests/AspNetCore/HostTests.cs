@@ -198,7 +198,7 @@ public class HostTests
 
         var capabilities = body["capabilities"]!.AsArray().Select(node => node!.GetValue<string>()).ToList();
 
-        capabilities.Should().Contain(["batch", "group.page", "page.offset", "any", "unwind.keepPath", "explain", "compat.v1"], "explain is on by default");
+        capabilities.Should().Equal(["explain", "compat.v1"], "explain is on by default, and only what depends on the host is listed (DG2 M12)");
         capabilities.Should().NotContain(capability => capability.StartsWith("oxql.", StringComparison.Ordinal), "engine.contract 2 is the marker of this package, not a capability");
 
         var limits = body["limits"]!.AsObject();

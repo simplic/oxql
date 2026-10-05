@@ -81,7 +81,7 @@
     "contract": 2,
     "engine": {
       "contract": 2,
-      "capabilities": ["batch","group.page","page.offset","any","unwind.keepPath","resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+      "capabilities": ["resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
     },
     "cache": {
       "maxAge": 30,

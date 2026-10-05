@@ -23,19 +23,20 @@ public static class EngineCapabilities
     /// <summary>A <c>lookup</c> whose <c>from</c> is another service's entity (DESIGN §3.4.4); only with a remote query client.</summary>
     public const string LookupRemote = "lookup.remote";
 
-    /// <summary><c>unwind.keepPath</c>: an unwind can take its collection out of the row (<c>keepPath: false</c>).</summary>
-    public const string UnwindKeepPath = "unwind.keepPath";
-
     /// <summary><c>POST /oxql/explain</c> answers.</summary>
     public const string Explain = "explain";
 
     /// <summary>The engine version, as health and explain publish it.</summary>
     public static string? Version { get; } = typeof(EngineCapabilities).Assembly.GetName().Version?.ToString();
 
-    /// <summary>The capabilities of a host with the given features and options.</summary>
+    /// <summary>
+    /// The capabilities of a host with the given features and options: only what depends on the host.
+    /// What every contract 2 engine has (batches, paging after a group, <c>any</c>) is not listed; the
+    /// contract number says it (DG2 M12).
+    /// </summary>
     public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain)
     {
-        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any", UnwindKeepPath };
+        var capabilities = new List<string>();
 
         if (remoteResolve)
         {

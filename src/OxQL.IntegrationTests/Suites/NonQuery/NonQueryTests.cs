@@ -25,7 +25,8 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any", "unwind.keepPath"];
+    /// <summary>What every host lists whatever it can do: nothing, since DG2 M12; the contract number says what every engine has.</summary>
+    private static readonly string[] Universal = [];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
 

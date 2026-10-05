@@ -320,14 +320,14 @@ public class KindsConformanceTests
 
         if (name != "char")
         {
-            await ShouldRefuse($$"""{ "{{kind.Member}}": { "eq": {{kind.Operand(At(Mine[0], kind.Member)!)}}, "options": { "ignoreCase": true } } }""", "OPTION_NOT_APPLICABLE");
+            await ShouldRefuse($$"""{ "{{kind.Member}}": { "eq": {{kind.Operand(At(Mine[0], kind.Member)!)}}, "options": { "caseSensitive": false } } }""", "OPTION_NOT_APPLICABLE");
             return;
         }
 
         // K-4: eq 'a' with ignoreCase either finds Alpha ('A') or is refused; 200 with no rows is the defect.
         var folded = Names(row => char.ToUpperInvariant((char)At(row, kind.Member)!.AsInt32) == 'A');
         folded.Should().ContainSingle();
-        var answer = await Send(Matching("""{ "grade": { "eq": "a", "options": { "ignoreCase": true } } }"""));
+        var answer = await Send(Matching("""{ "grade": { "eq": "a", "options": { "caseSensitive": false } } }"""));
 
         if (answer.StatusCode == 200)
             answer.Strings("name").Should().Equal(folded, id);

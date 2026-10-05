@@ -185,7 +185,7 @@ public static class OwnerQueryBuilder
             // The owner binds the comparison under its own default; only what the caller wrote travels.
             Options = slot.Leaf.IgnoreCase switch
             {
-                true => new FilterConditionOptions { IgnoreCase = true },
+                true => new FilterConditionOptions { CaseSensitive = false },
                 false => new FilterConditionOptions { CaseSensitive = true },
                 null => null,
             },

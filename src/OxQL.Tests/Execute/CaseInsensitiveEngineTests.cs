@@ -98,18 +98,18 @@ public class CaseInsensitiveEngineTests
 
         await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1" } } }]""");
         await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": true } } } }]""");
-        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }]""");
+        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }]""");
 
         var sent = client.Calls.Select(call => call.Request.Queries.Single().Pipeline[0].Match!.Condition!.Options).ToList();
 
         sent.Should().HaveCount(3);
         sent[0].Should().BeNull("nothing was written, so the owner applies its own default");
         sent[1].Should().BeEquivalentTo(new FilterConditionOptions { CaseSensitive = true });
-        sent[2].Should().BeEquivalentTo(new FilterConditionOptions { IgnoreCase = true });
+        sent[2].Should().BeEquivalentTo(new FilterConditionOptions { CaseSensitive = false });
 
-        // The alias asks the owner the same question, which the semi-join cache already holds.
-        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": false } } } }]""");
+        // The same choice asks the owner the same question, which the semi-join cache already holds.
+        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": true } } } }]""");
 
-        client.Calls.Should().HaveCount(3, "ignoreCase: false is caseSensitive: true, and that owner query is cached");
+        client.Calls.Should().HaveCount(3, "that owner query is cached");
     }
 }

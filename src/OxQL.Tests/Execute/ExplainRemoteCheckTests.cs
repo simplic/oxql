@@ -482,7 +482,10 @@ public class ExplainRemoteCheckTests
 
         // What an origin reads is there; what it would compute itself and drop is not.
         first.Select(pair => pair.Key).Should().BeEquivalentTo(
-            ["valid", "contract", "engine", "revision", "cache", "errors", "diagnostics", "notes", "stages", "aliases", "types", "rules", "owners", "catalog"]);
+            ["valid", "contract", "engine", "revision", "cache", "errors", "diagnostics", "notes", "stages", "aliases", "types", "rules", "columnFlags", "owners", "catalog"]);
+        first["columnFlags"]!.ToJsonString().Should().Be("""{"id":"588c3","name":"d9fff","code":"d9fff"}""",
+            "the origin shows these columns under its alias and holds no type to read their kind from: the owner says what each admits (a guid has no contains)");
+        first.ContainsKey("result").Should().BeFalse("the origin computes its own result");
         first["diagnostics"]!.AsArray().Should().BeEmpty();
         first["notes"]!.AsArray().Should().BeEmpty("only the notes about the answer itself travel");
         first["rules"]!.AsObject().Count.Should().Be(0);

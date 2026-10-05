@@ -20,7 +20,7 @@ public static class ExplainFacts
 
     /// <summary>Every value a <c>why</c> member may hold.</summary>
     public static readonly IReadOnlyList<string> Reasons =
-        ["underCollection", "notScalar", "notStored", "unknownKind", "joinedAfterPage", "owner", "semiJoin", "addonUndefined", "notInRow", "notApplicable"];
+        ["underCollection", "notScalar", "notStored", "unknownKind", "joinedAfterPage", "owner", "semiJoin", "ownerKind", "addonUndefined", "notInRow", "notApplicable"];
 
     // ---- identity -------------------------------------------------------------------------------
 
@@ -334,8 +334,16 @@ public static class ExplainFacts
     /// (<see cref="ExplainTypes.FlagsAt"/>) and of what <see cref="Shape.Resolve"/> answers for an
     /// aggregate argument, so a reader that holds the flags of a member that is no result column
     /// (its type's, with the stage's rule or override set) derives the same answer (<see cref="CanOf"/>).
+    /// <para>
+    /// A member of another service's rows is a member of a type this host does not hold: its shape
+    /// admits every operator a condition may carry, and the owner admits those of the member's kind.
+    /// With <paramref name="owner"/> (the member's own flags as its owner answered them) <c>filter</c>
+    /// is exactly those (<c>why.filter: "semiJoin"</c>: allowed, run as a semi-join at the owner);
+    /// without them it is still every operator, and <c>why.filter</c> is <c>ownerKind</c>: the list
+    /// is not narrowed to the member's kind, which only its owner's type says.
+    /// </para>
     /// </summary>
-    public static (JsonObject Can, JsonObject? Why) Can(Shape shape, string path)
+    public static (JsonObject Can, JsonObject? Why) Can(Shape shape, string path, MemberFlags? owner = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(path);
@@ -343,6 +351,13 @@ public static class ExplainFacts
         var flags = ExplainTypes.FlagsAt(shape, path);
         // not a read: what the path is at this boundary, and whether an aggregate takes it
         var facts = shape.Resolve(path, PathUsage.Project).Path ?? shape.Resolve(path, PathUsage.Match).Path;
+
+        // Only an owner's member is narrowed by what its owner said; this host's own are answered by its own flags.
+        if (facts is not { IsRemote: true })
+            owner = null;
+
+        if (owner is { } theirs)
+            flags = flags with { Operators = flags.Operators & theirs.Operators };
         var aggregate = shape.Resolve(path, PathUsage.Aggregate);
         var kind = aggregate.Path?.LeafKind ?? facts?.LeafKind ?? Kind.Unknown;
         var can = CanOf(flags, aggregate.Succeeded, kind);
@@ -352,7 +367,7 @@ public static class ExplainFacts
         if (flags.Operators == 0)
             why["filter"] = reason;
         else if (facts is { IsRemote: true })
-            why["filter"] = "semiJoin";
+            why["filter"] = owner is null ? "ownerKind" : "semiJoin";
 
         if (!flags.Sortable)
             why["sort"] = reason;

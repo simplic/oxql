@@ -655,8 +655,19 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   aggregate? } }`, and each column carries `can: "c:n"`. `values` says that the distinct values can
   be asked for (a `group` by the path binds). `why` gives one reason per refused use, from a closed
   list: `owner` (another service's rows), `joinedAfterPage`, `underCollection`, `notScalar`,
-  `notStored`, `unknownKind`, `addonUndefined`, `notInRow`, `notApplicable`; and `filter: "semiJoin"`
-  where a condition is allowed and runs as a semi-join at the owner. `sortVia` on a column of a join
+  `notStored`, `unknownKind`, `addonUndefined`, `notInRow`, `notApplicable` (the fallback: none of
+  the others holds, e.g. a scalar that still cannot be used that way); and for another service's
+  member, where a condition is allowed and runs as a semi-join at its owner, `filter: "semiJoin"`
+  when `can.filter` is what the member's kind admits there (its owner answered the explain's check:
+  a guid lists `eq neq in nin exists`, no `contains`), or `filter: "ownerKind"` when no owner
+  answered (`remote: "cached"` without a kept answer, an owner out of reach, the owner rate): the
+  list is then every operator a condition may carry, **not narrowed to the member's kind**, which
+  only the owner's type says; a client narrows it by the owner's schema document or offers it as
+  unchecked. An outcome member of a join that runs after the page (`outcomeAs` of a keyed or
+  remote resolve) is `joinedAfterPage` for every use. A run meets the owner's binder either way: a
+  condition whose operator the member's kind does not admit is refused (422 `RESOLVE_REFUSED` with
+  the owner's `INVALID_OPERAND`), although explain, which does not send a semi-join to its owner,
+  answers such a request `valid`. `sortVia` on a column of a join
   that cannot order the page names the same member in a copy of the joined record the row embeds
   (`snapshotOf`), when that path sorts; the engine never applies it. **A member that is no result
   column** has the same answer by rule: `can.filter` is its flag set's `operators`, `can.sort` its

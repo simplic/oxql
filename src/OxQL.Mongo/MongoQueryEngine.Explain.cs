@@ -423,6 +423,7 @@ public sealed partial class MongoQueryEngine
             Capabilities = EngineCapabilities.Of(remoteClient, options.Compat.Enabled, options.Explain.Enabled),
         };
         ExplainShapeResult? result = null;
+        JsonObject? columnFlags = null;
 
         if (trace is not null)
         {
@@ -430,10 +431,11 @@ public sealed partial class MongoQueryEngine
             var capabilities = new JsonObject();
 
             // What may be done with each column at the last boundary; equal answers are written once.
+            // A member of another service's rows admits what its owner said it does, where one answered.
             if (draft.Bound is { } final)
                 columns = columns.Select(column =>
                 {
-                    var capability = ExplainFacts.Can(final.FinalShape, column.Path);
+                    var capability = ExplainFacts.Can(final.FinalShape, column.Path, draft.Owners.FlagsOf(column.Path));
 
                     return column with
                     {
@@ -451,6 +453,10 @@ public sealed partial class MongoQueryEngine
                 Columns = columns,
                 Capabilities = capabilities.Count == 0 ? null : capabilities,
             };
+
+            // For an origin: the flags of each column of this row here, which it shows under its alias.
+            if (context.Internal && draft.Bound is { } owned)
+                columnFlags = ColumnFlags(owned, columns, draft.Owners);
         }
 
         var answer = new ExplainResult
@@ -500,9 +506,9 @@ public sealed partial class MongoQueryEngine
 
         // An owner answering an origin says what the origin reads, and nothing it would throw away.
         if (request.Slim && context.Internal)
-            return Slim(answer);
+            return Slim(answer) with { ColumnFlags = columnFlags };
 
-        return answer with { Etag = EtagOf(request, answer, context) };
+        return answer with { Etag = EtagOf(request, answer, context), ColumnFlags = columnFlags };
     }
 
     /// <summary>A note or diagnostic with its basis.</summary>
@@ -585,6 +591,33 @@ public sealed partial class MongoQueryEngine
             Status = filter.Failed ? "error" : "ok",
             Placed = filter.Placed.Select(placement => ExplainFilterPlacement.At(placement.Boundary, placement.Paths, placement.Having)).ToList(),
         }).ToList();
+
+    /// <summary>
+    /// The flags of each column of an owner query's row, by its path, for the origin that shows it
+    /// under an alias (<see cref="ExplainResult.ColumnFlags"/>): the member's own at this host, and for
+    /// a member this host itself shows from a third service what that owner said, narrowed the same
+    /// way, or nothing where it did not.
+    /// </summary>
+    private static JsonObject? ColumnFlags(BoundPipeline bound, IReadOnlyList<ExplainColumn> columns, RemoteExplain owners)
+    {
+        var said = new JsonObject();
+
+        foreach (var column in columns)
+        {
+            var flags = ExplainTypes.FlagsAt(bound.FinalShape, column.Path);
+            // not a read: whether the column is another service's member here
+            var remote = (bound.FinalShape.Resolve(column.Path, PathUsage.Project).Path ?? bound.FinalShape.Resolve(column.Path, PathUsage.Match).Path) is { IsRemote: true };
+
+            if (remote && owners.FlagsOf(column.Path) is not { } theirs)
+                continue;
+            else if (remote)
+                flags = flags with { Operators = flags.Operators & owners.FlagsOf(column.Path)!.Value.Operators };
+
+            said[column.Path] = flags.Id;
+        }
+
+        return said.Count == 0 ? null : said;
+    }
 
     private static ExplainResult Slim(ExplainResult answer) => answer with
     {

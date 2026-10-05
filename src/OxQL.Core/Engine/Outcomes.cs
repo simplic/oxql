@@ -806,6 +806,18 @@ public sealed record ExplainResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExplainShapeResult? Result { get; init; }
 
+    /// <summary>
+    /// Only in the answer an owner gives an origin (an internal call; the slim answer of the internal
+    /// route carries it in place of <see cref="Result"/>): per column of the owner query's row, by its path there, the id of the
+    /// member's own flags at the owner (<c>MemberFlags.Id</c>, the same at every engine). The origin
+    /// shows those columns under its alias and holds no type of the owner to read their kind from, so
+    /// this is how it knows which operators a condition on one of them admits. A column whose flags the
+    /// owner does not know itself (a member of a third service nobody answered for) is left out.
+    /// </summary>
+    [JsonPropertyName("columnFlags")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? ColumnFlags { get; init; }
+
     /// <summary>The owners the query reaches, each once; <c>stages[].placement.owner</c> and <c>aliases.*.targets[].owner</c> point here by index.</summary>
     [JsonPropertyName("owners")]
     public IReadOnlyList<JsonNode> Owners { get; init; } = [];

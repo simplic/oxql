@@ -56,7 +56,7 @@ public partial class ReadLedgerCallSiteTests
         ["OxQL.Core/Binding/ExplainTypes.cs"] = (17, "explain describes shapes: the flags of a member at a stage, a catalog entry, an item's element"),
         ["OxQL.Core/Binding/Shape.cs"] = (2, "a path under a keyed alias is checked against each target's own shape"),
         ["OxQL.Mongo/Explain/RemoteExplain.cs"] = (2, "whether a local target of a union has a path its remote targets' owners lack"),
-        ["OxQL.Mongo/MongoQueryEngine.Explain.cs"] = (2, "the kind of a result column under an alias, read off the final shape; whether an error's path lies under an addon bag"),
+        ["OxQL.Mongo/MongoQueryEngine.Explain.cs"] = (3, "the kind of a result column under an alias, read off the final shape; whether an error's path lies under an addon bag; whether a column an owner answers an origin about is itself another service's member"),
     };
 
     [Fact]

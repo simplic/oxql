@@ -279,8 +279,20 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
             (await Binds($$"""{ "group": { "by": [ { "path": "{{path}}", "as": "k" } ], "fields": { "n": { "count": true } } } }""")).Should().Be(can["group"]!.GetValue<bool>(), $"{id}: group by '{path}'");
             (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "first": "{{path}}" } } } }""")).Should().Be(functions.Contains("first"), $"{id}: first of '{path}'");
             (await Binds($$"""{ "group": { "by": [], "fields": { "n": { "sum": "{{path}}" } } } }""")).Should().Be(functions.Contains("sum"), $"{id}: sum of '{path}'");
-            (await Binds($$"""{ "match": { "{{path}}": { "exists": true } } }""")).Should().Be(operators.Contains("exists"), $"{id}: '{path}' exists");
-            (await Binds($$"""{ "match": { "{{path}}": { "contains": "x" } } }""")).Should().Be(operators.Contains("contains"), $"{id}: '{path}' contains");
+            // A condition on another service's member is asked of its owner (a semi-join), and it is the owner's
+            // binder that admits the operator: a run it refuses is refused (422), whatever this host's shape allows.
+            // Explain does not send the semi-join to the owner, so the owner's binder is asked here.
+            var why = answer.Result.Capabilities![column.Can!]!["why"]?["filter"]?.GetValue<string>();
+            var owner = why == "semiJoin" ? answer.Result.Subjects!.Select(subject => subject!.AsObject())
+                .FirstOrDefault(subject => subject["root"]!.GetValue<string>() == column.Root && subject["remote"]?.GetValue<bool>() == true && subject["entity"] is not null)?["entity"]!.GetValue<string>() : null;
+
+            async Task<bool> Admits(string condition) => owner is null
+                ? await Binds($$"""{ "match": { "{{path}}": {{condition}} } }""")
+                : (await Explained(new JsonObject { ["entityType"] = owner, ["pipeline"] = new JsonArray(JsonNode.Parse($$"""{ "match": { "{{path[(column.Root.Length + 1)..]}}": {{condition}} } }""")) })).Valid;
+
+            why.Should().NotBe("ownerKind", $"{id}: every owner answered, so '{path}' admits what its kind does");
+            (await Admits("""{ "exists": true }""")).Should().Be(operators.Contains("exists"), $"{id}: '{path}' exists");
+            (await Admits("""{ "contains": "x" }""")).Should().Be(operators.Contains("contains"), $"{id}: '{path}' contains");
             checkedColumns++;
         }
 

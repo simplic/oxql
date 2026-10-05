@@ -277,7 +277,7 @@ public class ExplainFactsTests
             [{ "resolve": { "path": "customerId", "as": "c" } },
              { "resolve": { "path": "contactId", "as": "r" } },
              { "resolve": { "path": "billingLineId", "as": "bl" } },
-             { "project": { "number": 1, "lines": 1, "lines.customerId": 1, "c.name": 1, "r.name": 1, "bl.amount": 1 } }]
+             { "project": { "number": 1, "lines": 1, "lines.customerId": 1, "c.name": 1, "r.name": 1, "r.id": 1, "bl.amount": 1 } }]
             """, client: OwnerFleet.Client());
         var result = answer.Result!;
 
@@ -289,6 +289,9 @@ public class ExplainFactsTests
         Json(Of("r.name")).Should().Be(
             """{"can":{"filter":["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"semiJoin","sort":"owner","group":"owner","values":"owner","aggregate":"owner"}}""",
             "another service's member: a condition is a semi-join at its owner, and nothing else reads it before the page");
+        Json(Of("r.id")).Should().Be(
+            """{"can":{"filter":["eq","neq","in","nin","exists"],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"semiJoin","sort":"owner","group":"owner","values":"owner","aggregate":"owner"}}""",
+            "its owner answered what the member admits: a guid compares, it has no text to contain anything");
         Json(Of("bl.amount")).Should().Be(
             """{"can":{"filter":[],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"joinedAfterPage","sort":"joinedAfterPage","group":"joinedAfterPage","values":"joinedAfterPage","aggregate":"joinedAfterPage"}}""");
         Of("lines")["why"]!["sort"]!.GetValue<string>().Should().Be("notScalar");
@@ -306,6 +309,36 @@ public class ExplainFactsTests
         result.Columns.Should().OnlyContain(column => column.Can != null && result.Capabilities!.ContainsKey(column.Can));
         result.Capabilities!.Select(pair => pair.Value!.ToJsonString()).Should().OnlyHaveUniqueItems("equal answers are written once");
         result.Capabilities.SelectMany(pair => pair.Value!["why"]?.AsObject().Select(reason => reason.Value!.GetValue<string>()) ?? []).Should().OnlyContain(reason => ExplainFacts.Reasons.Contains(reason));
+    }
+
+    [Fact]
+    public async Task A_member_of_another_services_rows_whose_owner_did_not_answer_says_that_its_operators_are_not_those_of_its_kind()
+    {
+        const string Pipeline = """[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "number": 1, "r.name": 1, "r.id": 1 } }]""";
+
+        // No owner answers: the origin holds no type of the owner, so it knows no kind to narrow the operators by.
+        var unanswered = await ExplainAsync(Pipeline, client: new FakeRemoteClient());
+
+        JsonObject Of(ExplainResult answer, string path) => answer.Result!.Capabilities![answer.Result.Columns.Single(column => column.Path == path).Can!]!.AsObject();
+
+        foreach (var path in new[] { "r.name", "r.id" })
+            Json(Of(unanswered, path)).Should().Be(
+                """{"can":{"filter":["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"ownerKind","sort":"owner","group":"owner","values":"owner","aggregate":"owner"}}""",
+                $"{path}: every operator a condition may carry, marked as not narrowed to the member's kind");
+
+        // The owner answers: the same columns admit what their kinds do, and say so.
+        var answered = await ExplainAsync(Pipeline, client: OwnerFleet.Client());
+
+        Of(answered, "r.id")["can"]!["filter"]!.ToJsonString().Should().Be("""["eq","neq","in","nin","exists"]""");
+        Of(answered, "r.name")["can"]!["filter"]!.AsArray().Select(op => op!.GetValue<string>()).Should().Contain("contains");
+        new[] { "r.id", "r.name" }.Select(path => Of(answered, path)["why"]!["filter"]!.GetValue<string>()).Should().Equal("semiJoin", "semiJoin");
+
+        // The function itself: the owner's flags narrow the operators and nothing else.
+        var bound = await BindHost.BoundAsync(ResolveModel.Model, Invoice, Pipeline);
+        var guid = ExplainTypes.FlagsAt((await BindHost.BoundAsync(ResolveModel.Model, Invoice, "[]")).FinalShape, "id");
+
+        ExplainFacts.Can(bound.FinalShape, "r.id", guid).Can.ToJsonString().Should().Be(Of(answered, "r.id")["can"]!.ToJsonString());
+        ExplainFacts.Can(bound.FinalShape, "number", guid).Can.ToJsonString().Should().Be(ExplainFacts.Can(bound.FinalShape, "number").Can.ToJsonString(), "a member of this host's own row is answered by its own flags");
     }
 
     [Fact]

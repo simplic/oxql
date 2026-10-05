@@ -338,6 +338,17 @@ public sealed class RemoteExplain : IExplainOwners
     /// </summary>
     public JsonObject? LoadsOf(string alias) => aliasLoads.GetValueOrDefault(alias);
 
+    private readonly Dictionary<string, MemberFlags> ownerFlags = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// After <see cref="CheckAsync"/>: the flags a member of an owner's row has at its owner, by the
+    /// path the origin row has it under (<c>&lt;alias&gt;.&lt;member&gt;</c>), as the owners that
+    /// answered said them (<c>columnFlags</c>); null when no owner answered for the path, or an owner
+    /// that did left it out. Several targets that hold the path admit what all of them admit. The
+    /// origin holds no type of the owner, so this is the one place it learns the member's kind from.
+    /// </summary>
+    public MemberFlags? FlagsOf(string path) => ownerFlags.TryGetValue(path, out var flags) ? flags : null;
+
     private readonly Dictionary<(string Alias, string Target), (List<string> Entities, List<string> Types)> branchAnswers = [];
     private readonly HashSet<(int Stage, string Target)> refusedAt = [];
     private readonly Dictionary<string, JsonArray> ownerBranches = new(StringComparer.Ordinal);
@@ -657,6 +668,20 @@ public sealed class RemoteExplain : IExplainOwners
 
         if (shape)
             types!.Import(answer);
+
+        // What each column of the owner's row admits at the owner, under the path the origin row shows it at.
+        if (check.Resolve is { } shown && answer["columnFlags"] is JsonObject columns)
+            foreach (var (ownerPath, id) in columns)
+            {
+                if (id is not JsonValue named || !named.TryGetValue<string>(out var text) || MemberFlags.FromId(text) is not { } flags)
+                    continue;
+
+                var path = Continuation.FromOwner(ownerPath, shown, check.Item, check.ContinuedAliases);
+
+                ownerFlags[path] = ownerFlags.TryGetValue(path, out var known)
+                    ? known with { Operators = known.Operators & flags.Operators, Sortable = known.Sortable && flags.Sortable, Groupable = known.Groupable && flags.Groupable }
+                    : flags;
+            }
 
         var aliases = answer["aliases"] as JsonObject;
 

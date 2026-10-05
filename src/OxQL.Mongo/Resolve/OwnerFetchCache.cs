@@ -27,6 +27,21 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 {
     /// <summary>The owner holds no record for the key (<c>not_found</c>): a negative entry, kept for <c>Cache:NegativeResolveTtlSeconds</c>.</summary>
     public bool IsNegative => Rows.Count == 0 && !Excluded;
+
+    /// <summary>
+    /// What the owner reported about these rows for the stages it continued (a reference of one of them
+    /// that names no record, say): its diagnostics cut to these rows, each entry of <c>params.rows</c>
+    /// naming its row by its place in <see cref="Rows"/>. Kept with the rows, so the page a cached
+    /// answer serves carries the report the owner's answer carried. Empty for most answers.
+    /// </summary>
+    public IReadOnlyList<JsonObject> Reported { get; init; } = [];
+
+    /// <summary>
+    /// Whether the answer says something is missing (no record for the key, or a report with its rows):
+    /// kept for the negative lifetime only, and never read by a strict request, which must not refuse
+    /// for a record created a moment ago.
+    /// </summary>
+    public bool IsProvisional => IsNegative || Reported.Count > 0;
 }
 
 /// <summary>
@@ -144,7 +159,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// </summary>
     public bool TryGet(string key, bool strict, out OwnerAnswer? answer)
     {
-        if (rows.TryGetValue(key, out Entry? cached) && cached is not null && time.GetUtcNow() < cached.Expires && !(strict && cached.Answer.IsNegative))
+        if (rows.TryGetValue(key, out Entry? cached) && cached is not null && time.GetUtcNow() < cached.Expires && !(strict && cached.Answer.IsProvisional))
         {
             answer = Clone(cached.Answer);
             return true;
@@ -156,13 +171,13 @@ public sealed class OwnerFetchCache : IDisposable
 
     /// <summary>
     /// Stores one by-keys answer: a positive one for <c>Cache:ResolveTtlSeconds</c>, a negative one
-    /// for <c>Cache:NegativeResolveTtlSeconds</c>, and a negative one not at all when that is 0.
+    /// (and one that carries a report) for <c>Cache:NegativeResolveTtlSeconds</c>, and such a one not at all when that is 0.
     /// </summary>
     public void Set(string key, OwnerAnswer answer)
     {
         ArgumentNullException.ThrowIfNull(answer);
 
-        var lifetime = answer.IsNegative ? negativeTtl : ttl;
+        var lifetime = answer.IsProvisional ? negativeTtl : ttl;
 
         if (lifetime <= TimeSpan.Zero)
             return;
@@ -306,8 +321,11 @@ public sealed class OwnerFetchCache : IDisposable
         drops.Dispose();
     }
 
-    private static OwnerAnswer Clone(OwnerAnswer answer) =>
-        answer with { Rows = answer.Rows.Select(row => (JsonObject)row.DeepClone()).ToList() };
+    private static OwnerAnswer Clone(OwnerAnswer answer) => answer with
+    {
+        Rows = answer.Rows.Select(row => (JsonObject)row.DeepClone()).ToList(),
+        Reported = answer.Reported.Count == 0 ? [] : answer.Reported.Select(report => (JsonObject)report.DeepClone()).ToList(),
+    };
 
     /// <summary>A stored answer with the instant it expires on this cache's clock.</summary>
     private sealed record Entry(OwnerAnswer Answer, DateTimeOffset Expires);

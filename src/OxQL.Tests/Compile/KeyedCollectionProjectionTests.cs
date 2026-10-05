@@ -8,29 +8,43 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// A keyed resolve over a collection keeps the whole collection through every projection, since the
-/// keyed fetch reads its elements off the page rows. A projection that names a member inside that
-/// collection too (the owning row's <c>tours.tourId</c> beside a continued resolve of it) merges into
-/// the collection: Mongo refuses a projection naming a path and one inside it ("path collision").
+/// A keyed resolve over a collection reads each element's reference (and what selects its cases)
+/// off the page rows, so a projection keeps those members of the collection, and no more of it: the
+/// page then carries one key per element, not the elements whole. A projection that names the whole
+/// collection as well keeps it whole once: Mongo refuses a projection naming a path and one inside it
+/// ("path collision"). As written (contract 1) the collection is kept whole, as it always was.
 /// </summary>
 public class KeyedCollectionProjectionTests
 {
-    private static async Task<BsonDocument> ProjectionAsync(string pipeline)
+    private static async Task<BsonDocument> ProjectionAsync(string pipeline, bool asWritten = false)
     {
         var bound = await BindHost.BoundAsync(ResolveModel.Model, ResolveModel.Invoice, pipeline);
-        var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)).PageStages;
+        var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000) { AsWritten = asWritten }).PageStages;
 
         return stages.Single(stage => stage.GetElement(0).Name == "$project")["$project"].AsBsonDocument;
     }
 
-    [Theory]
-    [InlineData("""[{ "resolve": { "path": "lines.customerId", "as": "c", "elements": "first" } }, { "project": { "lines.customerId": 1, "c": 1 } }]""")]
-    public async Task A_projected_member_inside_a_collection_a_keyed_resolve_keeps_merges_into_the_collection(string pipeline)
+    [Fact]
+    public async Task A_join_through_a_collection_keeps_the_key_of_each_element_and_not_the_elements()
     {
-        var projection = await ProjectionAsync(pipeline);
+        const string Join = """{ "resolve": { "path": "lines.customerId", "as": "c", "elements": "first" } }""";
 
-        projection.Names.Should().Contain("Lines");
-        projection.Names.Should().NotContain(name => name.StartsWith("Lines.", StringComparison.Ordinal), "the collection holds them; naming both is a path collision");
+        (await ProjectionAsync($$"""[{{Join}}, { "project": { "number": 1, "c": 1 } }]""")).Names
+            .Should().Equal(["Number", "Lines.CustomerId"], "the keyed fetch reads one key per element; the rest of the elements is not fetched for it");
+
+        (await ProjectionAsync($$"""[{{Join}}, { "project": { "lines.customerId": 1, "c": 1 } }]""")).Names
+            .Should().Equal(["Lines.CustomerId"], "the caller asked for the same member: it is named once");
+
+        var whole = await ProjectionAsync($$"""[{{Join}}, { "project": { "lines": 1, "c": 1 } }]""");
+
+        whole.Names.Should().Contain("Lines");
+        whole.Names.Should().NotContain(name => name.StartsWith("Lines.", StringComparison.Ordinal), "the collection holds its members; naming both is a path collision");
+
+        // As written, the collection is kept whole and a member the caller names inside it merges into it.
+        var written = await ProjectionAsync($$"""[{{Join}}, { "project": { "lines.customerId": 1, "c": 1 } }]""", asWritten: true);
+
+        written.Names.Should().Contain("Lines");
+        written.Names.Should().NotContain(name => name.StartsWith("Lines.", StringComparison.Ordinal));
     }
 
     [Fact]

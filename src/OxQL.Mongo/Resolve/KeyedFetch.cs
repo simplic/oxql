@@ -721,6 +721,10 @@ public sealed class KeyedFetch
         var pending = targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList();
         var fromOwners = new List<OwnerDiagnostic>();
 
+        // What an owner reported with rows the cache now answers for, said again with them.
+        foreach (var target in targets)
+            fromOwners.AddRange(target.Replayed.Select(replayed => new OwnerDiagnostic(target, target.Service, replayed.Reported, replayed.Rows)));
+
         for (var attempt = 0; pending.Count > 0; attempt++)
         {
             var retry = new List<Sent>();
@@ -763,12 +767,16 @@ public sealed class KeyedFetch
                     if (HasNextPage(result))
                         Partial(call.Service, target, keys.Where(key => !target.Hits.ContainsKey(key)).ToList(), keys, diagnostics);
 
-                    // What the owner reported about the continued stages comes back to the caller;
-                    // the cache keeps rows, not reports, so such an answer is not kept.
+                    // What the owner reported about the continued stages comes back to the caller. A
+                    // report that names its rows and says what the data says of them is kept with the
+                    // rows, so the next page is answered from the cache with the same report; any other
+                    // (an owner that did not answer, a list the owner cut) leaves the chunk unkept.
                     if (!target.Continued.IsEmpty && result["diagnostics"] is JsonArray { Count: > 0 } reported)
                     {
                         fromOwners.AddRange(reported.OfType<JsonObject>().Select(diagnostic => new OwnerDiagnostic(target, call.Service, diagnostic, items)));
-                        target.Uncached.UnionWith(keys);
+
+                        if (!target.Report(reported, items))
+                            target.Uncached.UnionWith(keys);
                     }
                 }
             }
@@ -934,7 +942,7 @@ public sealed class KeyedFetch
     internal const int MaxDropRounds = 2;
 
     /// <summary>A diagnostic an owner reported with its answer for a target that carried continued stages, and the answer's rows.</summary>
-    private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, JsonArray Items);
+    private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, IList<JsonNode?> Items);
 
     /// <summary>
     /// A path asked under the alias that no target of a union has (DESIGN §3.4.1): refused. A local target lacks
@@ -1829,6 +1837,10 @@ public sealed class KeyedFetch
             if (cached.Rows.Count > 0)
                 Hits[key] = cached.Rows.ToList();
 
+            // The report the owner's answer carried about these rows, over the rows as they are held now.
+            foreach (var report in cached.Reported)
+                Replayed.Add((report, cached.Rows.Cast<JsonNode?>().ToList()));
+
             if (cached.Excluded)
                 Excluded.Add(key);
         }
@@ -1841,7 +1853,99 @@ public sealed class KeyedFetch
         {
             Hits.TryGetValue(key, out var rows);
 
-            return new OwnerAnswer((rows ?? []).Take(RowsPerKey).ToList(), rows is not { Count: > 0 } && Excluded.Contains(key));
+            var kept = (rows ?? []).Take(RowsPerKey).ToList();
+
+            return new OwnerAnswer(kept, rows is not { Count: > 0 } && Excluded.Contains(key)) { Reported = ReportedOf(kept) };
+        }
+
+        /// <summary>The reports the cache replays: each an owner's diagnostic cut to the rows of one cached answer, with those rows.</summary>
+        public List<(JsonObject Reported, IList<JsonNode?> Rows)> Replayed { get; } = [];
+
+        /// <summary>What an owner reported about a row of its answer: the diagnostic and the row's entry in it.</summary>
+        private readonly Dictionary<JsonObject, List<(JsonObject Diagnostic, JsonObject Entry)>> reports = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>The outcomes a report states of the data; an owner that did not answer is not one, and is asked again.</summary>
+        private static readonly HashSet<string> Stated = new(StringComparer.Ordinal)
+        {
+            OutcomePolicy.WireName(KeyedOutcome.NotFound), OutcomePolicy.WireName(KeyedOutcome.Excluded), OutcomePolicy.WireName(KeyedOutcome.Ambiguous),
+            OutcomePolicy.WireName(KeyedOutcome.InvalidKey), OutcomePolicy.WireName(KeyedOutcome.ReferenceNull),
+        };
+
+        /// <summary>
+        /// Takes in what an owner reported with <paramref name="items"/>, so the rows can be kept with
+        /// it: true when every diagnostic lists its rows in full, each by its place in the answer and
+        /// with an outcome the data states. False leaves nothing recorded: the answer is not kept.
+        /// </summary>
+        public bool Report(JsonArray reported, JsonArray items)
+        {
+            var taken = new List<(JsonObject Row, JsonObject Diagnostic, JsonObject Entry)>();
+
+            foreach (var node in reported)
+            {
+                if (node is not JsonObject diagnostic || diagnostic["params"] is not JsonObject written || written["rows"] is not JsonArray entries
+                    || (written["truncated"] is JsonValue cut && cut.TryGetValue<bool>(out var truncated) && truncated)
+                    || (written["count"] is JsonValue counted && counted.TryGetValue<long>(out var count) && count != entries.Count))
+                    return false;
+
+                foreach (var listed in entries)
+                {
+                    if (listed is not JsonObject entry || entry["row"] is not JsonValue at || !at.TryGetValue<int>(out var index) || index < 0 || index >= items.Count
+                        || items[index] is not JsonObject row || entry["outcome"]?.ToString() is not { } outcome || !Stated.Contains(outcome))
+                        return false;
+
+                    taken.Add((row, diagnostic, entry));
+                }
+            }
+
+            foreach (var (row, diagnostic, entry) in taken)
+            {
+                if (!reports.TryGetValue(row, out var about))
+                    reports[row] = about = [];
+
+                about.Add((diagnostic, entry));
+            }
+
+            return true;
+        }
+
+        /// <summary>The reports about <paramref name="rows"/>, one per diagnostic, its entries naming each row by its place among them.</summary>
+        private List<JsonObject> ReportedOf(List<JsonObject> rows)
+        {
+            var cut = new List<(JsonObject Diagnostic, JsonArray Entries)>();
+
+            for (var index = 0; index < rows.Count; index++)
+            {
+                if (!reports.TryGetValue(rows[index], out var about))
+                    continue;
+
+                foreach (var (diagnostic, entry) in about)
+                {
+                    var at = cut.FindIndex(each => ReferenceEquals(each.Diagnostic, diagnostic));
+
+                    if (at < 0)
+                    {
+                        cut.Add((diagnostic, []));
+                        at = cut.Count - 1;
+                    }
+
+                    var moved = (JsonObject)entry.DeepClone();
+
+                    moved["row"] = index;
+                    cut[at].Entries.Add(moved);
+                }
+            }
+
+            return cut.Select(each =>
+            {
+                var report = (JsonObject)each.Diagnostic.DeepClone();
+                var written = (JsonObject)report["params"]!;
+
+                written["count"] = each.Entries.Count;
+                written["truncated"] = false;
+                written["rows"] = each.Entries;
+
+                return report;
+            }).ToList();
         }
 
         public void Hit(string key, JsonObject row)

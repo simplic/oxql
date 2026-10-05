@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using FluentAssertions;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
@@ -131,6 +133,73 @@ public partial class CommandBudgetTests
             """, """ "position": 1, "sourceParent.id": 1, "vehicle.matchCode": 1, "vehicleOutcome": 1 """)),
         cold: 5,
         warm: 1);
+
+    /// <summary>
+    /// A chain whose owner reports something about the rows it answers (a tour whose vehicle no record
+    /// holds): the tours are kept with that report, so the same page again is the page alone and says
+    /// the same. Before, an answer with a report was not kept and the tours were fetched on every repeat.
+    /// </summary>
+    [Fact]
+    public async Task S5b_a_chain_whose_owner_reports_a_missing_record_is_the_page_alone_warm_and_says_the_same()
+    {
+        var answers = new List<WireAnswer>();
+
+        await MeasureAsync(
+            "S5b",
+            async fleet =>
+            {
+                var answer = await fleet.Client(LabService.Transport, Org.C).SendAsync(Corpus.Shipment, """
+                    [ { "resolve": { "path": "tours.tourId", "as": "tour", "elements": "first" } },
+                      { "resolve": { "path": "tour.resource.id", "as": "vehicle", "target": "fleet.vehicle", "onMissing": "report" } },
+                      { "project": { "shipmentNumber": 1, "tour.number": 1, "vehicle.matchCode": 1 } },
+                      { "sort": [ { "shipmentNumber": "asc" } ] }, { "page": { "limit": 10 } } ]
+                    """);
+
+                answers.Add(answer);
+
+                return answer;
+            },
+            cold: 3,
+            warm: 1,
+            extra: SeedDanglingVehicleAsync);
+
+        answers[0].ShouldHaveDiagnostic("RESOLVE_MISSING")["params"]!["count"]!.GetValue<long>().Should().Be(2, "both shipments ride the tour whose vehicle is missing");
+        answers[1].Text.Should().Be(answers[0].Text, "the page answered from the cache says what the owners' answers said");
+    }
+
+    /// <summary>Three shipments of organisation C on two tours, one of which names a vehicle no record holds.</summary>
+    private static async Task SeedDanglingVehicleAsync(LabFleet fleet)
+    {
+        var organisation = Org.C.Id();
+        var transport = await fleet.DatabaseAsync(LabService.Transport);
+        var at = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var vehicle = Ids.Of("20000001", Org.C, 1);
+
+        await (await fleet.DatabaseAsync(LabService.Fleet)).GetCollection<BsonDocument>(LabService.Fleet.Model.Entities["fleet.vehicle"].Collection)
+            .InsertOneAsync(new Fleet.Models.Fleet.Vehicle { Id = vehicle, OrganizationId = organisation, MatchCode = "V-0001" }.ToBsonDocument());
+
+        await transport.GetCollection<BsonDocument>(LabService.Transport.Model.Entities["transport.tour"].Collection).InsertManyAsync(new[] { (1, vehicle), (2, Ids.Dangling(7, Org.C)) }.Select(tour =>
+            new Fleet.Models.Transport.Tour
+            {
+                Id = Ids.Of(Spaces.Tour, Org.C, tour.Item1),
+                OrganizationId = organisation,
+                Number = "T-" + tour.Item1,
+                Resource = new Fleet.Models.Transport.TractorUnitResource { Id = tour.Item2, OrganizationId = organisation },
+                CreateDateTime = at,
+                UpdateDateTime = at,
+            }.ToBsonDocument()));
+
+        await transport.GetCollection<BsonDocument>(Corpus.Entity(Corpus.Shipment).Collection).InsertManyAsync(Enumerable.Range(1, 3).Select(n =>
+            new Fleet.Models.Transport.Shipment
+            {
+                Id = Ids.Of(Spaces.Shipment, Org.C, n),
+                OrganizationId = organisation,
+                ShipmentNumber = "S-" + n,
+                Tours = [new Fleet.Models.Transport.ShipmentTour { Id = Ids.Of(Spaces.ShipmentTourEntry, Org.C, n), TourId = Ids.Of(Spaces.Tour, Org.C, n == 1 ? 1 : 2) }],
+                CreateDateTime = at,
+                UpdateDateTime = at,
+            }.ToBsonDocument()));
+    }
 
     [Fact]
     public Task S5_a_continued_chain_is_one_fetch_per_level_and_the_page_alone_warm() => MeasureAsync(

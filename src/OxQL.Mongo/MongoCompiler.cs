@@ -518,7 +518,7 @@ public static class MongoCompiler
                 case BoundStage.Project project:
                     if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
                         [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
-                        sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection) is { } projection)
+                        sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection, wholeCollections: options.AsWritten) is { } projection)
                     {
                         if (!options.AsWritten && ProjectsAfterPage(bound, index))
                         {
@@ -1694,15 +1694,29 @@ public static class MongoCompiler
     }
 
     /// <summary>
-    /// What a keyed resolve reads off the page rows, which a projection before the page keeps in
-    /// storage: the reference, the collection it crosses under <c>elements</c>, and the stored
-    /// values that select its cases.
+    /// What a keyed resolve reads off the page rows, which a projection keeps in storage: the
+    /// reference and the stored values that select its cases; under <c>elements</c> those of each
+    /// element of the collection it crosses, and with <paramref name="whole"/> that collection whole.
     /// </summary>
-    private static IEnumerable<string> KeptStorages(BoundStage.Resolve resolve)
+    private static IEnumerable<string> KeptStorages(BoundStage.Resolve resolve, bool whole)
     {
         if (resolve.CollectionStorage is { } collection)
         {
-            yield return collection;
+            // As written (contract 1) the collection is kept whole. Otherwise only what the keyed
+            // fetch reads of each element: the reference, and the stored values that select its
+            // cases, which are relative to the element. The elements keep their places either way.
+            if (whole)
+            {
+                yield return collection;
+                yield break;
+            }
+
+            yield return resolve.Reference.Storage ?? collection;
+
+            foreach (var bound in resolve.Cases ?? [])
+                if (bound.When is { } condition)
+                    yield return collection + "." + condition.Storage;
+
             yield break;
         }
 
@@ -2051,10 +2065,11 @@ public static class MongoCompiler
         IReadOnlyList<string> reservedIndexes,
         IReadOnlyList<string> sortStorages,
         List<string> sortKeptAgainstProjection,
-        ref bool keyKeptAgainstProjection)
+        ref bool keyKeptAgainstProjection,
+        bool wholeCollections = true)
     {
         var projection = new BsonDocument();
-        var kept = keyedResolves.SelectMany(KeptStorages).Distinct(StringComparer.Ordinal).ToList();
+        var kept = keyedResolves.SelectMany(resolve => KeptStorages(resolve, wholeCollections)).Distinct(StringComparer.Ordinal).ToList();
 
         foreach (var storage in lateJoinKeys)
             if (!kept.Contains(storage, StringComparer.Ordinal))

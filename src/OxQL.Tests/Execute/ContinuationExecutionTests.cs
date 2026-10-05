@@ -633,9 +633,49 @@ public class ContinuationExecutionTests
         rows.Should().OnlyContain(row => row["outcome"]!.ToString() == "not_found");
         ((IReadOnlyDictionary<string, object?>)diagnostic.Params["owner"]!)["stage"].Should().Be(1);
 
+        // The rows are kept with what the owner reported about them: the same page again asks no owner and says the same.
         client.Calls.Clear();
-        Succeeded(await RunAsync(engine, ContactChain)).Diagnostics.Should().ContainSingle("an answer with a report is not cached, so the report comes back every time");
-        client.Calls.Should().ContainSingle();
+
+        var again = Succeeded(await RunAsync(engine, ContactChain));
+
+        client.Calls.Should().BeEmpty("the owner's rows and its report about them are answered from the cache");
+        System.Text.Json.JsonSerializer.Serialize(again.Diagnostics, BindHost.Json).Should().Be(System.Text.Json.JsonSerializer.Serialize(result.Diagnostics, BindHost.Json), "the report the owner's answer carried comes back with its rows");
+        again.Items.Select(item => item!.ToJsonString()).Should().Equal(result.Items.Select(item => item!.ToJsonString()));
+
+        // A strict request refuses for what is missing, so it never reads an answer that says something is: the owner is asked.
+        await RunAsync(engine, ContactChain, strict: true);
+        client.Calls.Should().ContainSingle("a record created a moment ago must not be refused as missing");
+    }
+
+    [Fact]
+    public async Task An_owners_report_that_does_not_list_its_rows_in_full_or_says_the_owner_did_not_answer_is_asked_again()
+    {
+        foreach (var (truncated, outcome) in new[] { (true, "not_found"), (false, "owner_unanswered") })
+        {
+            var (engine, runner, client) = Host();
+
+            runner.Rows[Invoice] = [InvoiceRow(InvoiceId, row => row["ContactId"] = Id(ContactId))];
+
+            var reported = new JsonArray(new JsonObject
+            {
+                ["code"] = Codes.ResolveMissing,
+                ["message"] = "1 row references a record that does not exist ('co').",
+                ["stage"] = 1,
+                ["path"] = "companyId",
+                ["params"] = new JsonObject
+                {
+                    ["alias"] = "co", ["count"] = truncated ? 7 : 1, ["truncated"] = truncated,
+                    ["rows"] = new JsonArray(new JsonObject { ["row"] = 0, ["key"] = "k-1", ["outcome"] = outcome }),
+                },
+            });
+
+            client.Script = (_, _, _) => new FakeRemoteClient.Answer.Reported(reported, FakeRemoteClient.Row("id", ContactId.ToString(), ("name", "Alice"), ("co", null)));
+
+            Succeeded(await RunAsync(engine, ContactChain)).Diagnostics.Should().ContainSingle();
+            client.Calls.Clear();
+            Succeeded(await RunAsync(engine, ContactChain)).Diagnostics.Should().ContainSingle();
+            client.Calls.Should().ContainSingle($"an answer whose report is {(truncated ? "cut" : "an owner that did not answer")} is not kept");
+        }
     }
 
     // ---- the flat paths of a union over remote targets --------------------------------------------------

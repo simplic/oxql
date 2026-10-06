@@ -18,6 +18,9 @@ namespace OxQL.Core.Engine;
 /// <para>
 /// <c>db.ms</c> is the time the request spent with at least one command in flight: commands sent
 /// together count once (the union of their spans), so <c>totalMs − db.ms = oursMs</c> always holds.
+/// A read the host made at a database for the engine (its addon definitions, where the source says
+/// so: <see cref="Read"/>) is such a command, of kind <see cref="AddonRead"/>: it is database
+/// time, not this host's own.
 /// A command's time is what the driver saw: the server's execution, the network and the reply's
 /// read; the server alone is found in its profiler by the command's <c>comment</c>, the request's
 /// correlation id.
@@ -48,6 +51,9 @@ public sealed class QueryTiming
 
     /// <summary>A command this host ran as the owner of a keyed join's target.</summary>
     public const string Resolve = "resolve";
+
+    /// <summary>A read of addon definitions the host's source made, or waited for, at its database.</summary>
+    public const string AddonRead = "addon";
 
     private readonly object gate = new();
     private readonly List<Command> commands = [];
@@ -111,7 +117,11 @@ public sealed class QueryTiming
     /// <summary>The time since <paramref name="since"/> was spent binding (the addon definitions' read is taken out by <see cref="Addon"/>).</summary>
     public void Bind(long since) => Add(ref bind, since);
 
-    /// <summary>The time since <paramref name="since"/> was spent reading addon definitions.</summary>
+    /// <summary>
+    /// The time since <paramref name="since"/> was spent asking the host's source for addon
+    /// definitions: an answer from memory, or a wait for its database (which the source reports and
+    /// <see cref="Read"/> lists as a command).
+    /// </summary>
     public void Addon(long since) => Add(ref addon, since);
 
     /// <summary>The time since <paramref name="since"/> was spent compiling.</summary>
@@ -146,6 +156,24 @@ public sealed class QueryTiming
             root.commands.Add(command);
 
         return command;
+    }
+
+    /// <summary>
+    /// A command the host sent for the engine, or waited for, that is already over: it lasted from
+    /// <paramref name="started"/> to <paramref name="ended"/> and returned <paramref name="docs"/>
+    /// documents. <paramref name="roundTrips"/> is what this request caused: 0 says the request
+    /// waited for a command another request had sent (listed, as the time was waited, and counted
+    /// neither as a command nor as a round trip of this request).
+    /// </summary>
+    public void Read(string kind, string collection, long started, long ended, int docs, int roundTrips = 1)
+    {
+        var root = Root;
+        var command = new Command(kind, collection, Math.Min(started, ended));
+
+        command.Over(Math.Max(started, ended), docs, roundTrips);
+
+        lock (root.gate)
+            root.commands.Add(command);
     }
 
     /// <summary>Marks the commands of <paramref name="kind"/> whose answer the request did not use (a count the page made needless).</summary>
@@ -234,7 +262,17 @@ public sealed class QueryTiming
 
     private sealed record Snapshot(long Total, long Database, long Remote, List<(Command Command, long Ended)> Commands, List<Owner> Owners)
     {
-        public int RoundTrips => Commands.Sum(entry => 1 + Math.Max(0, entry.Command.GetMores ?? 0));
+        /// <summary>The commands this request sent: one it only waited for is another request's.</summary>
+        public int Sent => Commands.Count(entry => !entry.Command.Shared);
+
+        public int RoundTrips => Commands.Sum(entry => entry.Command.Shared ? 0 : 1 + Math.Max(0, entry.Command.GetMores ?? 0));
+
+        /// <summary>Whether the request read addon definitions at the database, or waited for such a read.</summary>
+        public bool ReadAddons => Commands.Any(entry => entry.Command.Kind == AddonRead);
+
+        /// <summary>The time with a read of addon definitions in flight; part of <see cref="Database"/>.</summary>
+        public long Addons(long from, long to) =>
+            Union(Commands.Where(entry => entry.Command.Kind == AddonRead).Select(entry => (entry.Command.Started, entry.Ended)), from, to);
     }
 
     /// <summary>Whether a header or a body member asks for the breakdown: present and neither <c>0</c> nor <c>false</c>.</summary>
@@ -244,8 +282,9 @@ public sealed class QueryTiming
     /// <summary>
     /// The <c>Server-Timing</c> value: <c>total</c>, <c>db</c> (with the commands and round trips),
     /// <c>ours</c> (= total − db), <c>bind</c>, <c>compile</c>, <c>convert</c>, and where they
-    /// occurred <c>resolve</c>, <c>remote</c>, <c>count</c> and the estimated network part of
-    /// <c>db</c> (<c>net</c>). Durations in milliseconds.
+    /// occurred <c>addon</c> (the addon definitions' reads at the database; part of <c>db</c>),
+    /// <c>resolve</c>, <c>remote</c>, <c>count</c> and the estimated network part of <c>db</c>
+    /// (<c>net</c>). Durations in milliseconds.
     /// </summary>
     public string ServerTiming() => ServerTiming([this]);
 
@@ -266,7 +305,7 @@ public sealed class QueryTiming
             ? snapshots[0].Database
             : Math.Min(total, Union(snapshots.SelectMany(snapshot => snapshot.Commands.Select(entry => (entry.Command.Started, entry.Ended))), from, to));
         var waited = snapshots.Sum(snapshot => snapshot.Remote);
-        var commands = snapshots.Sum(snapshot => snapshot.Commands.Count);
+        var commands = snapshots.Sum(snapshot => snapshot.Sent);
         var trips = snapshots.Sum(snapshot => snapshot.RoundTrips);
         var text = new StringBuilder();
 
@@ -287,6 +326,9 @@ public sealed class QueryTiming
         Metric("bind", roots.Sum(root => Math.Max(0, Interlocked.Read(ref root.bind) - Interlocked.Read(ref root.addon))));
         Metric("compile", roots.Sum(root => Interlocked.Read(ref root.compile)));
         Metric("convert", roots.Sum(root => Interlocked.Read(ref root.convert)));
+
+        if (snapshots.Any(snapshot => snapshot.ReadAddons))
+            Metric("addon", snapshots.Sum(snapshot => snapshot.Addons(from, to)), "db");
 
         if (roots.Sum(root => Interlocked.Read(ref root.resolve)) is var resolved and > 0)
             Metric("resolve", resolved, string.Create(CultureInfo.InvariantCulture, $"{roots.Sum(root => root.ResolveCalls)} calls / {roots.Sum(root => root.ResolveCacheHits)} cached"));
@@ -343,6 +385,9 @@ public sealed class QueryTiming
 
             entry["parallelWith"] = beside < 0 ? null : beside;
 
+            if (command.Shared)
+                entry["shared"] = true;
+
             if (command.Discarded)
                 entry["discarded"] = true;
 
@@ -357,7 +402,7 @@ public sealed class QueryTiming
         var database = new JsonObject
         {
             ["ms"] = Ms(snapshot.Database),
-            ["commands"] = snapshot.Commands.Count,
+            ["commands"] = snapshot.Sent,
             ["roundTrips"] = snapshot.RoundTrips,
         };
 
@@ -418,7 +463,7 @@ public sealed class QueryTiming
     {
         var snapshot = Root.Take();
 
-        return (Ms(snapshot.Total), Ms(snapshot.Database), Ms(snapshot.Total - snapshot.Database), Ms(Interlocked.Read(ref Root.convert)), snapshot.Commands.Count);
+        return (Ms(snapshot.Total), Ms(snapshot.Database), Ms(snapshot.Total - snapshot.Database), Ms(Interlocked.Read(ref Root.convert)), snapshot.Sent);
     }
 
     /// <summary>How this engine was built: its own share is larger in a Debug build.</summary>
@@ -441,7 +486,7 @@ public sealed class QueryTiming
             Started = started;
         }
 
-        /// <summary>What the command was for: <c>page</c>, <c>count</c>, <c>countRung</c>, <c>probe</c>, <c>resolve</c>.</summary>
+        /// <summary>What the command was for: <c>page</c>, <c>count</c>, <c>countRung</c>, <c>probe</c>, <c>resolve</c>, <c>addon</c>.</summary>
         public string Kind { get; }
 
         /// <summary>The entity whose collection it read.</summary>
@@ -462,6 +507,18 @@ public sealed class QueryTiming
         internal bool Failed { get; private set; }
 
         internal bool Discarded { get; set; }
+
+        /// <summary>The request waited for this command and another request had sent it.</summary>
+        internal bool Shared { get; private set; }
+
+        /// <summary>A command that is already over: when it ended, what it returned and the round trips the request caused.</summary>
+        internal void Over(long at, int docs, int roundTrips)
+        {
+            Docs = docs;
+            Shared = roundTrips <= 0;
+            GetMores = roundTrips > 1 ? roundTrips - 1 : null;
+            Ended = at;
+        }
 
         /// <summary>The first reply arrived (the command's own; what follows is reading the rest).</summary>
         public void FirstBatchAt(long timestamp) => FirstBatch = timestamp;

@@ -61,7 +61,9 @@ public class TimingTests
         var metrics = Metrics(response);
 
         metrics.Keys.Should().StartWith(["total", "db", "ours", "bind", "compile", "convert"]);
-        metrics["db"].Description.Should().Be("2 cmd / 2 rt", "the page and the count beside it, each one round trip");
+        metrics["db"].Description.Should().Be("3 cmd / 3 rt", "the addon definitions' read, then the page and the count beside it, each one round trip");
+        metrics["addon"].Description.Should().Be("db", "the fleet's addon source reads its database on every request, and says so");
+        metrics["addon"].Duration.Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(metrics["db"].Duration);
         (metrics["total"].Duration - metrics["db"].Duration).Should().BeApproximately(metrics["ours"].Duration, 0.011);
         metrics["db"].Duration.Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(metrics["total"].Duration);
         metrics.Should().ContainKey("net", "the driver knows its round-trip time to the server");
@@ -96,14 +98,23 @@ public class TimingTests
         var database = timing["db"]!.AsObject();
 
         database.Select(member => member.Key).Should().Equal("ms", "commands", "roundTrips", "rttMs", "networkEstimateMs", "list");
-        database["commands"]!.GetValue<int>().Should().Be(2);
-        database["roundTrips"]!.GetValue<int>().Should().Be(2, "no getMore: the page's batch closes its cursor");
+        database["commands"]!.GetValue<int>().Should().Be(3);
+        database["roundTrips"]!.GetValue<int>().Should().Be(3, "no getMore: the page's batch closes its cursor");
 
         var list = database["list"]!.AsArray();
 
-        list.Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("page", "count");
+        list.Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("addon", "page", "count");
 
-        var page = list[0]!.AsObject();
+        // The addon definitions' read is the database's time: a command like the others, in the collection the source named.
+        var read = list[0]!.AsObject();
+
+        read.Select(member => member.Key).Should().Equal("kind", "collection", "ms", "docs", "parallelWith");
+        read["collection"]!.GetValue<string>().Should().Be(TestAddonSource.Collection);
+        read["parallelWith"].Should().BeNull();
+        Number(read["ms"]).Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(Number(timing["addonMs"]) + 0.011, "the time the source was asked holds its read");
+        Number(timing["oursMs"]).Should().BeLessThanOrEqualTo(Number(timing["totalMs"]) - Number(read["ms"]) - Number(list[1]!["ms"]) + 0.021, "neither the read nor the page is this host's own time");
+
+        var page = list[1]!.AsObject();
 
         page.Select(member => member.Key).Should().Equal("kind", "collection", "ms", "firstBatchMs", "drainMs", "docs", "bytes", "getMores", "parallelWith");
         page["collection"]!.GetValue<string>().Should().Be("transport.shipment_template");
@@ -112,13 +123,14 @@ public class TimingTests
         page["getMores"]!.GetValue<int>().Should().Be(0);
         page["parallelWith"].Should().BeNull();
         (Number(page["firstBatchMs"]) + Number(page["drainMs"])).Should().BeApproximately(Number(page["ms"]), 0.021);
-        list[1]!["parallelWith"]!.GetValue<int>().Should().Be(0, "the count left beside the page");
-        list[1]!["docs"]!.GetValue<int>().Should().Be(1);
+        list[2]!["parallelWith"]!.GetValue<int>().Should().Be(1, "the count left beside the page");
+        list[2]!["docs"]!.GetValue<int>().Should().Be(1);
 
         // The header says the same sums.
         var metrics = Metrics(response);
 
-        metrics["db"].Description.Should().Be("2 cmd / 2 rt");
+        metrics["db"].Description.Should().Be("3 cmd / 3 rt");
+        metrics["addon"].Duration.Should().BeApproximately(Number(read["ms"]), 0.011);
         metrics["total"].Duration.Should().BeGreaterThanOrEqualTo(Number(timing["totalMs"]) - 0.011, "the header is written after the body's numbers were taken");
     }
 
@@ -161,13 +173,14 @@ public class TimingTests
         // The owner's own timing travels back: the database's share at the owner is known at the origin.
         var theirs = remote["timing"]!.AsArray().Should().ContainSingle().Subject!;
 
-        theirs["db"]!["list"]!.AsArray().Select(command => command!["kind"]!.GetValue<string>()).Should().Contain("page");
-        theirs["db"]!["list"]!.AsArray().Should().OnlyContain(command => command!["collection"]!.GetValue<string>() == "fleet.vehicle");
+        theirs["db"]!["list"]!.AsArray().Select(command => command!["kind"]!.GetValue<string>()).Should().Contain("page").And.Contain("addon", "the owner read its own organisation's definitions of the vehicle");
+        theirs["db"]!["list"]!.AsArray().Should().OnlyContain(command =>
+            command!["collection"]!.GetValue<string>() == (command["kind"]!.GetValue<string>() == "addon" ? TestAddonSource.Collection : "fleet.vehicle"));
         Number(cold["resolve"]!["remoteMs"]).Should().BeGreaterThan(0).And.BeLessThanOrEqualTo(Number(cold["resolve"]!["ms"]) + 0.011);
         cold["resolve"]!["calls"]!.GetValue<int>().Should().BeGreaterThan(0);
 
         // This host's own commands are all this request's: the page, and nothing of the other service's database.
-        cold["db"]!["list"]!.AsArray().Should().OnlyContain(command => command!["collection"]!.GetValue<string>().StartsWith("transport.", StringComparison.Ordinal));
+        cold["db"]!["list"]!.AsArray().Where(command => command!["kind"]!.GetValue<string>() != "addon").Should().OnlyContain(command => command!["collection"]!.GetValue<string>().StartsWith("transport.", StringComparison.Ordinal));
         (Number(cold["totalMs"]) - Number(cold["db"]!["ms"])).Should().BeApproximately(Number(cold["oursMs"]), 0.011);
 
         // Warm, the owner is answered from the cache: no call, the keys counted as hits.
@@ -193,8 +206,12 @@ public class TimingTests
         var timing = body["timing"]!.AsObject();
         var kinds = timing["db"]!["list"]!.AsArray().Select(command => (Kind: command!["kind"]!.GetValue<string>(), Collection: command["collection"]!.GetValue<string>())).ToList();
 
-        kinds[0].Should().Be(("page", "transport.shipment"));
-        kinds.Skip(1).Should().OnlyContain(command => command.Kind == "resolve", "the owner queries this host runs for itself are this request's commands");
+        kinds[0].Should().Be(("addon", TestAddonSource.Collection), "the shipment's addon definitions are read before anything is sent");
+
+        var sent = kinds.Where(command => command.Kind != "addon").ToList();
+
+        sent[0].Should().Be(("page", "transport.shipment"));
+        sent.Skip(1).Should().OnlyContain(command => command.Kind == "resolve", "the owner queries this host runs for itself are this request's commands");
         timing["resolve"]!["owners"]!.AsArray().Should().OnlyContain(owner => !owner!["remote"]!.GetValue<bool>() && owner["service"]!.GetValue<string>() == "transport");
         Number(timing["resolve"]!["remoteMs"]).Should().Be(0);
         (Number(timing["totalMs"]) - Number(timing["db"]!["ms"])).Should().BeApproximately(Number(timing["oursMs"]), 0.011);
@@ -221,14 +238,14 @@ public class TimingTests
 
         var metrics = Metrics(response);
 
-        metrics["db"].Description.Should().Be("4 cmd / 4 rt", "two queries, each its page and its count");
+        metrics["db"].Description.Should().Be("6 cmd / 6 rt", "two queries, each its addon definitions' read, its page and its count");
         (metrics["total"].Duration - metrics["db"].Duration).Should().BeApproximately(metrics["ours"].Duration, 0.011);
 
         var results = body["results"]!.AsArray();
 
         results[0]!.AsObject().ContainsKey("timing").Should().BeTrue();
         results[1]!.AsObject().ContainsKey("timing").Should().BeFalse("each query asks for itself");
-        results[0]!["timing"]!["db"]!["commands"]!.GetValue<int>().Should().Be(2);
+        results[0]!["timing"]!["db"]!["commands"]!.GetValue<int>().Should().Be(3);
     }
 
     [Fact]

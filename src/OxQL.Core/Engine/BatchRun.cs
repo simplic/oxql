@@ -112,7 +112,7 @@ public sealed class BatchFlights
 /// (a repository, a unit of work), so the queries of a batch that bind side by side never call it
 /// concurrently: they take turns, as they did when the batch ran one query after another.
 /// </summary>
-public sealed class SerialAddonSource : IAddonDefinitionSource
+public sealed class SerialAddonSource : IReportingAddonDefinitionSource
 {
     private readonly IAddonDefinitionSource source;
     private readonly SemaphoreSlim turn = new(1, 1);
@@ -128,13 +128,19 @@ public sealed class SerialAddonSource : IAddonDefinitionSource
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken)
+    public ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
+        ForEntityAsync(entity, organisation, new AddonReadReport(), cancellationToken);
+
+    /// <summary>The source's answer in this call's turn; what the source says it waited for at a database is said on, the wait for the turn is not.</summary>
+    public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, AddonReadReport report, CancellationToken cancellationToken)
     {
         await turn.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            return await source.ForEntityAsync(entity, organisation, cancellationToken).ConfigureAwait(false);
+            return source is IReportingAddonDefinitionSource reporting
+                ? await reporting.ForEntityAsync(entity, organisation, report, cancellationToken).ConfigureAwait(false)
+                : await source.ForEntityAsync(entity, organisation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

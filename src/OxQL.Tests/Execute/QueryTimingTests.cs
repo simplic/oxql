@@ -6,6 +6,7 @@ using MongoDB.Bson;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
+using OxQL.Model.Addon;
 using OxQL.Mongo;
 using OxQL.Tests.Bind;
 using Xunit;
@@ -44,10 +45,53 @@ public class QueryTimingTests
     private static List<BsonDocument> Rows(int count) =>
         Enumerable.Range(1, count).Select(index => new BsonDocument { ["_id"] = new BsonBinaryData(new Guid(index, 0, 0, new byte[8]), GuidRepresentation.Standard), ["Number"] = "n" + index, ["st"] = index }).ToList();
 
-    private static async Task<QueryResult> RunAsync(IAggregateRunner runner, string pipeline, bool timing = true)
+    /// <summary>
+    /// An addon source over a database that takes <see cref="Read"/> to answer: it says the wait
+    /// as a command it sent, or as one another request had sent (<see cref="Joined"/>), and with
+    /// <see cref="Cached"/> it answers from memory and says nothing.
+    /// </summary>
+    private sealed class DatabaseAddons : IReportingAddonDefinitionSource
+    {
+        public const string Collection = "model_definition.addon_definition.probe";
+
+        public TimeSpan Read { get; set; } = TimeSpan.FromMilliseconds(60);
+
+        public bool Joined { get; set; }
+
+        public bool Cached { get; set; }
+
+        public ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
+            ForEntityAsync(entity, organisation, new AddonReadReport(), cancellationToken);
+
+        public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, AddonReadReport report, CancellationToken cancellationToken)
+        {
+            if (Cached)
+                return [];
+
+            var started = Stopwatch.GetTimestamp();
+
+            await Task.Delay(Read, cancellationToken);
+            report.Database(Collection, started, docs: 4, roundTrips: Joined ? 0 : 1);
+
+            return [];
+        }
+    }
+
+    /// <summary>An addon source that takes as long and says nothing of where the time went.</summary>
+    private sealed class SilentAddons : IAddonDefinitionSource
+    {
+        public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken)
+        {
+            await Task.Delay(60, cancellationToken);
+
+            return [];
+        }
+    }
+
+    private static async Task<QueryResult> RunAsync(IAggregateRunner runner, string pipeline, bool timing = true, IAddonDefinitionSource? addons = null)
     {
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
-        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline) with { Timing = timing ? true : null }, BindHost.Context());
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline) with { Timing = timing ? true : null }, BindHost.Context(addons: addons));
 
         outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
 
@@ -131,6 +175,137 @@ public class QueryTimingTests
 
         steps.Select(command => command!["kind"]!.GetValue<string>()).Should().OnlyContain(kind => kind == "countRung");
         steps.Should().OnlyContain(command => command!["parallelWith"] == null);
+    }
+
+    [Fact]
+    public async Task A_read_of_addon_definitions_the_source_made_at_its_database_is_database_time_and_not_this_hosts()
+    {
+        var result = await RunAsync(new SlowRunner { PageRows = Rows(3), Page = TimeSpan.FromMilliseconds(5) }, """[{ "page": { "limit": 5 } }]""", addons: new DatabaseAddons());
+        var timing = result.Timing!;
+        var list = timing["db"]!["list"]!.AsArray();
+
+        list.Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("addon", "page");
+
+        var read = list[0]!.AsObject();
+
+        read.Select(member => member.Key).Should().Equal("kind", "collection", "ms", "docs", "parallelWith");
+        read["collection"]!.GetValue<string>().Should().Be(DatabaseAddons.Collection, "the collection as the source named it");
+        read["docs"]!.GetValue<int>().Should().Be(4);
+        read["parallelWith"].Should().BeNull();
+        Number(read["ms"]).Should().BeGreaterThanOrEqualTo(50);
+        list[1]!["parallelWith"].Should().BeNull("the read was over when the page left");
+        timing["db"]!["commands"]!.GetValue<int>().Should().Be(2);
+        timing["db"]!["roundTrips"]!.GetValue<int>().Should().Be(2);
+
+        // The wait is the database's: this host's own time does not hold it.
+        Number(timing["db"]!["ms"]).Should().BeGreaterThanOrEqualTo(Number(read["ms"]));
+        Number(timing["addonMs"]).Should().BeGreaterThanOrEqualTo(Number(read["ms"]) - 0.011, "the time the source was asked holds the read");
+        (Number(timing["totalMs"]) - Number(timing["db"]!["ms"])).Should().BeApproximately(Number(timing["oursMs"]), 0.011);
+        Number(timing["oursMs"]).Should().BeLessThan(Number(timing["totalMs"]) - 50, "a database round trip is not this host's own time");
+
+        var metrics = result.Measured!.ServerTiming().Split(", ").Select(metric => metric.Split(';')).ToDictionary(parts => parts[0], parts => parts.Skip(1).ToArray());
+
+        metrics.Keys.Should().Equal("total", "db", "ours", "bind", "compile", "convert", "addon");
+        metrics["db"].Should().Contain("desc=\"2 cmd / 2 rt\"");
+        metrics["addon"].Should().Contain("desc=\"db\"");
+        double.Parse(metrics["addon"][0]["dur=".Length..], CultureInfo.InvariantCulture).Should().BeApproximately(Number(read["ms"]), 0.011);
+        (double.Parse(metrics["total"][0]["dur=".Length..], CultureInfo.InvariantCulture) - double.Parse(metrics["db"][0]["dur=".Length..], CultureInfo.InvariantCulture))
+            .Should().BeApproximately(double.Parse(metrics["ours"][0]["dur=".Length..], CultureInfo.InvariantCulture), 0.011);
+    }
+
+    [Fact]
+    public async Task A_read_another_request_had_sent_is_listed_as_waited_for_and_counted_as_no_command_of_this_request()
+    {
+        var result = await RunAsync(new SlowRunner { PageRows = Rows(3), Page = TimeSpan.FromMilliseconds(5) }, """[{ "page": { "limit": 5 } }]""", addons: new DatabaseAddons { Joined = true });
+        var timing = result.Timing!;
+        var read = timing["db"]!["list"]!.AsArray()[0]!.AsObject();
+
+        read.Select(member => member.Key).Should().Equal("kind", "collection", "ms", "docs", "parallelWith", "shared");
+        read["kind"]!.GetValue<string>().Should().Be("addon");
+        read["shared"]!.GetValue<bool>().Should().BeTrue();
+        timing["db"]!["commands"]!.GetValue<int>().Should().Be(1, "the page; the read was another request's");
+        timing["db"]!["roundTrips"]!.GetValue<int>().Should().Be(1);
+        Number(timing["db"]!["ms"]).Should().BeGreaterThanOrEqualTo(50, "the request waited for the database all the same");
+        (Number(timing["totalMs"]) - Number(timing["db"]!["ms"])).Should().BeApproximately(Number(timing["oursMs"]), 0.011);
+        result.Measured!.ServerTiming().Should().Contain("db;dur=").And.Contain("desc=\"1 cmd / 1 rt\"").And.Contain("addon;dur=");
+    }
+
+    [Fact]
+    public async Task A_source_that_answers_from_memory_lists_no_command_and_one_that_says_nothing_keeps_its_time_with_this_host()
+    {
+        var cached = await RunAsync(new SlowRunner { PageRows = Rows(3), Page = TimeSpan.FromMilliseconds(5) }, """[{ "page": { "limit": 5 } }]""", addons: new DatabaseAddons { Cached = true });
+
+        cached.Timing!["db"]!["list"]!.AsArray().Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("page");
+        cached.Measured!.ServerTiming().Should().NotContain("addon;");
+
+        // The engine does not guess what a source waited for: only a source that says so moves its time to the database.
+        var silent = await RunAsync(new SlowRunner { PageRows = Rows(3), Page = TimeSpan.FromMilliseconds(5) }, """[{ "page": { "limit": 5 } }]""", addons: new SilentAddons());
+        var timing = silent.Timing!;
+
+        timing["db"]!["list"]!.AsArray().Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("page");
+        Number(timing["addonMs"]).Should().BeGreaterThanOrEqualTo(50);
+        Number(timing["oursMs"]).Should().BeGreaterThanOrEqualTo(50);
+        Number(timing["bindMs"]).Should().BeLessThan(50, "the time the source was asked is taken out of the binding");
+        silent.Measured!.ServerTiming().Should().NotContain("addon;");
+    }
+
+    [Fact]
+    public async Task The_queries_of_a_batch_that_take_turns_at_the_source_say_its_read_and_not_their_wait_for_the_turn()
+    {
+        var source = SerialAddonSource.Of(new DatabaseAddons());
+        var first = new AddonReadReport();
+        var second = new AddonReadReport();
+        var started = Stopwatch.GetTimestamp();
+        var one = ((IReportingAddonDefinitionSource)source).ForEntityAsync(Order, BindHost.Organisation, first, CancellationToken.None).AsTask();
+        var two = ((IReportingAddonDefinitionSource)source).ForEntityAsync(Order, BindHost.Organisation, second, CancellationToken.None).AsTask();
+
+        await Task.WhenAll(one, two);
+
+        first.Reads.Should().ContainSingle();
+        second.Reads.Should().ContainSingle();
+
+        var later = first.Reads[0].Started > second.Reads[0].Started ? first.Reads[0] : second.Reads[0];
+        var earlier = first.Reads[0].Started > second.Reads[0].Started ? second.Reads[0] : first.Reads[0];
+
+        later.Started.Should().BeGreaterThanOrEqualTo(earlier.Ended, "the second read began when its turn came, not when it was asked");
+        Stopwatch.GetElapsedTime(started, later.Started).TotalMilliseconds.Should().BeGreaterThanOrEqualTo(50);
+
+        // A source that reports nothing is read in turns as before.
+        (await SerialAddonSource.Of(new SilentAddons()).ForEntityAsync(Order, BindHost.Organisation, CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_read_that_is_over_joins_the_union_of_the_commands_and_keeps_its_kind_in_a_nested_request()
+    {
+        var timing = new QueryTiming();
+        var before = QueryTiming.Now;
+
+        Thread.Sleep(30);
+        timing.Read(QueryTiming.AddonRead, "definitions", before, QueryTiming.Now, docs: 2);
+
+        var page = timing.Begin(QueryTiming.Page, "a");
+
+        Thread.Sleep(20);
+        page.End(5);
+
+        // An owner query this host runs for itself reads its target's definitions: the read is this request's, an addon read still.
+        var nested = timing.Nested();
+        var inner = QueryTiming.Now;
+
+        Thread.Sleep(20);
+        nested.Read(QueryTiming.AddonRead, "definitions", inner, QueryTiming.Now, docs: 0, roundTrips: 3);
+        timing.Stop();
+
+        var json = timing.ToJson();
+        var list = json["db"]!["list"]!.AsArray();
+
+        list.Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("addon", "page", "addon");
+        list[2]!["getMores"]!.GetValue<int>().Should().Be(2, "three round trips are the command and two further batches");
+        json["db"]!["commands"]!.GetValue<int>().Should().Be(3);
+        json["db"]!["roundTrips"]!.GetValue<int>().Should().Be(5);
+        Number(json["db"]!["ms"]).Should().BeGreaterThanOrEqualTo(65).And.BeApproximately(list.Sum(command => Number(command!["ms"])), 0.5, "one after the other, the union is the sum");
+        (Number(json["totalMs"]) - Number(json["db"]!["ms"])).Should().BeApproximately(Number(json["oursMs"]), 0.011);
+        Number(json["oursMs"]).Should().BeLessThan(15);
     }
 
     [Fact]

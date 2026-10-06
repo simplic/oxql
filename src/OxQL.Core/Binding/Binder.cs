@@ -1281,6 +1281,20 @@ public sealed class Binder
 
             var reading = Engine.QueryTiming.Now;
 
+            // A source that says what it waited for at a database is asked to: that wait is database time, not this host's.
+            if (context.Timing is { } timing && context.AddonSource is IReportingAddonDefinitionSource reporting)
+            {
+                var report = new AddonReadReport();
+
+                addons[target.Id] = await reporting.ForEntityAsync(target.Id, context.Organisation!.Value, report, cancellationToken);
+                timing.Addon(reading);
+
+                foreach (var read in report.Reads)
+                    timing.Read(Engine.QueryTiming.AddonRead, read.Collection, read.Started, read.Ended, read.Docs, read.RoundTrips);
+
+                return;
+            }
+
             addons[target.Id] = await context.AddonSource.ForEntityAsync(target.Id, context.Organisation!.Value, cancellationToken);
             context.Timing?.Addon(reading);
         }

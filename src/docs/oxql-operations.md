@@ -139,8 +139,8 @@ stage's effective `onMissing`:
 ### Where the time went
 
 Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `desc="<commands> cmd /
-<round trips> rt"`, `ours` = `total` − `db`, `bind`, `compile`, `convert`, and `resolve`, `remote`,
-`count`, `net` where they occurred), and a request that asks (`"timing": true`, or the header
+<round trips> rt"`, `ours` = `total` − `db`, `bind`, `compile`, `convert`, and `addon`, `resolve`,
+`remote`, `count`, `net` where they occurred), and a request that asks (`"timing": true`, or the header
 `X-OxQL-Timing`) the breakdown as the `timing` member; the members are listed in
 [`oxql-query-syntax.md`](oxql-query-syntax.md#where-the-time-went). What a host should know:
 
@@ -150,6 +150,26 @@ Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `de
   (`TimedAggregateRunner`), so a host that registers its own runner is measured too. The engine's
   `MongoAggregateRunner` also says when the command's own reply arrived, how many `getMore`s
   followed and the driver's round-trip time; another runner leaves those out.
+- **A read the host makes at a database for the engine is database time.** The engine cannot see
+  inside the host's `IAddonDefinitionSource`, so a source that waits for a database says so: it
+  implements `IReportingAddonDefinitionSource` (`OxQL.Model.Addon`) and calls
+  `report.Database(collection, started, docs, roundTrips)` for every command a call waited for,
+  with the `Stopwatch` timestamp it took before the wait began (`roundTrips: 0` when the call
+  waited for a command another request had sent). The request's timing then lists the wait as a
+  command of kind `addon`, inside `db.ms`, and `Server-Timing` carries `addon;dur=…;desc="db"`.
+  A call the source answers from memory reports nothing. A source that does not implement the
+  interface is not asked and the engine guesses nothing: whatever its calls take stays in
+  `addonMs` and in `oursMs`. A host should keep that read off the request path altogether: cache
+  the definitions per organisation and entity, serve a value past its lifetime while one read
+  replaces it in the background, and let the calls that miss together share one read.
+- **The first use of a code path is this host's own time.** A request that is the first in the
+  process to run a stage or an operator pays the runtime's compilation of every method it is the
+  first to call: measured in a Release build on the test fleet, 16 to 23 ms of `ours` for the
+  first request with a `match`, `sort` and `project`, 17 to 20 ms for the first `contains`, on
+  each of two requests sent together, and under 1 ms for the first date range or `in` after
+  them; the second request of the same kind pays nothing. It shows in `bindMs` and `parseMs`,
+  never in `db`. The opt-in `FirstUseBench` (`OXQL_PERF_FIRSTUSE=<file>`, Release) measures it.
+  The engine does not warm itself at start.
 - The owner queries a host runs for its own join targets are the request's own commands
   (`kind: "resolve"`). Another service's owner is asked for its timing only when the origin's
   request asked for the breakdown; it travels back in the owner's answer (`timing` on each result of

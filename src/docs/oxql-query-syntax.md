@@ -790,10 +790,11 @@ milliseconds.
 Server-Timing: total;dur=51.3, db;dur=47.6;desc="1 cmd / 1 rt", ours;dur=3.7, bind;dur=0.11, compile;dur=0.05, convert;dur=0.64, net;dur=0.8;desc="est"
 ```
 
-`resolve` (the keyed joins, with their owner calls and cache hits), `remote` (the time waited
-for other services' owners) and `count` (the time finished rows waited for their count) appear
-when they occurred; `net` is the estimated network part of `db` (round trips × the driver's
-measured round-trip time).
+`addon` (`desc="db"`: the time the request waited for the host's read of addon definitions at
+its database; part of `db`), `resolve` (the keyed joins, with their owner calls and cache hits),
+`remote` (the time waited for other services' owners) and `count` (the time finished rows waited
+for their count) appear when they occurred; `net` is the estimated network part of `db` (round
+trips × the driver's measured round-trip time).
 
 A request that asks (`"timing": true`, or the request header `X-OxQL-Timing: 1`) also gets the
 breakdown as `timing`, the last member of the answer:
@@ -815,12 +816,19 @@ breakdown as `timing`, the last member of the answer:
   reply); the server alone is found in the database's profiler by the command's `comment`, the
   request's correlation id.
 - `db.list[]`: `kind` is `page`, `count`, `countRung` (a step of the count alone), `probe` (a
-  strict request's truncation check) or `resolve` (an owner query this host ran for a join target
-  of its own); `collection` is the entity read; `docs` the documents returned and `bytes` their
-  size as BSON; `getMores` the further round trips; `parallelWith` the index of the first earlier
-  command still in flight when this one left, or null. `discarded: true` marks a command whose
-  answer was not used (a count the page made needless); `failed: true` one that ended without an
-  answer; `running: true` one that had not ended.
+  strict request's truncation check), `resolve` (an owner query this host ran for a join target
+  of its own) or `addon` (the host's read of the organisation's addon definitions, where the
+  request had to wait for it); `collection` is the entity read (for `addon` the collection as
+  the database names it); `docs` the documents returned and `bytes` their size as BSON;
+  `getMores` the further round trips; `parallelWith` the index of the first earlier command
+  still in flight when this one left, or null. `discarded: true` marks a command whose answer
+  was not used (a count the page made needless); `failed: true` one that ended without an
+  answer; `running: true` one that had not ended; `shared: true` (an `addon` read only) one
+  that another request had sent and this one waited for: its time is in `db.ms`, and it counts
+  neither in `db.commands` nor in `db.roundTrips`.
+- `addonMs` is the time the host's addon source was asked. Where the source waited for its
+  database and says so, that wait is listed under `db.list[]` (`kind: "addon"`) and is database
+  time, not `oursMs`; a host that answers from its cache lists nothing. `bindMs` never holds it.
 - `resolve.owners[]`: one entry per join target: `service`, `entity`, `remote` (another service's
   owner), `ms` of the calls that carried its keys, `keys` asked, `cacheHits`. An owner of another
   service that was asked answers with its own `timing` per query (`timing: [ … ]`), so the

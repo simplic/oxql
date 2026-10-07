@@ -135,13 +135,20 @@ public static class Notes
     /// </summary>
     public const string GroupScans = "GROUP_SCANS";
 
+    /// <summary>
+    /// What a <c>values</c> stage reads: at most <c>scan</c> of the rows that reach it, whatever the
+    /// request matches, and the collections above its path unwound for the values alone (params
+    /// <c>scan</c>, <c>limit</c>, <c>counts</c>, <c>unwinds</c>: how many collections). Said at the stage.
+    /// </summary>
+    public const string ValuesScans = "VALUES_SCANS";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
-        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans,
+        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans, ValuesScans,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -300,6 +307,16 @@ public static class Notes
                         collector.Path(path, stage);
                     break;
 
+                // The values of a string fold into one another as a group's keys do, and its search with them.
+                case BoundStage.Values values:
+                    collector.Path(values.Path, stage);
+
+                    if (bound.Collated && values.Path is { LeafKind: Kind.String, Root: not ShapeNode.Outcome } valued && !OperandCoercer.IsCharRepresented(valued))
+                        collector.Folds(stage, valued.Wire, "values");
+
+                    collector.Notes.Add(Scanned(stage, values));
+                    break;
+
                 case BoundStage.Sort sort:
                     foreach (var field in sort.Fields)
                         collector.Sort(field, stage);
@@ -368,6 +385,23 @@ public static class Notes
         Stage = stage,
         Params = new Dictionary<string, object?> { ["keys"] = keys },
     };
+
+    /// <summary>What a values stage reads (<see cref="ValuesScans"/>).</summary>
+    private static Diagnostic Scanned(int? stage, BoundStage.Values values)
+    {
+        var path = values.Path.Wire;
+
+        return new Diagnostic
+        {
+            Code = ValuesScans,
+            Message = $"The values are read off at most {values.Scan} of the rows that reach the stage, whatever the request matches: when that many were read the answer says so (VALUES_SCAN_CAPPED) and lists the values among them."
+                + (values.Collections.Count > 0 ? $" '{path}' lies under {(values.Collections.Count == 1 ? "a collection" : $"{values.Collections.Count} collections")} the stage unwinds for the values: a value is one some element holds{(values.Counts ? ", and a count counts elements, a row without any once under null" : "")}." : "")
+                + " An index that holds the organisation, the path and what the conditions before the stage read, built without a collation, answers it without reading a document.",
+            Stage = stage,
+            Path = path,
+            Params = new Dictionary<string, object?> { ["scan"] = values.Scan, ["limit"] = values.Limit, ["counts"] = values.Counts, ["unwinds"] = values.Collections.Count },
+        };
+    }
 
     /// <summary>The parents of an unwound page ordered and cut before the unwind (<see cref="SortBeforeUnwind"/>).</summary>
     public static Diagnostic ParentsFirst(int? stage, string path, string? alias) => new()

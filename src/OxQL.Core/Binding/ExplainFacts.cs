@@ -61,6 +61,13 @@ public static class ExplainFacts
                 continue;
             }
 
+            // A values stage answers one row per value: a bucket whose one key is the value.
+            if (written.Values is not null)
+            {
+                bucket = [BoundStage.Values.ValueAlias];
+                continue;
+            }
+
             if (written.Unwind is not { Path: { } path } unwind || bucket is not null)
                 continue;
 
@@ -278,6 +285,18 @@ public static class ExplainFacts
         ArgumentNullException.ThrowIfNull(query);
 
         var order = new JsonArray();
+
+        // Values are ordered by their stage: with counts by the number of rows, most first, then by value.
+        if (bound.Values is { } values)
+        {
+            if (values.Counts)
+                order.Add(Entry(BoundStage.Values.CountAlias, ascending: false, tieBreak: false));
+
+            order.Add(Entry(BoundStage.Values.ValueAlias, ascending: true, tieBreak: values.Counts));
+
+            return order;
+        }
+
         var fields = bound.Sort?.Fields ?? [];
         // The fields the caller wrote lead; a sort the binder supplied or completed is a tie-breaker from there.
         var written = bound.Sort is { } sort && bound.CallerIndexOf(sort) is { } at && at < query.Pipeline.Count ? query.Pipeline[at].Sort?.Count ?? 0 : 0;
@@ -328,7 +347,9 @@ public static class ExplainFacts
     /// (<c>can</c>), and why not where it may not (<c>why</c>, null when nothing is refused or to be
     /// said): the operators a condition on it admits (<c>filter</c>), whether a sort and a group key
     /// may name it, the aggregate functions that take it, and whether its distinct values can be
-    /// asked for (<c>values</c>: a group by it binds). It is a function of the path's flags there
+    /// asked for (<c>values</c>: a <c>values</c> stage over it binds, which is where a group by it
+    /// binds and, through collections that are not unwound, where a group would bind once they were:
+    /// <see cref="CanValues"/>). It is a function of the path's flags there
     /// (<see cref="ExplainTypes.FlagsAt"/>) and of what <see cref="Shape.Resolve"/> answers for an
     /// aggregate argument, so a reader that holds the flags of a member that is no result column
     /// (its type's, with the stage's rule or override set) derives the same answer (<see cref="CanOf"/>).
@@ -358,7 +379,8 @@ public static class ExplainFacts
             flags = flags with { Operators = flags.Operators & theirs.Operators };
         var aggregate = shape.Resolve(path, PathUsage.Aggregate);
         var kind = aggregate.Path?.LeafKind ?? facts?.LeafKind ?? Kind.Unknown;
-        var can = CanOf(flags, aggregate.Succeeded, kind);
+        var valued = CanValues(shape, path);
+        var can = CanOf(flags, aggregate.Succeeded, kind, valued);
         var reason = ReasonOf(facts);
         var why = new JsonObject();
 
@@ -371,10 +393,10 @@ public static class ExplainFacts
             why["sort"] = reason;
 
         if (!flags.Groupable)
-        {
             why["group"] = reason;
+
+        if (!valued)
             why["values"] = reason;
-        }
 
         // Under a collection that is not unwound only push takes the path; the others need one value per row.
         if (!aggregate.Succeeded || flags.UnderCollection > 0)
@@ -385,13 +407,17 @@ public static class ExplainFacts
 
     /// <summary>
     /// <c>can</c> of a member from its flags at a boundary: <c>filter</c> the flag set's operators,
-    /// <c>sort</c> its <c>sortable</c>, <c>group</c> and <c>values</c> its <c>groupable</c>, and
+    /// <c>sort</c> its <c>sortable</c>, <c>group</c> its <c>groupable</c>, and
     /// <c>aggregate</c> the functions its kind takes where an aggregate may read it
     /// (<paramref name="aggregable"/>: the member is in the row before the page; every function for a
     /// number, all but <c>sum</c> and <c>avg</c> for anything else, and under a collection that is not
-    /// unwound <c>push</c> alone).
+    /// unwound <c>push</c> alone). <c>values</c> is <paramref name="values"/> where the caller knows
+    /// it (<see cref="CanValues"/>), else <c>groupable</c>. A reader that holds a member's flags and
+    /// its kind derives <see cref="CanValues"/> as: <c>groupable</c>, or a member of a scalar kind
+    /// (the member's own kind, so no array) that is in the row before the page and has
+    /// <c>underCollection</c> above 0.
     /// </summary>
-    public static JsonObject CanOf(MemberFlags flags, bool aggregable, Kind kind)
+    public static JsonObject CanOf(MemberFlags flags, bool aggregable, Kind kind, bool? values = null)
     {
         var operators = new JsonArray();
 
@@ -415,8 +441,37 @@ public static class ExplainFacts
             ["sort"] = flags.Sortable,
             ["group"] = flags.Groupable,
             ["aggregate"] = functions,
-            ["values"] = flags.Groupable,
+            ["values"] = values ?? flags.Groupable,
         };
+    }
+
+    /// <summary>
+    /// Whether a <c>values</c> stage over <paramref name="path"/> binds where the row has
+    /// <paramref name="shape"/>: the path is a scalar a group key could read there, and every
+    /// collection above it that is not unwound is one the stage unwinds itself (an array of the row).
+    /// It is the binder's own test, read off the same resolution.
+    /// </summary>
+    public static bool CanValues(Shape shape, string path)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ArgumentNullException.ThrowIfNull(path);
+
+        // not a read: whether a values stage could read the path at this boundary
+        if (shape.Resolve(path, PathUsage.GroupKey) is not { Succeeded: true, Path: { } key } || key.Kind == Kind.Array || !Kinds.IsScalar(key.Kind) || key.Storage is null)
+            return false;
+
+        if (key.CollectionAncestors == 0)
+            return true;
+
+        var segments = path.Split('.');
+        var arrays = 0;
+
+        for (var length = 1; length < segments.Length; length++)
+            // not a read: which prefixes of the path are collections the stage unwinds
+            if (shape.Resolve(string.Join('.', segments, 0, length), PathUsage.Project) is { Succeeded: true, Path: { Kind: Kind.Array, Storage: not null } })
+                arrays++;
+
+        return arrays == key.CollectionAncestors;
     }
 
     /// <summary>Why a path cannot be used some way, from what it is in the row: the first of the reasons that holds.</summary>

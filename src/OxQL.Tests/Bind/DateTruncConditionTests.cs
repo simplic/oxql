@@ -302,6 +302,22 @@ public class DateTruncConditionTests
         unbound.Stage.Should().Be(1);
     }
 
+    [Fact]
+    public async Task In_a_joins_filter_it_binds_against_the_target_and_an_option_beside_it_does_not_apply()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """
+            [{ "resolve": { "path": "customerId", "as": "c", "filter": { "createDateTime": { "dateTrunc": { "unit": "year", "eq": "2026-06-01T00:00:00Z" } } } } }]
+            """);
+        var filter = bound.Stages.OfType<BoundStage.Resolve>().Single().Filter.Should().BeOfType<BoundCondition.Leaf>().Subject;
+
+        filter.Operand.Should().BeOfType<BoundOperand.Range>().Which.From.ToUniversalTime().Should().Be(Utc("2026-01-01T00:00:00Z"));
+
+        var error = await BindHost.ErrorAsync(BindHost.Probe, Order,
+            """[{ "match": { "when": { "dateTrunc": { "unit": "day", "eq": "2026-08-13T14:25:36Z" }, "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
+
+        error.Path.Should().Be("when");
+    }
+
     // ---- what it is bound to ------------------------------------------------------------------
 
     [Fact]

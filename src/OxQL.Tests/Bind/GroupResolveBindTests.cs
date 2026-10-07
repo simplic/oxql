@@ -91,6 +91,20 @@ public class GroupResolveBindTests
         semi.PageStages.Select(stage => stage.ToJson()).Should().Contain(stage => stage.Contains("\"key\" : { \"$in\""), "the owner's ids narrow the groups by their key");
     }
 
+    [Fact]
+    public async Task A_resolve_only_the_display_reads_does_not_bind_the_levels_cursor()
+    {
+        var plain = await Bound($$"""[{{Grouped("customerId")}}, { "sort": [{ "n": "desc" }] }]""");
+        var shown = await Bound($$"""[{{Grouped("customerId")}}, { "resolve": { "path": "key", "as": "c" } }, { "project": { "key": 1, "n": 1, "c.name": 1 } }, { "sort": [{ "n": "desc" }] }]""");
+        var remote = await Bound($$"""[{{Grouped("contactId")}}, { "resolve": { "path": "key", "as": "r" } }, { "sort": [{ "n": "desc" }] }]""");
+        var remotePlain = await Bound($$"""[{{Grouped("contactId")}}, { "sort": [{ "n": "desc" }] }]""");
+        var ordered = await Bound($$"""[{{Grouped("customerId")}}, { "resolve": { "path": "key", "as": "c" } }, { "sort": [{ "c.name": "asc" }] }]""");
+
+        shown.Fingerprint.Should().Be(plain.Fingerprint, "showing the record's name is a column, not another list");
+        remote.Fingerprint.Should().Be(remotePlain.Fingerprint);
+        ordered.Fingerprint.Should().NotBe(plain.Fingerprint, "ordered by the record it is another list");
+    }
+
     [Theory]
     [InlineData("customerCode", ResolveExecutor.Inline, "a member of the target that is not its key")]
     [InlineData("billingLineId", ResolveExecutor.Keyed, "an item of the target")]

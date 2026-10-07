@@ -550,7 +550,7 @@ public sealed class ExplainTypes
             project.Succeeded,
             matched is { Filterable: true, Root: not ShapeNode.Outcome } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched),
             project.Path?.CollectionAncestors ?? 0,
-            facts?.Path?.References is { Count: > 0 } && facts.Addon is null ? Followable(Crossed(shape, path)) : 0);
+            facts?.References is not null && facts.Addon is null ? Followable(Crossed(shape, path)) : 0);
     }
 
     private const int ExistsBit = 1 << 11;
@@ -1597,11 +1597,14 @@ public sealed class ExplainTypes
         _ => 3,
     };
 
-    /// <summary>The reference a path declares with every case (DESIGN §4.5).</summary>
-    private static JsonObject? ReferenceOf(ResolvedPath? facts)
+    /// <summary>The reference a path declares with every case (DESIGN §4.5); on a group's key, the reference of the member it was taken over.</summary>
+    private static JsonObject? ReferenceOf(ResolvedPath? facts) =>
+        facts?.References is not { } cases || facts.Addon is not null ? null : ReferenceOf(cases);
+
+    /// <summary>A declared reference with every case, as an explain answer writes it.</summary>
+    public static JsonObject ReferenceOf(IReadOnlyList<ReferenceDef> cases)
     {
-        if (facts?.Path?.References is not { Count: > 0 } cases || facts.Addon is not null)
-            return null;
+        ArgumentNullException.ThrowIfNull(cases);
 
         var reference = new JsonObject();
 

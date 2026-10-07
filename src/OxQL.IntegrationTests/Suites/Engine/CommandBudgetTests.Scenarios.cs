@@ -51,6 +51,38 @@ public partial class CommandBudgetTests
         warm: 1);
 
     /// <summary>
+    /// A <c>resolve</c> after a <c>group</c> (DG2): the record a group's key names. Of this service it is
+    /// joined in the page's own aggregate, on the page's rows: no command more. Of another service it
+    /// is one owner query for the page's keys, and none while that answer is kept.
+    /// </summary>
+    [Theory]
+    [InlineData("local", 1, 1)]
+    [InlineData("remote", 2, 1)]
+    public Task S2d_the_record_a_groups_key_names_costs_nothing_here_and_one_owner_query_elsewhere_once(string where, int cold, int warm) => MeasureAsync(
+        "S2d_" + where,
+        async fleet =>
+        {
+            var answer = where == "local"
+                ? await fleet.Client(LabService.Fleet).SendAsync(Corpus.Equipment, """
+                    [ { "group": { "by": [ { "path": "vehicle.id", "as": "vehicle" } ], "fields": { "n": { "count": true } } } },
+                      { "resolve": { "path": "vehicle", "as": "veh" } }, { "project": { "vehicle": 1, "n": 1, "veh.matchCode": 1 } },
+                      { "sort": [ { "n": "desc" } ] }, { "page": { "limit": 100 } } ]
+                    """)
+                : await fleet.Client(LabService.Transport).SendAsync(Corpus.Shipment, """
+                    [ { "group": { "by": [ { "path": "department.id", "as": "department" } ], "fields": { "n": { "count": true } } } },
+                      { "resolve": { "path": "department", "as": "dep" } }, { "project": { "department": 1, "n": 1, "dep.name": 1 } },
+                      { "sort": [ { "n": "desc" } ] }, { "page": { "limit": 100 } } ]
+                    """);
+
+            answer.ShouldBeOk();
+            answer.Items.Should().Contain(row => row![where == "local" ? "veh" : "dep"] != null, "the case joins records: {0}", answer);
+
+            return answer;
+        },
+        cold,
+        warm);
+
+    /// <summary>
     /// A page of groups with <c>count: true</c>. Not full, it is its own exact count and the groups are
     /// computed once: one aggregate. Full, the count follows the page: two aggregates, one after the other.
     /// </summary>

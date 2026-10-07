@@ -170,7 +170,8 @@ public static class ExplainFacts
     /// (<c>root</c>, <c>entity</c> or, for a union, <c>entities</c>; <c>key</c>, the row path of its
     /// key, or null where only its owner knows the key's name; <c>nullable</c>; <c>many</c> for an
     /// alias that holds several; <c>remote</c> for another service's). An alias that holds elements of
-    /// an item collection is no subject; its owning row (<c>parentAs</c>) is. A grouped row holds none.
+    /// an item collection is no subject; its owning row (<c>parentAs</c>) is. A grouped row is no record
+    /// itself and holds those a <c>resolve</c> after the group joined to its keys.
     /// </summary>
     public static JsonArray Subjects(BoundPipeline bound)
     {
@@ -178,9 +179,6 @@ public static class ExplainFacts
 
         var shape = bound.FinalShape;
         var subjects = new JsonArray();
-
-        if (shape.Grouped)
-            return subjects;
 
         foreach (var (name, node) in shape.Roots)
         {

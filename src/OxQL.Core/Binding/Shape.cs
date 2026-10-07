@@ -394,7 +394,7 @@ public sealed class Shape
                 {
                     Wire = wire, Storage = output.StoragePrefix, Kind = output.Kind, Shape = output.Shape, CollectionAncestors = 0,
                     Filterable = Kinds.IsScalar(output.Shape?.LeafKind ?? output.Kind),
-                    Sortable = Kinds.IsScalar(output.Kind) && output.Kind != Kind.Array, Root = node,
+                    Sortable = Kinds.IsScalar(output.Kind) && output.Kind != Kind.Array, Root = node, KeyOf = output.KeyOf,
                 })
                 : PathResolution.Fail(Codes.UnknownPath, $"'{rootName}' is a group output; '{wire}' has no members.", PathReasons.NoMembers, ("alias", rootName)),
             _ => PathResolution.Fail(Codes.UnknownPath, $"'{wire}' cannot be resolved."),

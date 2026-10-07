@@ -2536,8 +2536,8 @@ public sealed class Binder
 
             var reference = resolution.Path!;
 
-            // Step 4: the declared cases.
-            if (reference.Path?.References is not { Count: > 0 } declaredCases)
+            // Step 4: the declared cases. A group's key over a member that declares a reference follows that reference.
+            if (reference.References is not { } declaredCases)
             {
                 errors.Add(Error(Codes.ResolveNotDeclared, $"'{resolve.Path}' declares no reference; it is {Kinds.WithArticle(reference.Kind)}.", index, resolve.Path));
                 return;
@@ -2597,6 +2597,21 @@ public sealed class Binder
                         .ToList();
                     narrowedTo = wanted;
                 }
+            }
+
+            // After a group the row holds the key and nothing beside it: a reference that picks its target
+            // by another member of the row, or by the variant of the object that held it, has nothing to pick by.
+            if (reference.Root is ShapeNode.GroupOutput && selected.Any(declared => declared.When is not null))
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.ResolveNotDeclared,
+                    Message = $"'{resolve.Path}' is a group's key over a member whose reference picks its target by another member of the row, which the group's row does not hold; resolve it before the group.",
+                    Stage = index,
+                    Path = resolve.Path,
+                    Params = contract2 ? new Dictionary<string, object?> { ["reason"] = "conditionalAfterGroup" } : null,
+                });
+                return;
             }
 
             // 'parentAs' is the owning row of an item target; an entity target is its own row.
@@ -3808,7 +3823,13 @@ public sealed class Binder
             // A group replaces the row: no alias a later stage could continue under survives it.
             anchors.Clear();
 
-            shape = shape.WithGroup(keys.Select(key => new ShapeNode.GroupOutput(key.OutputKind, key.OutputShape, key.As))
+            // A key over a member that declares a reference keeps it: the key holds the member's value,
+            // so a resolve after the group follows the reference from the key's alias (a key over such a key too).
+            // Contract 1 is frozen: its group rows carry no reference, as they never did.
+            shape = shape.WithGroup(keys.Select(key => new ShapeNode.GroupOutput(key.OutputKind, key.OutputShape, key.As)
+                {
+                    KeyOf = contract2 && key.Path is { Addon: null, References: not null } over ? over.Path ?? over.KeyOf : null,
+                })
                 .Concat(fields.Select(field => field.Function == "push"
                     ? new ShapeNode.GroupOutput(field.OutputKind, null, field.As, field.ArgumentKind, field.OutputShape)
                     : new ShapeNode.GroupOutput(field.OutputKind, field.OutputShape, field.As))));

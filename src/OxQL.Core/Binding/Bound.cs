@@ -45,6 +45,15 @@ public sealed record ResolvedPath
     /// <summary>The addon definition the path binds through, when it is a defined addon key.</summary>
     public AddonDefinition? Addon { get; init; }
 
+    /// <summary>
+    /// On a group's key: the member the key was taken over, when that member declares a reference. The
+    /// key holds the member's value, so a <c>resolve</c> after the group follows the reference from it.
+    /// </summary>
+    public PathDef? KeyOf { get; init; }
+
+    /// <summary>The reference cases a resolve may follow from the path: the member's own, or on a group's key those of the member it was taken over.</summary>
+    public IReadOnlyList<ReferenceDef>? References => Path?.References is { Count: > 0 } own ? own : KeyOf?.References is { Count: > 0 } keyed ? keyed : null;
+
     /// <summary>The kind once array traversal is accounted for.</summary>
     public Kind LeafKind => Shape?.LeafKind ?? Kind;
 
@@ -131,7 +140,14 @@ public abstract record ShapeNode(string StoragePrefix)
     /// collection nothing filters or sorts — so it carries its element's kind and shape
     /// instead, and the encoder renders each element the way a row renders the member.
     /// </summary>
-    public sealed record GroupOutput(Kind Kind, ShapeDef? Shape, string StoragePrefix, Kind ElementKind = Kind.Unknown, ShapeDef? ElementShape = null) : ShapeNode(StoragePrefix);
+    public sealed record GroupOutput(Kind Kind, ShapeDef? Shape, string StoragePrefix, Kind ElementKind = Kind.Unknown, ShapeDef? ElementShape = null) : ShapeNode(StoragePrefix)
+    {
+        /// <summary>
+        /// On a key over a member that declares a reference: that member. The key holds its value, so a
+        /// <c>resolve</c> written after the group follows the reference from the key's alias.
+        /// </summary>
+        public PathDef? KeyOf { get; init; }
+    }
 }
 
 /// <summary>One target a keyed alias may hold: the entity, or the element of <paramref name="Item"/> on it.</summary>

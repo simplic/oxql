@@ -578,6 +578,24 @@ the condition "the row's date is in the bucket `eq` is in", computed as a group 
 - After a `group` the shape is the aliases: a later `match`, `sort` or `group` addresses them by
   name, the members of an object returned by `first` or `last` are not addressable, and `lookup`
   and `unwind` have nothing to work on.
+- **A `resolve` after a `group`** follows the reference of the member a key was taken over (a key
+  over such a key in a later group keeps it). The group's row then holds the record under the
+  resolve's alias, null where the key is null or names no record; the groups, their counts and
+  their order are those of the request without the stage.
+  - *Where it runs.* A target of this service is one `$lookup` in the page's aggregate: after the
+    page is taken when only the display reads the alias (at most `limit` keys, `JOIN_AFTER_PAGE`),
+    before it when a `sort` or a `match` after the resolve reads the record (every group, then
+    ordered or cut). It adds no command. A target of another service is one owner query for the
+    keys of the page's rows, kept for `Cache:ResolveTtlSeconds` like any keyed fetch: one command
+    more for a block the first time, none while the answer is kept.
+  - *Conditions and order.* A condition on a member of a local record is a condition on the
+    groups; on another service's record it is a semi-join on the key (`key in <owner's ids>`),
+    with the limits of every semi-join. A sort by a member of a local record orders the groups
+    and is completed by the group's keys, so the page still continues by value; another
+    service's record orders nothing (`RESOLVE_NOT_SORTABLE`).
+  - *What it cannot follow.* A reference that picks its target by a sibling member or by the
+    variant of the object that held it needs the row the group replaced: resolve it before the
+    group and group by a member of the record instead. Contract 1 has no such stage.
 
 ## Polymorphic values
 

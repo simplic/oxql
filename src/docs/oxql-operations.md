@@ -91,7 +91,7 @@ the listed status.
 | `LOOKUP_ON_NOT_ENTITY` | 400 | a lookup's `on` names a lookup array, an unwound element, a scalar or a group output |
 | `UNION_CARDINALITY_MISMATCH` | 400 | the branches of a union join (`byTarget`) do not yield one shape: one resolves one record per row and another every element (`elements: "all"`); `params` `alias`, `branch` (the branch to change), `elements`, `expected` (`one` or `all`) |
 | `NOT_CONTINUABLE` | 400 | on an alias that comes from an owner after the page, a stage other than a `resolve` or `lookup` (an `unwind`, a `group` key); a continued stage under an `elements: "all"` alias or under a remote `lookup` without `first`; any continued stage under contract 1 |
-| `RESOLVE_NOT_DECLARED` | 400 | the `resolve` path declares no reference (the message names its kind), the target key or items are not stored, or a case tests a sibling that is not stored |
+| `RESOLVE_NOT_DECLARED` | 400 | the `resolve` path declares no reference (the message names its kind): a member without one, an aggregate of a group, a group's key over a member without one; the target key or items are not stored; a case tests a sibling that is not stored; after a `group`, the key's reference picks its target by another member of the row (`params.reason: "conditionalAfterGroup"`) |
 | `RESOLVE_ON_COLLECTION` | 400 | a resolve path under a collection that is not unwound, without `elements` |
 | `RESOLVE_TARGET_NOT_DECLARED` | 400 | a resolve's `target` is not a target of any case of the reference; the message lists them |
 | `RESOLVE_PARENT_NOT_ITEM` | 400 | a resolve's `parentAs` on a reference whose (narrowed) targets include an entity rather than an item |
@@ -511,7 +511,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner that knows it did not answer), `lookupOn` (a lookup may name it as its parent row), and where
   they apply `source` (an element's collection), `kind` (a scalar's), `many` (it holds an array),
   `parentOf` (it is the owning row of that alias), `reference` (the reference a resolve follows, as
-  bound, with the `name` the engine derived for its relation where this host's model holds the member), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
+  bound, with the `name` the engine derived for its relation where this host's model holds the member; on a
+  group's key over a member that declares a reference, `node: "group"`, the declared reference
+  `{ simple?, keyAs?, cases: [{ when?, keyAs?, targets: [{ entity, field, item?, remote? }] }] }` a `resolve`
+  after the group may follow from the key, beside `keyOf`, the member the key was taken over as the
+  group wrote it; the key's flags then say `follow: "one"`), `targets` (each target with its `service`, whether it is `remote`, its `type`, the `owner`
   it is asked at, whether its owner query is `grouped`, and the stages `continued` there or
   `notApplicable` to its rows), `continuedFrom` (`{ alias, target }` of a stage continued at an
   owner; for a union join the alias of the keyed stage and no target), `branches` (only on the
@@ -665,7 +669,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   an owning row `parentAs`, an alias a continued stage adds). `entities` for a union. `key` is the
   row path of the record's key, `null` where only the owner knows its name (read it from that
   service's schema document); the row carries it only when the projection names it. An alias that
-  holds elements of an item collection is no subject. Empty after a `group`.
+  holds elements of an item collection is no subject. After a `group` the row is no record itself:
+  the list holds the records a `resolve` after the group joined to its keys, and is empty without one.
 - **`result.order`**: the total order the page is taken in, as the server sorts:
   `[{ path, direction, tieBreak? }]`, the caller's fields first, then what completes them marked
   `tieBreak: true`: the entity key; after an unwind the key and one position per unwind (`path` the

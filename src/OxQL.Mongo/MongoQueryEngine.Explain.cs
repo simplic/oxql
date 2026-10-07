@@ -987,8 +987,18 @@ public sealed partial class MongoQueryEngine
                         entry["outcomeOf"] = outcome.Join;
                         break;
 
+                    // A key over a member that declares a reference: the member, as the group wrote it, and
+                    // the reference a resolve after the group follows from the key.
                     case ShapeNode.GroupOutput output:
                         entry["kind"] = Kinds.NameOf(output.Kind);
+
+                        if (output.KeyOf?.References is { Count: > 0 } followed && stage.Index < draft.Request.Query.Pipeline.Count
+                            && draft.Request.Query.Pipeline[stage.Index]?.Group?.By.FirstOrDefault(key => key?.As == alias)?.Path is { } over)
+                        {
+                            entry["keyOf"] = over;
+                            entry["reference"] = ExplainTypes.ReferenceOf(followed);
+                        }
+
                         break;
                 }
 

@@ -621,6 +621,23 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 - After `group` the shape is only the `by` and `fields` aliases (unique among each other, at
   most `MaxGroupFields`); rows carry those names only. A page after `group` continues from its
   cursor like any other.
+- **A `resolve` may follow a group.** A key over a member that declares a reference keeps the
+  reference, so the record a key names is joined to the group's row from the key's alias:
+
+  ```jsonc
+  { "group": { "by": [ { "path": "customerId", "as": "customer" } ], "fields": { "revenue": { "sum": "amount" } } } },
+  { "resolve": { "path": "customer", "as": "c" } },
+  { "project": { "customer": 1, "revenue": 1, "c.name": 1 } },
+  { "sort": [ { "revenue": "desc" } ] }, { "page": { "limit": 100 } }
+  ```
+
+  It is the `resolve` it would be before the group, with every member it has there (`filter`,
+  `target`, `parentAs`, `onMissing`, `outcomeAs`) and the same executor: a target of this service
+  joins in the aggregate, another service's is fetched for the page's keys. An aggregate
+  (`first`, `min`, …) and a key over a member without a reference declare none
+  (`RESOLVE_NOT_DECLARED`), and so does a key over a reference that picks its target by another
+  member of the row (`params.reason: "conditionalAfterGroup"`: resolve it before the group). A
+  `lookup` and an `unwind` still have nothing to work on after a group.
 
 ## Stage: `project`
 

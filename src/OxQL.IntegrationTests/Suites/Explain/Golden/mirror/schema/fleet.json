@@ -5,14 +5,14 @@
     "name": "fleet-api",
     "version": "v1"
   },
-  "revision": "sha256:3ad81a3ac29363de68e855ae115d4f2e647f5898e396ce5de9d0f25fa80e4072",
+  "revision": "sha256:8eea10e482906ff9c66c371f4092e508727132bc2538f946af4d4cd57521a379",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

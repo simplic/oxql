@@ -5,14 +5,14 @@
     "name": "transport-api",
     "version": "v1"
   },
-  "revision": "sha256:7818a882697ebd460e84ffc12b3e371f8be56bd3dab1031b3aa5d1d2f7cb8eb7",
+  "revision": "sha256:cba2840146b7437c872f3522305641078f1b47a8e76acaec288e327a48436df0",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

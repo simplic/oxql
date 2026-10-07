@@ -14,6 +14,7 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
   "variables": { "from": "2026-01-01T00:00:00Z" },   // optional, bound by { "$var": "from" }
   "filter": [ { "id": "open", "where": { … } } ],    // optional: conditions the engine places
   "strict": true,                              // optional: refuse instead of losing data
+  "maxTimeMs": 3000,                           // optional: this request's own time ceiling
   "pipeline": [                                // stages, executed as written
     { "match": { … } },
     { "page": { "limit": 50 } }
@@ -21,8 +22,13 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
 }
 ```
 
-- A request carries `entityType`, `variables`, `filter`, `pipeline`, `strict` and `timing`. Any other top-level member
-  is `UNKNOWN_REQUEST_MEMBER` under contract 2. `timing: true` asks for the `timing` member of the
+- A request carries `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing` and `maxTimeMs`. Any other top-level member
+  is `UNKNOWN_REQUEST_MEMBER` under contract 2. `maxTimeMs` is a ceiling on this request's time in
+  milliseconds, under the host's (`Execution:MaxTimeMs`) and, in a batch, under what the batch
+  leaves it: the page, the count and the owners asked end within it, and a request that does not is
+  504 `QUERY_TIMEOUT`. A value above the host's ceiling is the host's ceiling, a value below 1 is 1;
+  it changes no row and is no part of a cursor, and contract 1 ignores it. A grid sends it with the
+  request for its totals, so a total that is slow ends early. `timing: true` asks for the `timing` member of the
   answer (see [Response](#response)); it changes no row and is no part of a cursor. `filter` is described under
   [The request's `filter`](#the-requests-filter). The member `keyedBy`
   exists only on the internal route an owner is called through (see
@@ -615,11 +621,15 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 - An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`,
   or an arithmetic expression `add subtract multiply divide coalesce` over an array of
   arguments.
+- **A group over no key** (`"by": []`) is the totals of the rows that reach it: one row with the
+  aggregates, no order, no next page. Over no row at all there is no group and so no row: an
+  empty `items` is the total of nothing.
 - A string key folds case and accents under the collation: `Open` and `OPEN` are one group,
   reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
   same way.
 - After `group` the shape is only the `by` and `fields` aliases (unique among each other, at
-  most `MaxGroupFields`); rows carry those names only. A page after `group` continues from its
+  most `MaxGroupFields`, 40 unless the host says otherwise; one more is `MAX_GROUP_FIELDS_EXCEEDED`
+  with `params { "limit": "maxGroupFields", "max", "count" }`); rows carry those names only. A page after `group` continues from its
   cursor like any other.
 - **A `resolve` may follow a group.** A key over a member that declares a reference keeps the
   reference, so the record a key names is joined to the group's row from the key's alias:

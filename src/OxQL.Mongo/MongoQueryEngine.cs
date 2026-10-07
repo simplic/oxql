@@ -86,6 +86,10 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         context = Reaching(context) with { Timing = timing };
 
+        // The request's own ceiling (contract 2), under what its batch or its host leaves it.
+        if (context.Contract != 1 && request.MaxTimeMs is { } asked)
+            context = context with { MaxTimeMs = context.MaxTimeMs is { } left and > 0 ? Math.Min(left, Math.Max(1, asked)) : Math.Max(1, asked) };
+
         var binds = QueryTiming.Now;
         var binding = await new Binder(models.Model, cursors).BindAsync(request, context, cancellationToken);
 

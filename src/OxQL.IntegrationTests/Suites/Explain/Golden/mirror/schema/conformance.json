@@ -5,14 +5,14 @@
     "name": "conformance-api",
     "version": "v1"
   },
-  "revision": "sha256:e46b06f32884cc646aed73982a6d72bd1e3d7635c7935843965fa3998fcd3239",
+  "revision": "sha256:9a890884172be3b3feec9de7b7596310705020c1e35d86835f1819e5f5defe6f",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

@@ -32,7 +32,7 @@ public class PagingLimitsTests
         ["maxLookupStages"] = 5,
         ["maxUnwindStages"] = 5,
         ["maxResolveStages"] = 8,
-        ["maxGroupFields"] = 20,
+        ["maxGroupFields"] = 40,
         ["maxProjectionFields"] = 500,
         ["maxConditions"] = 200,
         ["maxVariables"] = 64,

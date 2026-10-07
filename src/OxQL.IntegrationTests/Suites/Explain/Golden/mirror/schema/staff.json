@@ -5,14 +5,14 @@
     "name": "staff-api",
     "version": "v1"
   },
-  "revision": "sha256:18d7473ed2f53aae9bb3b2dec8a9cac2e506caefacba8a81196d54d57db97cd5",
+  "revision": "sha256:c784895d1c68ea47c68d769f86a0b845449ff5d8a1886adaae956c59ef592b91",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

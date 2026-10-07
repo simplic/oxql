@@ -43,7 +43,7 @@ public sealed class Binder
     /// The top-level members a request carries. An internal call may also carry <c>keyedBy</c>
     /// (<see cref="InternalRequestMembers"/>); the public route never names it.
     /// </summary>
-    public const string RequestMembers = "entityType, variables, filter, pipeline, strict, timing";
+    public const string RequestMembers = "entityType, variables, filter, pipeline, strict, timing, maxTimeMs";
 
     /// <summary>The top-level members a request carries on an internal call (<see cref="RequestContext.Internal"/>).</summary>
     public const string InternalRequestMembers = RequestMembers + ", keyedBy";
@@ -3687,7 +3687,13 @@ public sealed class Binder
             var aliases = new HashSet<string>(StringComparer.Ordinal);
 
             if (group.By.Count + group.Fields.Count > options.Limits.MaxGroupFields)
-                errors.Add(Error(Codes.MaxGroupFieldsExceeded, $"The group has {group.By.Count + group.Fields.Count} fields; the limit is {options.Limits.MaxGroupFields}.", index, null));
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.MaxGroupFieldsExceeded,
+                    Message = $"The group has {group.By.Count + group.Fields.Count} fields; the limit is {options.Limits.MaxGroupFields}.",
+                    Stage = index,
+                    Params = contract2 ? new Dictionary<string, object?> { ["limit"] = "maxGroupFields", ["max"] = options.Limits.MaxGroupFields, ["count"] = group.By.Count + group.Fields.Count } : null,
+                });
 
             foreach (var by in group.By)
             {

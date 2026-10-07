@@ -5,14 +5,14 @@
     "name": "ledger-api",
     "version": "v1"
   },
-  "revision": "sha256:b5c8682f99d860eea18fae119096f6812c04bbdcd49c0a6a770e23d5f74729ae",
+  "revision": "sha256:9bed08b57a0d87d1b423a043da60b18565fdb42c0686ddcf47540253954660c8",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

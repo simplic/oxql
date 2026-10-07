@@ -174,7 +174,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Limits:MaxContinuedStages` | 8 | stages continued under one keyed or remote alias; clamped to `MaxPipelineStages` |
 | `Limits:MaxFlattenDepth` | 5 | levels an `unwind` with `flatten` descends; clamped to 1–12 |
 | `Limits:MaxReportPageSize` / `MaxReportedRows` | 5 000 / 50 | the page of a `strict` request without cursor or offset / rows one outcome diagnostic lists |
-| `Limits:MaxGroupFields` / `MaxProjectionFields` | 20 / 500 | |
+| `Limits:MaxGroupFields` / `MaxProjectionFields` | 40 / 500 | keys and aggregates of one `group` together / paths of one projection |
 | `Limits:MaxConditions` / `MaxVariables` | 200 / 64 | leaf conditions, lookup and resolve filters included |
 | `Limits:MaxOffset` | 5 000 | the largest `offset`; beyond it a cursor |
 | `Limits:CountCap` | 100 000 | above it `totalCount` is the cap and `totalCountCapped` true |
@@ -365,7 +365,8 @@ operator notice:
   `MaxReportedRows`, `Execution:ChainTimeoutMs`, `Cache:NegativeResolveTtlSeconds` and the sixteen
   `Explain` limits. Health publishes 41 limit entries, the schema's `limits` fifteen.
 - **Requests.** A contract 2 request with a top-level member other than `entityType`, `variables`,
-  `pipeline` and `strict` is refused with `UNKNOWN_REQUEST_MEMBER`. A resolve path
+  `filter`, `pipeline`, `strict`, `timing` and `maxTimeMs` is refused with `UNKNOWN_REQUEST_MEMBER`.
+  `maxTimeMs` lowers the host's time ceiling for the one request (a grid's totals carry it). A resolve path
   under a collection that is not unwound is refused with `RESOLVE_ON_COLLECTION` unless it says
   `elements` (under two or more such collections, `UNWIND_ORDER`).
   A condition nests at most 32 levels of `and`, `or`, `not` and `any` (`MAX_CONDITIONS_EXCEEDED`).

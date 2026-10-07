@@ -69,7 +69,7 @@ the listed status.
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
@@ -112,7 +112,7 @@ the listed status.
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
-| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs` or the batch's `maxTimeMs` |
+| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's |
 | `INTERNAL_ERROR` | 500 | any other fault |
 | `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a v1 `lookup` or `resolve`, an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
 
@@ -232,7 +232,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxUnwindStages` | 5 | binder | `MAX_UNWIND_STAGES_EXCEEDED` | yes | — |
 | `Limits:MaxResolveStages` | 8 | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
-| `Limits:MaxGroupFields` | 20 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` | yes | — |
+| `Limits:MaxGroupFields` | 40 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` (contract 2: `params { limit: "maxGroupFields", max, count }`) | yes | a grid derives one aggregate per column it totals; the value was 20 |
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
@@ -250,7 +250,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Count:BudgetMs` / `Count:MaxBudgetMs` | 500 / 5 000 | the time a contract 2 count has when the request names none, and the most a request may name with `page.count.budgetMs` (a larger one is clamped): the count step's own `maxTimeMS`, the longest an answer waits for it, and the budget of a count-only ladder | `pageInfo.count` `unknown` / `timeout`, or a lower bound `stoppedBy: "budget"` / `"time"`; never a refusal | no | — |
 | `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without a `cursor` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
-| `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate, and of a `strict` request's truncation checks, which are sent with them and so end within the same limit; a batch's `maxTimeMs` only lowers it | 504 `QUERY_TIMEOUT` | no | the server ends a command at its next interrupt check after the limit, so a command that finishes within milliseconds of it is still answered (a page that comes in one reply has no later check to fail at); the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
+| `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate, and of a `strict` request's truncation checks, which are sent with them and so end within the same limit; a request's own `maxTimeMs` (contract 2) and a batch's only lower it, the lower of the two holding, and a value below 1 is 1 | 504 `QUERY_TIMEOUT` | no | the server ends a command at its next interrupt check after the limit, so a command that finishes within milliseconds of it is still answered (a page that comes in one reply has no later check to fail at); the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
 | `Execution:ChainTimeoutMs` | 6 000, never above `MaxTimeMs` | keyed fetch: one owner call carrying continued stages or a typed, item, converted or element-wise resolve; the time left less 50 ms, at most this | `RESOLVE_TIMEOUT` | no | the owner budgets its own owner calls from what is left of it, so time bounds the whole chain |
 | `Execution:BatchConcurrency` | 4, clamped to 1–16 | how many queries of one internal batch run at once, at the owner and at a host answering its own targets; `1` runs them one after another | — | no | each query in flight holds a connection (two with a count); a public batch always runs one query after another |
@@ -301,7 +301,7 @@ Anonymous, always 200, and never waits for another service:
   "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
-    "maxUnwindStages": 5, "maxResolveStages": 8, "maxGroupFields": 20, "maxProjectionFields": 500,
+    "maxUnwindStages": 5, "maxResolveStages": 8, "maxGroupFields": 40, "maxProjectionFields": 500,
     "maxConditions": 200, "maxVariables": 64, "maxOffset": 5000, "countCap": 100000,
     "maxSemiJoinIds": 5000, "resolveKeyChunk": 500, "maxResolveKeys": 10000, "maxRequestBytes": 262144,
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,

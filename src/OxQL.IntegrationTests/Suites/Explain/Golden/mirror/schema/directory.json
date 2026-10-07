@@ -5,14 +5,14 @@
     "name": "directory-api",
     "version": "v1"
   },
-  "revision": "sha256:05ddb7d84b53e6ca33362ca9fb95ac16d8299433388a5b8b4513b87c3cd159b7",
+  "revision": "sha256:9008676a5fc0785ece831a8001c9ada734ffebdbe65ea6d88a522e347398cadb",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
     "maxPipelineStages": 20,
     "maxLookupStages": 5,
     "maxUnwindStages": 5,
-    "maxGroupFields": 20,
+    "maxGroupFields": 40,
     "maxProjectionFields": 500,
     "regexMaxLength": 200,
     "maxOffset": 5000,

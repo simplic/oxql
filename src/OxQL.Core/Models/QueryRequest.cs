@@ -67,6 +67,17 @@ public sealed record QueryRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Timing { get; init; }
 
+    /// <summary>
+    /// A ceiling on this request's time, in milliseconds, under the host's own
+    /// (<c>Execution:MaxTimeMs</c>) and under what a batch leaves it (contract 2): the page, the count
+    /// and the owners it asks end within it, and a request that does not is <c>QUERY_TIMEOUT</c>. A
+    /// value above the host's ceiling is the host's ceiling; a value below 1 is 1. It changes no row
+    /// and is no part of a cursor. Contract 1 never had the member and ignores it.
+    /// </summary>
+    [JsonPropertyName("maxTimeMs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxTimeMs { get; init; }
+
     /// <summary>Whether the request is strict: <see cref="Strict"/> written as true.</summary>
     [JsonIgnore]
     public bool IsStrict => Strict == true;

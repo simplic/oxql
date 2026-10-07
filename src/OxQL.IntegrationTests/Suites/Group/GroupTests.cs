@@ -148,12 +148,13 @@ public class GroupTests
         var client = await Transport();
         static string Fields(int count) => string.Join(", ", Enumerable.Range(0, count).Select(index => $$""" "f{{index}}": { "count": true } """));
 
-        var at = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(19)}} } } }, { "sort": [{ "k": "asc" }] }, { "page": { "limit": 1 } }]""");
+        var at = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(39)}} } } }, { "sort": [{ "k": "asc" }] }, { "page": { "limit": 1 } }]""");
         at.ShouldBeOk();
-        Number(at.Items[0]!["f18"]).Should().Be(ShipmentStatuses()[0].Count);
+        Number(at.Items[0]!["f38"]).Should().Be(ShipmentStatuses()[0].Count);
 
-        var over = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(20)}} } } }, { "page": { "limit": 1 } }]""");
-        ShouldRefuseOnly(over, "MAX_GROUP_FIELDS_EXCEEDED").Should().Contain("21 fields; the limit is 20");
+        var over = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(40)}} } } }, { "page": { "limit": 1 } }]""");
+        ShouldRefuseOnly(over, "MAX_GROUP_FIELDS_EXCEEDED").Should().Contain("41 fields; the limit is 40");
+        over.Errors[0]["params"]!.ToJsonString().Should().Be("""{"limit":"maxGroupFields","max":40,"count":41}""");
     }
 
     // ── N11–N25 · the nine aggregate functions ───────────────────────────────────────────

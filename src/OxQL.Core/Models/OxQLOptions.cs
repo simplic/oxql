@@ -316,8 +316,8 @@ public sealed class LimitOptions
     /// <summary>How many resolve stages one pipeline may carry on this host; stages continued at an owner count there.</summary>
     public int MaxResolveStages { get; set; } = 8;
 
-    /// <summary>How many keys and aggregates one group stage may carry.</summary>
-    public int MaxGroupFields { get; set; } = 20;
+    /// <summary>How many keys and aggregates one group stage may carry: a grid derives one aggregate per column it sums, counts or ranges.</summary>
+    public int MaxGroupFields { get; set; } = 40;
 
     /// <summary>How many fields one projection may name.</summary>
     public int MaxProjectionFields { get; set; } = 500;

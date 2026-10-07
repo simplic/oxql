@@ -753,7 +753,7 @@
         {"path":"representative.taxGroupId","kind":"guid","nullable":true,"root":"representative","present":"ifStored","can":"c:1"},
         {"path":"representative.vatId","kind":"string","nullable":true,"root":"representative","present":"ifStored","can":"c:2"},
         {"path":"representative.address","kind":"object","nullable":true,"root":"representative","present":"ifStored","can":"c:6"},
-        {"path":"convertState","kind":"enum","nullable":false,"root":"","present":"always","can":"c:7"},
+        {"path":"convertState","kind":"enum","nullable":false,"root":"","present":"always","can":"c:5"},
         {"path":"alternativePaymentDeadline","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:5"},
         {"path":"balance","kind":"decimal","nullable":true,"root":"","present":"ifStored","can":"c:3"},
         {"path":"barcode","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
@@ -781,16 +781,16 @@
         {"path":"signedTotalPriceGross","kind":"decimal","nullable":false,"root":"","present":"always","can":"c:3"},
         {"path":"signedTotalPrice","kind":"decimal","nullable":false,"root":"","present":"always","can":"c:3"},
         {"path":"signedTotalPriceTax","kind":"decimal","nullable":false,"root":"","present":"always","can":"c:3"},
-        {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always","can":"c:8"},
+        {"path":"taxKeyTotalPrices","kind":"array","nullable":false,"root":"","present":"always","can":"c:7"},
         {"path":"sign","kind":"int","nullable":false,"root":"","present":"always","can":"c:3"},
-        {"path":"operationItemCombinationMode","kind":"enum","nullable":false,"root":"","present":"always","can":"c:7"},
+        {"path":"operationItemCombinationMode","kind":"enum","nullable":false,"root":"","present":"always","can":"c:5"},
         {"path":"isGross","kind":"bool","nullable":false,"root":"","present":"always","can":"c:1"},
         {"path":"financialExportDisabled","kind":"bool","nullable":false,"root":"","present":"always","can":"c:1"},
         {"path":"validationResult.inputFieldValidationResults","kind":"dictionary","nullable":true,"root":"validationResult","present":"ifStored","can":"c:6"},
         {"path":"validationResult.errors","kind":"array","nullable":true,"root":"validationResult","present":"ifStored","can":"c:4"},
         {"path":"validationResult.isValid","kind":"bool","nullable":true,"root":"validationResult","present":"ifStored","can":"c:1"},
-        {"path":"defaultCostCenters","kind":"array","nullable":false,"root":"","present":"always","can":"c:8"},
-        {"path":"defaultCostObjects","kind":"array","nullable":false,"root":"","present":"always","can":"c:8"},
+        {"path":"defaultCostCenters","kind":"array","nullable":false,"root":"","present":"always","can":"c:7"},
+        {"path":"defaultCostObjects","kind":"array","nullable":false,"root":"","present":"always","can":"c:7"},
         {"path":"cashDiscountDate","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:5"},
         {"path":"createDateTime","kind":"dateTime","nullable":false,"root":"","present":"always","can":"c:5"},
         {"path":"updateDateTime","kind":"dateTime","nullable":false,"root":"","present":"always","can":"c:5"},
@@ -808,8 +808,8 @@
         {"path":"item.articleId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:1"},
         {"path":"item.inputPrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
         {"path":"item.taxRate","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:6"},
-        {"path":"item.costCenters","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:8"},
-        {"path":"item.costObjects","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:8"},
+        {"path":"item.costCenters","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:7"},
+        {"path":"item.costObjects","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:7"},
         {"path":"item.singlePrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
         {"path":"item.totalPrice","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
         {"path":"item.singlePriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
@@ -820,22 +820,22 @@
         {"path":"item.totalPriceVat","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
         {"path":"item.quantity","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:6"},
         {"path":"item.deltaValue","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
-        {"path":"item.assignedTransactionItems","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:9"},
-        {"path":"item.valueOperator","kind":"enum","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:7"},
+        {"path":"item.assignedTransactionItems","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:8"},
+        {"path":"item.valueOperator","kind":"enum","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:5"},
         {"path":"item.amount","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:3"},
         {"path":"item.billingLineId","kind":"guid","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:1"},
         {"path":"item.priceUnit","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:6"},
         {"path":"item.reference","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:2"},
-        {"path":"item.references","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:8"},
+        {"path":"item.references","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:7"},
         {"path":"item.isManualBillingLine","kind":"bool","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:1"},
         {"path":"item.generalLedgerAccount","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:6"},
-        {"path":"item.items","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:9"},
+        {"path":"item.items","kind":"array","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:8"},
         {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always","can":"c:3"},
         {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:1"},
-        {"path":"sourceLine","kind":"object","nullable":true,"stage":4,"root":"sourceLine","present":"always","can":"c:10"},
-        {"path":"sourceParent","kind":"object","nullable":true,"stage":4,"root":"sourceParent","present":"always","can":"c:10"},
-        {"path":"deliveringTour","kind":"object","nullable":true,"stage":5,"root":"deliveringTour","present":"always","can":"c:10"},
-        {"path":"shipmentVehicle","kind":"object","nullable":true,"stage":6,"root":"shipmentVehicle","present":"always","can":"c:10"}
+        {"path":"sourceLine","kind":"object","nullable":true,"stage":4,"root":"sourceLine","present":"always","can":"c:9"},
+        {"path":"sourceParent","kind":"object","nullable":true,"stage":4,"root":"sourceParent","present":"always","can":"c:9"},
+        {"path":"deliveringTour","kind":"object","nullable":true,"stage":5,"root":"deliveringTour","present":"always","can":"c:9"},
+        {"path":"shipmentVehicle","kind":"object","nullable":true,"stage":6,"root":"shipmentVehicle","present":"always","can":"c:9"}
       ],
       "capabilities": {
         "c:1": {
@@ -881,7 +881,7 @@
         },
         "c:5": {
           "can": {
-            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists","dateTrunc"],
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
             "sort": true,
             "group": true,
             "aggregate": ["count","countDistinct","min","max","first","last","push"],
@@ -904,15 +904,6 @@
         },
         "c:7": {
           "can": {
-            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
-            "sort": true,
-            "group": true,
-            "aggregate": ["count","countDistinct","min","max","first","last","push"],
-            "values": true
-          }
-        },
-        "c:8": {
-          "can": {
             "filter": ["exists","any"],
             "sort": false,
             "group": false,
@@ -925,7 +916,7 @@
             "values": "notScalar"
           }
         },
-        "c:9": {
+        "c:8": {
           "can": {
             "filter": ["exists","is","any"],
             "sort": false,
@@ -939,7 +930,7 @@
             "values": "notScalar"
           }
         },
-        "c:10": {
+        "c:9": {
           "can": {
             "filter": [],
             "sort": false,

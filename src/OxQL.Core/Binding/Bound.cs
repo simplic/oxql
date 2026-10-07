@@ -299,12 +299,6 @@ public abstract record BoundOperand
     /// <summary>The <c>null</c> operand: absent or null.</summary>
     public sealed record Null : BoundOperand;
 
-    /// <summary>
-    /// A half-open range of stored values, <paramref name="From"/> included and <paramref name="Until"/>
-    /// not: the bucket of a <c>dateTrunc</c> condition, which an index on the member bounds.
-    /// </summary>
-    public sealed record Range(BsonValue From, BsonValue Until) : BoundOperand;
-
     /// <summary>The operand as written, for a condition the remote owner binds.</summary>
     public sealed record Raw(JsonElement Value) : BoundOperand;
 

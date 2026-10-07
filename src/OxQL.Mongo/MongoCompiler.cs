@@ -1501,10 +1501,6 @@ public static class MongoCompiler
             case BoundOperand.Single single:
                 return Compare(storage, op, single.Value, casing);
 
-            // A bucket of dates: one range on the stored value, which an index on the member bounds.
-            case BoundOperand.Range range:
-                return new BsonDocument(storage, new BsonDocument { ["$gte"] = range.From, ["$lt"] = range.Until });
-
             default:
                 return new BsonDocument(storage, BsonNull.Value);
         }

@@ -180,7 +180,7 @@ Storage spellings (`_id`, `MatchCode`) are never accepted under contract 2.
 
 ### Operators
 
-Case-sensitive: `eq neq gt gte lt lte in nin contains startsWith endsWith exists regex is dateTrunc`.
+Case-sensitive: `eq neq gt gte lt lte in nin contains startsWith endsWith exists regex is`.
 Anything else is `UNKNOWN_OPERATOR`.
 
 | operator | applies to | operand |
@@ -192,7 +192,6 @@ Anything else is `UNKNOWN_OPERATOR`.
 | `regex` | `string` | a pattern up to `RegexMaxLength` (`REGEX_TOO_LONG`); nested quantifiers and backreferences are `INVALID_REGEX`; an unanchored pattern is diagnosed `REGEX_UNANCHORED` |
 | `exists` | every kind | a boolean |
 | `is` | an object, or a collection of objects, whose type has variants | a variant name, or a non-empty array of names |
-| `dateTrunc` | `date dateTime` | `{ "unit", "timezone"?, "weekStart"?, "eq" }`: the rows of one bucket of dates |
 
 `neq` and `nin` match documents where the member is absent, as Mongo does, except for `null`.
 
@@ -215,39 +214,6 @@ Anything else is `UNKNOWN_OPERATOR`.
   `any`. `options` on it are `OPTION_NOT_APPLICABLE`.
 - It compiles to an `$in` over the stored discriminator values (`_t` by default). Contract 1
   refuses it with `UNKNOWN_OPERATOR`.
-
-**`dateTrunc`** matches the rows whose date lies in one bucket: the bucket a `group` key of the
-same `unit`, `timezone` and `weekStart` puts them in.
-
-```jsonc
-{ "match": { "loadStart": { "dateTrunc": { "unit": "month", "timezone": "Europe/Berlin", "eq": "2026-02-28T23:00:00Z" } } } }   // March 2026 in Berlin
-{ "match": { "dueDate":   { "dateTrunc": { "unit": "week", "weekStart": "sunday", "eq": { "$var": "at" } } } } }
-{ "match": { "loadStart": { "dateTrunc": { "unit": "day", "eq": null } } } }                                                     // the rows without a date
-```
-
-- `unit`, `timezone` and `weekStart` are those of a `group` key's `dateTrunc`, with the same
-  defaults (`UTC`, `monday`) and the same refusals (`INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`);
-  there is no `path`, the condition's own path is the date. Members other than these and `eq` are
-  `INVALID_OPERAND`.
-- `eq` is required. It is an instant (ISO-8601 with `Z` or an offset), or a variable that holds
-  one. **Any instant of the bucket names it**, so the key a group answered is sent back as it came,
-  and so is "now" for "this month". On a `date` member a day (`YYYY-MM-DD`) is accepted as well and
-  names the bucket that day lies in. `eq: null` names the group of the rows that have no date:
-  the member is null or absent.
-- It applies to a `date` or `dateTime` member of the row, of an unwound element, of a join's alias,
-  inside `any`, to a group's key (the condition is then on the groups), and to a member under
-  another service's alias, which its owner binds like every condition there. On another kind it is
-  `INVALID_OPERAND`. Through a collection that is not unwound it is `INVALID_OPERAND` too
-  (`params.reason: "underCollection"`): a bucket is one value's, so the element is named, by `any`
-  on the collection or by unwinding it.
-- It is a range, not an expression: the engine computes where the bucket starts and where the next
-  one starts in the zone and compares the stored date with those two instants (`>=` and `<`), so an
-  index on the member bounds it. A day on which the clock changes is a bucket of 23 or 25 hours.
-- A refusal carries `params { "op": "dateTrunc", "reason" }`, `reason` one of `notAnObject`,
-  `unknownMember` (with `members`), `unit`, `weekStart`, `timezone`, `eqRequired`, `eq`, `range`
-  (the bucket leaves the years a date holds), `underCollection`.
-- A cursor is bound to the bucket, not to how it was named: two instants of one bucket continue
-  each other's pages. Contract 1 does not have the operator (`UNKNOWN_OPERATOR`).
 
 ### Operands per kind
 
@@ -610,7 +576,10 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   and, for `week`, `weekStart` (default `monday`). A truncated key is emitted as the UTC
   instant of the local boundary. A `date` has no time of day and truncates on its calendar day
   in that zone, so the bucket is local midnight of the row's own day; a `dateTime` truncates as
-  the instant it holds.
+  the instant it holds. `day` and coarser buckets correspond to calendar ranges in the zone;
+  sub-day buckets are elapsed-time based. `dateTrunc` is a key only: the rows of a bucket are
+  asked for with a range on the member (`gte` its start, `lt` its end) that the caller computes
+  (semantics guide, *Grouping*).
 - Aggregates: `count` (`{ "count": true }`), `countDistinct`, `sum`, `avg`, `min`, `max`,
   `first`, `last`, `push` (`UNKNOWN_AGG_FUNCTION`). `sum` and `avg` need a numeric argument
   (`INVALID_AGGREGATE_ARGUMENT`).

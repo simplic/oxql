@@ -330,6 +330,17 @@ public class StageRulesTests
         await Error("""[{ "match": { "number": { "startswith": "x" } } }]""", Codes.UnknownOperator);
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public async Task A_dateTrunc_is_a_group_key_and_no_operator_of_a_condition_the_rows_of_a_bucket_are_a_range(int contract)
+    {
+        (await Error("""[{ "match": { "when": { "dateTrunc": { "unit": "day", "eq": "2026-03-05T00:00:00Z" } } } }]""", Codes.UnknownOperator, BindHost.Context(contract: contract)))
+            .Message.Should().Be("'dateTrunc' is not an operator.");
+
+        OperandCoercer.Operators.Should().BeEquivalentTo(["eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is"]);
+    }
+
     [Fact]
     public async Task IgnoreCase_applies_to_the_listed_operators_on_strings_only()
     {

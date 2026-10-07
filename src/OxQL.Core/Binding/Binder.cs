@@ -1396,13 +1396,6 @@ public sealed class Binder
                 return null;
             }
 
-            // So is the bucket test; to contract 1 it is the unknown operator it always was.
-            if (op == OperandCoercer.DateTrunc && !contract2)
-            {
-                errors.Add(Error(Codes.UnknownOperator, $"'{op}' is not an operator.", index, condition.Path));
-                return null;
-            }
-
             // A join's outcome compares with its own vocabulary, exactly.
             if (path.Root is ShapeNode.Outcome)
                 return BindOutcomeCondition(condition, path, op, index);
@@ -1445,9 +1438,6 @@ public sealed class Binder
             }
 
             var caseSensitive = BindCaseOption(condition, path, op, index);
-
-            if (op == OperandCoercer.DateTrunc)
-                return BindBucket(condition, path, index);
 
             var operand = coercer.Coerce(condition.Value, path, op, index, errors);
 
@@ -1564,197 +1554,6 @@ public sealed class Binder
             }
 
             return new BoundCondition.Leaf(path, op, operand, IgnoreCase: false, IsSemiJoin: false);
-        }
-
-        /// <summary>
-        /// A bucket test (DG2): <c>{ "loadStart": { "dateTrunc": { "unit": "month", "timezone": "Europe/Berlin", "eq": "2026-02-28T23:00:00Z" } } }</c>
-        /// matches the rows whose date lies in the bucket <c>eq</c> lies in, which is the bucket a group
-        /// key of the same unit, zone and week start puts them in: the rows of the group whose key is
-        /// that bucket's start. It binds to one half-open range on the stored date, so an index on the
-        /// member bounds it. <c>eq</c> is an instant, or a variable that holds one; on a member that
-        /// holds a date without a time also a day (<c>YYYY-MM-DD</c>); <c>null</c> is the group of the
-        /// rows that have no date. Under a remote alias the owner binds it, as it binds every condition;
-        /// what travels is the operand as written with its variables bound.
-        /// </summary>
-        private BoundCondition? BindBucket(FilterCondition condition, ResolvedPath path, int index)
-        {
-            var wire = condition.Path!;
-
-            if (path.IsRemote)
-            {
-                var before = errors.Count;
-                var sent = coercer.SubstituteVariables(condition.Value ?? OperandCoercer.JsonNull, index, wire, errors);
-
-                if (errors.Count > before)
-                    return null;
-
-                hasSemiJoin = true;
-
-                return new BoundCondition.Leaf(path, OperandCoercer.DateTrunc, new BoundOperand.Raw(sent), null, IsSemiJoin: true);
-            }
-
-            QueryValidationError Refused(string code, string reason, string message, params (string Name, object? Value)[] facts)
-            {
-                var parameters = new Dictionary<string, object?>(StringComparer.Ordinal) { ["op"] = OperandCoercer.DateTrunc, ["reason"] = reason };
-
-                foreach (var (name, value) in facts)
-                    parameters[name] = value;
-
-                return new QueryValidationError { Code = code, Message = message, Stage = index, Path = wire, Params = parameters };
-            }
-
-            // A bucket is one value's. Through a collection that is not unwound the two ends of the range
-            // would be met by different elements, so the element is named: by any, or by an unwind.
-            if (path.CollectionAncestors > 0 || path.Kind == Kind.Array)
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "underCollection",
-                    $"'{wire}' lies in a collection that is not unwound; 'dateTrunc' tests one value. Test the elements with 'any' on the collection, or unwind it first."));
-                return null;
-            }
-
-            if (condition.Value is not { ValueKind: JsonValueKind.Object } written)
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "notAnObject", "'dateTrunc' takes an object of unit, timezone, weekStart and eq."));
-                return null;
-            }
-
-            string? unit = null, timezone = null, weekStart = null;
-            JsonElement? eq = null;
-            var unknown = new List<string>();
-
-            foreach (var property in written.EnumerateObject())
-            {
-                var text = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
-
-                switch (property.Name)
-                {
-                    case "unit" when text is not null: unit = text; break;
-                    case "timezone" when text is not null: timezone = text; break;
-                    case "weekStart" when text is not null: weekStart = text; break;
-                    case "timezone" or "weekStart" when property.Value.ValueKind == JsonValueKind.Null: break;
-                    case "eq": eq = property.Value; break;
-                    default: unknown.Add(property.Name); break;
-                }
-            }
-
-            if (unknown.Count > 0)
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "unknownMember",
-                    $"'{string.Join(", ", unknown)}' is not a member of a dateTrunc condition, or not a string; it carries unit, timezone, weekStart (strings) and eq.", ("members", unknown)));
-                return null;
-            }
-
-            if (!Units.Contains(unit ?? ""))
-            {
-                errors.Add(Refused(Codes.InvalidDateTruncUnit, "unit", $"'{unit}' is not a unit; one of year, quarter, month, week, day, hour, minute, second."));
-                return null;
-            }
-
-            if (!TryTimezone(timezone, out var iana, out var zone))
-            {
-                errors.Add(Refused(Codes.InvalidTimezone, "timezone", $"'{iana}' is not an IANA timezone."));
-                return null;
-            }
-
-            var firstDay = DayOfWeek.Monday;
-
-            if (unit == "week" && !string.IsNullOrWhiteSpace(weekStart) && !TryWeekDay(weekStart, out firstDay))
-            {
-                errors.Add(Refused(Codes.InvalidDateTruncUnit, "weekStart", $"'{weekStart}' is not a day of the week."));
-                return null;
-            }
-
-            if (eq is not { } operand)
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "eqRequired", "'dateTrunc' needs 'eq': the instant whose bucket the rows are matched by, or null for the rows without a date."));
-                return null;
-            }
-
-            if (!coercer.TryValue(operand, index, wire, errors, out var value))
-                return null;
-
-            // The rows without a date are one group, whose key is null.
-            if (value.ValueKind == JsonValueKind.Null)
-                return new BoundCondition.Leaf(path, OperandCoercer.DateTrunc, BoundOperand.NullValue, IgnoreCase: false, IsSemiJoin: false);
-
-            var dateOnly = path.LeafKind == Kind.Date;
-            DateTime instant;
-
-            if (value.ValueKind == JsonValueKind.String && OperandCoercer.TryDateTime(value.GetString()!, out var parsed))
-                instant = parsed;
-            else if (dateOnly && value.ValueKind == JsonValueKind.String
-                && DateOnly.TryParseExact(value.GetString(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var day))
-                instant = DateBucket.Midnight(day, zone);
-            else
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "eq", dateOnly
-                    ? $"The 'eq' of the dateTrunc on '{wire}' expects an ISO-8601 date-time with 'Z' or an offset, a date as YYYY-MM-DD, or null."
-                    : $"The 'eq' of the dateTrunc on '{wire}' expects an ISO-8601 date-time with 'Z' or an offset, or null."));
-                return null;
-            }
-
-            if (DateBucket.Of(instant, unit!, zone, firstDay) is not { } bucket)
-            {
-                errors.Add(Refused(Codes.InvalidOperand, "range", $"The {unit} of '{value.GetString()}' does not lie within the years a date holds."));
-                return null;
-            }
-
-            if (!dateOnly)
-                return new BoundCondition.Leaf(path, OperandCoercer.DateTrunc, new BoundOperand.Range(new BsonDateTime(bucket.From), new BsonDateTime(bucket.Until)), IgnoreCase: false, IsSemiJoin: false);
-
-            // A date without a time is stored as the midnight of its day in UTC, or as its text: the
-            // bucket holds the days whose midnight in the zone lies in it, and either form orders by day.
-            var days = DateBucket.Days(bucket, zone);
-            var asText = path.Leaf?.Representation.BsonType == BsonType.String;
-            BsonValue Stored(DateOnly date) => asText
-                ? new BsonString(date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))
-                : new BsonDateTime(date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
-
-            return new BoundCondition.Leaf(path, OperandCoercer.DateTrunc, new BoundOperand.Range(Stored(days.From), Stored(days.Until)), IgnoreCase: false, IsSemiJoin: false);
-        }
-
-        /// <summary>
-        /// The zone a <c>dateTrunc</c> names: UTC when it names none, else the IANA id of the zone the
-        /// runtime finds, spelled as the database takes it. False when there is no such zone.
-        /// </summary>
-        private static bool TryTimezone(string? written, out string iana, out TimeZoneInfo zone)
-        {
-            iana = string.IsNullOrWhiteSpace(written) ? "UTC" : written.Trim();
-            zone = TimeZoneInfo.Utc;
-
-            if (iana == "UTC")
-                return true;
-
-            // Mongo's $dateTrunc takes an IANA id, spelled exactly. The runtime's lookup is
-            // looser: it ignores case on some platforms and also finds a zone by its Windows
-            // id. What goes on the wire is therefore the id of the zone that was found when
-            // that is an IANA id, the IANA id the runtime maps a Windows id to otherwise,
-            // and nothing when there is no such mapping.
-            if (!TimeZoneInfo.TryFindSystemTimeZoneById(iana, out var found) || !TryIanaId(found, out var id))
-                return false;
-
-            iana = id;
-            zone = id is "UTC" or "Etc/UTC" ? TimeZoneInfo.Utc : found;
-
-            return true;
-        }
-
-        /// <summary>The day a week starts on, from its long or short English name in any case.</summary>
-        private static bool TryWeekDay(string written, out DayOfWeek day)
-        {
-            day = written.Trim().ToLowerInvariant() switch
-            {
-                "monday" or "mon" => DayOfWeek.Monday,
-                "tuesday" or "tue" => DayOfWeek.Tuesday,
-                "wednesday" or "wed" => DayOfWeek.Wednesday,
-                "thursday" or "thu" => DayOfWeek.Thursday,
-                "friday" or "fri" => DayOfWeek.Friday,
-                "saturday" or "sat" => DayOfWeek.Saturday,
-                "sunday" or "sun" => DayOfWeek.Sunday,
-                _ => (DayOfWeek)(-1),
-            };
-
-            return (int)day >= 0;
         }
 
         /// <summary>
@@ -3870,10 +3669,22 @@ public sealed class Binder
                 return null;
             }
 
-            if (!TryTimezone(trunc.Timezone, out var timezone, out _))
+            var timezone = string.IsNullOrWhiteSpace(trunc.Timezone) ? "UTC" : trunc.Timezone.Trim();
+
+            if (timezone != "UTC")
             {
-                errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
-                return null;
+                // Mongo's $dateTrunc takes an IANA id, spelled exactly. The runtime's lookup is
+                // looser: it ignores case on some platforms and also finds a zone by its Windows
+                // id. What goes on the wire is therefore the id of the zone that was found when
+                // that is an IANA id, the IANA id the runtime maps a Windows id to otherwise,
+                // and nothing when there is no such mapping.
+                if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone) || !TryIanaId(zone, out var iana))
+                {
+                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
+                    return null;
+                }
+
+                timezone = iana;
             }
 
             string? weekStart = null;

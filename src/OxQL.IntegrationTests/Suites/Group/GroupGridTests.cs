@@ -12,7 +12,8 @@ namespace OxQL.IntegrationTests.Suites.Group;
 
 /// <summary>
 /// The requests a grid that groups sends (DG2 grouping), each on the fleet's real rows: a level of
-/// groups paged by value in any order, the rows of one group by its key sent back, a second level
+/// groups paged by value in any order, the rows of one group by its key sent back (a bucket of dates
+/// by the range of its calendar bounds, which the client computes), a second level
 /// under the first, the conditions of the request's <c>filter</c> run before or after the group by
 /// what they read, the number of groups, and the totals as a group over no key. The engine has no
 /// tree of groups: a level is a request, and these hold that the requests of a tree add up.
@@ -186,7 +187,9 @@ public class GroupGridTests
 
             foreach (var month in months.Items)
             {
-                var bucket = $$"""{ "id": "group:1", "where": { "loadStart": { "dateTrunc": { "unit": "month", "timezone": "{{Berlin}}", "eq": {{month!["month"]!.ToJsonString()}} } } } }""";
+                // A bucket of dates has no condition of its own: the client sends the month's calendar range in the zone.
+                var range = CalendarRange.Of(CalendarRange.Instant(month!["month"]!.GetValue<string>()), "month", Berlin);
+                var bucket = $$"""{ "id": "group:1", "where": { "loadStart": {{CalendarRange.Condition(range)}} } }""";
                 var leaves = await client.QueryAsync(Request($"[ {Removed}, {parent}, {bucket} ]", Leaves));
 
                 leaves.ShouldHaveIds(Sorted(inStatus.Where(row => Truncation.Truncate(Corpus.Date(row, "loadStart")!.Value, "month", Berlin) == month["month"]!.GetValue<string>())));
@@ -208,14 +211,15 @@ public class GroupGridTests
             [ { "group": { "by": [{ "path": "shipmentNumber", "as": "shipmentNumber" }, { "path": "status.name", "as": "statusName" }], "fields": { "count": { "count": true }, "latest": { "max": "loadStart" } } } },
               { "sort": [{ "shipmentNumber": "asc" }, { "statusName": "asc" }] }, { "page": { "limit": 500, "count": true } } ]
             """;
-        const string Filter = """
+        var year = CalendarRange.Of(new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc), "year", Berlin);
+        var filter = $$"""
             [ { "id": "preset", "where": { "isDeleted": { "neq": true } } },
               { "id": "col:number", "where": { "shipmentNumber": { "startsWith": "s" } } },
               { "id": "col:count", "where": { "count": { "gte": 1 } } },
               { "id": "col:status", "where": { "statusName": { "neq": "Closed" } } },
-              { "id": "col:latest", "where": { "latest": { "dateTrunc": { "unit": "year", "timezone": "Europe/Berlin", "eq": "2026-06-01T00:00:00Z" } } } } ]
+              { "id": "col:latest", "where": { "latest": {{CalendarRange.Condition(year)}} } } ]
             """;
-        var request = Request(Filter, Pipeline);
+        var request = Request(filter, Pipeline);
         var answer = await client.QueryAsync(request);
         var expected = Shipments
             .Where(row => Corpus.ValueAt(row, "isDeleted") is not BsonBoolean { Value: true })
@@ -268,7 +272,7 @@ public class GroupGridTests
             && Truncation.Truncate(Corpus.Date(row, "loadStart")!.Value, "month", Berlin) == month.Key).ToList();
         var filter = $$"""
             [ { "id": "removeDeleted", "where": { "isDeleted": { "neq": true } } },
-              { "id": "preset:month", "where": { "loadStart": { "dateTrunc": { "unit": "month", "timezone": "{{Berlin}}", "eq": "{{month.Key}}" } } } } ]
+              { "id": "preset:month", "where": { "loadStart": {{CalendarRange.Condition(CalendarRange.Of(CalendarRange.Instant(month.Key), "month", Berlin))}} } } ]
             """;
         const string Totals = """[ { "group": { "by": [], "fields": { "count": { "count": true }, "first": { "min": "loadStart" }, "last": { "max": "loadStart" }, "numbers": { "countDistinct": "shipmentNumber" } } } } ]""";
 
@@ -298,7 +302,7 @@ public class GroupGridTests
         (await client.QueryAsync(Request(filter, """[ { "page": { "limit": 0, "count": true } } ]"""))).ShouldCount("exact", rows.Count);
 
         // Over no row at all there is no group, so there is no row: an empty answer is a total of nothing.
-        var none = await client.QueryAsync(Request("""[ { "where": { "loadStart": { "dateTrunc": { "unit": "year", "eq": "1999-06-01T00:00:00Z" } } } } ]""", Totals));
+        var none = await client.QueryAsync(Request("""[ { "where": { "loadStart": { "gte": "1999-01-01T00:00:00Z", "lt": "2000-01-01T00:00:00Z" } } } ]""", Totals));
 
         none.ShouldBeOk();
         none.Items.Should().BeEmpty();

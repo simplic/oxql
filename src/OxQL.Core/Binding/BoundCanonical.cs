@@ -522,7 +522,6 @@ public static class BoundCanonical
         BoundOperand.Single single => JsonNode.Parse(single.Value.ToJson(Canonical)),
         BoundOperand.Set set => new JsonObject { ["set"] = new JsonArray(set.Values.Select(value => JsonNode.Parse(value.ToJson(Canonical))).ToArray()) },
         BoundOperand.Tolerant tolerant => new JsonObject { ["tolerant"] = new JsonArray(tolerant.Alternatives.Select(value => JsonNode.Parse(value.ToJson(Canonical))).ToArray()) },
-        BoundOperand.Range range => new JsonObject { ["from"] = JsonNode.Parse(range.From.ToJson(Canonical)), ["until"] = JsonNode.Parse(range.Until.ToJson(Canonical)) },
         BoundOperand.Raw raw => new JsonObject { ["raw"] = JsonNode.Parse(raw.Value.GetRawText()) },
         _ => null,
     };

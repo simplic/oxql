@@ -659,6 +659,13 @@ stored number, one the enum does not declare included. A value sent back as `eq`
 the rows the list counted, as a group's key does, with the one exception grouping has too: an
 undeclared enum number cannot be named in a condition (`UNKNOWN_ENUM_MEMBER`).
 
+**The request's `filter`.** Every entry runs before the stage, at the point its paths are in the
+row; none reads `value` or `count`, which exist only in the answer. A set filter asks for its list
+with **every entry but its own**: the entry `col:status` is left out of the request that lists the
+statuses. Sent with it, the list would hold only what is already chosen. The engine offers no
+`except` for this on purpose: a request says what it runs, and explain, cursors and the count of the
+grid's other requests stay those of the entries actually sent.
+
 **Not offered.** A list under another service's alias (`NOT_CONTINUABLE`: its values are its
 owner's to list); a `contains` search; a cursor; a count of rows rather than elements under a
 collection; an answer kept between requests (every request reads the database).

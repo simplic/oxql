@@ -814,6 +814,11 @@ POST query { "entityType": "transport.shipment",
   `valuesScanRows` or `regexMaxLength`, `max`, `value`); a path that is no scalar `NOT_FILTERABLE`,
   a collection itself `GROUP_ON_COLLECTION`, an unknown one `UNKNOWN_PATH`.
 
+**A set filter's list** is this request with every entry of the request's `filter` except the
+column's own: the list then follows what the other filters leave, and still offers what the
+column's own filter would hide. The engine has no member that excludes an entry; the caller leaves
+it out.
+
 What a list holds and how it relates to the group one would write by hand:
 [`oxql-semantics.md`](oxql-semantics.md#distinct-values). Contract 1 has no such stage
 (`UNKNOWN_STAGE`).

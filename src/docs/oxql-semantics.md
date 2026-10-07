@@ -666,6 +666,20 @@ statuses. Sent with it, the list would hold only what is already chosen. The eng
 `except` for this on purpose: a request says what it runs, and explain, cursors and the count of the
 grid's other requests stay those of the entries actually sent.
 
+**What it costs, and the index that answers it.** One aggregate, one round trip, whatever the list:
+
+| the rows are read | when | examined |
+|---|---|---|
+| from an index alone | an index holds the organisation member and the path (and whatever the conditions before the stage read), **built without a collation** | `scan` keys at most, no document |
+| as documents | no such index; an index built with a collation (it holds sort keys, and the database then reads the document whatever the path holds); a condition on a member the index lacks; a path under a collection (an index over an array's members never stands for the documents) | `scan` documents at most |
+
+`{ OrganizationId: 1, <storage path>: 1 }` is the index of a list that is asked often; it is the
+host's to declare, the engine creates none. Without the bound either form would read every row that
+matches (measured in process on 50 000 matching rows of about 450 bytes: 22 ms from the index, 28 ms
+as documents; bounded at 20 000 rows 8 ms and 12 ms). The bound is what keeps a list on a table of millions at the cost of
+50 000 rows. A `group` before the stage is computed over every row that reaches it first, as
+always: the bound then limits the groups read, not the rows.
+
 **Not offered.** A list under another service's alias (`NOT_CONTINUABLE`: its values are its
 owner's to list); a `contains` search; a cursor; a count of rows rather than elements under a
 collection; an answer kept between requests (every request reads the database).

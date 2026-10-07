@@ -597,6 +597,31 @@ the condition "the row's date is in the bucket `eq` is in", computed as a group 
     variant of the object that held it needs the row the group replaced: resolve it before the
     group and group by a member of the record instead. Contract 1 has no such stage.
 
+**Groups for a grid.** The engine has no tree of groups; a level of a tree is a request, and the
+requests of a tree add up because each is the same rows cut another way:
+
+| the grid shows | it sends | the engine guarantees |
+|---|---|---|
+| a level: the groups of one key | the leaf pipeline without `project`, `sort`, `page`, then `group` by that key with a `count` and one aggregate per totalled column, `sort`, `page` | the groups page by value in any order that a `sort` after the group gives, an aggregate included (the order is completed by the key); `page.count` counts groups |
+| the rows of one group | the leaf pipeline with one more `filter` entry: `{ "<path>": { "eq": <key> } }` for a key over a path, `{ "<path>": { "dateTrunc": { unit, timezone, weekStart, "eq": <key> } } }` for a `dateTrunc` key | the entry runs before everything that does not need it; the rows are the rows the group counted; `eq null` and `dateTrunc … eq null` are the group keyed `null` (the member null or absent) |
+| a level under a group | the same `group` request with the parents' keys as `filter` entries | the counts of the level sum to the parent's count |
+| the totals | the leaf pipeline with `group` over no key, and `maxTimeMs` | one row; its `count` is the number of rows the filter leaves; over no row, no row |
+
+- **A key is sent back as it was answered.** A string key folds case and accents, and so does
+  `eq`: the value the group reported (the first met) finds every spelling in it. An enum key is
+  its number, a guid its text, a boolean itself, a `dateTrunc` key an instant.
+- **A stored enum number the enum does not declare** is a group of its own (the stored value is
+  the key), and no condition can name it: an operand off the enum is `UNKNOWN_ENUM_MEMBER`, here
+  as everywhere. Such a group's rows are reached through its other members only.
+- **A filter entry is about the thing its path names from the entry on.** A key under an alias
+  that is also a member of the entity (`{ path: "status.name", as: "status" }` where `status` is an
+  object) leaves `status` in a filter entry meaning the member, not the key: the entry runs at
+  the entry of the pipeline, on the member (`NOT_FILTERABLE` for an object; explain notes
+  `FILTER_BINDS_EARLIER` where it binds). A key that a condition should reach after the group
+  has an alias no member has; a key over the member of the same name is the same thing either way.
+- **`countDistinct`** counts the distinct values the rows store: a stored `null` is one of them,
+  a member that is absent is none.
+
 ## Polymorphic values
 
 A member typed as a base class or an interface may hold one of several variants: the driver

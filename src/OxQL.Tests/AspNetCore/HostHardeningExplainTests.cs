@@ -86,14 +86,18 @@ public class HostHardeningExplainTests
         host.Indexes.Asked.Should().Equal(["probe.customer", "probe.order"]);
         host.Runner.Calls.Should().BeEmpty();
 
-        var join = body!["advisory"]!.AsArray().Select(node => node!.AsObject()).Single(entry => entry["field"]!.GetValue<string>() == "lookup:orders");
+        var indexes = body!["advisory"]!["indexes"]!.AsArray().Select(node => node!.AsObject()).ToList();
+        var join = indexes.Single(entry => entry["for"]!.GetValue<string>() == "join");
 
+        join["collection"]!.GetValue<string>().Should().Be("orders");
+        join["key"]!.ToJsonString().Should().Be("""{"OrganizationId":1,"CustomerId":1}""");
         join["used"]!.GetValue<bool>().Should().BeTrue(join.ToJsonString());
+        join["existing"]!.GetValue<string>().Should().Be("served");
         join["index"]!.GetValue<string>().Should().Be("org_customer");
 
         var advice = body["notes"]!.AsArray().Select(node => node!.AsObject()).Where(note => note["code"]!.GetValue<string>() == Notes.IndexAdvice).ToList();
-        advice.Should().HaveCount(body["advisory"]!.AsArray().Count, "each line of the advisory is also a note");
-        advice.Single(note => note["params"]!["field"]!.GetValue<string>() == "lookup:orders")["params"]!["index"]!.GetValue<string>().Should().Be("org_customer");
+        advice.Should().HaveCount(indexes.Count, "each index of the advisory is also a note");
+        advice.Single(note => note["params"]!["id"]!.GetValue<string>() == join["id"]!.GetValue<string>())["params"]!["index"]!.GetValue<string>().Should().Be("org_customer");
     }
 
     [Fact]

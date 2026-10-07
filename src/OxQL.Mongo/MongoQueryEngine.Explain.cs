@@ -171,35 +171,36 @@ public sealed partial class MongoQueryEngine
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false, checkErrors, cancellationToken).ConfigureAwait(false));
         }
 
-        // The advisory reads index lists; a list that cannot be read is a note, never a failed explain.
-        // The read falls under the explain's own time (Explain:TimeoutMs, or what its origin has left
-        // of it): once that is spent it is given up, and the note says so.
-        try
+        // The advisory reads index lists; a list that cannot be read is a note, never a failed explain:
+        // the advice is then given without saying which of it an index serves already. The read falls
+        // under the explain's own time (Explain:TimeoutMs, or what its origin has left of it): once
+        // that is spent it is given up, and the note says so.
+        if (request.IncludesIndexes)
         {
-            if (request.IncludesIndexes)
+            IReadOnlyList<BsonDocument>? listed = null;
+            Dictionary<string, IReadOnlyList<BsonDocument>>? joined = null;
+
+            try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
                 timeout.CancelAfter(AdvisoryTime(request, context, wall.Elapsed));
-                draft.Advisory = await AdviseAsync(bound, compiled, timeout.Token).ConfigureAwait(false);
+                (listed, joined) = await IndexListsAsync(bound, timeout.Token).ConfigureAwait(false);
             }
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            draft.Notes.Add(new Diagnostic
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                Code = Notes.IndexAdvice,
-                Message = "The index lists could not be read, so no index advice is given.",
-                Params = new Dictionary<string, object?> { ["reason"] = exception is OperationCanceledException ? nameof(TimeoutException) : exception.GetType().Name },
-            });
-        }
+                (listed, joined) = (null, null);
+                draft.Notes.Add(new Diagnostic
+                {
+                    Code = Notes.IndexAdvice,
+                    Message = "The index lists could not be read: the advice says which indexes would serve the request, not whether they exist.",
+                    Params = new Dictionary<string, object?> { ["reason"] = exception is OperationCanceledException ? nameof(TimeoutException) : exception.GetType().Name },
+                });
+            }
 
-        foreach (var line in draft.Advisory ?? [])
-            draft.Notes.Add(Notes.Index(
-                line["field"]?.GetValue<string>() ?? "",
-                line["used"] is JsonValue used && used.TryGetValue<bool>(out var flag) ? flag : null,
-                line["index"]?.GetValue<string>(),
-                line["note"]?.GetValue<string>()));
+            draft.Advisory = IndexAdvisor.Advise(bound, compiled, listed, joined);
+            draft.Notes.AddRange(IndexAdvisor.NotesOf(draft.Advisory));
+        }
 
         if (request.IncludesPlan)
             draft.Plan = new ExplainPlan
@@ -251,7 +252,7 @@ public sealed partial class MongoQueryEngine
         /// <summary>Per alias whose rows an owner holds, the type its owners' answers point it to (null: none answered).</summary>
         public Dictionary<string, string?> OwnerTypes { get; } = new(StringComparer.Ordinal);
 
-        public IReadOnlyList<JsonNode>? Advisory { get; set; }
+        public JsonObject? Advisory { get; set; }
 
         public ExplainPlan? Plan { get; set; }
 
@@ -1736,15 +1737,14 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>
-    /// The opt-in index advisory (DESIGN §4.1): the index lists of the entity's collection and of
-    /// every collection a <c>$lookup</c> joins, matched statically against the leading match, the
-    /// sort and each join field. It reads <c>listIndexes</c> only (cached by the index source) and
-    /// never runs the pipeline.
+    /// What the opt-in index advisory reads: the index list of the entity's collection and of every
+    /// collection a <c>$lookup</c> joins (<c>listIndexes</c>, cached by the index source), and nothing
+    /// else: the pipeline never runs. Both null on a host without an index source.
     /// </summary>
-    private async Task<IReadOnlyList<JsonNode>?> AdviseAsync(BoundPipeline bound, CompiledQuery compiled, CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<BsonDocument>? Listed, Dictionary<string, IReadOnlyList<BsonDocument>>? Joined)> IndexListsAsync(BoundPipeline bound, CancellationToken cancellationToken)
     {
         if (indexes is null)
-            return null;
+            return (null, null);
 
         var listed = await indexes.IndexesAsync(bound.Entity, cancellationToken).ConfigureAwait(false);
         var joined = new Dictionary<string, IReadOnlyList<BsonDocument>>(StringComparer.Ordinal);
@@ -1753,7 +1753,7 @@ public sealed partial class MongoQueryEngine
             if (!joined.ContainsKey(target.Collection))
                 joined[target.Collection] = await indexes.IndexesAsync(target, cancellationToken).ConfigureAwait(false);
 
-        return IndexAdvisor.Advise(compiled.PageStages, listed, joined, compiled.Collation);
+        return (listed, joined);
     }
 
     /// <summary>The entities the aggregate joins with <c>$lookup</c>: every lookup's child and every inline resolve's target.</summary>

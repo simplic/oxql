@@ -441,9 +441,10 @@
             parts.push(section(`Owner queries · ${queries.length}`, queries.map(({ owner, query }) =>
                 `<div class="sub">stage ${esc(query.stage)} · ${esc(query.target)} → ${esc(owner.service)}${owner.route ? ` (${esc(owner.route.apiName)})` : ""}</div><pre class="raw">${highlight(query.query)}</pre>`).join(""), false));
         }
-        if (Array.isArray(answer.advisory)) {
-            parts.push(section(`Index advisory · ${answer.advisory.length}`, table(["field", "used", "index", "note"], answer.advisory.map(a =>
-                `<tr><td>${esc(a.field)}</td><td class="used-${a.used === true ? "yes" : a.used === false ? "no" : "unknown"}">${a.used === true ? "yes" : a.used === false ? "no" : "?"}</td><td>${esc(a.index ?? "")}</td><td>${esc(a.note ?? "")}</td></tr>`)), true));
+        if (Array.isArray(answer.advisory?.indexes)) {
+            parts.push(section(`Index advisory · ${answer.advisory.indexes.length}`, table(["for", "create", "used", "index", "lacks", "without"], answer.advisory.indexes.map(a =>
+                `<tr><td>${esc(a.for)}</td><td>${esc(a.command)}</td><td class="used-${a.used === true ? "yes" : a.used === false ? "no" : "unknown"}">${a.used === true ? "yes" : a.used === false ? "no" : "?"}</td>` +
+                `<td>${esc(a.index ?? "")}</td><td>${esc((a.lacks || []).join(", "))}</td><td>${esc((a.without || []).join(", "))}</td></tr>`)), true));
         }
         if (Array.isArray(answer.diagnostics) && answer.diagnostics.length) parts.push(section(`Diagnostics · ${answer.diagnostics.length}`, `<pre class="raw">${highlight(answer.diagnostics)}</pre>`, true));
         if (Array.isArray(plan.stages)) parts.push(section(`Compiled page stages · ${plan.stages.length}`, `<pre class="raw">${highlight(plan.stages)}</pre>`, false));

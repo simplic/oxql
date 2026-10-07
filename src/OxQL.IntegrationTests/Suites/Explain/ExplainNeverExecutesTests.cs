@@ -87,7 +87,9 @@ public class ExplainNeverExecutesTests
         var answer = Answer(await engine.ExplainAsync(request, direct.Context()));
 
         answer.Valid.Should().BeTrue();
-        answer.Advisory.Should().NotBeNull().And.Contain(line => line["field"]!.GetValue<string>() == "lookup:equipment");
+        answer.Advisory!["existing"]!.GetValue<string>().Should().Be("known");
+        answer.Advisory["indexes"]!.AsArray().Should().Contain(index => index!["for"]!.GetValue<string>() == "join" && index["serves"]![0]!["alias"]!.GetValue<string>() == "equipment")
+            .Which!["existing"]!.GetValue<string>().Should().NotBe("unknown", "the joined collection's index list was read");
         commands.Should().Equal(["listIndexes", "listIndexes"], "one index list for fleet.vehicle, one for the joined fleet.equipment; no aggregate, no explain");
     }
 

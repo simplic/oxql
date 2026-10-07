@@ -979,8 +979,9 @@ public class ExplainRemoteCheckTests
 
         watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5), "the index read falls under Explain:TimeoutMs");
         result.Valid.Should().BeTrue();
-        result.Advisory.Should().BeNull();
-        result.Notes!.Should().ContainSingle(note => note.Code == Notes.IndexAdvice).Which.Params!["reason"].Should().Be(nameof(TimeoutException));
+        result.Advisory!["existing"]!.GetValue<string>().Should().Be("unknown", "the advice is given, without a word on what exists");
+        result.Advisory["indexes"]!.AsArray().Should().OnlyContain(index => index!["existing"]!.GetValue<string>() == "unknown" && index["used"] == null);
+        result.Notes!.Should().ContainSingle(note => note.Code == Notes.IndexAdvice && note.Params!.ContainsKey("reason")).Which.Params!["reason"].Should().Be(nameof(TimeoutException));
     }
 
     [Fact]

@@ -73,7 +73,11 @@ public static class Notes
     /// <summary>A strict request that neither continues nor jumps reads every row in one page or refuses (params <c>limit</c>, <c>max</c>).</summary>
     public const string ReportPage = "REPORT_PAGE";
 
-    /// <summary>One line of the opt-in index advisory (params <c>field</c>, <c>used</c>, <c>index</c>).</summary>
+    /// <summary>
+    /// One index of the opt-in index advisory, at the part of the request it serves first (params
+    /// <c>id</c>, <c>for</c>, <c>collection</c>, <c>existing</c>, <c>used</c>, <c>index</c>); or that
+    /// the index lists could not be read (params <c>reason</c>).
+    /// </summary>
     public const string IndexAdvice = "INDEX_ADVICE";
 
     /// <summary>
@@ -508,20 +512,6 @@ public static class Notes
         Stage = stage,
         Path = path,
         Params = new Dictionary<string, object?> { ["alias"] = alias, ["branch"] = branch, ["parent"] = false },
-    };
-
-    /// <summary>One line of the opt-in index advisory as a note.</summary>
-    public static Diagnostic Index(string field, bool? used, string? index, string? note) => new()
-    {
-        Code = IndexAdvice,
-        Message = note ?? (used switch
-        {
-            true => $"'{field}' is served by the index '{index}'.",
-            false => $"No index serves '{field}'.",
-            _ => $"Whether an index serves '{field}' is not known.",
-        }),
-        Path = field,
-        Params = new Dictionary<string, object?> { ["field"] = field, ["used"] = used, ["index"] = index },
     };
 
     /// <summary>The effective <c>onMissing</c> as the wire spells it.</summary>

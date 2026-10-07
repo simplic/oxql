@@ -276,15 +276,28 @@ public class HostTests
         body!["plan"]!["bound"]!["entity"]!.GetValue<string>().Should().Be("probe.order");
         body["plan"]!["stages"]!.AsArray().Should().NotBeEmpty();
         body["plan"]!["count"]!.AsArray().Last()!.AsObject().ContainsKey("$count").Should().BeTrue();
-        body["advisory"]!.AsArray().Should().NotBeEmpty();
+        body["advisory"]!["existing"]!.GetValue<string>().Should().Be("known");
         host.Runner.Calls.Should().BeEmpty("explain never executes");
         host.Indexes.Asked.Should().Equal(["probe.order"], "the index list of the entity alone: no join");
 
-        var advisory = body["advisory"]!.AsArray().Select(node => node!.AsObject()).ToList();
+        // One index for the request: the organisation, the number it compares and orders by, the key. The
+        // collection's index holds the first two without the request's collation and without the key.
+        var advised = body["advisory"]!["indexes"]!.AsArray().Single()!.AsObject();
 
-        advisory.Single(entry => entry["field"]!.GetValue<string>() == "OrganizationId")["used"]!.GetValue<bool>().Should().BeTrue();
-        advisory.Single(entry => entry["field"]!.GetValue<string>() == "Number")["index"]!.GetValue<string>().Should().Be("org_number");
-        advisory.Single(entry => entry["field"]!.GetValue<string>().StartsWith("sort:"))["note"]!.GetValue<string>().Should().Contain("tie-breaker");
+        advised["key"]!.ToJsonString().Should().Be("""{"OrganizationId":1,"Number":1,"_id":1}""");
+        advised["collation"]!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
+        advised["existing"]!.GetValue<string>().Should().Be("partial");
+        advised["used"]!.GetValue<bool>().Should().BeFalse();
+        advised["index"]!.GetValue<string>().Should().Be("org_number");
+        advised["lacks"]!.ToJsonString().Should().Be("""["equality","sort","collation"]""");
+        advised["serves"]!.AsArray().Select(serve => serve!["use"]!.GetValue<string>()).Should().Equal("filter", "sort");
+
+        var note = body["notes"]!.AsArray().Select(node => node!.AsObject()).Single(each => each["code"]!.GetValue<string>() == "INDEX_ADVICE");
+
+        note["basis"]!.GetValue<string>().Should().Be("advisory");
+        note["stage"]!.GetValue<int>().Should().Be(0);
+        note["path"]!.GetValue<string>().Should().Be("number");
+        note["params"]!["id"]!.GetValue<string>().Should().Be(advised["id"]!.GetValue<string>());
     }
 
     // ---- scope provider (§10) ----------------------------------------------------------------

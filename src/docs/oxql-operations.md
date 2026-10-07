@@ -435,7 +435,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
               { "service": "fleet", "remote": true, "via": "transport", "…": "…" } ],
   "catalog": [],
   "plan": { "bound": { … }, "stages": [ … ], "count": [ … ], "collation": { "locale": "de", "strength": 1 } },   // only with include: ["plan"]
-  "advisory": [ … ]                                                                                             // only with include: ["indexes"]
+  "advisory": { "existing": "known", "indexes": [ … ], "unbounded": [ … ] }                                     // only with include: ["indexes"]: the index advisory, below
 }
 ```
 
@@ -642,7 +642,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   stand in the order the row writes its members, not the order the projection names them. An object
   the projection names (`"customer.address": 1`), one no projection narrows and one an exclusion
   takes members out of stay one column, and a collection that is not unwound is always one `array`
-  column: what a member below such a column can is the function of its flags (*what a column can*).
+  column: what a member below such a column can is the function of its flags (`capabilities`, below).
   Members of a remote alias are `unknown`: their kind is in the owner's type. Under a
   join's alias the columns are its output set (`aliases.<alias>.shows`), each `ifJoined`, whoever
   runs the join: an alias a continued stage adds lists what its owner answered it shows. Only an
@@ -782,8 +782,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),
-  `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`; an index list that cannot be read
-  is an `INDEX_ADVICE` note saying so), `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
+  `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`: one per index of the advisory, at
+  the part of the request the index serves, `params` `id`, `for`, `collection`, `existing`, `used`,
+  `index`; an index list that cannot be read is one more `INDEX_ADVICE` note saying so, `params.reason`),
+  `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
   are stable; messages may change. Without `include: "notes"` only the notes about the answer itself
   are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). A remote union target's
   `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check), which then
@@ -925,17 +927,118 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
 **It never executes the query.** Explain binds and compiles; it sends the database no `aggregate`
 and no `explain` command. Without `include: ["indexes"]` it reads nothing from the database but, on
 a cache miss, the organisation's addon definitions. With it, it reads the
-index lists of the collections involved (`listIndexes`, cached 60 s per collection) and matches
-them statically against the leading `$match` (scope, cursor predicate and first caller condition,
-which the server coalesces), the sort and each `$lookup`'s join field; each advisory line is also an
-`INDEX_ADVICE` note. The advisory is absent when the host provides no index source. The page
-aggregate fetches `limit + 1` rows; the extra one decides `hasNextPage`. A join that runs after the
-page appears after the `$limit`.
+index lists of the collections involved (`listIndexes`, cached 60 s per collection: the entity's
+and that of each collection a join of the aggregate reads) and nothing else; the advice itself is
+computed from the bound request. The page aggregate fetches `limit + 1` rows; the extra one decides
+`hasNextPage`. A join that runs after the page appears after the `$limit`.
+
+**The index advisory** (`include: ["indexes"]`, on a valid request). Explain says which index
+would serve the request, as a definition to copy, what of the request it serves, and whether the
+collection has it. **Nothing creates an index**: not explain, not the engine, not a host. The
+advice is static (no statistics, no cost numbers): it follows from the request as bound and
+compiled and from the index lists.
+
+```jsonc
+"advisory": {
+  "existing": "known" | "unknown",            // unknown: this host read no index list (no index source, or the read failed)
+  "indexes": [ {
+    "id": "ix:24bbf3642b60",                  // stable for collection + keys + collation: the same index asked by two requests has one id
+    "for": "rows" | "group" | "values" | "join",
+    "collection": "shipment", "entity": "transport.shipment",
+    "key": { "OrganizationId": 1, "Status.Name": 1, "ShipmentNumber": -1, "_id": 1, "LoadStart": 1 },   // the key document, in order
+    "keys": [ { "field": "OrganizationId", "direction": 1, "role": "scope" },
+              { "field": "Status.Name", "direction": 1, "role": "equality", "path": "status.name" }, … ],  // the same keys with their role and the path as the caller wrote it
+    "collation": { "locale": "de", "strength": 1 },      // only where a text key needs it; absent = build without one
+    "multikey": true,                                     // only when a key lies under a collection
+    "covers": true,                                       // only when the index holds everything the request reads: no document is read
+    "existing": "served" | "partial" | "missing" | "unknown",
+    "used": true | false | null,                          // served / not served / unknown
+    "index": "org_number",                                // the index that serves it, or the one that goes furthest; absent when none leads to it
+    "lacks": ["equality", "sort", "range", "covering", "collation"],   // partial only: what that index lacks
+    "without": ["sortsInMemory", "scansOrganisation"],    // not served, list known: what the request does meanwhile
+    "serves": [ { "use": "filter", "role": "equality", "path": "status.name", "op": "in", "filter": "col:status" },
+                { "use": "sort", "path": "shipmentNumber", "direction": "desc", "stage": 1 }, … ],
+    "command": "db.getCollection(\"shipment\").createIndex({ … }, { collation: { locale: \"de\", strength: 1 } })",
+    "note": "…" } ],                                      // a sentence where the definition needs one (the collation of a values index)
+  "unbounded": [ { "use": "filter", "path": "isDeleted", "op": "neq", "reason": "negation", "filter": "removeDeleted" } ] }
+```
+
+- **The key order is equality, sort, range** (the ESR rule):
+  1. the organisation member, which the engine filters every request by (`role: "scope"`);
+  2. the members the request compares for **equality** (`eq`, `in`), in the order written;
+  3. the **sort** keys in the request's directions, completed by the key (`_id`) as the engine
+     completes every order. A member held to one value by `eq` is no sort key; a set (`in`) on a
+     member the request sorts by is no equality: the member stands once, as a sort key;
+  4. the members the request bounds by a **range** (`gt`, `gte`, `lt`, `lte`, a folded `startsWith`).
+
+  The conditions are those of every `match` and every entry of the request's `filter` up to the
+  first `group` or `values`, on a stored member of the entity's own row; a condition on the element
+  of an unwound collection counts where the engine asks it of the collection before the unwind
+  (`UNWIND_PREFILTER`), as a key under the collection (`multikey: true`; at most one collection per
+  index). The cursor's own condition is not listed: the sort keys serve it.
+- **Collation.** A text key that the request compares or orders under the collation is bounded and
+  ordered only by an index built with the same collation: the definition then carries `collation`
+  (and the shell line its option). An index with no text key, and one of a request that folds
+  nothing, has none. An existing index of another collation `lacks: ["collation"]`.
+- **`for: "values"`** (a request that ends in `values`): equality and range, then the path
+  (`role: "values"`), then every other member the conditions read (`role: "covered"`), **without a
+  collation**, so that the list is read off the index's keys and no document is read (`covers`).
+  A text the request compares under the collation is held, not bounded (`unbounded[].reason:
+  "heldNotBounded"`): an index built with the collation would bound it, and make the database read
+  every document for the values; the search by prefix runs on the values, after them. Under a
+  collection, after an unwind or a join, the values are read off the documents: the index then only
+  bounds the rows (`covers` absent, `note` says why).
+- **`for: "group"`** (the first `group`): equality and range bound the rows the group reads, then
+  its keys (`role: "group"`) and what its aggregates and the other conditions read
+  (`role: "covered"`), without a collation: the group is computed from the index (`covers`). Where a
+  text bounds the rows under the collation, bounding comes first: the index has the collation and
+  only the bounding keys. A condition on the group's own row and the order of the groups are no
+  index's (`unbounded[].reason: "afterGroup"`).
+- **`for: "join"`**: one per `lookup` or `resolve` the aggregate runs onto a member that is not the
+  key: the joined collection's organisation member, the member joined on (`role: "join"`), and a
+  lookup's own `sort` with the key. `serves` names the stage, the alias and the path followed. A
+  join onto the key has the key's index and gets no advice; a join that runs at its owner (another
+  service's rows, a keyed resolve) is advised by that owner's explain, not here.
+- **`existing`.** `served`: an index of the collection leads with the equality keys (in any order),
+  continues with the sort keys in the request's directions or all reversed, has the first range key
+  next where nothing is sorted, fits the collation, and holds every key where the advised index
+  `covers`. `partial`: the index named goes part of the way, `lacks` says what is missing. `missing`:
+  no index leads to it. `unknown`: no index list was read: **nothing is called missing that was not
+  looked for**. An index over part of the rows (`partialFilterExpression`), a sparse or hidden one
+  and a text, hashed, geo or wildcard index are never counted as serving.
+- **`without`**, only where it follows from the index list: `sortsInMemory` (no index orders the
+  rows; with `allowDiskUse` off a large result is refused as `QUERY_TOO_EXPENSIVE`),
+  `scansOrganisation` (the rows of the organisation are read to find those that match),
+  `scansCollection` (no index leads with the organisation), `scansPerRow` (the joined collection is
+  read once for every row that joins), `readsDocuments` (the documents are read where the index's
+  keys would do).
+- **`unbounded`**: the conditions and sort members no key bounds, each with `use`, `path`, `op`,
+  `filter` or `stage`, and one `reason`: `negation` (`neq`, `nin`), `exists`, `pattern` (`contains`,
+  `endsWith`, `regex`), `exactUnderCollation` (a text compared exactly while the aggregate runs under
+  the collation: an anchored pattern), `foldsWithoutCollation`, `decimalText`, `variant` (`is`), `or`,
+  `not`, `any`, `addon`, `joined` (a member a join brings), `afterUnwind`, `afterGroup`,
+  `secondCollection`, `collection` (a sort by a member under a collection), `heldNotBounded`.
+- **`command`** is the shell line that creates the index, to copy as it is
+  (`db.getCollection("<collection>").createIndex(<keys>[, { collation }])`). It names no database:
+  the operator selects it.
+- **Notes.** Each index is also one `INDEX_ADVICE` note (`basis: "advisory"`): of rows at the first
+  part of the request it serves (`filter` = the entry's id, else `stage`; `path` as written), of a
+  group, a list of values and a join at that stage. An edit that changes neither the keys nor the
+  collation keeps the `id`.
+- **Cost.** One `listIndexes` per collection involved, kept 60 s, under what is left of
+  `Explain:TimeoutMs`; no aggregate, no `explain` command, no statistics. Held on a server
+  (`IndexAdviceServerTests`): the advised index, created as defined, takes the in-memory sort out of
+  the plan and leaves a page reading a page's documents; a values and a group index leave no
+  document read; a join index ends the read of the joined collection per row.
+- **Not covered:** an index for a sort by a member a join brings or by an element's member (none
+  exists); conditions under `or`; a second collection's members; what a multikey index does to an
+  order (advised by the same rule, not measured).
 
 **What it reveals.** To any authenticated caller of the organisation: member names and kinds of the
 entities the query reaches, and with the plan storage paths, collection names, the emitted Mongo
-stages, the collation and the forwarded owner queries, and with the index opt-in the index names
-and keys. None of it is more sensitive than what `GET /schema` serves anonymously (storage names,
+stages, the collation and the forwarded owner queries, and with the index opt-in the collection
+names, the storage names of the members the request reads and the names of the indexes the
+collections have. None of it is more sensitive than what `GET /schema` serves anonymously (storage names,
 keys, references, routes), and it concerns the caller's own organisation only: the scope stage
 shows the caller's organisation id. No row data, no other organisation's data, no configuration
 secret appears.

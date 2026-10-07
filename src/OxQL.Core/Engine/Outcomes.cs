@@ -831,10 +831,15 @@ public sealed record ExplainResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExplainPlan? Plan { get; init; }
 
-    /// <summary>The static index advisory: only with <c>include: ["indexes"]</c> on a host with an index source.</summary>
+    /// <summary>
+    /// The static index advisory, only with <c>include: ["indexes"]</c> on a valid request:
+    /// <c>{ existing, indexes[], unbounded[]? }</c>, each index a complete definition, what of the
+    /// request it serves and whether the collection has it. On a host that reads no index lists it
+    /// is given all the same, every index <c>existing: "unknown"</c>.
+    /// </summary>
     [JsonPropertyName("advisory")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public IReadOnlyList<JsonNode>? Advisory { get; init; }
+    public JsonObject? Advisory { get; init; }
 
     /// <summary>The answer to a request refused before its stages were bound (a contract 1 rewrite): not valid, the errors, nothing else.</summary>
     public static ExplainResult Invalid(int contract, ExplainEngine engine, IReadOnlyList<QueryValidationError> errors) => new()

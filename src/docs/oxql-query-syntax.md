@@ -1041,8 +1041,9 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
   `types` (it implies `shape`): the member rows of every type written out, the flag sets and the
   per-root overrides, for a caller that holds no schema document; `shape.depth` and the row cap
   apply to it alone. `docs`: the descriptions of types, members and enum values in the member rows.
-  `plan`: the bound form, the emitted stages and every owner query. `indexes`: the index advisory,
-  the only extra read explain makes.
+  `plan`: the bound form, the emitted stages and every owner query. `indexes`: the index advisory
+  (the definition of each index that serves the request and whether the collection has it), the
+  only extra read explain makes.
 - `remote`: `check` checks what an owner binds at that owner. `cached` asks no owner: it answers
   from the owner answers a `check` of the last 30 seconds left (per organisation, user and forwarded
   body), and says what it therefore does not know (`cache.complete: false`, a `REMOTE_UNCHECKED` note

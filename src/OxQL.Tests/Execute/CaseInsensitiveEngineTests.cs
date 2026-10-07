@@ -83,12 +83,12 @@ public class CaseInsensitiveEngineTests
 
         plain.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Plan!.Collation.Should().BeNull();
 
-        var stages = new[] { new BsonDocument("$match", new BsonDocument("Number", "x")) };
-        var advised = IndexAdvisor.Advise(stages, [], null, DefaultCollation);
+        // The index that serves a folded comparison is built with the collation; one for other kinds has none.
+        var advised = await AspNetCore.IndexAdvisorTests.AdviseAsync("""[{ "match": { "number": { "eq": "x" } } }]""");
 
-        advised.Should().ContainSingle(line => line["field"]!.GetValue<string>() == "collation")
-            .Which["note"]!.GetValue<string>().Should().Contain("de/1").And.Contain("same collation");
-        IndexAdvisor.Advise(stages, [], null).Should().NotContain(line => line["field"]!.GetValue<string>() == "collation");
+        advised["indexes"]![0]!["collation"]!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
+        advised["indexes"]![0]!["command"]!.GetValue<string>().Should().Contain("""collation: { locale: "de", strength: 1 }""");
+        (await AspNetCore.IndexAdvisorTests.AdviseAsync("""[{ "match": { "count": { "eq": 1 } } }]"""))["indexes"]![0]!.AsObject().ContainsKey("collation").Should().BeFalse();
     }
 
     [Fact]

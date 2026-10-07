@@ -205,7 +205,10 @@ with no index but `_id`. What changes with the collation is which indexes the se
   `{ organizationId: 1, <member>: 1, _id: 1 }` with the engine's collation. When the configured
   collation changes, those indexes are rebuilt with it.
 - `POST /oxql/explain` shows the collation a request runs under; asked with
-  `include: ["indexes"]`, its advisory says which fields an index serves.
+  `include: ["indexes"]`, its advisory gives the index that serves the request as a definition to
+  copy: collection, key document in the order equality, sort, range (the organisation first), the
+  collation where a text key needs one, what of the request it serves, and whether the collection
+  has it (`oxql-operations.md`, *The index advisory*). The engine creates none of them.
 
 ## Sorting and paging
 

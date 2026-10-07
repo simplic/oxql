@@ -343,7 +343,7 @@ public static class ExplainFacts
     /// is not narrowed to the member's kind, which only its owner's type says.
     /// </para>
     /// </summary>
-    public static (JsonObject Can, JsonObject? Why) Can(Shape shape, string path, MemberFlags? owner = null)
+    public static (JsonObject Can, JsonObject? Why) Can(Shape shape, string path, MemberFlags? owner = null, Kind? ownerKind = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(path);
@@ -360,7 +360,17 @@ public static class ExplainFacts
             flags = flags with { Operators = flags.Operators & theirs.Operators };
         var aggregate = shape.Resolve(path, PathUsage.Aggregate);
         var kind = aggregate.Path?.LeafKind ?? facts?.LeafKind ?? Kind.Unknown;
+
+        // A member of another service's rows has the kind its owner said, where one answered.
+        if (kind == Kind.Unknown && owner is not null && ownerKind is { } said)
+            kind = said;
+
         var can = CanOf(flags, aggregate.Succeeded, kind);
+
+        // No owner answered: the list is every operator a condition may carry, the bucket test among them.
+        if (facts is { IsRemote: true } && owner is null && flags.Operators != 0 && can["filter"] is JsonArray every && !every.Any(name => name?.GetValue<string>() == OperandCoercer.DateTrunc))
+            every.Add(OperandCoercer.DateTrunc);
+
         var reason = ReasonOf(facts);
         var why = new JsonObject();
 
@@ -386,7 +396,9 @@ public static class ExplainFacts
     }
 
     /// <summary>
-    /// <c>can</c> of a member from its flags at a boundary: <c>filter</c> the flag set's operators,
+    /// <c>can</c> of a member from its flags at a boundary: <c>filter</c> the flag set's operators, and
+    /// after them <c>dateTrunc</c>, which has no flag of its own, on a date or a date-time that admits
+    /// <c>gte</c> and lies under no collection that is not unwound (the bucket test is a range on one value),
     /// <c>sort</c> its <c>sortable</c>, <c>group</c> and <c>values</c> its <c>groupable</c>, and
     /// <c>aggregate</c> the functions its kind takes where an aggregate may read it
     /// (<paramref name="aggregable"/>: the member is in the row before the page; every function for a
@@ -400,6 +412,9 @@ public static class ExplainFacts
         for (var bit = 0; bit < ExplainTypes.OperatorOrder.Count; bit++)
             if ((flags.Operators & (1 << bit)) != 0)
                 operators.Add(ExplainTypes.OperatorOrder[bit]);
+
+        if (kind is Kind.Date or Kind.DateTime && flags.UnderCollection == 0 && (flags.Operators & (1 << RangeBit)) != 0)
+            operators.Add(OperandCoercer.DateTrunc);
 
         var numeric = kind is Kind.Int or Kind.Long or Kind.Double or Kind.Decimal;
         var functions = new JsonArray();
@@ -420,6 +435,9 @@ public static class ExplainFacts
             ["values"] = flags.Groupable,
         };
     }
+
+    /// <summary>The bit of <c>gte</c> in a flag set's operators: a member that takes a range takes a bucket of dates.</summary>
+    private static readonly int RangeBit = ExplainTypes.OperatorOrder.ToList().IndexOf("gte");
 
     /// <summary>Why a path cannot be used some way, from what it is in the row: the first of the reasons that holds.</summary>
     private static string ReasonOf(ResolvedPath? facts) => facts switch

@@ -324,8 +324,8 @@ public class ExplainFactsTests
 
         foreach (var path in new[] { "r.name", "r.id" })
             Json(Of(unanswered, path)).Should().Be(
-                """{"can":{"filter":["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"ownerKind","sort":"owner","group":"owner","values":"owner","aggregate":"owner"}}""",
-                $"{path}: every operator a condition may carry, marked as not narrowed to the member's kind");
+                """{"can":{"filter":["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex","dateTrunc"],"sort":false,"group":false,"aggregate":[],"values":false},"why":{"filter":"ownerKind","sort":"owner","group":"owner","values":"owner","aggregate":"owner"}}""",
+                $"{path}: every operator a condition may carry, the bucket test among them, marked as not narrowed to the member's kind");
 
         // The owner answers: the same columns admit what their kinds do, and say so.
         var answered = await ExplainAsync(Pipeline, client: OwnerFleet.Client());

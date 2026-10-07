@@ -59,7 +59,7 @@ the listed status.
 | `UNWIND_ORDER` | 400 | an inner collection unwound before its outer one; under contract 2 an unwind of a collection a join of an earlier stage reads its keys from (`params` `reason: "joinReadsCollection"`, `join`, `alias`: join after the unwind) |
 | `ALIAS_COLLISION` | 400 | an alias equal to a member's wire or storage name or an earlier alias; two group outputs of one name; an unwind's `as` equal to its `includeIndex` |
 | `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr`; a contract 2 `unwind` without `as` (`params` `stage: "unwind"`, `member: "as"`, `reason: "required"`) |
-| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names |
+| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names; `dateTrunc` on a member that is no date, through a collection that is not unwound, or with an operand that is not `{ unit, timezone?, weekStart?, eq }` with an instant, a day on a `date` member, or `null` as `eq` (`params` `op: "dateTrunc"`, `reason`) |
 | `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes) |
 | `OPERAND_NOT_ARRAY` | 400 | `in` or `nin` without an array |
 | `DECIMAL_TEXT_NOT_ORDERABLE` | 400 | `gt gte lt lte` on a decimal member whose declared storage is text |
@@ -83,7 +83,7 @@ the listed status.
 | `MIXED_PROJECTION` | 400 | inclusion and exclusion in one projection (other than `"id": 0`); an empty projection |
 | `GROUP_ON_COLLECTION` | 400 | a group key or aggregate argument under a collection that is not unwound |
 | `UNKNOWN_AGG_FUNCTION` | 400 | an aggregate outside `count countDistinct sum avg min max first last push` |
-| `INVALID_AGGREGATE_ARGUMENT` | 400 | `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date |
+| `INVALID_AGGREGATE_ARGUMENT` | 400 | `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; a group key's `dateTrunc` over a non-date |
 | `INVALID_DATE_TRUNC_UNIT` | 400 | a unit outside `year quarter month week day hour minute second`; a `weekStart` that is not a day |
 | `INVALID_TIMEZONE` | 400 | a `timezone` that is not an IANA (or Windows) zone id |
 | `INVALID_SORT_DIRECTION` | 400 | a direction other than `asc`/`desc`; the object form without `direction`; the object form under contract 1 |
@@ -692,7 +692,9 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   answers `valid: false` with that `INVALID_OPERAND`. `sortVia` on a column of a join
   that cannot order the page names the same member in a copy of the joined record the row embeds
   (`snapshotOf`), when that path sorts; the engine never applies it. **A member that is no result
-  column** has the same answer by rule: `can.filter` is its flag set's `operators`, `can.sort` its
+  column** has the same answer by rule: `can.filter` is its flag set's `operators`, followed by
+  `dateTrunc` when the member is a `date` or a `dateTime`, admits `gte` and lies under no collection
+  that is not unwound (the bucket test has no flag of its own, so no flag id changed), `can.sort` its
   `sortable`, `can.group` and `can.values` its `groupable` (the flags of its type, with the stage's
   rule or override set), and `can.aggregate` is every function for a number and all but `sum` and
   `avg` otherwise, wherever the member is in the row before the page (under a collection that is

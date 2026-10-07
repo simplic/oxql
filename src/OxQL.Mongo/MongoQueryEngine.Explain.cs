@@ -443,7 +443,7 @@ public sealed partial class MongoQueryEngine
             if (draft.Bound is { } final)
                 columns = columns.Select(column =>
                 {
-                    var capability = ExplainFacts.Can(final.FinalShape, column.Path, draft.Owners.FlagsOf(column.Path));
+                    var capability = ExplainFacts.Can(final.FinalShape, column.Path, draft.Owners.FlagsOf(column.Path), Kinds.Parse(column.Kind));
 
                     return column with
                     {

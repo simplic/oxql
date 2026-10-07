@@ -800,7 +800,7 @@
         },
         "c:3": {
           "can": {
-            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists","dateTrunc"],
             "sort": true,
             "group": true,
             "aggregate": ["count","countDistinct","min","max","first","last","push"],

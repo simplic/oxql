@@ -36,8 +36,15 @@ public sealed class OperandCoercer
     /// <summary>The operators, case-sensitive.</summary>
     public static readonly IReadOnlySet<string> Operators = new HashSet<string>(StringComparer.Ordinal)
     {
-        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is",
+        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is", DateTrunc,
     };
+
+    /// <summary>
+    /// The bucket operator (contract 2): <c>{ "dateTrunc": { unit, timezone?, weekStart?, eq } }</c> on a
+    /// date matches the rows whose value lies in the bucket of <c>eq</c>, the bucket a group key of the
+    /// same unit, zone and week start puts them in.
+    /// </summary>
+    public const string DateTrunc = "dateTrunc";
 
     private static readonly IReadOnlySet<string> StringOperators = new HashSet<string>(StringComparer.Ordinal) { "contains", "startsWith", "endsWith", "regex" };
     private static readonly IReadOnlySet<string> OrderedOperators = new HashSet<string>(StringComparer.Ordinal) { "gt", "gte", "lt", "lte" };
@@ -51,6 +58,9 @@ public sealed class OperandCoercer
     {
         if (StringOperators.Contains(op))
             return kind == Kind.String;
+
+        if (op == DateTrunc)
+            return kind is Kind.Date or Kind.DateTime;
 
         if (OrderedOperators.Contains(op))
             return kind is Kind.Int or Kind.Long or Kind.Double or Kind.Decimal or Kind.Date or Kind.DateTime or Kind.TimeSpan or Kind.String or Kind.Enum;
@@ -450,6 +460,35 @@ public sealed class OperandCoercer
             default:
                 return JsonNode.Parse(element.GetRawText());
         }
+    }
+
+    /// <summary>
+    /// A value an operator carries inside its own operand object (the <c>eq</c> of a <c>dateTrunc</c>):
+    /// as written, or the value of the variable it names. False with the error added when the variable
+    /// is not bound or holds something other than one value.
+    /// </summary>
+    public bool TryValue(JsonElement raw, int stage, string path, List<QueryValidationError> errors, out JsonElement value)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+
+        value = raw;
+
+        if (raw.ValueKind != JsonValueKind.Object || !TryVariable(raw, out var name))
+            return true;
+
+        if (!TryResolveVariable(name!, out value))
+        {
+            errors.Add(Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path));
+            return false;
+        }
+
+        if (value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+        {
+            errors.Add(Error(Codes.InvalidVariable, $"The variable '{name}' holds {(value.ValueKind == JsonValueKind.Array ? "an array" : "an object")}; the 'eq' of a dateTrunc holds one value.", stage, path));
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>Resolves a variable for a group expression.</summary>

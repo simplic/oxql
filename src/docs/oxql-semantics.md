@@ -24,6 +24,8 @@ document. The operators do not, except `exists`:
 | `nin [ … ]` | yes, unless the list holds `null` | yes, unless the list holds `null` | `nin []` matches everything |
 | `gt gte lt lte` | no | no | a `null` operand is `INVALID_OPERAND` |
 | `contains startsWith endsWith regex` | no | no | the operand must be a string |
+| `dateTrunc { …, eq: <instant> }` | no | no | a bucket holds dates only |
+| `dateTrunc { …, eq: null }` | yes | yes | the group of the rows without a date |
 | `exists: true` | yes | no | a stored `null` counts as present |
 | `exists: false` | no | yes | |
 | `not { … }` | complement | complement | compiled to `$nor`: the rows the inner condition does not match, `null` and absent included |
@@ -523,6 +525,40 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   bucket is local midnight of that day, in every zone. A `dateTime` truncates as the instant it
   holds.
 - The path must be a `date` or `dateTime` outside any collection that is not unwound.
+
+**The bucket test.** `{ "<path>": { "dateTrunc": { "unit", "timezone"?, "weekStart"?, "eq" } } }` is
+the condition "the row's date is in the bucket `eq` is in", computed as a group key computes it:
+
+- **It is the group.** For every unit, zone and week start, the rows it matches with a group's key
+  as `eq` are the rows that group counted, and the buckets of all keys hold every row once. A client
+  that shows groups and opens one sends the key back and adds nothing of its own.
+- **It is a range.** The engine computes the first instant of the bucket and the first instant of
+  the next one and emits `{ $gte, $lt }` on the stored date. An index that leads to the member
+  bounds it to the bucket's keys; nothing is evaluated per row. The same bucket as an expression
+  over `$dateTrunc` reads every candidate row.
+- **Units from `day` up are the calendar's in the zone**, so a bucket follows daylight saving: a
+  day is 23, 24 or 25 hours long. Where a zone skips a midnight the bucket starts when the clock
+  next shows a time; where it shows a midnight twice the bucket starts at the first of the two.
+  The database names such a bucket by the second (its key is an instant an hour into the bucket);
+  the key still names its bucket, so nothing is to be corrected by a caller.
+- **Units below `day` are elapsed time**, counted in whole units from midnight of 2000-01-01 in the
+  zone, as the database counts them. In a zone whose offset is a whole number of hours that is the
+  hour on the clock; a zone at `:30` or `:45` has its hours at `:30` or `:45` UTC; and the two
+  passes through an hour the clock shows twice are two buckets, as they are two groups.
+- **A `date` member** is stored as its day, and a group truncates it from the midnight of that day
+  in the zone. Its bucket is therefore a range of days: every day whose midnight lies in the
+  bucket. Below a day that is the one day whose midnight starts the bucket, or none, exactly as a
+  group by the hour of a date gives every day one key.
+- **Null.** An instant matches no row whose date is null or absent; `eq: null` matches those and
+  no other, which is the group a `dateTrunc` key puts them in.
+- **The zone's rules** are the host runtime's, the database's are its own copy of the IANA
+  database. They are the same data on a host that reads that database (Linux). A Windows host reads
+  the system's rules, which agree for the years a zone's current rules cover and may differ for
+  dates before them. The test suite holds the engine's bucket equal to the database's across both
+  changes of the clock of 2025 and 2026 in nine zones, on the platform it runs on.
+- A member stored as text (`date` with a string representation) is compared by the day's text,
+  which orders as the days do. A defined addon key of kind `date` or `dateTime` is matched in its
+  stored date form only; a value the bag holds as text is in no bucket.
 
 **Output types.** A group row carries its aliases only, each in the wire encoding of its kind:
 

@@ -42,7 +42,9 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
   diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
   entity and carries the same diagnostic, with the lookup's `stage`.
 - Each pipeline element is an object with exactly one stage key: `match`, `lookup`, `resolve`,
-  `unwind`, `group`, `project`, `sort`, `page`. Two keys in one element is `UNKNOWN_STAGE`.
+  `unwind`, `group`, `project`, `sort`, `page`, or `values`, which ends a pipeline in place of
+  `page` and answers the distinct values of one path instead of rows. Two keys in one element is
+  `UNKNOWN_STAGE`.
 - The organisation scope (`organizationId eq <caller's organisation>`) is applied by the engine
   at every entry into an entity. It is not a stage a caller can write, place or project away,
   and it does not count toward `MaxPipelineStages`. A request whose context has no
@@ -752,6 +754,70 @@ rows are the same either way. Under contract 2 such a join written before an `un
 that unwind, once per parent and not once per element of the page (see *Where the engine places a
 stage* in [`oxql-semantics.md`](oxql-semantics.md)).
 
+## Stage: `values`
+
+```jsonc
+{ "values": { "path": "customer.address.companyName" } }                       // the values, by value
+{ "values": { "path": "status.name", "counts": true } }                        // with the rows that hold each, most first
+{ "values": { "path": "customer.address.companyName", "search": "mü", "limit": 200, "counts": true, "scan": 20000 } }
+```
+
+The distinct values of one path among the rows that reach the stage: what a set filter lists.
+It stands **in place of `page`**: once, last, and nothing follows it, a `page` included
+(`STAGE_AFTER_PAGE`). Everything before it is the pipeline as it is (stages and the request's
+`filter`); the stage replaces the row by one row per value:
+
+```jsonc
+POST query { "entityType": "transport.shipment",
+  "filter": [ { "id": "removeDeleted", "where": { "isDeleted": { "neq": true } } } ],
+  "pipeline": [ { "values": { "path": "status.name", "counts": true } } ] }
+200 { "items": [ { "value": "Open", "count": 24 }, { "value": "Closed", "count": 10 }, { "value": "Planned", "count": 5 } ],
+      "pageInfo": { "hasNextPage": false, "count": { "state": "exact", "value": 3 } } }
+```
+
+| member | | |
+|---|---|---|
+| `path` | required | A scalar path a `group` key could name where the stage stands: a member of the entity, of an unwound element, of a record joined in the aggregate, a key or an aggregate of a `group`. **Also a scalar under collections that are not unwound** (`items.status.name`): the stage unwinds them for the values alone |
+| `search` | optional string | Keeps the values that start with the text, folded as `startsWith` folds (case and accents under the collation). Only for a path that holds text (`OPTION_NOT_APPLICABLE` otherwise, `params` `option: "search"`, `kind`); at most `RegexMaxLength` characters. Empty or `null`: every value |
+| `limit` | optional, 1 to `MaxValuesLimit` (500) | The most values answered; `Values:DefaultLimit` (100) when absent |
+| `counts` | optional boolean | Each row also carries `count`, and the values lead by it |
+| `scan` | optional, 1 to `Values:ScanRows` (50 000) | The most rows read for the list; the host's bound when absent |
+
+- **The row** is `{ "value": … }`, with `"count": n` under `counts`. The value is written as a row
+  writes the member: an enum as its number, a `long` and a `decimal` as strings, a date as
+  `YYYY-MM-DD`, a `dateTime` as an ISO instant, a guid as text. `count` is a JSON number.
+- **`null` is a value**: the member null or absent (and, under a collection, the row that holds no
+  element) is the one row `{ "value": null }`. The empty string is a value of its own.
+- **A string folds as a group key folds**: spellings the collation calls equal are one value,
+  reported under the first spelling met.
+- **Order**: with `counts`, by the count, most first, then by value; without, by value. Values
+  order as a `sort` orders the member (a string under the collation), `null` first.
+- **`hasNextPage: true`** says more values exist than `limit`. There is **no cursor**: a list is
+  narrowed with `search`, never continued. `pageInfo.count` counts what the answer lists, the
+  values: `exact` when the list is whole, `atLeast` `limit + 1` (`stoppedBy: "page"`) when it is not.
+- **`scan`** bounds the rows the stage reads, whatever the request matches. When that many were
+  read the answer carries the diagnostic `VALUES_SCAN_CAPPED` (`stage`, `path`, `params.scan`):
+  the list is then of the values among those rows, and a count is a count within them. It is said
+  as soon as the bound is reached, so a request that matches exactly `scan` rows carries it too.
+  It stays a diagnostic under `strict`.
+- **Under a collection that is not unwound** a value is one some element holds, and **`count`
+  counts elements**, a row without any once under `null`; `scan` still counts rows.
+- **Under an alias whose rows come from an owner after the page** (another service's record, a
+  keyed join) the stage is refused: `NOT_CONTINUABLE`. Explain says it beforehand
+  (`can.values: false`, `why.values: "owner"` or `"joinedAfterPage"`).
+- **A sort before it** that only conditions follow is not run: the values are the same in any
+  order of the rows, and ordering them would read every row before `scan` could apply. A
+  projection before it stays where it is written; the path has to survive it.
+- **Refusals**: a member the stage does not have `UNKNOWN_STAGE_MEMBER`; a member of another JSON
+  kind, a `limit` or `scan` below 1 `INVALID_PAGE_LIMIT` (`params` `stage: "values"`, `member`);
+  above the host's bounds `VALUES_LIMIT_EXCEEDED` (`params` `limit`: `maxValuesLimit`,
+  `valuesScanRows` or `regexMaxLength`, `max`, `value`); a path that is no scalar `NOT_FILTERABLE`,
+  a collection itself `GROUP_ON_COLLECTION`, an unknown one `UNKNOWN_PATH`.
+
+What a list holds and how it relates to the group one would write by hand:
+[`oxql-semantics.md`](oxql-semantics.md#distinct-values). Contract 1 has no such stage
+(`UNKNOWN_STAGE`).
+
 ## Strict requests and the report page
 
 `"strict": true` (contract 2; contract 1 refuses it with `LEGACY_STAGE_UNSUPPORTED`) makes a request
@@ -789,7 +855,8 @@ strings, `dateTime` ISO UTC, `guid` string, enum as number, `date` as `YYYY-MM-D
 `timeSpan` as an ISO duration, binary as base64. Grouped rows carry the aliases only; unwound
 rows the element under the alias plus the index, and not the unwound collection; resolved rows the object or `null`
 under the alias; looked-up rows the array (`first`: the object or `null`); a `parentAs` alias
-`{ "entity": "<entity id>", … }`; an `elements: "all"` alias an array. `pageInfo.count` is on
+`{ "entity": "<entity id>", … }`; an `elements: "all"` alias an array; the rows of a request that
+ends in `values` are `{ value, count? }`, one per value. `pageInfo.count` is on
 every answer (see *Counts*); `nextCursor` only when a page follows; `diagnostics` only when there
 are any. A diagnostic or an error that belongs to an entry of the request's `filter` carries
 `filter` (the entry's `id`, or its index in the list when it has none) and no `stage`.
@@ -845,7 +912,8 @@ breakdown as `timing`, the last member of the answer:
   A command's `ms` is what the driver saw (the server's execution, the network, reading the
   reply); the server alone is found in the database's profiler by the command's `comment`, the
   request's correlation id.
-- `db.list[]`: `kind` is `page`, `count`, `countRung` (a step of the count alone), `probe` (a
+- `db.list[]`: `kind` is `page`, `count`, `countRung` (a step of the count alone), `values` (the
+  one aggregate of a request that ends in `values`), `probe` (a
   strict request's truncation check), `resolve` (an owner query this host ran for a join target
   of its own) or `addon` (the host's read of the organisation's addon definitions, where the
   request had to wait for it); `collection` is the entity read (for `addon` the collection as
@@ -903,7 +971,7 @@ carries no 'X-OxQL-Contract: 2' header." The codes are unchanged.
 
 ### Error codes
 
-The closed list, 71 codes (contract 2 has the eleven marked †):
+The closed list, 72 codes (contract 2 has the twelve marked †):
 
 | area | codes |
 |---|---|
@@ -913,7 +981,7 @@ The closed list, 71 codes (contract 2 has the eleven marked †):
 | operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE` (also a stage option where it does not apply), `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE`, `UNKNOWN_VARIANT`† (`is`) |
 | stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `FLATTEN_NOT_RECURSIVE`†, `LOOKUP_NOT_DECLARED`, `LOOKUP_ON_NOT_ENTITY`†, `NOT_CONTINUABLE`†, `UNION_CARDINALITY_MISMATCH`† (`byTarget`), `RESOLVE_NOT_DECLARED`, `RESOLVE_ON_COLLECTION`†, `RESOLVE_TARGET_NOT_DECLARED`†, `RESOLVE_PARENT_NOT_ITEM`†, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
-| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
+| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `VALUES_LIMIT_EXCEEDED`† (a `values` stage over the host's bounds), `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
 | cursor | `CURSOR_INVALID` |
 | access | `ACCESS_DENIED` (403) |
 | execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500), `PAGE_INCOMPLETE`† (422, strict only) |
@@ -925,7 +993,7 @@ Under `strict` (or a stage's `onMissing: "refuse"`) the data-loss diagnostics be
 ### Diagnostic codes
 
 Never a refusal outside `strict`; carried in `diagnostics` with machine-readable `params` where
-useful. 13 codes (contract 2 has the five marked †):
+useful. 14 codes (contract 2 has the six marked †):
 `ENTITY_ID_RETIRED` (`params.currentId`), `TOTAL_COUNT_CAPPED` (`params.cap`; contract 1 and internal calls only, a contract 2 count says where it stopped under `pageInfo.count`),
 `RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`, `RESOLVE_PARTIAL` (keys an owner was not asked for or did
 not answer in full), `SORT_ON_ADDON`, `REGEX_UNANCHORED`, `DECIMAL_TEXT_EXCLUDED` (an ordered
@@ -933,8 +1001,9 @@ comparison on a decimal covered the Decimal128 rows only), `RESOLVE_MISSING`† 
 resolved to nothing, under `onMissing` `report` or `refuse`), `RESOLVE_AMBIGUOUS`† (a key more than
 one record holds), `RESOLVE_TRUNCATED`† (an `elements: "all"` alias over `MaxLookupLimit`),
 `LOOKUP_TRUNCATED`† (a lookup over its `limit`), `UNWIND_DEPTH_TRUNCATED`† (a `flatten` over
-`MaxFlattenDepth`). Every one but the first two, `SORT_ON_ADDON`, `REGEX_UNANCHORED` and
-`DECIMAL_TEXT_EXCLUDED` is data loss and refuses under `strict`. The HTTP status and a typical cause
+`MaxFlattenDepth`), `VALUES_SCAN_CAPPED`† (a `values` stage read as many rows as its bound lets
+it; `params.scan`). Every one but the first two, `SORT_ON_ADDON`, `REGEX_UNANCHORED`,
+`DECIMAL_TEXT_EXCLUDED` and `VALUES_SCAN_CAPPED` is data loss and refuses under `strict`. The HTTP status and a typical cause
 of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 
 ## Explain request
@@ -1018,7 +1087,8 @@ cursor or jumps by an offset, not both), `page.includeTotalCount` answered as `t
 replaces the collection in place) or with it (the element beside the collection), a cursor
 bound to the whole pipeline including its projection, and any variable name. What only contract 2
 has is not read under contract 1: `strict` and the new stage members (`page.count` among them) are
-`LEGACY_STAGE_UNSUPPORTED`, `is` is `UNKNOWN_OPERATOR`, a continued stage is `NOT_CONTINUABLE`, and
+`LEGACY_STAGE_UNSUPPORTED`, `is` is `UNKNOWN_OPERATOR`, a `values` stage is `UNKNOWN_STAGE` like any
+stage contract 1 never had, a continued stage is `NOT_CONTINUABLE`, and
 unknown top-level members, `filter` among them, are ignored as before. Each
 such refusal says the request was read as contract 1 for want of the header (see *Refusal*). Every
 contract 1 request is logged under `OxQL.Compat`. When compatibility is switched off, every request

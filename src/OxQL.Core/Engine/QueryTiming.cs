@@ -49,6 +49,9 @@ public sealed class QueryTiming
     /// <summary>A strict request's truncation probe.</summary>
     public const string Probe = "probe";
 
+    /// <summary>The distinct values a request that ends in <c>values</c> asks for: its one aggregate.</summary>
+    public const string Values = "values";
+
     /// <summary>A command this host ran as the owner of a keyed join's target.</summary>
     public const string Resolve = "resolve";
 

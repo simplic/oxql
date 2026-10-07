@@ -101,6 +101,7 @@ the listed status.
 | `INVALID_PAGE_LIMIT` | 400 | `limit` below 1 (contract 2: `limit: 0` without `count` or with a cursor, `params` `limit: 0`, `needs: "count"`); a `count` that is not `true`, `false` or an object, or whose `upTo` or `budgetMs` is not a positive integer; contract 1 and internal calls: a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
 | `PAGE_SIZE_EXCEEDED` | 400 | `limit` above `MaxPageSize` |
 | `LOOKUP_LIMIT_EXCEEDED` | 400 | a lookup `limit` below 1 or above `MaxLookupLimit` |
+| `VALUES_LIMIT_EXCEEDED` | 400 | contract 2: a `values` stage over a bound of the host; `params` `limit` names it (`maxValuesLimit`: its `limit`; `valuesScanRows`: its `scan`; `regexMaxLength`: the length of its `search`), with `max` and `value` |
 | `MAX_OFFSET_EXCEEDED` | 400 | contract 1 and internal calls: `offset` above `MaxOffset`. A contract 2 page has no `offset` (`UNKNOWN_STAGE_MEMBER`) |
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
@@ -132,6 +133,7 @@ stage's effective `onMissing`:
 | `RESOLVE_TRUNCATED` (loss) | `alias`, `limit`, `rows` (a number) | an `elements: "all"` alias of some row held more than `MaxLookupLimit` targets |
 | `LOOKUP_TRUNCATED` (loss) | `alias`, `limit`, `rows` (a number) | a lookup had more children for some parent than its `limit` |
 | `UNWIND_DEPTH_TRUNCATED` (loss) | `path`, `depth`, `rows` | a `flatten` met items nested deeper than `MaxFlattenDepth` |
+| `VALUES_SCAN_CAPPED` | `scan` | a `values` stage read as many rows as its bound lets it: the list is of the values among those rows, a count is a count within them. No loss of rows: it stays a diagnostic under `strict` |
 | `SORT_ON_ADDON` | — | a sort on an addon key, whose values may be stored in several types |
 | `REGEX_UNANCHORED` | — | a `regex` that does not start with `^` or `\A` scans every value |
 | `DECIMAL_TEXT_EXCLUDED` | — | an ordered comparison on a decimal covered the Decimal128 rows only; rows stored as text are outside it |
@@ -218,8 +220,8 @@ registered: a value below 1 is raised to 1 (`MaxOffset` and `Cache:NegativeResol
 a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChunk` are clamped to
 `MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
 `MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
-twenty-three `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
-`chainTimeoutMs`, `negativeResolveTtlSeconds` and the seventeen explain limits (42 entries). The fifteen
+twenty-four `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
+`chainTimeoutMs`, `negativeResolveTtlSeconds`, the explain limits and the two `Values` bounds (47 entries). The fifteen
 a caller checks a request against before sending it are also published in the schema document's
 `limits` by the Simplic base package (column */schema*).
 
@@ -250,6 +252,9 @@ a caller checks a request against before sending it are also published in the sc
 | `Count:BudgetMs` / `Count:MaxBudgetMs` | 500 / 5 000 | the time a contract 2 count has when the request names none, and the most a request may name with `page.count.budgetMs` (a larger one is clamped): the count step's own `maxTimeMS`, the longest an answer waits for it, and the budget of a count-only ladder | `pageInfo.count` `unknown` / `timeout`, or a lower bound `stoppedBy: "budget"` / `"time"`; never a refusal | no | — |
 | `Limits:MaxReportPageSize` | 5 000 | binder: the largest `page.limit` of a `strict` request without a `cursor` (at least `MaxPageSize`); beyond `MaxPageSize` the page limit times the rows its lookups return per row (their limits, one under `first`) stays within `MaxPageSize` × `MaxLookupLimit` × `MaxLookupStages` (250 000) | `PAGE_SIZE_EXCEEDED`; 422 `PAGE_INCOMPLETE` when more rows match | yes | — |
 | `Limits:MaxReportedRows` | 50 | the rows one `RESOLVE_MISSING` or `RESOLVE_AMBIGUOUS` lists | — (`truncated: true`) | no | owner-reported rows are mapped back and capped here |
+| `Limits:MaxValuesLimit` | 500 | binder: the largest `limit` of a `values` stage (health `maxValuesLimit`) | `VALUES_LIMIT_EXCEEDED` (`params.limit: "maxValuesLimit"`) | no | a list of values is asked of this host's own rows only |
+| `Values:ScanRows` | 50 000 | binder and compiler: the most rows a `values` stage reads, and what it reads when the request names no `scan` (health `valuesScanRows`); a request may lower it | `VALUES_LIMIT_EXCEEDED` (`params.limit: "valuesScanRows"`) above it; diagnostic `VALUES_SCAN_CAPPED` when a run reaches it | no | — |
+| `Values:DefaultLimit` | 100, never above `MaxValuesLimit` | binder: the `limit` of a `values` stage that names none (health `valuesDefaultLimit`) | — | no | — |
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate, and of a `strict` request's truncation checks, which are sent with them and so end within the same limit; a request's own `maxTimeMs` (contract 2) and a batch's only lower it, the lower of the two holding, and a value below 1 is 1 | 504 `QUERY_TIMEOUT` | no | the server ends a command at its next interrupt check after the limit, so a command that finishes within milliseconds of it is still answered (a page that comes in one reply has no later check to fail at); the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
 | `Execution:ChainTimeoutMs` | 6 000, never above `MaxTimeMs` | keyed fetch: one owner call carrying continued stages or a typed, item, converted or element-wise resolve; the time left less 50 ms, at most this | `RESOLVE_TIMEOUT` | no | the owner budgets its own owner calls from what is left of it, so time bounds the whole chain |
@@ -306,6 +311,7 @@ Anonymous, always 200, and never waits for another service:
     "maxSemiJoinIds": 5000, "resolveKeyChunk": 500, "maxResolveKeys": 10000, "maxRequestBytes": 262144,
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
+    "maxValuesLimit": 500, "valuesScanRows": 50000, "valuesDefaultLimit": 100,
     "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10,
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,

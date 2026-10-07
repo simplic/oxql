@@ -617,6 +617,52 @@ requests of a tree add up because each is the same rows cut another way:
 - **`countDistinct`** counts the distinct values the rows store: a stored `null` is one of them,
   a member that is absent is none.
 
+## Distinct values
+
+A request that ends in `values` (see [`oxql-query-syntax.md`](oxql-query-syntax.md#stage-values))
+answers the distinct values of one path among the rows that reach the stage. It is the group one
+would write by hand, and tests hold the two equal on the same rows, values, counts and order:
+
+```jsonc
+{ "values": { "path": "status.name", "counts": true } }
+// = { "group": { "by": [ { "path": "status.name", "as": "value" } ], "fields": { "count": { "count": true } } } },
+//   { "sort": [ { "count": "desc" }, { "value": "asc" } ] }, { "page": { … } }
+```
+
+What the stage adds to that group:
+
+- **It reads through collections.** For `items.status.name` it unwinds `items` (and, for
+  `items.weightNotes.number`, both collections) for the values alone, keeping the row that holds no
+  element as `null`: the hand-written form is `unwind` with `preserveNull` and then the group. A
+  value is then one that **some element** holds, which is what a condition on the same path
+  matches (`{ "items.status.name": { "in": […] } }` is "some item has one of these"), and `count`
+  counts elements, not rows. After an `unwind` of the collection the member is a scalar of the row
+  (`item.status.name`): a row is an element, and a row without elements is no row.
+- **It bounds the rows it reads** (`scan`, at most `Values:ScanRows`, 50 000): the bound stands
+  before the unwinds and the group, so the cost of a list never grows with what the request
+  matches. Reaching it is said (`VALUES_SCAN_CAPPED`): the list is then "the values among the
+  first *n* rows". Which rows those are is the database's choice (by the index it reads them
+  through; with an index on the path, the lowest values), so a capped list is a sample, never a
+  ranking, and a `count` in it is a count within the sample. A filter that leaves fewer rows than
+  the bound gives the whole list.
+- **`search` narrows the values, not the rows**: the rows read are counted whatever the search
+  keeps, so "not found among the first 50 000 rows" and "no such value" are told apart by the
+  diagnostic. It is a prefix under the collation, the comparison `startsWith` makes: `mul` finds
+  `Müller`, `MÜLLER` and `muller`, which are one value.
+- **It has no cursor.** `hasNextPage` says the list is cut at `limit`; the next step is a longer
+  prefix.
+
+**Null, folding, kinds.** As for a group key: null and absent are one value (`null`), the empty
+string another; a string's spellings fold into one value under the collation, reported under the
+first one met (which spelling that is depends on the order the rows are read in); an enum is its
+stored number, one the enum does not declare included. A value sent back as `eq` or in `in` finds
+the rows the list counted, as a group's key does, with the one exception grouping has too: an
+undeclared enum number cannot be named in a condition (`UNKNOWN_ENUM_MEMBER`).
+
+**Not offered.** A list under another service's alias (`NOT_CONTINUABLE`: its values are its
+owner's to list); a `contains` search; a cursor; a count of rows rather than elements under a
+collection; an answer kept between requests (every request reads the database).
+
 ## Polymorphic values
 
 A member typed as a base class or an interface may hold one of several variants: the driver

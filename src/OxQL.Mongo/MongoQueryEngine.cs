@@ -129,6 +129,10 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             }
         }
 
+        // A request that ends in values answers a list of values, not rows: one aggregate, no page.
+        if (bound.Values is { } values)
+            return await ValuesAsync(values, compiled, runOptions, diagnostics, timer, timing, context, resolveCalls, cancellationToken).ConfigureAwait(false);
+
         // A count-only request reads no page: the count is refined step by step within its budget.
         if (bound.Page is { CountOnly: true, Count: { } ladder } && compiled.CountStages is { } counted)
         {
@@ -433,6 +437,97 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         };
 
         Log(compiled, timer, page.Count, timedOut, capped == true || countInfo is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, cacheHits);
+
+        return QueryOutcome.Of(Timed(result, timing));
+    }
+
+    /// <summary>
+    /// The answer of a request that ends in <c>values</c>: the distinct values of the stage's path
+    /// among the rows that reach it, in the row envelope. One aggregate answers one document: how many
+    /// rows the stage read, and the values the search keeps, in order, one more than the limit. Each
+    /// value is written as a row of the same member is (<c>value</c>, and <c>count</c> when asked for);
+    /// one more than the limit says the list goes on (<c>hasNextPage</c>, without a cursor: the caller
+    /// narrows with <c>search</c>). A stage that read as many rows as its bound lets it says so
+    /// (<c>VALUES_SCAN_CAPPED</c>): the list is then of those rows, not of all that match.
+    /// </summary>
+    private async Task<QueryOutcome> ValuesAsync(BoundStage.Values values, CompiledQuery compiled, AggregateRunOptions runOptions, List<Diagnostic> diagnostics,
+        Stopwatch timer, QueryTiming timing, RequestContext context, int resolveCalls, CancellationToken cancellationToken)
+    {
+        var bound = compiled.Bound;
+        IReadOnlyList<BsonDocument> answered;
+
+        try
+        {
+            answered = await runner.AggregateAsync(QueryTiming.Values, timing, bound.Entity, compiled.PageStages, runOptions, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            var refusal = MapDriverError(exception);
+
+            Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
+
+            return QueryOutcome.Of(refusal);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The caller gave up: what the aggregate ended in under the abort is no fault to log or to answer.
+            throw new OperationCanceledException("The caller gave up on the request while its aggregate ran.", exception, cancellationToken);
+        }
+
+        var answer = answered.Count > 0 ? answered[0] : [];
+        var list = answer.TryGetValue(MongoCompiler.ValuesList, out var listed) && listed is BsonArray entries ? entries : [];
+        var read = answer.TryGetValue(MongoCompiler.ValuesTotal, out var totals) && totals is BsonArray { Count: > 0 } total && total[0] is BsonDocument counted
+            && counted.TryGetValue(MongoCompiler.ValuesRows, out var rows) ? rows.ToInt64() : 0;
+        var hasMore = list.Count > values.Limit;
+        var items = new List<JsonNode?>(Math.Min(list.Count, values.Limit));
+        var unfit = new List<string>();
+        var converting = QueryTiming.Now;
+
+        foreach (var entry in list.Take(values.Limit).OfType<BsonDocument>())
+            items.Add(WireEncoder.Encode(new BsonDocument
+            {
+                [BoundStage.Values.ValueAlias] = entry.GetValue("_id", BsonNull.Value),
+                [BoundStage.Values.CountAlias] = entry.GetValue(MongoCompiler.ValuesCount, 0),
+            }, bound, null, unfit));
+
+        timing.Convert(converting);
+        timing.Rows = items.Count;
+
+        if (unfit.Count > 0)
+            logger.LogWarning(
+                "OxQL {Entity} returned {Count} stored values verbatim because they do not fit their kind; paths={Paths} org={OrganisationId} correlation={CorrelationId}",
+                bound.Entity.Id,
+                unfit.Count,
+                values.Path.Wire,
+                context.Organisation,
+                context.CorrelationId);
+
+        // As many rows read as the bound lets through: there may be more, and the list says nothing of them.
+        if (read >= values.Scan)
+            diagnostics.Add(new Diagnostic
+            {
+                Code = Codes.ValuesScanCapped,
+                Message = $"The values are those among the first {values.Scan} rows that reach the stage; more rows may match{(values.Counts ? ", and a count is the count within them" : "")}. Narrow the request's filter to see the values of fewer rows.",
+                Stage = bound.CallerIndexOf(values),
+                Path = values.Path.Wire,
+                Params = new Dictionary<string, object?> { ["scan"] = values.Scan },
+            });
+
+        var result = new QueryResult
+        {
+            Items = items,
+            PageInfo = new PageInfo
+            {
+                HasNextPage = hasMore,
+                // The envelope's count is of what it lists: the values, all of them or at least one more.
+                Count = context.Contract == 2
+                    ? hasMore ? new CountInfo { State = CountInfo.AtLeast, Value = items.Count + 1, StoppedBy = CountInfo.ByPage } : new CountInfo { State = CountInfo.Exact, Value = items.Count }
+                    : null,
+            },
+            Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
+        };
+
+        Log(compiled, timer, items.Count, false, false, context, null, resolveCalls, 0);
 
         return QueryOutcome.Of(Timed(result, timing));
     }

@@ -240,6 +240,21 @@ public static class MongoCompiler
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
 
+    /// <summary>The prefix of the position a values stage numbers the elements of a collection it unwinds by; no row keeps it.</summary>
+    private const string ReservedValuesIndex = Aliases.ReservedPrefix + "oxVal";
+
+    /// <summary>The member of a values answer that holds the values: each its <c>_id</c> and, under <see cref="ValuesCount"/>, the rows that hold it.</summary>
+    public const string ValuesList = "v";
+
+    /// <summary>The member of a values answer that holds the one total: under <see cref="ValuesRows"/> the rows the stage read.</summary>
+    public const string ValuesTotal = "t";
+
+    /// <summary>The member of a value that holds the number of rows (elements, under a collection) with it.</summary>
+    public const string ValuesCount = "c";
+
+    /// <summary>The member that holds the number of rows read: of a value, and of the total.</summary>
+    public const string ValuesRows = "r";
+
     /// <summary>
     /// The character with the highest primary weight in the root collation; a string is
     /// below the prefix followed by it exactly when it starts with the prefix under the
@@ -594,6 +609,16 @@ public static class MongoCompiler
                     emitted.AddRange(Group(group, [.. probes.Select(probe => probe.Field), .. rowFlags]));
                     break;
 
+                case BoundStage.Values values:
+                    emitted.AddRange(Values(values, collated));
+                    break;
+
+                // A sort that only conditions follow up to the values orders rows nobody sees in that
+                // order: it would read and order every row before the stage's bound on the rows read
+                // could apply, so it is not run. The values are the same whatever the order of the rows.
+                case BoundStage.Sort when bound.Values is not null && bound.Stages.Skip(index + 1).All(later => later is BoundStage.Match or BoundStage.Values or BoundStage.Page):
+                    break;
+
                 case BoundStage.Project project:
                     if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
                         [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
@@ -687,7 +712,9 @@ public static class MongoCompiler
         if (offset > 0)
             stages.Add(new BsonDocument("$skip", offset));
 
-        stages.Add(new BsonDocument("$limit", page.Limit + 1));
+        // A values stage cuts its own list and answers one document; there is no page to cut.
+        if (bound.Values is null)
+            stages.Add(new BsonDocument("$limit", page.Limit + 1));
         stages.AddRange(lateRename);
         stages.AddRange(lateProjections);
         stages.AddRange(lateJoins);
@@ -2082,6 +2109,75 @@ public static class MongoCompiler
         return projection;
     }
 
+    // ---- values -----------------------------------------------------------------------------
+
+    /// <summary>
+    /// The values stage: at most <c>scan</c> of the rows that reach it, the collections above the path
+    /// unwound, one group per value with the rows that hold it, then in one document the number of rows
+    /// read and the list: the values the search keeps, in order, one more than the limit.
+    /// <list type="bullet">
+    /// <item>The bound on the rows stands first, so nothing after it reads more than that many rows,
+    /// and an index that holds the organisation and the path answers them without reading a document.</item>
+    /// <item>A collection is unwound keeping the row that holds none (its value is null), and with the
+    /// position of each element: the first element of a row, or the row without one, counts the row,
+    /// so the rows read are known however many elements they hold.</item>
+    /// <item>The search runs on the groups, not on the rows: there are as many comparisons as there
+    /// are distinct values, and the rows read are counted whatever the search keeps.</item>
+    /// <item>With counts the values lead by their number of rows, then by value; without, by value.
+    /// A string orders, and folds into its group, under the aggregate's collation; null orders first.</item>
+    /// </list>
+    /// </summary>
+    private static IEnumerable<BsonDocument> Values(BoundStage.Values values, bool collated)
+    {
+        yield return new BsonDocument("$limit", values.Scan);
+
+        var positions = new List<string>();
+
+        foreach (var collection in values.Collections)
+        {
+            positions.Add(ReservedValuesIndex + positions.Count);
+
+            yield return new BsonDocument("$unwind", new BsonDocument
+            {
+                ["path"] = "$" + collection,
+                ["includeArrayIndex"] = positions[^1],
+                ["preserveNullAndEmptyArrays"] = true,
+            });
+        }
+
+        var group = new BsonDocument
+        {
+            ["_id"] = "$" + values.Path.Storage,
+            [ValuesCount] = new BsonDocument("$sum", 1),
+        };
+
+        // One element per row counts the row: the first of each collection, or the row that has none.
+        if (positions.Count > 0)
+        {
+            var first = positions.Select(position => (BsonValue)new BsonDocument("$in", new BsonArray { "$" + position, new BsonArray { 0, BsonNull.Value } })).ToList();
+
+            group[ValuesRows] = new BsonDocument("$sum", new BsonDocument("$cond", new BsonArray { first.Count == 1 ? first[0] : new BsonDocument("$and", new BsonArray(first)), 1, 0 }));
+        }
+
+        yield return new BsonDocument("$group", group);
+
+        var list = new BsonArray();
+
+        if (values.Search is { } search)
+            list.Add(new BsonDocument("$match", Filter(search, null, collated)));
+
+        list.Add(new BsonDocument("$sort", values.Counts
+            ? new BsonDocument { [ValuesCount] = -1, ["_id"] = 1 }
+            : new BsonDocument("_id", 1)));
+        list.Add(new BsonDocument("$limit", values.Limit + 1));
+
+        yield return new BsonDocument("$facet", new BsonDocument
+        {
+            [ValuesTotal] = new BsonArray { new BsonDocument("$group", new BsonDocument { ["_id"] = BsonNull.Value, [ValuesRows] = new BsonDocument("$sum", "$" + (positions.Count > 0 ? ValuesRows : ValuesCount)) }) },
+            [ValuesList] = list,
+        });
+    }
+
     // ---- group ------------------------------------------------------------------------------
 
     private static IEnumerable<BsonDocument> Group(BoundStage.Group group, IReadOnlyList<string> truncations)
@@ -2561,7 +2657,8 @@ public static class MongoCompiler
         {
             switch (stages[later])
             {
-                case BoundStage.Group:
+                // A group and a values stage replace the row: what they do not read is in no row.
+                case BoundStage.Group or BoundStage.Values:
                     return false;
 
                 case BoundStage.Project project:
@@ -2610,6 +2707,7 @@ public static class MongoCompiler
         BoundStage.Group group => group.Keys.Any(key => (key.Path is not null && RootIs(key.Path, alias)) || (key.Trunc is not null && RootIs(key.Trunc.Path, alias)))
             || group.Fields.Any(field => field.Argument is not null && Paths(field.Argument).Any(path => RootIs(path, alias))),
         BoundStage.Project project => project.Paths.Any(path => RootIs(path, alias)),
+        BoundStage.Values values => RootIs(values.Path, alias),
         BoundStage.Resolve resolve => RootIs(resolve.Reference, alias),
         BoundStage.Lookup lookup => lookup.On == alias,
         _ => false,

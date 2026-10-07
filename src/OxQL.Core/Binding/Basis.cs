@@ -76,7 +76,7 @@ public static class Basis
         [Codes.MaxResolveStagesExceeded] = Limits, [Codes.MaxContinuedStagesExceeded] = Limits, [Codes.MaxGroupFieldsExceeded] = Limits,
         [Codes.MaxProjectionFieldsExceeded] = Limits, [Codes.MaxConditionsExceeded] = Limits, [Codes.MaxVariablesExceeded] = Limits,
         [Codes.PageSizeExceeded] = Limits, [Codes.LookupLimitExceeded] = Limits, [Codes.MaxOffsetExceeded] = Limits, [Codes.RegexTooLong] = Limits,
-        [Codes.BatchTooLarge] = Limits, [Codes.RequestTooLarge] = Limits, [Codes.ExplainLimit] = Limits,
+        [Codes.BatchTooLarge] = Limits, [Codes.RequestTooLarge] = Limits, [Codes.ExplainLimit] = Limits, [Codes.ValuesLimitExceeded] = Limits,
 
         // a part that could not be checked
         [Codes.ResolveUnavailable] = Owner,
@@ -86,6 +86,7 @@ public static class Basis
         [Codes.CursorInvalid] = Data, [Codes.InternalError] = Data, [Codes.AccessDenied] = Data, [Codes.TotalCountCapped] = Data,
         [Codes.ResolveTimeout] = Data, [Codes.ResolveUnreachable] = Data, [Codes.ResolvePartial] = Data, [Codes.ResolveMissing] = Data,
         [Codes.ResolveAmbiguous] = Data, [Codes.ResolveTruncated] = Data, [Codes.LookupTruncated] = Data, [Codes.UnwindDepthTruncated] = Data,
+        [Codes.ValuesScanCapped] = Data,
 
         // the query runs
         [Codes.EntityIdRetired] = Advisory, [Codes.SortOnAddon] = Advisory, [Codes.RegexUnanchored] = Advisory, [Codes.DecimalTextExcluded] = Advisory,

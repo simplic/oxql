@@ -32,7 +32,7 @@ public class RefusalsCatalogueTests
     {
         "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED", "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE",
         "RESOLVE_PARTIAL", "SORT_ON_ADDON", "REGEX_UNANCHORED", "DECIMAL_TEXT_EXCLUDED",
-        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED",
+        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED", "VALUES_SCAN_CAPPED",
     };
 
     /// <summary>Every error code and the case that provokes it outside the V table.</summary>
@@ -60,6 +60,7 @@ public class RefusalsCatalogueTests
         ["PAGE_INCOMPLETE"] = nameof(Joins.JoinsOutcomesTests.A_strict_report_page_that_holds_fewer_rows_than_match_is_PAGE_INCOMPLETE),
         ["INVALID_FILTER"] = nameof(Filters.FilterPlacementTests.A_malformed_filter_is_INVALID_FILTER_and_an_error_in_a_condition_names_its_entry_by_id_or_index),
         ["FILTER_NOT_PLACEABLE"] = nameof(Filters.FilterPlacementTests.A_condition_that_cannot_be_placed_is_FILTER_NOT_PLACEABLE_and_names_its_entry_and_the_births_of_its_paths),
+        ["VALUES_LIMIT_EXCEEDED"] = nameof(Values.ValuesTests.What_it_refuses_is_refused_before_anything_runs),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -99,10 +100,10 @@ public class RefusalsCatalogueTests
         // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
         // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
         // MAX_CONTINUED_STAGES_EXCEEDED, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH, then (DG2 M1)
-        // INVALID_FILTER and FILTER_NOT_PLACEABLE.
-        catalogue.Should().HaveCount(87);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(74);
-        catalogue.Count(DiagnosticCodes.Contains).Should().Be(13);
+        // INVALID_FILTER and FILTER_NOT_PLACEABLE, then (DG2 set filters) VALUES_LIMIT_EXCEEDED with the diagnostic VALUES_SCAN_CAPPED.
+        catalogue.Should().HaveCount(89);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(75);
+        catalogue.Count(DiagnosticCodes.Contains).Should().Be(14);
     }
 
     [Fact]

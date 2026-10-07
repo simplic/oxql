@@ -175,6 +175,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Limits:MaxFlattenDepth` | 5 | levels an `unwind` with `flatten` descends; clamped to 1–12 |
 | `Limits:MaxReportPageSize` / `MaxReportedRows` | 5 000 / 50 | the page of a `strict` request without cursor or offset / rows one outcome diagnostic lists |
 | `Limits:MaxGroupFields` / `MaxProjectionFields` | 40 / 500 | keys and aggregates of one `group` together / paths of one projection |
+| `Limits:MaxValuesLimit` / `Values:DefaultLimit` / `Values:ScanRows` | 500 / 100 / 50 000 | of a `values` stage (the distinct values of a path, a set filter's list): the most values answered / those answered without a `limit` / the most rows read for them, after which the answer says `VALUES_SCAN_CAPPED` |
 | `Limits:MaxConditions` / `MaxVariables` | 200 / 64 | leaf conditions, lookup and resolve filters included |
 | `Limits:MaxOffset` | 5 000 | the largest `offset`; beyond it a cursor |
 | `Limits:CountCap` | 100 000 | above it `totalCount` is the cap and `totalCountCapped` true |

@@ -426,6 +426,27 @@ public abstract record BoundStage
 
     public sealed record Sort(IReadOnlyList<BoundSortField> Fields) : BoundStage;
 
+    /// <summary>
+    /// The distinct values of one path among the rows that reach the stage (contract 2), in place of
+    /// the page. <paramref name="Collections"/> are the collections above the path that are not
+    /// unwound, outermost first, by storage: they are unwound for the values alone.
+    /// <paramref name="Search"/> is the condition a value starts with the caller's text by, bound on
+    /// the value itself (<see cref="ValueStorage"/>); null for every value. At most
+    /// <paramref name="Limit"/> values are answered, each with the number of rows that hold it under
+    /// <paramref name="Counts"/>, off at most <paramref name="Scan"/> rows.
+    /// </summary>
+    public sealed record Values(ResolvedPath Path, IReadOnlyList<string> Collections, BoundCondition.Leaf? Search, int Limit, bool Counts, int Scan) : BoundStage
+    {
+        /// <summary>The member of an answered row that holds the value.</summary>
+        public const string ValueAlias = "value";
+
+        /// <summary>The member of an answered row that holds the number of rows with the value.</summary>
+        public const string CountAlias = "count";
+
+        /// <summary>Where the value lies when the search is applied: the key of the group that collects it.</summary>
+        public const string ValueStorage = "_id";
+    }
+
     /// <summary>The page; <paramref name="CountCap"/> is the request's own count cap, already under the host's, or null for the host's.</summary>
     public sealed record Page(int Limit, int Offset, CursorPayload? Cursor, bool IncludeTotalCount, int? CountCap = null) : BoundStage
     {
@@ -577,6 +598,13 @@ public sealed record BoundPipeline
 
     /// <summary>The page, given or defaulted.</summary>
     public required BoundStage.Page Page { get; init; }
+
+    /// <summary>
+    /// The values stage the request ends in instead of a page (contract 2), or null. With one the
+    /// request answers the distinct values of a path, not rows: <see cref="Page"/> then only carries
+    /// its limit, and nothing is paged, counted or continued.
+    /// </summary>
+    public BoundStage.Values? Values { get; init; }
 
     public required PagingMode PagingMode { get; init; }
 

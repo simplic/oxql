@@ -39,6 +39,13 @@ public static class BoundCanonical
     /// </summary>
     public static JsonObject Render(BoundStage.Scope scope, IReadOnlyList<BoundStage> stages, BoundStage.Page? page, PagingMode mode, BoundKeyedBy? keyedBy, bool contract2, bool rows = false)
     {
+        // A request that ends in values has no page: the one the binder supplied only carries the stage's limit.
+        if (stages.Any(stage => stage is BoundStage.Values))
+        {
+            stages = stages.Where(stage => stage is not BoundStage.Page).ToList();
+            page = null;
+        }
+
         var node = new JsonObject
         {
             ["entity"] = scope.Entity.Id,
@@ -266,6 +273,18 @@ public static class BoundCanonical
                 ["direction"] = field.Ascending ? "asc" : "desc",
                 ["caseSensitive"] = !field.IgnoreCase,
             }).ToArray()),
+        },
+        BoundStage.Values values => new JsonObject
+        {
+            ["values"] = new JsonObject
+            {
+                ["path"] = values.Path.Storage,
+                ["unwind"] = new JsonArray(values.Collections.Select(collection => (JsonNode)collection).ToArray()),
+                ["search"] = values.Search is null ? null : RenderCondition(values.Search),
+                ["limit"] = values.Limit,
+                ["counts"] = values.Counts,
+                ["scan"] = values.Scan,
+            },
         },
         BoundStage.Page page when contract2 => new JsonObject { ["page"] = RenderPage(page) },
         BoundStage.Page page => new JsonObject

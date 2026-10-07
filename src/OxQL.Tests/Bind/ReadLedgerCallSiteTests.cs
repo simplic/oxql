@@ -112,7 +112,7 @@ public partial class ReadLedgerCallSiteTests
             ["Sort"] = 1,
             ["Project"] = 2,        // a projected path, the key an inclusion names
             ["Unwind"] = 1,
-            ["GroupKey"] = 2,       // a key's path, a dateTrunc's date
+            ["GroupKey"] = 3,       // a key's path, a dateTrunc's date, the path of a values stage
             ["Aggregate"] = 1,
             ["ResolveKey"] = 1,
             ["CaseCondition"] = 1,  // the sibling member; the variant form is recorded beside its resolve

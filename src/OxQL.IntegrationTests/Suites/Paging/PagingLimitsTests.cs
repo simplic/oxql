@@ -71,6 +71,9 @@ public class PagingLimitsTests
         ["explainMaxConcurrentPerUser"] = 1_000,
         ["explainMaxConcurrentPerHost"] = 1_000,
         ["explainMaxConcurrentPerCaller"] = 4,
+        ["maxValuesLimit"] = 500,
+        ["valuesScanRows"] = 50_000,
+        ["valuesDefaultLimit"] = 100,
     };
 
     private static int Limit(string name) => Defaults[name];

@@ -235,7 +235,10 @@ public class HostTests
         limits["explainMaxStages"]!.GetValue<int>().Should().Be(30);
         limits["explainMaxCatalogEntries"]!.GetValue<int>().Should().Be(10);
         limits["explainMaxShapeDepth"]!.GetValue<int>().Should().Be(3);
-        limits.Count.Should().Be(44,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["maxValuesLimit"]!.GetValue<int>().Should().Be(500);
+        limits["valuesScanRows"]!.GetValue<int>().Should().Be(50_000);
+        limits["valuesDefaultLimit"]!.GetValue<int>().Should().Be(100);
+        limits.Count.Should().Be(47,"health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

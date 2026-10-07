@@ -127,6 +127,13 @@ public static class Codes
     public const string InvalidPageLimit = "INVALID_PAGE_LIMIT";
     public const string PageSizeExceeded = "PAGE_SIZE_EXCEEDED";
     public const string LookupLimitExceeded = "LOOKUP_LIMIT_EXCEEDED";
+
+    /// <summary>
+    /// A <c>values</c> stage asks for more than the host allows: more values than <c>MaxValuesLimit</c>,
+    /// more rows read than <c>Values:ScanRows</c>, or a longer search text than <c>RegexMaxLength</c>
+    /// (params <c>limit</c>, <c>max</c>, <c>value</c>).
+    /// </summary>
+    public const string ValuesLimitExceeded = "VALUES_LIMIT_EXCEEDED";
     public const string MaxOffsetExceeded = "MAX_OFFSET_EXCEEDED";
     public const string BatchTooLarge = "BATCH_TOO_LARGE";
     public const string RequestTooLarge = "REQUEST_TOO_LARGE";
@@ -192,4 +199,10 @@ public static class Codes
 
     /// <summary>An <c>elements: "all"</c> resolve met a row with more targets than <c>MaxLookupLimit</c>; only the first are in the alias.</summary>
     public const string ResolveTruncated = "RESOLVE_TRUNCATED";
+
+    /// <summary>
+    /// A <c>values</c> stage read as many rows as its bound lets it (params <c>scan</c>): the values are
+    /// those among that many rows that reach the stage, not among all of them, and a count is a count within them.
+    /// </summary>
+    public const string ValuesScanCapped = "VALUES_SCAN_CAPPED";
 }

@@ -145,6 +145,10 @@ public sealed class Binder
         private BoundStage.Sort? sort;
         private BoundStage.Page? page;
         private int pageIndex = -1;
+
+        /// <summary>The values stage the pipeline ends in instead of a page (contract 2), and the caller's index of it; nothing follows it.</summary>
+        private BoundStage.Values? values;
+        private int valuesIndex = -1;
         private int lookups, unwinds, resolves, conditions, conditionDepth;
         private bool conditionDepthReported;
         private bool hasSemiJoin;
@@ -275,7 +279,7 @@ public sealed class Binder
                 // The conditions of the request's filter run at the earliest point their paths are in
                 // the row (DG2 M1): each boundary between two stages is tried in order, the page's last.
                 if (page is null)
-                    PlaceFilter(index, last: stage?.Kind == "page");
+                    PlaceFilter(index, last: stage?.Kind == "page" || (contract2 && stage?.Kind == "values"));
 
                 // A null element is a caller error, not a fault, and is refused with a code.
                 var before = shape;
@@ -289,10 +293,18 @@ public sealed class Binder
 
                 // So is a known stage key whose value is null: the key is recorded, the member
                 // is not, and no stage binds from nothing.
-                if (stage.Kind is { } kind && !HasMember(stage, kind))
+                if (stage.Kind is { } kind && !HasMember(stage, kind) && (contract2 || kind != "values"))
                 {
                     errors.Add(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null));
                     traced.Add((index, kind, before, shape));
+                    continue;
+                }
+
+                // A values stage stands in place of the page: nothing follows it, a page included.
+                if (valuesIndex >= 0)
+                {
+                    errors.Add(Error(Codes.StageAfterPage, "No stage may follow the values stage: it ends the pipeline in place of a page.", index, null));
+                    traced.Add((index, stage.Kind, before, shape));
                     continue;
                 }
 
@@ -316,10 +328,12 @@ public sealed class Binder
                     case "project": BindProject(stage.Project!, index); break;
                     case "sort": BindSort(stage.Sort!, index); break;
                     case "page": BindPage(stage.Page!, index); break;
+                    // Contract 1 knows no such stage: it is the unknown stage it always was there.
+                    case "values" when contract2: BindValues(stage.Values!, index); break;
                     default:
                         errors.Add(Error(Codes.UnknownStage, stage.Keys.Count == 0
                             ? "A stage object must carry exactly one stage member."
-                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page.", index, null));
+                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page{(contract2 ? ", values" : "")}.", index, null));
                         break;
                 }
 
@@ -807,7 +821,8 @@ public sealed class Binder
         /// </summary>
         private void DefaultSort()
         {
-            if (sort is not null || (shape.IsRootShape && !UnwoundRows))
+            // Values are ordered by the stage itself, and nothing pages them.
+            if (values is not null || sort is not null || (shape.IsRootShape && !UnwoundRows))
                 return;
 
             var fields = new List<BoundSortField>();
@@ -950,6 +965,7 @@ public sealed class Binder
                 Loads = loads,
                 Sort = sort,
                 Page = page!,
+                Values = values,
                 PagingMode = mode,
                 Diagnostics = diagnostics,
                 Fingerprint = fingerprint,
@@ -2966,7 +2982,7 @@ public sealed class Binder
                 return false;
 
             errors.Add(Error(Codes.NotContinuable,
-                $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. Aggregate chain data in the report.", index, path));
+                $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. {(kind == "values" ? "The values of such a member are its owner's to list." : "Aggregate chain data in the report.")}", index, path));
             return true;
         }
 
@@ -4061,6 +4077,7 @@ public sealed class Binder
             "project" => stage.Project is not null,
             "sort" => stage.Sort is not null,
             "page" => stage.Page is not null,
+            "values" => stage.Values is not null,
             _ => false,
         };
 
@@ -4251,6 +4268,200 @@ public sealed class Binder
             contract2 && options.Limits.MaxReportPageSize > options.Limits.MaxPageSize
                 ? $" A strict request without {(context.Internal ? "cursor or offset" : "a cursor")} may ask for up to {options.Limits.MaxReportPageSize}."
                 : "";
+
+        // ---- values --------------------------------------------------------------------------
+
+        /// <summary>The members of a values stage.</summary>
+        private const string ValuesMembers = "path, search, limit, counts, scan";
+
+        /// <summary>
+        /// The values stage (contract 2): the distinct values of one scalar path among the rows that
+        /// reach it, in place of the page. The path is read where the stage stands, as a group key is,
+        /// with one difference: collections above it that are not unwound are unwound for the values
+        /// alone, so a member of an item answers the values its items hold. Under an alias whose rows
+        /// come from an owner after the page there is nothing to read them off (<c>NOT_CONTINUABLE</c>).
+        /// A string's values fold as a group key folds, and <c>search</c> keeps the values that start
+        /// with its text under the same fold. The stage replaces the row by <c>value</c> (and
+        /// <c>count</c>), as a group does, and supplies the page that carries its limit.
+        /// </summary>
+        private void BindValues(ValuesStage stage, int index)
+        {
+            valuesIndex = index;
+
+            if (!CheckStageMembers(stage.Unknown, "values", ValuesMembers, index))
+                return;
+
+            if (stage.Invalid.Count > 0)
+            {
+                foreach (var member in stage.Invalid)
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.InvalidPageLimit,
+                        Message = member == "values"
+                            ? $"A values stage is an object carrying {ValuesMembers}."
+                            : $"'{member}' of values is {member switch { "path" or "search" => "a string", "counts" => "true or false", _ => "a whole number" }}.",
+                        Stage = index,
+                        Params = new Dictionary<string, object?> { ["stage"] = "values", ["member"] = member },
+                    });
+                return;
+            }
+
+            // An internal owner query answers rows per key; it has no values to answer.
+            if (request.KeyedBy is not null)
+            {
+                errors.Add(Error(Codes.UnknownStage, "A request keyed by its caller answers rows; it carries no values stage.", index, null));
+                return;
+            }
+
+            if (string.IsNullOrEmpty(stage.Path))
+            {
+                errors.Add(Error(Codes.UnknownPath, "A values stage names the member whose values it answers under 'path'.", index, null));
+                return;
+            }
+
+            var limit = stage.Limit ?? Math.Min(options.Values.DefaultLimit, options.Limits.MaxValuesLimit);
+            var scan = stage.Scan ?? options.Values.EffectiveScanRows;
+            var bounded = true;
+
+            if (limit < 1)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidPageLimit,
+                    Message = $"The values limit {limit} is not positive.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "values", ["member"] = "limit" },
+                });
+                bounded = false;
+            }
+            else if (limit > options.Limits.MaxValuesLimit)
+            {
+                errors.Add(ValuesLimit("maxValuesLimit", options.Limits.MaxValuesLimit, limit, index,
+                    $"The values limit {limit} exceeds the maximum of {options.Limits.MaxValuesLimit}; narrow the values with 'search' instead."));
+                bounded = false;
+            }
+
+            if (scan < 1)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidPageLimit,
+                    Message = $"The values scan {scan} is not positive.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "values", ["member"] = "scan" },
+                });
+                bounded = false;
+            }
+            else if (scan > options.Values.EffectiveScanRows)
+            {
+                errors.Add(ValuesLimit("valuesScanRows", options.Values.EffectiveScanRows, scan, index,
+                    $"The values scan {scan} exceeds the {options.Values.EffectiveScanRows} rows this host reads for a list of values."));
+                bounded = false;
+            }
+
+            var search = string.IsNullOrEmpty(stage.Search) ? null : stage.Search;
+
+            if (search is not null && search.Length > options.Limits.RegexMaxLength)
+            {
+                errors.Add(ValuesLimit("regexMaxLength", options.Limits.RegexMaxLength, search.Length, index,
+                    $"The values search has {search.Length} characters; the limit is {options.Limits.RegexMaxLength}."));
+                bounded = false;
+            }
+
+            if (RefusedUnderAnchor(stage.Path, "values", index))
+                return;
+
+            var resolution = Read(shape, stage.Path, PathUsage.GroupKey, ReadUse.GroupKey, index, Reading.Row);
+
+            if (!resolution.Succeeded)
+            {
+                errors.Add(Unresolved(resolution, index, stage.Path));
+                return;
+            }
+
+            var path = resolution.Path!;
+
+            if (path.Kind == Kind.Array)
+            {
+                errors.Add(Error(Codes.GroupOnCollection, $"'{stage.Path}' is a collection; values takes a scalar member, also one of the elements of a collection.", index, stage.Path));
+                return;
+            }
+
+            if (!Kinds.IsScalar(path.Kind) || path.Storage is null)
+            {
+                errors.Add(Error(Codes.NotFilterable, $"'{stage.Path}' is {Kinds.WithArticle(path.Kind)}; values needs a scalar.", index, stage.Path));
+                return;
+            }
+
+            // The collections above the path that are not unwound, outermost first: each is unwound for
+            // the values alone. One the shape counts and no array stands for (a dictionary stored as an
+            // array) has no element to name a member of.
+            var collections = CollectionsCrossed(stage.Path).Where(collection => collection.Wire != stage.Path).ToList();
+
+            if (collections.Count != path.CollectionAncestors || collections.Any(collection => collection.Storage is null))
+            {
+                errors.Add(Error(Codes.GroupOnCollection, $"'{stage.Path}' lies under a collection the values cannot be read through; unwind it first.", index, stage.Path));
+                return;
+            }
+
+            var text = FoldsAsText(path);
+
+            if (search is not null && !text)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.OptionNotApplicable,
+                    Message = $"'search' keeps the values that start with a text; '{stage.Path}' is {Kinds.WithArticle(path.LeafKind)}, not text.",
+                    Stage = index,
+                    Path = stage.Path,
+                    Params = new Dictionary<string, object?> { ["option"] = "search", ["kind"] = Kinds.NameOf(path.LeafKind) },
+                });
+                return;
+            }
+
+            if (!bounded)
+                return;
+
+            // A string's values fold into one another as a group's keys do, and the search folds with them.
+            if (text)
+                collated = true;
+
+            var counted = stage.Counts;
+            var value = new ShapeNode.GroupOutput(path.Kind, path.Shape, BoundStage.Values.ValueAlias);
+
+            values = new BoundStage.Values(
+                path,
+                collections.Select(collection => collection.Storage!).ToList(),
+                search is null ? null : new BoundCondition.Leaf(
+                    path with { Wire = BoundStage.Values.ValueAlias, Storage = BoundStage.Values.ValueStorage, CollectionAncestors = 0, Root = value },
+                    "startsWith", new BoundOperand.Single(new BsonString(search)), IgnoreCase: true, IsSemiJoin: false),
+                limit,
+                counted,
+                scan);
+
+            stages.Add(values);
+            callerIndexes.Add(index);
+
+            // The stage replaces the row, as a group does: no alias a later stage could continue under survives it.
+            anchors.Clear();
+            shape = shape.WithGroup(counted
+                ? [value, new ShapeNode.GroupOutput(Kind.Int, null, BoundStage.Values.CountAlias)]
+                : [value]);
+            sort = null;
+
+            // The page the engine supplies carries the limit; nothing is paged, counted or continued.
+            page = new BoundStage.Page(limit, 0, null, false);
+            stages.Add(page);
+            callerIndexes.Add(null);
+        }
+
+        private static QueryValidationError ValuesLimit(string limit, int max, int value, int index, string message) => new()
+        {
+            Code = Codes.ValuesLimitExceeded,
+            Message = message,
+            Stage = index,
+            Params = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["value"] = value },
+        };
 
         // ---- helpers -------------------------------------------------------------------------
 

@@ -24,6 +24,9 @@ public sealed class OxQLOptions
     /// <summary>How far and how long a contract 2 page counts (<c>page.count</c>).</summary>
     public CountOptions Count { get; set; } = new();
 
+    /// <summary>How many rows a <c>values</c> stage reads and how many values it answers by default.</summary>
+    public ValuesOptions Values { get; set; } = new();
+
     /// <summary>How operands are encoded for members whose storage is not uniform.</summary>
     public RepresentationOptions Representation { get; set; } = new();
 
@@ -99,6 +102,9 @@ public sealed class OxQLOptions
         Limits.MaxContinuedStages = AtLeast(1, Limits.MaxContinuedStages, nameof(LimitOptions.MaxContinuedStages), adjustments);
         Limits.MaxReportPageSize = AtLeast(1, Limits.MaxReportPageSize, nameof(LimitOptions.MaxReportPageSize), adjustments);
         Limits.MaxReportedRows = AtLeast(1, Limits.MaxReportedRows, nameof(LimitOptions.MaxReportedRows), adjustments);
+        Limits.MaxValuesLimit = AtLeast(1, Limits.MaxValuesLimit, nameof(LimitOptions.MaxValuesLimit), adjustments);
+        Values.ScanRows = AtLeast(1, Values.ScanRows, nameof(ValuesOptions.ScanRows), adjustments, "Values");
+        Values.DefaultLimit = AtLeast(1, Values.DefaultLimit, nameof(ValuesOptions.DefaultLimit), adjustments, "Values");
         Execution.ChainTimeoutMs = AtLeast(1, Execution.ChainTimeoutMs, nameof(ExecutionOptions.ChainTimeoutMs), adjustments, "Execution");
         Cache.NegativeResolveTtlSeconds = AtLeast(0, Cache.NegativeResolveTtlSeconds, nameof(CacheOptions.NegativeResolveTtlSeconds), adjustments, "Cache");
         Explain.RemoteTimeoutMs = AtLeast(1, Explain.RemoteTimeoutMs, nameof(ExplainOptions.RemoteTimeoutMs), adjustments, "Explain");
@@ -149,6 +155,12 @@ public sealed class OxQLOptions
         {
             adjustments.Add($"OxQL:Limits:MaxContinuedStages was {Limits.MaxContinuedStages}, above MaxPipelineStages ({Limits.MaxPipelineStages}); it is clamped, because no pipeline carries more stages to continue.");
             Limits.MaxContinuedStages = Limits.MaxPipelineStages;
+        }
+
+        if (Values.DefaultLimit > Limits.MaxValuesLimit)
+        {
+            adjustments.Add($"OxQL:Values:DefaultLimit was {Values.DefaultLimit}, above Limits:MaxValuesLimit ({Limits.MaxValuesLimit}); it is clamped, because a values stage that names no limit would otherwise be refused for the host's own default.");
+            Values.DefaultLimit = Limits.MaxValuesLimit;
         }
 
         if (Limits.DefaultPageSize > Limits.MaxPageSize)
@@ -400,6 +412,33 @@ public sealed class LimitOptions
 
     /// <summary>How many rows one diagnostic lists (a missing or ambiguous reference names the rows it met, up to this many).</summary>
     public int MaxReportedRows { get; set; } = 50;
+
+    /// <summary>
+    /// The most distinct values one <c>values</c> stage answers (its <c>limit</c>); one more is
+    /// refused. A list longer than this is no list a person reads: the caller narrows it with <c>search</c>.
+    /// </summary>
+    public int MaxValuesLimit { get; set; } = 500;
+}
+
+/// <summary>
+/// The bounds of a <c>values</c> stage, which answers the distinct values of one path among the rows
+/// that reach it. It groups rows, so what it costs is the rows it reads: <see cref="ScanRows"/> bounds
+/// them, whatever the request matches.
+/// </summary>
+public sealed class ValuesOptions
+{
+    /// <summary>
+    /// The most rows a <c>values</c> stage reads, and what it reads when the request names no
+    /// <c>scan</c>; a request may lower it, one that asks for more is refused. When that many rows
+    /// were read the answer says so (<c>VALUES_SCAN_CAPPED</c>): its values are those among them.
+    /// </summary>
+    public int ScanRows { get; set; } = 50_000;
+
+    /// <summary>How many values a <c>values</c> stage answers when it names no <c>limit</c>, under <c>Limits:MaxValuesLimit</c>.</summary>
+    public int DefaultLimit { get; set; } = 100;
+
+    /// <summary>The effective bound on the rows read: the configured value, at least 1.</summary>
+    public int EffectiveScanRows => Math.Max(1, ScanRows);
 }
 
 /// <summary>

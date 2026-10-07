@@ -425,7 +425,7 @@ public static class IndexAdvisor
             .ToList();
 
     private static JsonObject Unbounded(Condition condition) =>
-        new JsonObject { ["use"] = "filter", ["path"] = condition.Path, ["op"] = condition.Op, ["reason"] = condition.Reason ?? (condition.Bound == Bound.Equality ? "heldNotBounded" : "notLeading") }
+        new JsonObject { ["use"] = "filter", ["path"] = condition.Path, ["op"] = condition.Op, ["reason"] = condition.Reason ?? "heldNotBounded" }
             .With("filter", condition.Filter).With("stage", condition.Filter is null ? condition.Stage : null);
 
     // ---- conditions -------------------------------------------------------------------------

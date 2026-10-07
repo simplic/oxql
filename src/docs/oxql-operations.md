@@ -1017,7 +1017,9 @@ compiled and from the index lists.
   `endsWith`, `regex`), `exactUnderCollation` (a text compared exactly while the aggregate runs under
   the collation: an anchored pattern), `foldsWithoutCollation`, `decimalText`, `variant` (`is`), `or`,
   `not`, `any`, `addon`, `joined` (a member a join brings), `afterUnwind`, `afterGroup`,
-  `secondCollection`, `collection` (a sort by a member under a collection), `heldNotBounded`.
+  `secondCollection`, `collection` (a sort by a member under a collection), `heldNotBounded` (the
+  index holds the member so that no document is read for it, and does not bound it), `notStored`,
+  `notBounded`.
 - **`command`** is the shell line that creates the index, to copy as it is
   (`db.getCollection("<collection>").createIndex(<keys>[, { collation }])`). It names no database:
   the operator selects it.

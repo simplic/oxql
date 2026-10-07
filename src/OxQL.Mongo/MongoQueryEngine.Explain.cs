@@ -1492,7 +1492,9 @@ public sealed partial class MongoQueryEngine
     /// grouped the way the row nests them: a member of the entity under root <c>""</c>, an object
     /// member one level down under its own name, and every alias under its name — a join's select, an
     /// element's members, a lookup's array — so the studio groups a join's columns under its hop.
-    /// Scalars a stage adds (an unwind index, a group output) lie under <c>""</c>. Each column says
+    /// Scalars a stage adds (an unwind index, a group output) lie under <c>""</c>. Below that level an
+    /// object is one column, except where an inclusion projection names members of it: those members
+    /// are the columns then, however deep, under the root of the object they lie in. Each column says
     /// when a row carries its key (<c>present</c>), as the row encoder writes it: a stored member the
     /// record does not hold has no key, a join that found nothing leaves its alias null.
     /// </summary>
@@ -1646,10 +1648,22 @@ public sealed partial class MongoQueryEngine
 
             if (expand && memberShape is { Kind: Kind.Object, Type: { } inner })
                 Members(inner, wire + ".", wire, memberNullable, stage, shape, columns, expand: false, joined, memberVariant);
+            else if (memberShape is { Kind: Kind.Object, Type: { } named } && NamesBelow(shape, wire))
+                Members(named, wire + ".", root, memberNullable, stage, shape, columns, expand: false, joined, memberVariant);
             else
                 columns.Add(Column(wire, memberShape.Kind, memberNullable, stage, root, present));
         }
     }
+
+    /// <summary>
+    /// Whether an inclusion projection names members below the object at <paramref name="wire"/> and not
+    /// the object itself: the row then shows those members and nothing else of it, so each is a column
+    /// of its own, at any depth. An object the projection names, one no projection narrows and one an
+    /// exclusion only takes members out of stay one column.
+    /// </summary>
+    private static bool NamesBelow(Shape shape, string wire) =>
+        shape.Included is { } included && !included.Contains(wire)
+        && included.Any(kept => kept.Length > wire.Length && kept[wire.Length] == '.' && kept.StartsWith(wire, StringComparison.Ordinal));
 
     /// <summary>
     /// What a join alias the row keeps whole carries, relative to the alias: a keyed resolve's paths (the

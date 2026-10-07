@@ -632,7 +632,18 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   a row carries the key. `always`: on every row, the value may be null. `ifJoined`: absent on a row
   whose join found nothing. `ifVariant`: only on rows of the variants that have the member.
   `ifStored`: absent on a row whose stored record does not hold the member, or whose parent object
-  is null. Members of a remote alias are `unknown`: their kind is in the owner's type. Under a
+  is null. A member of the entity is a column under root `""`, a member of an object of the entity
+  one level down under the object's name (`status.name`, root `status`); an object below that level
+  is one column (`customer.address`, `kind: "object"`), **except where an inclusion projection names
+  members of it**: `{ "project": { "customer.address.companyName": 1, "customer.address.city": 1 } }`
+  lists `customer.address.companyName` and `customer.address.city`, each with its own kind, `can`
+  and `sortVia`, under the root of the object they lie in (`customer`), at any depth and under an
+  unwound element's alias alike (`line.financialPartner.address.city`, root `line`). The columns
+  stand in the order the row writes its members, not the order the projection names them. An object
+  the projection names (`"customer.address": 1`), one no projection narrows and one an exclusion
+  takes members out of stay one column, and a collection that is not unwound is always one `array`
+  column: what a member below such a column can is the function of its flags (*what a column can*).
+  Members of a remote alias are `unknown`: their kind is in the owner's type. Under a
   join's alias the columns are its output set (`aliases.<alias>.shows`), each `ifJoined`, whoever
   runs the join: an alias a continued stage adds lists what its owner answered it shows. Only an
   alias whose output set this host does not know is one column of the alias itself (`kind: "object"`,

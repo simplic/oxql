@@ -42,7 +42,7 @@ public class ExplainNotesTests
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
             "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER",
-            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER", "SEMI_JOIN_NOT_BY_KEY");
+            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER", "SEMI_JOIN_NOT_BY_KEY", "GROUP_SCANS");
         Notes.All.Except([Notes.ExplainLimit]).Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue; only an explain limit is both a refusal (past a bound, before binding) and a note (hit mid-way)");
     }
@@ -103,6 +103,34 @@ public class ExplainNotesTests
             .Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         legacy.Notes.Should().NotContain(note => note.Code == Notes.ProjectAfterPage);
+    }
+
+    [Fact]
+    public async Task What_a_group_reads_for_every_page_is_said_once_at_the_first_group()
+    {
+        var notes = await NotesAsync(
+            """[{ "match": { "number": { "exists": true } } }, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "group": { "by": [{ "path": "n", "as": "size" }], "fields": { "groups": { "count": true } } } }]""",
+            "probe.order", model: BindHost.Probe);
+        var scans = Single(notes, Notes.GroupScans);
+
+        scans.Stage.Should().Be(1, "the first group; a group of groups reads no more rows");
+        scans.Message.Should().StartWith("The groups are computed over every row that reaches the group, for every page of groups");
+        System.Text.Json.JsonSerializer.Serialize(scans.Params).Should().Be("""{"keys":1}""");
+        Basis.OfNote[scans.Code].Should().Be(Basis.Advisory);
+
+        var totals = Single(await NotesAsync("""[{ "group": { "by": [], "fields": { "n": { "count": true } } } }]""", "probe.order", model: BindHost.Probe), Notes.GroupScans);
+
+        totals.Message.Should().StartWith("The totals are computed over every row that reaches the group");
+        System.Text.Json.JsonSerializer.Serialize(totals.Params).Should().Be("""{"keys":0}""");
+
+        (await NotesAsync("""[{ "sort": [{ "number": "asc" }] }]""", "probe.order", model: BindHost.Probe)).Should().NotContain(note => note.Code == Notes.GroupScans);
+
+        // Contract 1 says what it always said.
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), new FakeRemoteClient());
+        var legacy = (await engine.ExplainAsync(BindHost.Request("probe.order", """[{ "group": { "by": [], "fields": { "n": { "count": true } } } }]"""), BindHost.Context(contract: 1)))
+            .Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        legacy.Notes.Should().NotContain(note => note.Code == Notes.GroupScans);
     }
 
     [Fact]

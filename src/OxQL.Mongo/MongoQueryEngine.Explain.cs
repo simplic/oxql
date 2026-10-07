@@ -137,6 +137,15 @@ public sealed partial class MongoQueryEngine
                 draft.Notes.Add(Notes.Prefiltered(unwoundAt, unwound.Path.Wire, unwound.As, placed.Prefiltered));
         }
 
+        // What a group costs is said once, at the first: every page of groups reads every row that reaches it.
+        if (context.Contract != 1)
+            for (var position = 0; position < bound.Stages.Count; position++)
+                if (bound.Stages[position] is BoundStage.Group scanned && draft.Indexes[position] is { } groupedAt)
+                {
+                    draft.Notes.Add(Notes.Scanned(groupedAt, scanned.Keys.Count));
+                    break;
+                }
+
         // A request this host cannot run is not valid, though it binds: the same refusal the query
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)

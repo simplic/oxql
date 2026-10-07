@@ -304,11 +304,13 @@ public class GroupGridTests
         none.Items.Should().BeEmpty();
         none.ShouldCount("exact", 0);
 
-        var explain = await client.ExplainHereAsync(new JsonObject { ["query"] = Request(filter, Totals, """ "maxTimeMs": 3000, """) });
+        var explain = await client.ExplainHereAsync(new JsonObject { ["query"] = Request(filter, Totals, """ "maxTimeMs": 3000, """), ["include"] = new JsonArray("notes") });
 
         explain.Body!["valid"]!.GetValue<bool>().Should().BeTrue(explain.ToString());
         explain.Body["result"]!["identity"]!.ToJsonString().Should().Be("""{"kind":"single"}""");
         explain.Body["result"]!["order"]!.AsArray().Should().BeEmpty();
+        explain.Body["notes"]!.AsArray().Single(note => note!["code"]!.GetValue<string>() == "GROUP_SCANS")!.ToJsonString().Should().Be(
+            """{"code":"GROUP_SCANS","message":"The totals are computed over every row that reaches the group: no page and no cap makes them cheaper, only the conditions before the group do.","stage":0,"params":{"keys":0},"basis":"advisory"}""");
         explain.Body["filter"]!.AsArray().Should().OnlyContain(entry => entry!["placed"]!.ToJsonString().StartsWith("""[{"before":0""", StringComparison.Ordinal));
     }
 

@@ -128,13 +128,20 @@ public static class Notes
     /// </summary>
     public const string SemiJoinNotByKey = "SEMI_JOIN_NOT_BY_KEY";
 
+    /// <summary>
+    /// A group is computed over every row that reaches it, for every page of groups: the page cuts the
+    /// groups it answers, never the rows the database reads for them. Said once, at the first group of
+    /// the request (params <c>keys</c>: how many keys it groups by, 0 for the totals).
+    /// </summary>
+    public const string GroupScans = "GROUP_SCANS";
+
     /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
-        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey,
+        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans,
     ];
 
     /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
@@ -349,6 +356,17 @@ public static class Notes
         Code = ProjectAfterPage,
         Message = "The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.",
         Stage = stage,
+    };
+
+    /// <summary>What a group reads for every page of groups (<see cref="GroupScans"/>).</summary>
+    public static Diagnostic Scanned(int? stage, int keys) => new()
+    {
+        Code = GroupScans,
+        Message = keys == 0
+            ? "The totals are computed over every row that reaches the group: no page and no cap makes them cheaper, only the conditions before the group do."
+            : "The groups are computed over every row that reaches the group, for every page of groups: the page cuts the groups answered, not the rows read. Only the conditions before the group make it cheaper.",
+        Stage = stage,
+        Params = new Dictionary<string, object?> { ["keys"] = keys },
     };
 
     /// <summary>The parents of an unwound page ordered and cut before the unwind (<see cref="SortBeforeUnwind"/>).</summary>

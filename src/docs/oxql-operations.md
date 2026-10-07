@@ -745,6 +745,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   after the unwind is asked of the collection before it; `params` `path`, `alias`, `paths`) — the
   three say where the engine places a stage of a contract 2 request (see
   [`oxql-semantics.md`](oxql-semantics.md)); the rows are those of the request as written,
+  `GROUP_SCANS` (contract 2, once per request, at its first `group`: the groups, or the totals of
+  a group over no key, are computed over every row that reaches the group for every page of
+  groups, so only the conditions before the group make the request cheaper; `params` `keys`, the
+  number of keys, 0 for the totals),
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),

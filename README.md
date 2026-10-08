@@ -463,23 +463,31 @@ contract 1 caller can still observe, both loosened, neither a new refusal:
 ### Every service's schema revision changes once
 
 The base package publishes fifteen of the engine's limits in the schema document (`limits`), and
-the document's `revision` is the hash of its bytes. Of those fifteen exactly one default changed:
+the document's `revision` is the hash of its bytes. What of those fifteen a service publishes
+differently once it takes this engine, at the defaults:
 
-| published in `/schema` → `limits` | published engine | this engine |
-|---|---|---|
-| `maxGroupFields` | 20 | 40 |
+| published in `/schema` → `limits` | published engine (2.0) | pushed base of 2.1 | this engine |
+|---|---|---|---|
+| `maxGroupFields` | 20 | 20 | **40** |
+| `maxResolveStages` | 2 | 8 | 8 |
+| `maxContinuedStages`, `maxFlattenDepth`, `maxReportPageSize` | not in the document | 8, 5, 5 000 | 8, 5, 5 000 |
+| the other ten (`maxPageSize` 500, `defaultPageSize` 100, `maxPipelineStages` 20, `maxLookupStages` 5, `maxUnwindStages` 5, `maxProjectionFields` 500, `regexMaxLength` 200, `maxOffset` 5 000, `maxBatchQueries` 10, `maxLookupLimit` 100) | as now | as now | as now |
 
 So **the schema revision of every service changes when it takes the package, without any change
-to its model**. A client that holds a document reloads it (the revision an explain answer names no
-longer matches), and an origin's kept explain answers of that owner are dropped with the revision
-they were keyed by. Nothing else in the document moves: the other fourteen values, the types and
-the relation names are what they were. The limits this engine adds (`maxFilterEntries`,
-`maxValuesLimit`, `valuesScanRows`, `valuesDefaultLimit`, the explain rates) are published on
-health only and are not in the document. `maxGroupFields` could live on health alone, and then no
-revision would move for a limit; it stays in the document, because a client that checks a `group`
-against the document before sending it (the fifteen are there for exactly that) would lose the
-check. The explain rates changed on health as well: `explainRatePerMinute` 20 → 120,
-`explainRateBurst` 5 → 30, with `explainOwnerRatePerMinute` 20 and `explainOwnerRateBurst` 5 new.
+to its model**: against the published packages for the document's format as well (1.1, its three
+new limits, `maxResolveStages`), against a build of the pushed base for `maxGroupFields` alone. A
+client that holds a document reloads it (the revision an explain answer names no longer matches),
+and an origin's kept explain answers of that owner are dropped with the revision they were keyed
+by. A host that configures one of the fifteen publishes its own value, as before.
+
+The limits this engine adds (`maxFilterEntries`, `maxValuesLimit`, `valuesScanRows`,
+`valuesDefaultLimit`, the explain rates) are published on health only and are not in the document,
+so they move no revision. `maxGroupFields` could live on health alone, and then no revision would
+move for a limit again; it stays in the document, because a client that checks a `group` against
+the document before sending it (the fifteen are there for exactly that) would lose the check, and
+the frontend's generated modules read it there. The explain rates changed on health as well:
+`explainRatePerMinute` 20 → 120, `explainRateBurst` 5 → 30, with `explainOwnerRatePerMinute` 20
+and `explainOwnerRateBurst` 5 new.
 
 ### Two builds in one fleet
 

@@ -127,7 +127,9 @@ public sealed class OxQLQueryService : IOxQLQueryService
             return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
             {
                 Code = Codes.UnknownRequestMember,
-                Message = $"'{string.Join(", ", unknown.Keys)}' is not a member of a batch; a batch carries queries and maxTimeMs, and each query its own strict.",
+                // On the internal route the batch is written by the calling service's engine: an unknown member is another build's.
+                Message = $"'{string.Join(", ", unknown.Keys)}' is not a member of a batch; a batch carries queries and maxTimeMs, and each query its own strict." + (internalCall ? " " + Binder.OtherBuildHint : ""),
+                Params = internalCall ? new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = unknown.Keys.ToList() } : null,
             }]));
 
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)

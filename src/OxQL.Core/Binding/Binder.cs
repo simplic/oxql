@@ -45,6 +45,9 @@ public sealed class Binder
     /// </summary>
     public const string RequestMembers = "entityType, variables, filter, pipeline, strict, timing, maxTimeMs";
 
+    /// <summary>What an owner says of a request on the internal route that carries a member it does not know: another build of the engine wrote it.</summary>
+    public const string OtherBuildHint = "The request came over the internal route, where the calling service's engine writes it: that engine and this one are different builds. The engine and the base package are deployed together on every service that calls or is called.";
+
     /// <summary>The top-level members a request carries on an internal call (<see cref="RequestContext.Internal"/>).</summary>
     public const string InternalRequestMembers = RequestMembers + ", keyedBy";
 
@@ -642,8 +645,8 @@ public sealed class Binder
             }
 
             if (request.Unknown is { Count: > 0 } unknown)
-                errors.Add(Error(Codes.UnknownRequestMember,
-                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", null, null));
+                errors.Add(OtherBuild(Error(Codes.UnknownRequestMember,
+                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", null, null), unknown.Keys));
 
             // The two members a request is read with as written (contract 1 ignores them whatever they
             // hold): under contract 2 each has one kind, and another is refused with the member's name.
@@ -663,6 +666,19 @@ public sealed class Binder
                     Params = new Dictionary<string, object?> { ["member"] = "maxTimeMs", ["reason"] = "notAnInteger" },
                 });
         }
+
+        /// <summary>
+        /// A top-level member this engine does not know, on an internal call: there the request is
+        /// written by the calling service's engine, never by a caller, so the two services run
+        /// different builds of the engine. The refusal says so and carries
+        /// <c>params { reason: "engineBuild", members }</c>, so that the origin's <c>RESOLVE_REFUSED</c>
+        /// names the cause instead of a member no caller wrote. On the public route the error is as it was.
+        /// </summary>
+        private QueryValidationError OtherBuild(QueryValidationError error, IEnumerable<string> members) => !context.Internal ? error : error with
+        {
+            Message = error.Message + " " + OtherBuildHint,
+            Params = new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = members.ToList() },
+        };
 
         /// <summary>
         /// The internal <c>keyedBy</c> (DESIGN §3.5.2 step 3): the owner's rows grouped per key, at most
@@ -693,8 +709,8 @@ public sealed class Binder
 
             if (keyedBy.Unknown is { Count: > 0 } unknownMembers)
             {
-                errors.Add(Error(Codes.UnknownRequestMember,
-                    $"'{string.Join(", ", unknownMembers.Keys.Select(name => "keyedBy." + name))}' is not a member of keyedBy; it carries path, keys, perKey, references and rows.", null, null));
+                errors.Add(OtherBuild(Error(Codes.UnknownRequestMember,
+                    $"'{string.Join(", ", unknownMembers.Keys.Select(name => "keyedBy." + name))}' is not a member of keyedBy; it carries path, keys, perKey, references and rows.", null, null), unknownMembers.Keys.Select(name => "keyedBy." + name)));
                 return;
             }
 

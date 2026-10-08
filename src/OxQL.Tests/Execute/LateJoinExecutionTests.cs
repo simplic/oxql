@@ -90,8 +90,10 @@ public class LateJoinExecutionTests
         private static bool Matches(BsonDocument row, BsonDocument filter) => filter.All(element => element.Name switch
         {
             "$and" => element.Value.AsBsonArray.All(inner => Matches(row, inner.AsBsonDocument)),
-            // What an unwind would drop: a collection that is missing, null or empty.
-            _ when element.Value is BsonDocument { ElementCount: 1 } only && only.GetElement(0) is { Name: "$nin", Value: BsonArray excluded } => !excluded.Contains(Get(row, element.Name) ?? BsonNull.Value),
+            // What an unwind answers a row for: an array that holds something, or a value that is no array; not a null, not a missing member.
+            "$expr" when element.Value is BsonDocument { ElementCount: 1 } asked && asked.GetElement(0) is { Name: "$gt", Value: BsonArray { Count: 2 } operands }
+                && operands[0] is BsonDocument rows && rows.GetValue("$cond", null) is BsonArray { Count: 3 } cond && cond[0] is BsonDocument isArray && isArray.GetValue("$isArray", null) is BsonString collection
+                => (Get(row, collection.Value.TrimStart('$')) switch { BsonArray array => array.Count, null or BsonNull or BsonUndefined => 0, _ => 1 }) > operands[1].ToInt32(),
             _ when element.Name.StartsWith('$') || element.Value is BsonDocument => throw new NotSupportedException($"The evaluator does not match {element.ToJson()}."),
             _ => Get(row, element.Name) == element.Value,
         });

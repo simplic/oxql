@@ -503,6 +503,16 @@ public sealed class ExecutionOptions
     /// </summary>
     public int SlowQueryMs { get; set; } = 1_000;
 
+    /// <summary>
+    /// Whether a contract 2 caller may ask for the breakdown of a request's time: the <c>timing</c>
+    /// member of the answer, asked for by <c>"timing": true</c> or the header <c>X-OxQL-Timing</c>. It
+    /// names the entities read, the documents and bytes each command returned, the owners asked with
+    /// their own breakdown, and the build. On by default; off, both ways of asking are accepted and
+    /// answer no member, on the public route and for another service's origin alike. The
+    /// <c>Server-Timing</c> header (durations and counts, no name) is sent either way.
+    /// </summary>
+    public bool TimingDetail { get; set; } = true;
+
     /// <summary>The ceiling <see cref="BatchConcurrency"/> is clamped to.</summary>
     public const int MaxBatchConcurrency = 16;
 

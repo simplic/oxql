@@ -58,6 +58,55 @@ public class RequestCeilingTests
     }
 
     [Fact]
+    public async Task A_value_no_int_holds_is_the_hosts_ceiling_and_a_whole_number_in_any_spelling_is_read()
+    {
+        (await Ceilings(Request("99999999999999"))).Should().Equal([10_000, 500], "a value above the host's ceiling is the host's ceiling, however far above");
+        (await Ceilings(Request("3e3"))).Should().Equal([3_000, 500]);
+        (await Ceilings(Request("3000.0"))).Should().Equal([3_000, 500]);
+    }
+
+    [Theory]
+    [InlineData("maxTimeMs", "\"soon\"", "notAnInteger")]
+    [InlineData("maxTimeMs", "2.5", "notAnInteger")]
+    [InlineData("maxTimeMs", "true", "notAnInteger")]
+    [InlineData("maxTimeMs", "{ \"ms\": 5 }", "notAnInteger")]
+    [InlineData("timing", "\"yes\"", "notABoolean")]
+    [InlineData("timing", "1", "notABoolean")]
+    [InlineData("timing", "[true]", "notABoolean")]
+    public async Task Under_contract_2_a_member_of_another_kind_is_refused_by_name_and_under_contract_1_it_is_ignored(string member, string value, string reason)
+    {
+        var request = BindHost.Parse($$"""{ "entityType": "{{Order}}", "{{member}}": {{value}}, "pipeline": [{ "page": { "limit": 5 } }] }""");
+        var (engine, runner) = Host();
+        var refused = (await engine.ExecuteAsync(request, BindHost.Context())).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
+        var error = refused.Errors.Should().ContainSingle().Subject;
+
+        refused.Status.Should().Be(400);
+        error.Code.Should().Be(Codes.InvalidOperand);
+        error.Params.Should().Contain("member", member).And.Contain("reason", reason);
+        runner.Calls.Should().BeEmpty();
+
+        // Contract 1 never had either member: whatever one holds, the request runs as if it were not there.
+        var legacy = (await engine.ExecuteAsync(request, BindHost.Context(contract: 1))).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+
+        legacy.Timing.Should().BeNull();
+        runner.Calls.Should().ContainSingle().Which.Options.MaxTimeMs.Should().Be(10_000, "the host's ceiling, not the request's");
+    }
+
+    [Fact]
+    public async Task Under_contract_1_a_well_formed_ceiling_and_a_timing_request_are_ignored_too()
+    {
+        var request = BindHost.Parse($$"""{ "entityType": "{{Order}}", "maxTimeMs": 1, "timing": true, "pipeline": [{ "page": { "limit": 5 } }] }""");
+        var (engine, runner) = Host();
+        var legacy = (await engine.ExecuteAsync(request, BindHost.Context(contract: 1))).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+
+        legacy.Timing.Should().BeNull("a contract 1 body has no timing member");
+        runner.Calls.Should().ContainSingle().Which.Options.MaxTimeMs.Should().Be(10_000);
+
+        // null is no value under either contract.
+        (await Ceilings(BindHost.Parse($$"""{ "entityType": "{{Order}}", "maxTimeMs": null, "timing": null, "pipeline": [{ "page": { "limit": 5 } }] }"""))).Should().Equal([10_000]);
+    }
+
+    [Fact]
     public async Task Inside_a_batch_the_lower_of_the_requests_and_what_the_batch_leaves_it_holds()
     {
         (await Ceilings(Request("3000"), BindHost.Context() with { MaxTimeMs = 2_000 })).Should().Equal([2_000, 500]);

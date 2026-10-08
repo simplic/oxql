@@ -340,10 +340,13 @@ public class GroupGridTests
         // A ceiling above the host's is the host's: nothing is refused for asking.
         (await client.QueryAsync(With(int.MaxValue))).ShouldBeOk();
 
-        // It is a number of milliseconds: anything else is a body the host cannot read, as for every typed member.
+        // It is a whole number of milliseconds: anything else is refused with the member's name.
         var malformed = await client.QueryAsync(JsonNode.Parse($$"""{ "entityType": "{{Corpus.Template}}", "maxTimeMs": "soon", "pipeline": [ { "page": { "limit": 1 } } ] }""")!);
 
-        malformed.StatusCode.Should().Be(400, malformed.ToString());
+        malformed.ShouldRefuse("INVALID_OPERAND", 400);
+
+        // Contract 1 never had the member and ignores it, whatever it holds.
+        (await client.Contract(1).QueryAsync(JsonNode.Parse($$"""{ "entityType": "{{Corpus.Template}}", "maxTimeMs": "soon", "timing": "yes", "pipeline": [ { "page": { "limit": 1 } } ] }""")!)).ShouldBeOk();
 
         // Contract 1 never had the member and ignores it.
         var legacy = await client.Contract(1).QueryAsync(JsonNode.Parse($$"""{ "entityType": "{{Corpus.Template}}", "maxTimeMs": 1, "pipeline": [ { "page": { "limit": 1 } } ] }""")!);

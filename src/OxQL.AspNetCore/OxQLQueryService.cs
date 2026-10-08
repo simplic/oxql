@@ -123,7 +123,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         // A member the batch does not have is refused rather than dropped: a batch-level strict
         // would otherwise run every query without it. Contract 1 ignores it, as it always has.
-        if (batch.Unknown is { Count: > 0 } unknown && ContractOf(httpContextAccessor?.HttpContext) != 1)
+        if (batch.Unknown is { Count: > 0 } unknown && ContractOf(options, httpContextAccessor?.HttpContext) != 1)
             return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
             {
                 Code = Codes.UnknownRequestMember,
@@ -419,8 +419,13 @@ public sealed class OxQLQueryService : IOxQLQueryService
     /// and a missing header means contract 1; once compatibility is switched off every request
     /// is contract 2, header or not.
     /// </summary>
-    public int ContractOf(HttpContext? httpContext)
+    public int ContractOf(HttpContext? httpContext) => ContractOf(options, httpContext);
+
+    /// <summary>The contract a request was written for under <paramref name="options"/>; the one rule every part of the host reads it by.</summary>
+    public static int ContractOf(OxQLOptions options, HttpContext? httpContext)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         if (!options.Compat.Enabled)
             return 2;
 

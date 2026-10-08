@@ -81,14 +81,15 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // Where the time goes is always recorded; a host that started the clock earlier hands its collector in.
         var timing = context.Timing ?? new QueryTiming();
 
-        if (request.Timing == true)
-            timing.Detail = true;
+        // The breakdown is a contract 2 answer's member, asked for by the request or by its header, and a
+        // host can keep it to itself. Under contract 1 nothing asks: the member and the header are ignored.
+        timing.Detail = context.Contract != 1 && options.Execution.TimingDetail && (timing.Detail || request.AsksTiming);
 
         context = Reaching(context) with { Timing = timing };
 
         // The request's own ceiling (contract 2), under what its batch or its host leaves it.
-        if (context.Contract != 1 && request.MaxTimeMs is { } asked)
-            context = context with { MaxTimeMs = context.MaxTimeMs is { } left and > 0 ? Math.Min(left, Math.Max(1, asked)) : Math.Max(1, asked) };
+        if (context.Contract != 1 && request.TimeCeilingMs is { } asked)
+            context = context with { MaxTimeMs = context.MaxTimeMs is { } left and > 0 ? Math.Min(left, asked) : asked };
 
         var binds = QueryTiming.Now;
         var binding = await new Binder(models.Model, cursors).BindAsync(request, context, cancellationToken);

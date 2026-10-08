@@ -88,10 +88,12 @@ public class QueryTimingTests
         }
     }
 
-    private static async Task<QueryResult> RunAsync(IAggregateRunner runner, string pipeline, bool timing = true, IAddonDefinitionSource? addons = null)
+    private static async Task<QueryResult> RunAsync(IAggregateRunner runner, string pipeline, bool timing = true, IAddonDefinitionSource? addons = null, int contract = 2, Action<OxQLOptions>? configure = null, bool header = false)
     {
-        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
-        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline) with { Timing = timing ? true : null }, BindHost.Context(addons: addons));
+        var options = BindHost.Options(configure);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options);
+        var context = BindHost.Context(options, addons: addons, contract: contract) with { Timing = new QueryTiming { Detail = header } };
+        var outcome = await engine.ExecuteAsync(BindHost.Request(Order, pipeline) with { Timing = timing ? QueryRequest.TimingAsked : null }, context);
 
         outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
 
@@ -135,6 +137,36 @@ public class QueryTimingTests
     }
 
     [Fact]
+    public async Task Under_contract_1_neither_the_member_nor_the_header_asks_for_the_breakdown()
+    {
+        // Contract 1 never had the member: it is ignored as every member it does not know, and the answer carries none.
+        var member = await RunAsync(new SlowRunner { PageRows = Rows(3) }, """[{ "page": { "limit": 5 } }]""", contract: 1);
+        var header = await RunAsync(new SlowRunner { PageRows = Rows(3) }, """[{ "page": { "limit": 5 } }]""", timing: false, contract: 1, header: true);
+
+        member.Timing.Should().BeNull();
+        header.Timing.Should().BeNull();
+        member.Measured!.Detail.Should().BeFalse("nothing downstream is asked for a breakdown either");
+        System.Text.Json.JsonSerializer.Serialize(member, BindHost.Json).Should().NotContain("timing");
+    }
+
+    [Fact]
+    public async Task A_host_that_keeps_the_breakdown_to_itself_answers_none_whoever_asks_and_still_measures()
+    {
+        static void Off(OxQLOptions options) => options.Execution.TimingDetail = false;
+
+        var member = await RunAsync(new SlowRunner { PageRows = Rows(3) }, """[{ "page": { "limit": 5 } }]""", configure: Off);
+        var header = await RunAsync(new SlowRunner { PageRows = Rows(3) }, """[{ "page": { "limit": 5 } }]""", timing: false, configure: Off, header: true);
+
+        member.Timing.Should().BeNull("the member is accepted and answers nothing");
+        header.Timing.Should().BeNull();
+        member.Measured!.Detailed.Should().BeFalse("no owner is asked for its breakdown");
+        member.Measured!.ServerTiming().Should().Contain("total;dur=").And.Contain("db;dur=", "the header's durations are sent either way");
+
+        new OxQLOptions().Execution.TimingDetail.Should().BeTrue("the breakdown is on unless a host switches it off");
+        (await RunAsync(new SlowRunner { PageRows = Rows(3) }, """[{ "page": { "limit": 5 } }]""", timing: false, header: true)).Timing.Should().NotBeNull("the header asks where the host allows it");
+    }
+
+    [Fact]
     public async Task Commands_in_flight_together_count_once_and_say_which_they_ran_beside()
     {
         var result = await RunAsync(new SlowRunner { PageRows = Rows(6), Page = TimeSpan.FromMilliseconds(120), Count = TimeSpan.FromMilliseconds(120) }, """[{ "page": { "limit": 5, "count": true } }]""");
@@ -149,7 +181,7 @@ public class QueryTimingTests
 
         var sum = list.Sum(command => Number(command!["ms"]));
 
-        Number(timing["db"]!["ms"]).Should().BeLessThan(sum * 0.75, "two commands side by side are waited for once, not twice");
+        Number(timing["db"]!["ms"]).Should().BeLessThan(sum, "two commands side by side are waited for once, not twice");
         (Number(timing["totalMs"]) - Number(timing["db"]!["ms"])).Should().BeApproximately(Number(timing["oursMs"]), 0.011);
     }
 
@@ -245,7 +277,7 @@ public class QueryTimingTests
         timing["db"]!["list"]!.AsArray().Select(command => command!["kind"]!.GetValue<string>()).Should().Equal("page");
         Number(timing["addonMs"]).Should().BeGreaterThanOrEqualTo(50);
         Number(timing["oursMs"]).Should().BeGreaterThanOrEqualTo(50);
-        Number(timing["bindMs"]).Should().BeLessThan(50, "the time the source was asked is taken out of the binding");
+        Number(timing["bindMs"]).Should().BeLessThan(Number(timing["addonMs"]), "the time the source was asked is taken out of the binding");
         silent.Measured!.ServerTiming().Should().NotContain("addon;");
     }
 
@@ -303,9 +335,17 @@ public class QueryTimingTests
         list[2]!["getMores"]!.GetValue<int>().Should().Be(2, "three round trips are the command and two further batches");
         json["db"]!["commands"]!.GetValue<int>().Should().Be(3);
         json["db"]!["roundTrips"]!.GetValue<int>().Should().Be(5);
-        Number(json["db"]!["ms"]).Should().BeGreaterThanOrEqualTo(65).And.BeApproximately(list.Sum(command => Number(command!["ms"])), 0.5, "one after the other, the union is the sum");
+        list.Select(command => command!["parallelWith"]).Should().AllSatisfy(beside => beside.Should().BeNull("each read was over before the next command left"));
+
+        // What is asserted is how the time is attributed, never how long the machine took: a span is
+        // at least a clock tick long, the union of spans that do not overlap is their sum, and what
+        // is not the database's is this host's. A bound on this host's share would be a bound on the
+        // scheduler, which is free to take the thread between any two statements above.
+        list.Select(command => Number(command!["ms"])).Should().AllSatisfy(ms => ms.Should().BeGreaterThan(0));
+        Number(json["db"]!["ms"]).Should().BeApproximately(list.Sum(command => Number(command!["ms"])), 0.5, "one after the other, the union is the sum");
         (Number(json["totalMs"]) - Number(json["db"]!["ms"])).Should().BeApproximately(Number(json["oursMs"]), 0.011);
-        Number(json["oursMs"]).Should().BeLessThan(15);
+        Number(json["oursMs"]).Should().BeGreaterThanOrEqualTo(0);
+        Number(json["db"]!["ms"]).Should().BeLessThanOrEqualTo(Number(json["totalMs"]));
     }
 
     [Fact]

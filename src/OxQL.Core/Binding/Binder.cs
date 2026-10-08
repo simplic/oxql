@@ -644,6 +644,24 @@ public sealed class Binder
             if (request.Unknown is { Count: > 0 } unknown)
                 errors.Add(Error(Codes.UnknownRequestMember,
                     $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", null, null));
+
+            // The two members a request is read with as written (contract 1 ignores them whatever they
+            // hold): under contract 2 each has one kind, and another is refused with the member's name.
+            if (request.Timing is { ValueKind: not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null) })
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidOperand,
+                    Message = "'timing' is true or false: whether the answer carries where its time went.",
+                    Params = new Dictionary<string, object?> { ["member"] = "timing", ["reason"] = "notABoolean" },
+                });
+
+            if (request.MaxTimeMs is { ValueKind: not JsonValueKind.Null } ceiling && (ceiling.ValueKind != JsonValueKind.Number || !QueryRequest.IsWhole(ceiling, out _)))
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidOperand,
+                    Message = "'maxTimeMs' is a whole number of milliseconds: the ceiling on this request's time.",
+                    Params = new Dictionary<string, object?> { ["member"] = "maxTimeMs", ["reason"] = "notAnInteger" },
+                });
         }
 
         /// <summary>

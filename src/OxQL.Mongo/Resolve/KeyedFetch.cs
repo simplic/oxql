@@ -1006,7 +1006,7 @@ public sealed class KeyedFetch
             // the database's share at the owner is then known here. This host's own targets are
             // measured in this request's collector as they run.
             var queries = isRemote && context.Timing is { Detailed: true }
-                ? sent.Select(entry => entry.Query with { Timing = true }).ToList()
+                ? sent.Select(entry => entry.Query with { Timing = QueryRequest.TimingAsked }).ToList()
                 : sent.Select(entry => entry.Query).ToList();
             var since = QueryTiming.Now;
             var outcome = await CallSharedAsync(owner, group.Key, queries, deadline, sent.Any(entry => entry.Target.Chain), context, cancellationToken).ConfigureAwait(false);

@@ -34,6 +34,10 @@ public class OxQLController : ControllerBase
     /// (<c>Accept-Encoding</c>: Brotli, else gzip) when the body is at least
     /// <see cref="WireCompression.MinBytes"/>, with <c>Vary: Accept-Encoding</c> either way: a page of
     /// rows repeats its member names in every row and shrinks to about a tenth. A refusal is not coded.
+    /// <para>
+    /// A contract 1 request is answered as it always was (<see cref="Contract1"/>): through the host's
+    /// own JSON formatter, with no content coding, no length, and no header the engine adds.
+    /// </para>
     /// </summary>
     [HttpPost("query")]
     [ProducesResponseType(typeof(QueryResult), StatusCodes.Status200OK)]
@@ -48,6 +52,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
+            QueryOutcome.Success success when Contract1 => Ok(success.Result),
             QueryOutcome.Success success => Timed(success.Result.Measured is { } measured ? [measured] : [], new CompressedJsonResult(success.Result)),
             QueryOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
@@ -57,7 +62,7 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// Executes several queries in order under one time ceiling; always 200, each entry carries
     /// its own outcome. More queries than <c>Limits:MaxBatchQueries</c> is <c>BATCH_TOO_LARGE</c>.
-    /// The answer is content-coded as a query's is.
+    /// The answer is content-coded as a query's is, and a contract 1 batch is answered as it always was.
     /// </summary>
     [HttpPost("batch")]
     [ProducesResponseType(typeof(BatchResponse), StatusCodes.Status200OK)]
@@ -69,6 +74,7 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
+            BatchOutcome.Success success when Contract1 => Ok(success.Response),
             BatchOutcome.Success success => Timed(success.Response.Measured, new CompressedJsonResult(success.Response)),
             BatchOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
@@ -84,6 +90,12 @@ public class OxQLController : ControllerBase
     /// measurement has finished. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
     /// starts no measurement; that is the form one host asks of another, so a probe never sets off
     /// the probed service's own probes.
+    /// <para>
+    /// <c>capabilities</c> is read per caller: a request without the contract header on a host that
+    /// answers contract 1 gets the names every engine listed before contract 2 (batches, paging after a
+    /// group and by offset, <c>any</c>, <c>unwind.keepPath</c>) ahead of the host's own, since that host
+    /// does all of them for that caller. Members and limits are only ever added.
+    /// </para>
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
@@ -108,7 +120,7 @@ public class OxQLController : ControllerBase
                 version = EngineCapabilities.Version,
                 contract = EngineCapabilities.Contract,
             },
-            capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
+            capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
             limits = Limits(options),
             remote = services,
         });
@@ -251,11 +263,21 @@ public class OxQLController : ControllerBase
     }
 
     /// <summary>
+    /// Whether the request was written for contract 1 (<see cref="OxQLQueryService.ContractOf(OxQLOptions, HttpContext?)"/>).
+    /// What such a caller receives is frozen: the status, the headers and the body bytes of the
+    /// engine that first answered it. Everything the engine has since added to an answer on the wire
+    /// (the content coding and with it <c>Vary</c> and <c>Content-Length</c>, <c>X-Content-Type-Options</c>,
+    /// <c>Server-Timing</c>, <c>Access-Control-Expose-Headers</c>, the <c>timing</c> member) is a
+    /// contract 2 answer's alone, and so is whatever is added next: it goes behind this.
+    /// </summary>
+    private bool Contract1 => OxQLQueryService.ContractOf(options, HttpContext) == 1;
+
+    /// <summary>
     /// The answer under its <c>Server-Timing</c> header: where the time went up to here, the first
     /// byte of the body (total, the database with its commands and round trips, this host's own
     /// share and its parts). A browser on another origin reads the header only when it is exposed:
     /// the header is named in <c>Access-Control-Expose-Headers</c> for a request that carries an
-    /// <c>Origin</c>, beside what the host's CORS policy exposes.
+    /// <c>Origin</c>, beside what the host's CORS policy exposes. Contract 2 only.
     /// </summary>
     private IActionResult Timed(IReadOnlyList<QueryTiming> measured, IActionResult answer)
     {

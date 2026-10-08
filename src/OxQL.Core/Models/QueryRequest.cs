@@ -62,21 +62,46 @@ public sealed record QueryRequest
     /// Whether the answer carries where its time went (the <c>timing</c> member beside <c>pageInfo</c>):
     /// the database commands with what each returned, the owners asked, and this host's own share. The
     /// header <c>X-OxQL-Timing</c> asks the same. It changes no row and is no part of a cursor.
+    /// Contract 2 only, and only <c>true</c> asks (<see cref="AsksTiming"/>). Kept as written, as
+    /// <see cref="Filter"/> is: contract 1 never had the member and ignores it whatever it holds, as it
+    /// ignores every member it does not know; under contract 2 the binder refuses a value that is no boolean.
     /// </summary>
     [JsonPropertyName("timing")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? Timing { get; init; }
+    public JsonElement? Timing { get; init; }
 
     /// <summary>
     /// A ceiling on this request's time, in milliseconds, under the host's own
     /// (<c>Execution:MaxTimeMs</c>) and under what a batch leaves it (contract 2): the page, the count
     /// and the owners it asks end within it, and a request that does not is <c>QUERY_TIMEOUT</c>. A
-    /// value above the host's ceiling is the host's ceiling; a value below 1 is 1. It changes no row
-    /// and is no part of a cursor. Contract 1 never had the member and ignores it.
+    /// value above the host's ceiling is the host's ceiling; a value below 1 is 1
+    /// (<see cref="TimeCeilingMs"/>). It changes no row and is no part of a cursor. Kept as written:
+    /// contract 1 never had the member and ignores it whatever it holds; under contract 2 the binder
+    /// refuses a value that is no whole number.
     /// </summary>
     [JsonPropertyName("maxTimeMs")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? MaxTimeMs { get; init; }
+    public JsonElement? MaxTimeMs { get; init; }
+
+    /// <summary>The <c>timing</c> member of a request that asks for the breakdown: what a host writes on a request it sends on.</summary>
+    public static JsonElement TimingAsked { get; } = JsonSerializer.SerializeToElement(true);
+
+    /// <summary>Whether <see cref="Timing"/> asks for the breakdown: written as <c>true</c>.</summary>
+    [JsonIgnore]
+    public bool AsksTiming => Timing is { ValueKind: JsonValueKind.True };
+
+    /// <summary>
+    /// The ceiling <see cref="MaxTimeMs"/> names, at least 1 and at most what an int holds; null when
+    /// the member is absent, null or no whole number.
+    /// </summary>
+    [JsonIgnore]
+    public int? TimeCeilingMs => MaxTimeMs is { ValueKind: JsonValueKind.Number } written && IsWhole(written, out var ms)
+        ? (int)Math.Clamp(ms, 1d, int.MaxValue)
+        : null;
+
+    /// <summary>Whether a JSON number is whole (<c>3000</c>, <c>3e3</c>, <c>3000.0</c>); a fraction, an infinity and what no double holds are not.</summary>
+    internal static bool IsWhole(JsonElement number, out double value) =>
+        number.TryGetDouble(out value) && double.IsFinite(value) && Math.Floor(value) == value;
 
     /// <summary>Whether the request is strict: <see cref="Strict"/> written as true.</summary>
     [JsonIgnore]

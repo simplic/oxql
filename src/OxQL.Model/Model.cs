@@ -180,8 +180,92 @@ public sealed class EntityDef
     /// <summary>Every reachable wire path by its spelling, ordinal.</summary>
     public IReadOnlyDictionary<string, PathDef> PathIndex { get; internal set; } = new Dictionary<string, PathDef>(StringComparer.Ordinal);
 
-    /// <summary>The path at a wire spelling, or null.</summary>
-    public PathDef? Path(string wire) => PathIndex.GetValueOrDefault(wire);
+    /// <summary>
+    /// The path at a wire spelling, or null. A path the index holds is answered from it. A path
+    /// below a member whose type the walk had already met on its branch (an item that holds items
+    /// of its own kind: <c>items.assignedTransactionItems.text</c>) is not in the index, which stops
+    /// there to stay finite; it is described here from the place the index does describe that type,
+    /// under the spelling and the storage of the path asked for, down to <see cref="MaxPathSegments"/>.
+    /// </summary>
+    public PathDef? Path(string wire) =>
+        PathIndex.TryGetValue(wire, out var known) ? known : Below(wire);
+
+    /// <summary>The deepest path described, in segments: the depth the index itself stops at.</summary>
+    public const int MaxPathSegments = Build.PathIndexer.MaxDepth;
+
+    private Lazy<IReadOnlyDictionary<TypeDef, PathDef?>>? described;
+
+    /// <summary>A path the index stops above, described from where its parent's type is described.</summary>
+    private PathDef? Below(string wire)
+    {
+        var dot = wire.LastIndexOf('.');
+
+        if (dot <= 0 || dot == wire.Length - 1 || wire.AsSpan().Count('.') >= MaxPathSegments)
+            return null;
+
+        if (Path(wire[..dot]) is not { } parent)
+            return null;
+
+        // The type one member below the parent: an object, or the element of a collection of objects.
+        if (parent.Shape.Leaf is not { Kind: Kind.Object, Type: { IsEnum: false } type })
+            return null;
+
+        var anchors = (described ??= new Lazy<IReadOnlyDictionary<TypeDef, PathDef?>>(Described, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+        if (!anchors.TryGetValue(type, out var anchor))
+            return null;
+
+        var segment = wire[(dot + 1)..];
+
+        if (!PathIndex.TryGetValue(anchor is null ? segment : anchor.Wire + "." + segment, out var member))
+            return null;
+
+        var storage = parent.Storage is null || member.Storage is null || (anchor is not null && anchor.Storage is null)
+            ? null
+            : anchor is null ? parent.Storage + "." + member.Storage : parent.Storage + member.Storage[anchor.Storage!.Length..];
+        // The collections between the described type and its member are the same wherever the type is held;
+        // those the holder itself adds are the parent's.
+        var ancestors = parent.CollectionAncestors + Nesting(parent.Shape) + member.CollectionAncestors - (anchor is null ? 0 : anchor.CollectionAncestors + Nesting(anchor.Shape));
+        var path = new PathDef(wire, storage, member.Member, member.Shape, parent.Depth + 1, ancestors)
+        {
+            Filterable = storage is not null && member.Filterable,
+        };
+
+        path.Sortable = path.Filterable && ancestors == 0 && member.Shape.Kind != Kind.Array;
+
+        return path;
+    }
+
+    /// <summary>How many collections a shape is itself: the arrays around its leaf.</summary>
+    private static int Nesting(ShapeDef shape)
+    {
+        var count = 0;
+
+        for (var current = shape; current is { Kind: Kind.Array, Of: not null }; current = current.Of)
+            count++;
+
+        return count;
+    }
+
+    /// <summary>
+    /// Where the index describes each type: the first path in walk order that holds it and has its
+    /// members below it, and null for the root type, whose members are the root paths.
+    /// </summary>
+    private IReadOnlyDictionary<TypeDef, PathDef?> Described()
+    {
+        var anchors = new Dictionary<TypeDef, PathDef?> { [Root] = null };
+
+        foreach (var path in Paths)
+        {
+            if (path.Shape.Leaf is not { Kind: Kind.Object, Type: { IsEnum: false } type } || anchors.ContainsKey(type))
+                continue;
+
+            if (type.Members.Count > 0 && PathIndex.ContainsKey(path.Wire + "." + type.Members[0].WireName))
+                anchors[type] = path;
+        }
+
+        return anchors;
+    }
 }
 
 /// <summary>One pooled type: an object with members, or an enum with values.</summary>

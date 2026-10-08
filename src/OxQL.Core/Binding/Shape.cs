@@ -585,18 +585,24 @@ public sealed class Shape
 
             var candidate = key.Length == 0 ? segment : key + "." + segment;
 
-            if (index.TryGetValue(candidate, out var next))
+            // The index, or below a member that holds its own kind (an item's items) the path described from it.
+            if (index.TryGetValue(candidate, out var next) || (current is not { Kind: Kind.Dictionary } && (next = entity.Path(candidate)) is not null))
             {
                 key = candidate;
             }
-            else if (current is { Kind: Kind.Dictionary } && index.TryGetValue(key + ".*", out next))
+            else if (current is { Kind: Kind.Dictionary } && (index.TryGetValue(key + ".*", out next) || (next = entity.Path(key + ".*")) is not null))
             {
                 key += ".*";
                 literals.Add(segment);
             }
             else
             {
-                return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is not a path of {entity.Id}.", PathReasons.NotAMember, ("entity", entity.Id));
+                // The stored discriminator of a polymorphic value is no member of the model.
+                return IsDiscriminator(segment, current, entity)
+                    ? PathResolution.Fail(Codes.UnknownPath,
+                        $"'{wire}' is not a path of {entity.Id}: '{segment}' is the stored type discriminator, which is not a member under contract 2. Which variant a row holds is what the model publishes for the polymorphic member (the schema document lists its variants and their members), and a match tests it with 'is'.",
+                        PathReasons.NotAMember, ("entity", entity.Id), ("discriminator", segment))
+                    : PathResolution.Fail(Codes.UnknownPath, $"'{wire}' is not a path of {entity.Id}.", PathReasons.NotAMember, ("entity", entity.Id));
             }
 
             var isLast = position == segments.Count - 1;
@@ -649,6 +655,18 @@ public sealed class Shape
             Sortable = sortable,
             Root = node,
         });
+    }
+
+    /// <summary>
+    /// Whether a segment the model does not know is the discriminator element the driver stores with a
+    /// polymorphic value: the one the type at this place declares, or the driver's default name where
+    /// the place holds no polymorphic type the model knows.
+    /// </summary>
+    private static bool IsDiscriminator(string segment, PathDef? holder, EntityDef entity)
+    {
+        var type = holder is null ? entity.Root : holder.Shape.Leaf.Type;
+
+        return type?.DiscriminatorElement is { } declared ? string.Equals(segment, declared, StringComparison.Ordinal) : segment == "_t";
     }
 
     private PathResolution ResolveAddon(EntityDef entity, ShapeNode node, PathDef bag, string definitionPath, string wire, PathUsage usage, string storagePrefix, PathDef? sourcePath, int ancestors)

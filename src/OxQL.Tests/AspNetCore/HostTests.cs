@@ -238,7 +238,8 @@ public class HostTests
         limits["maxValuesLimit"]!.GetValue<int>().Should().Be(500);
         limits["valuesScanRows"]!.GetValue<int>().Should().Be(50_000);
         limits["valuesDefaultLimit"]!.GetValue<int>().Should().Be(100);
-        limits.Count.Should().Be(47,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["maxFilterEntries"]!.GetValue<int>().Should().Be(64);
+        limits.Count.Should().Be(48,"health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

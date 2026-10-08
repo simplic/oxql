@@ -88,6 +88,7 @@ public sealed class OxQLOptions
         Limits.MaxGroupFields = AtLeast(1, Limits.MaxGroupFields, nameof(LimitOptions.MaxGroupFields), adjustments);
         Limits.MaxProjectionFields = AtLeast(1, Limits.MaxProjectionFields, nameof(LimitOptions.MaxProjectionFields), adjustments);
         Limits.MaxConditions = AtLeast(1, Limits.MaxConditions, nameof(LimitOptions.MaxConditions), adjustments);
+        Limits.MaxFilterEntries = AtLeast(1, Limits.MaxFilterEntries, nameof(LimitOptions.MaxFilterEntries), adjustments);
         Limits.MaxVariables = AtLeast(1, Limits.MaxVariables, nameof(LimitOptions.MaxVariables), adjustments);
         Limits.MaxOffset = AtLeast(0, Limits.MaxOffset, nameof(LimitOptions.MaxOffset), adjustments);
         Limits.CountCap = AtLeast(1, Limits.CountCap, nameof(LimitOptions.CountCap), adjustments);
@@ -339,6 +340,13 @@ public sealed class LimitOptions
 
     /// <summary>How many variables one request may bind.</summary>
     public int MaxVariables { get; set; } = 64;
+
+    /// <summary>
+    /// How many entries the <c>filter</c> of one request may carry (contract 2): a grid sends one per
+    /// filtered column, per preset and for its fixed conditions. Checked before an entry is read; the
+    /// conditions of all entries together are bounded by <see cref="MaxConditions"/>, also before any is placed.
+    /// </summary>
+    public int MaxFilterEntries { get; set; } = 64;
 
     /// <summary>The largest <c>offset</c> a page may skip to; beyond it a cursor is needed.</summary>
     public int MaxOffset { get; set; } = 5_000;

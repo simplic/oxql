@@ -35,6 +35,7 @@ public class PagingLimitsTests
         ["maxGroupFields"] = 40,
         ["maxProjectionFields"] = 500,
         ["maxConditions"] = 200,
+        ["maxFilterEntries"] = 64,
         ["maxVariables"] = 64,
         ["maxOffset"] = 5_000,
         ["countCap"] = 100_000,

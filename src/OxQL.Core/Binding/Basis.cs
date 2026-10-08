@@ -74,7 +74,7 @@ public static class Basis
         // against a configured limit of the binding host
         [Codes.MaxPipelineStagesExceeded] = Limits, [Codes.MaxLookupStagesExceeded] = Limits, [Codes.MaxUnwindStagesExceeded] = Limits,
         [Codes.MaxResolveStagesExceeded] = Limits, [Codes.MaxContinuedStagesExceeded] = Limits, [Codes.MaxGroupFieldsExceeded] = Limits,
-        [Codes.MaxProjectionFieldsExceeded] = Limits, [Codes.MaxConditionsExceeded] = Limits, [Codes.MaxVariablesExceeded] = Limits,
+        [Codes.MaxProjectionFieldsExceeded] = Limits, [Codes.MaxConditionsExceeded] = Limits, [Codes.MaxFilterEntriesExceeded] = Limits, [Codes.MaxVariablesExceeded] = Limits,
         [Codes.PageSizeExceeded] = Limits, [Codes.LookupLimitExceeded] = Limits, [Codes.MaxOffsetExceeded] = Limits, [Codes.RegexTooLong] = Limits,
         [Codes.BatchTooLarge] = Limits, [Codes.RequestTooLarge] = Limits, [Codes.ExplainLimit] = Limits, [Codes.ValuesLimitExceeded] = Limits,
 

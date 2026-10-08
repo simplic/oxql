@@ -330,17 +330,7 @@ public static class Notes
 
         collector.Filter = null;
 
-        foreach (var filter in bound.Filters)
-            foreach (var (path, alias, stage) in filter.BindsEarlier)
-                collector.Notes.Add(new Diagnostic
-                {
-                    Code = FilterBindsEarlier,
-                    Message = $"The condition on '{path}' runs before the group of stage {stage}, on the rows that feed it; the group's '{alias}' is another thing of the same name. A match stage after the group filters that one.",
-                    Stage = stage,
-                    Path = path,
-                    Filter = filter.Label,
-                    Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
-                });
+        collector.Notes.AddRange(FilterBindsEarlierOf(bound));
 
         if (bound.Page.IncludeTotalCount)
         {
@@ -498,6 +488,31 @@ public static class Notes
         Path = path,
         Params = new Dictionary<string, object?> { ["alias"] = alias, ["target"] = target, ["parent"] = parent },
     };
+
+    /// <summary>
+    /// The conditions of the request's <c>filter</c> that read a name a later <c>group</c> gives to
+    /// another thing (an aggregate, or a key over another path): each ran where its path first existed,
+    /// before that group, on the rows that feed it, and not on the group's output of the same name. Said
+    /// by explain as a note and by a run as a diagnostic of the answer, so that a 200 whose rows are not
+    /// what the name suggests after the group is never silent: at the group's stage, with the entry
+    /// (<c>filter</c>: its id or index), the path, and params <c>path</c>, <c>alias</c>.
+    /// </summary>
+    public static IEnumerable<Diagnostic> FilterBindsEarlierOf(BoundPipeline bound)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        foreach (var filter in bound.Filters)
+            foreach (var (path, alias, stage) in filter.BindsEarlier)
+                yield return new Diagnostic
+                {
+                    Code = FilterBindsEarlier,
+                    Message = $"The condition on '{path}' runs before the group of stage {stage}, on the rows that feed it; the group's '{alias}' is another thing of the same name. A match stage after the group filters that one.",
+                    Stage = stage,
+                    Path = path,
+                    Filter = filter.Label,
+                    Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
+                };
+    }
 
     /// <summary>
     /// A path asked under a union join's alias (<c>byTarget</c>) that the branch of one target does not

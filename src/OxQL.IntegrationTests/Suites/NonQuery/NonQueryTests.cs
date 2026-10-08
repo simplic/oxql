@@ -110,6 +110,10 @@ public class NonQueryTests
         foreach (var service in LabService.All)
             Strings((await (await Lab.ClientAsync(service)).HealthAsync()).Body!["capabilities"]).Should().Equal(expectedFleet, service.Key);
 
+        // A contract 1 caller reads what it read from the engine it was written against: the five earlier names, then the host's.
+        Strings((await (await Lab.ClientAsync(LabService.Transport)).Contract(null).HealthAsync()).Body!["capabilities"])
+            .Should().Equal(["batch", "group.page", "page.offset", "any", "unwind.keepPath", .. expectedFleet]);
+
         var shared = await CorpusFleet.SharedAsync();
 
         // Y5: explain is published exactly when it is on (the default), and the route answers to match.
@@ -117,7 +121,8 @@ public class NonQueryTests
         using (var client = explainOff.Server.CreateClient())
         {
             var body = JsonNode.Parse(await client.GetStringAsync("OxQL/health"))!;
-            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "compat.v1"]));
+            // A caller that names no contract on a host that answers contract 1 reads the names every engine listed before, first.
+            Strings(body["capabilities"]).Should().Equal(OxQL.Core.Engine.EngineCapabilities.Contract1.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "compat.v1"]));
         }
 
         // Y6: compat.v1 is published exactly when the compat binder is on.
@@ -127,7 +132,7 @@ public class NonQueryTests
         // Y4: resolve.remote, semiJoin, resolve.chain and lookup.remote need a remote query client.
         await using var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport));
         var bareHealth = await bare.GetAsync("OxQL/health");
-        Strings(bareHealth.Body!["capabilities"]).Should().Equal(Universal.Concat(["explain", "compat.v1"]));
+        Strings(bareHealth.Body!["capabilities"]).Should().Equal(OxQL.Core.Engine.EngineCapabilities.Contract1.Concat(["explain", "compat.v1"]), "asked without the contract header");
         bareHealth.Body!.AsObject().ContainsKey("remote").Should().BeFalse("a host with no remote client has no remote state to report");
     }
 
@@ -140,7 +145,7 @@ public class NonQueryTests
         {
             ["maxPageSize"] = defaults.MaxPageSize, ["defaultPageSize"] = defaults.DefaultPageSize, ["maxPipelineStages"] = defaults.MaxPipelineStages,
             ["maxLookupStages"] = defaults.MaxLookupStages, ["maxUnwindStages"] = defaults.MaxUnwindStages, ["maxResolveStages"] = defaults.MaxResolveStages,
-            ["maxGroupFields"] = defaults.MaxGroupFields, ["maxProjectionFields"] = defaults.MaxProjectionFields, ["maxConditions"] = defaults.MaxConditions,
+            ["maxGroupFields"] = defaults.MaxGroupFields, ["maxProjectionFields"] = defaults.MaxProjectionFields, ["maxConditions"] = defaults.MaxConditions, ["maxFilterEntries"] = defaults.MaxFilterEntries,
             ["maxVariables"] = defaults.MaxVariables, ["maxOffset"] = defaults.MaxOffset, ["countCap"] = defaults.CountCap,
             ["maxSemiJoinIds"] = defaults.MaxSemiJoinIds, ["resolveKeyChunk"] = defaults.ResolveKeyChunk, ["maxResolveKeys"] = defaults.MaxResolveKeys,
             ["maxRequestBytes"] = defaults.MaxRequestBytes, ["maxBatchQueries"] = defaults.MaxBatchQueries, ["regexMaxLength"] = defaults.RegexMaxLength,
@@ -163,7 +168,7 @@ public class NonQueryTests
             // the bounds of a values stage
             ["maxValuesLimit"] = defaults.MaxValuesLimit, ["valuesScanRows"] = options.Values.ScanRows, ["valuesDefaultLimit"] = options.Values.DefaultLimit,
         };
-        expected.Should().HaveCount(47);
+        expected.Should().HaveCount(48);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

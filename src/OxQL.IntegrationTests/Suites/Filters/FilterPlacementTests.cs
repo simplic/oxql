@@ -205,4 +205,66 @@ public class FilterPlacementTests
 
         legacy.ShouldBeOk();
     }
+
+    [Fact]
+    public async Task A_filter_over_its_bounds_is_refused_once_before_anything_is_placed()
+    {
+        var client = await Lab.ClientAsync(LabService.Transport);
+        var limit = (await client.HealthAsync()).Body!["limits"]!["maxFilterEntries"]!.GetValue<int>();
+
+        static string Entries(int count, string where = """{ "isDeleted": { "neq": true } }""") =>
+            "[" + string.Join(",", Enumerable.Range(0, count).Select(index => $$"""{ "id": "e{{index}}", "where": {{where}} }""")) + "]";
+
+        limit.Should().Be(64);
+        (await client.QueryAsync(Request(Corpus.Shipment, Entries(limit), """[{ "page": { "limit": 1 } }]"""))).ShouldBeOk();
+
+        // One more entry: one error, whatever the entries hold (these name a path that does not exist).
+        var over = await client.QueryAsync(Request(Corpus.Shipment, Entries(limit + 1, """{ "nope": { "eq": 1 } }"""), """[{ "page": { "limit": 1 } }]"""));
+
+        over.ShouldRefuse("MAX_FILTER_ENTRIES_EXCEEDED", 400)["params"]!.ToJsonString().Should().Be($$"""{"limit":"maxFilterEntries","max":{{limit}},"count":{{limit + 1}}}""");
+        over.ErrorCodes.Should().Equal(["MAX_FILTER_ENTRIES_EXCEEDED"], over.ToString());
+
+        // More conditions than a request may carry, in one entry: one error, none of them bound.
+        var conditions = "{ \"and\": [" + string.Join(",", Enumerable.Repeat("""{ "nope": { "eq": 1 } }""", 2_000)) + "] }";
+        var many = await client.QueryAsync(Request(Corpus.Shipment, $$"""[{ "id": "many", "where": {{conditions}} }]""", """[{ "page": { "limit": 1 } }]"""));
+
+        many.ShouldRefuse("MAX_CONDITIONS_EXCEEDED", 400)["filter"]!.GetValue<string>().Should().Be("many");
+        many.ErrorCodes.Should().Equal(["MAX_CONDITIONS_EXCEEDED"], many.ToString());
+
+        // Explain says the same of the request, with the basis of a limit, and says it can never run.
+        var explained = await client.ExplainAsync(Request(Corpus.Shipment, Entries(limit + 1), "[]"));
+        var error = explained.Body!["errors"]!.AsArray().Should().ContainSingle().Subject!;
+
+        explained.Body["valid"]!.GetValue<bool>().Should().BeFalse();
+        error["code"]!.GetValue<string>().Should().Be("MAX_FILTER_ENTRIES_EXCEEDED");
+        error["basis"]!.GetValue<string>().Should().Be("limits");
+    }
+
+    [Fact]
+    public async Task A_run_says_in_its_diagnostics_that_a_filter_condition_ran_before_the_group_that_gives_its_name_to_an_aggregate()
+    {
+        var client = await Lab.ClientAsync(LabService.Transport);
+        const string Level = """{ "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "loadStart": { "max": "loadStart" }, "n": { "count": true } } } }""";
+        const string Column = """[{ "id": "col:loadStart", "where": { "loadStart": { "gte": "2026-01-01T00:00:00Z" } } }]""";
+
+        var run = await client.QueryAsync(Request(Corpus.Shipment, Column, $$"""[{{Level}}, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 50 } }]"""));
+        var said = run.ShouldBeOk().Diagnostics.Should().ContainSingle(each => each["code"]!.GetValue<string>() == "FILTER_BINDS_EARLIER").Subject;
+
+        said["stage"]!.GetValue<int>().Should().Be(0);
+        said["path"]!.GetValue<string>().Should().Be("loadStart");
+        said["filter"]!.GetValue<string>().Should().Be("col:loadStart");
+        said["params"]!.ToJsonString().Should().Be("""{"path":"loadStart","alias":"loadStart"}""");
+
+        // What it says is what ran: the rows loaded from that day on feed the groups, as a match before the group does.
+        var written = await client.QueryAsync(Request(Corpus.Shipment, "[]", $$"""[{ "match": { "loadStart": { "gte": "2026-01-01T00:00:00Z" } } }, {{Level}}, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 50 } }]"""));
+
+        run.Items.Select(row => row!.ToJsonString()).Should().Equal(written.ShouldBeOk().Items.Select(row => row!.ToJsonString()));
+        written.DiagnosticCodes.Should().NotContain("FILTER_BINDS_EARLIER");
+
+        // Explain's note of the same request carries the same text.
+        var explained = await client.ExplainAsync(Request(Corpus.Shipment, Column, $$"""[{{Level}}]"""));
+
+        explained.Body!["notes"]!.AsArray().Should().ContainSingle(note => note!["code"]!.GetValue<string>() == "FILTER_BINDS_EARLIER")
+            .Which!["message"]!.GetValue<string>().Should().Be(said["message"]!.GetValue<string>());
+    }
 }

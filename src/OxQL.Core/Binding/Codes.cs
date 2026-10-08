@@ -123,6 +123,9 @@ public static class Codes
     public const string MaxGroupFieldsExceeded = "MAX_GROUP_FIELDS_EXCEEDED";
     public const string MaxProjectionFieldsExceeded = "MAX_PROJECTION_FIELDS_EXCEEDED";
     public const string MaxConditionsExceeded = "MAX_CONDITIONS_EXCEEDED";
+
+    /// <summary>The request's <c>filter</c> carries more entries than <c>MaxFilterEntries</c> (contract 2).</summary>
+    public const string MaxFilterEntriesExceeded = "MAX_FILTER_ENTRIES_EXCEEDED";
     public const string MaxVariablesExceeded = "MAX_VARIABLES_EXCEEDED";
     public const string InvalidPageLimit = "INVALID_PAGE_LIMIT";
     public const string PageSizeExceeded = "PAGE_SIZE_EXCEEDED";

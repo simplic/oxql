@@ -127,6 +127,39 @@ public class FilterPlacementTests
     }
 
     [Fact]
+    public async Task A_run_whose_filter_condition_ran_before_a_group_that_rebinds_its_name_says_so_in_its_diagnostics()
+    {
+        // The natural grid case: a level sums 'amount' and the column filter on 'amount' means the rows, not the sums.
+        const string Level = """{ "group": { "by": [{ "path": "state", "as": "state" }], "fields": { "amount": { "sum": "amount" } } } }""";
+        var runner = new FakeAggregateRunner { PageRows = [new BsonDocument { ["state"] = 1, ["amount"] = 5 }] };
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
+
+        async Task<QueryResult> Run(string filter, string pipeline) =>
+            (await engine.ExecuteAsync(Request(filter, pipeline), BindHost.Context())).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+
+        var rows = await Run("""[{ "id": "col:amount", "where": { "amount": { "gt": 1000 } } }]""", $"[{Level}, {{ \"page\": {{ \"limit\": 5 }} }}]");
+        var said = rows.Diagnostics.Should().ContainSingle(each => each.Code == Notes.FilterBindsEarlier).Subject;
+
+        JsonSerializer.Serialize(said with { Message = "" }, BindHost.Json).Should().Be("""{"code":"FILTER_BINDS_EARLIER","message":"","stage":0,"path":"amount","filter":"col:amount","params":{"path":"amount","alias":"amount"}}""");
+        said.Message.Should().Be("The condition on 'amount' runs before the group of stage 0, on the rows that feed it; the group's 'amount' is another thing of the same name. A match stage after the group filters that one.");
+
+        // It is what explain says of the same request, word for word.
+        var explained = ((ExplainOutcome.Success)await engine.ExplainAsync(Request("""[{ "id": "col:amount", "where": { "amount": { "gt": 1000 } } }]""", $"[{Level}]"), BindHost.Context())).Result;
+
+        explained.Notes.Should().ContainSingle(each => each.Code == Notes.FilterBindsEarlier).Which.Message.Should().Be(said.Message);
+
+        // The count alone and a list of values answer the same rows and say the same.
+        (await Run("""[{ "id": "col:amount", "where": { "amount": { "gt": 1000 } } }]""", $"[{Level}, {{ \"page\": {{ \"limit\": 0, \"count\": true }} }}]"))
+            .Diagnostics.Should().ContainSingle(each => each.Code == Notes.FilterBindsEarlier);
+        (await Run("""[{ "id": "col:amount", "where": { "amount": { "gt": 1000 } } }]""", $"[{Level}, {{ \"values\": {{ \"path\": \"state\" }} }}]"))
+            .Diagnostics.Should().ContainSingle(each => each.Code == Notes.FilterBindsEarlier);
+
+        // A key over the member of the same name is the same thing, and a condition after the group is where it reads: neither is said.
+        (await Run("""[{ "where": { "state": { "eq": 1 } } }]""", $"[{Level}, {{ \"page\": {{ \"limit\": 5 }} }}]")).Diagnostics.Should().BeNull();
+        (await Run("[]", $"[{Level}, {{ \"match\": {{ \"amount\": {{ \"gt\": 1000 }} }} }}, {{ \"page\": {{ \"limit\": 5 }} }}]")).Diagnostics.Should().NotContain(each => each.Code == Notes.FilterBindsEarlier);
+    }
+
+    [Fact]
     public async Task An_or_group_is_one_unit_at_the_latest_birth_of_its_paths()
     {
         var bound = await Bound("""[{ "id": "mixed", "where": { "or": [{ "number": { "eq": "x" } }, { "item.quantity": { "gt": 5 } }] } }, { "id": "not", "where": { "not": { "item.quantity": { "gt": 1 } } } }]""",
@@ -240,6 +273,84 @@ public class FilterPlacementTests
         (await Bound($$"""[{ "id": "{{new string('x', 64)}}", "where": {} }]""", "[]")).Filters.Should().ContainSingle().Which.Placed.Should().BeEmpty();
         (await Bound("[]", "[]")).Filters.Should().BeEmpty();
         (await Bound("null", "[]")).Filters.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task More_entries_than_MaxFilterEntries_is_one_refusal_before_an_entry_is_read()
+    {
+        new OxQLOptions().Limits.MaxFilterEntries.Should().Be(64);
+
+        static string Entries(int count) => "[" + string.Join(",", Enumerable.Range(0, count).Select(index => $$"""{ "id": "e{{index}}", "where": { "number": { "eq": "a" } } }""")) + "]";
+
+        (await Bound(Entries(64), "[]")).Filters.Should().HaveCount(64);
+
+        // One error whatever the entries hold: none is read (the second would be malformed, the rest unknown paths).
+        var over = "[" + string.Join(",", Enumerable.Repeat("""{ "where": { "nope": { "eq": 1 } } }""", 64).Prepend("5")) + "]";
+        var error = (await Errors(over, "[]")).Should().ContainSingle().Subject;
+
+        error.Code.Should().Be(Codes.MaxFilterEntriesExceeded);
+        error.Message.Should().Be("The request's filter has 65 entries; the limit is 64.");
+        error.Stage.Should().BeNull();
+        error.Filter.Should().BeNull();
+        JsonSerializer.Serialize(error.Params).Should().Be("""{"limit":"maxFilterEntries","max":64,"count":65}""");
+
+        // The host's own bound holds.
+        var two = BindHost.Context(BindHost.Options(options => options.Limits.MaxFilterEntries = 2));
+
+        (await BindHost.BindAsync(BindHost.Probe, Request(Entries(3), "[]"), two)).Should().BeOfType<BindOutcome.Failed>()
+            .Subject.Refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.MaxFilterEntriesExceeded);
+        (await BindHost.BindAsync(BindHost.Probe, Request(Entries(2), "[]"), two)).Should().BeOfType<BindOutcome.Bound>();
+    }
+
+    [Fact]
+    public async Task More_conditions_in_the_filter_than_MaxConditions_is_one_refusal_before_any_is_placed_or_bound()
+    {
+        // One entry of thousands of conjuncts on a path that does not exist: bound, each would be an error of its own.
+        var where = "{ \"and\": [" + string.Join(",", Enumerable.Repeat("""{ "nope": { "eq": 1 } }""", 5_000)) + "] }";
+        var error = (await Errors($$"""[{ "id": "ok", "where": { "number": { "eq": "a" } } }, { "id": "many", "where": {{where}} }, { "id": "later", "where": { "nope": { "eq": 2 } } }]""", $"[{UnwindItems}, {GroupByNumber}]"))
+            .Should().ContainSingle("nothing of the filter is placed once it is over the bound").Subject;
+
+        error.Code.Should().Be(Codes.MaxConditionsExceeded);
+        error.Message.Should().Be("The request's filter has more than 200 conditions; the limit is 200.");
+        error.Filter.Should().Be("many");
+        JsonSerializer.Serialize(error.Params).Should().Be("""{"limit":"maxConditions","max":200}""");
+
+        // Conditions inside or, not and any count as they do in a match.
+        var nested = "{ \"or\": [" + string.Join(",", Enumerable.Repeat("""{ "not": { "items": { "any": { "quantity": { "eq": 2 }, "and": [{ "quantity": { "gt": 1 } }] } } } }""", 101)) + "] }";
+
+        (await Errors($$"""[{ "where": {{nested}} }]""", "[]")).Should().ContainSingle().Which.Code.Should().Be(Codes.MaxConditionsExceeded);
+
+        // Exactly the bound binds.
+        var full = "{ \"and\": [" + string.Join(",", Enumerable.Repeat("""{ "number": { "neq": "a" } }""", 200)) + "] }";
+
+        (await Bound($$"""[{ "where": {{full}} }]""", "[]")).Filters.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Placement_looks_at_a_condition_until_it_is_placed_and_never_again()
+    {
+        // The largest filter a host admits over the longest pipeline: every boundary sees only what is still unplaced.
+        var options = BindHost.Options(configure =>
+        {
+            configure.Limits.MaxFilterEntries = 20_000;
+            configure.Limits.MaxConditions = 100_000;
+            configure.Limits.MaxPipelineStages = 64;
+        });
+        var entries = "[" + string.Join(",", Enumerable.Range(0, 20_000).Select(index => $$"""{ "id": "e{{index}}", "where": { "number": { "neq": "n{{index}}" }, "{{(index % 2 == 0 ? "count" : "item.quantity")}}": { "neq": 7 } } }""")) + "]";
+        var pipeline = "[" + string.Join(",", Enumerable.Repeat("""{ "sort": [{ "number": "asc" }] }""", 40).Append(UnwindItems).Concat(Enumerable.Repeat("""{ "sort": [{ "number": "asc" }] }""", 20))) + "]";
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var bound = await Bound(entries, pipeline, context: BindHost.Context(options));
+
+        timer.Stop();
+
+        bound.Filters.Should().HaveCount(20_000);
+        Placed(bound, 0).Should().Be("0:number,count");
+        Placed(bound, 1).Should().Be("0:number | 41:item.quantity", "the entity member at the entry, the element's right after the unwind");
+        bound.Stages.Count(stage => bound.FilterOf(stage) is not null).Should().Be(30_000, "one match per entry and boundary that placed something");
+
+        // Not a bound on the machine: a placement that scans every condition for every entry at every boundary does
+        // 20 000 x 40 000 x 62 steps here (minutes); one that looks at what is still unplaced binds 40 000 conditions.
+        timer.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20));
     }
 
     [Fact]

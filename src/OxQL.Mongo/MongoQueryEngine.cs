@@ -109,6 +109,10 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
+
+        // A filter condition that ran before a group which gives its name to another thing: explain says
+        // it as a note, and the run that answers such rows says it too (rows, a count and values alike).
+        diagnostics.AddRange(Notes.FilterBindsEarlierOf(bound));
         var runOptions = new AggregateRunOptions(compiled.MaxTimeMs, compiled.AllowDiskUse, compiled.Collation) { Comment = context.CorrelationId };
         var resolveCalls = 0;
         var cacheHits = 0;

@@ -146,6 +146,7 @@ public class OxQLController : ControllerBase
             maxGroupFields = limits.MaxGroupFields,
             maxProjectionFields = limits.MaxProjectionFields,
             maxConditions = limits.MaxConditions,
+            maxFilterEntries = limits.MaxFilterEntries,
             maxVariables = limits.MaxVariables,
             maxOffset = limits.MaxOffset,
             countCap = limits.CountCap,

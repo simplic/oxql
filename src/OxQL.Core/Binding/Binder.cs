@@ -1015,6 +1015,9 @@ public sealed class Binder
             public List<FilterPlacement> Placed { get; } = [];
 
             public List<(string Path, string Alias, int Stage)> BindsEarlier { get; } = [];
+
+            /// <summary>The entry's conditions no boundary has taken yet, in the order written: a boundary looks at these and at nothing placed before it.</summary>
+            public List<FilterUnit> Unplaced { get; } = [];
         }
 
         /// <summary>
@@ -1036,7 +1039,9 @@ public sealed class Binder
         }
 
         private readonly List<FilterEntry> filterEntries = [];
-        private readonly List<FilterUnit> filterUnits = [];
+
+        /// <summary>How many conditions of the filter no boundary has taken yet; at zero a boundary has nothing to do.</summary>
+        private int filterUnplaced;
         private readonly Dictionary<BoundStage, object> filterStages = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>
@@ -1070,8 +1075,24 @@ public sealed class Binder
                 return;
             }
 
+            // The bounds come first, before an entry is read and before anything is placed: a filter of
+            // thousands of entries costs its parse and one error, never a pass over them per stage.
+            var limits = options.Limits;
+
+            if (raw.GetArrayLength() is var entries && entries > limits.MaxFilterEntries)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.MaxFilterEntriesExceeded,
+                    Message = $"The request's filter has {entries} entries; the limit is {limits.MaxFilterEntries}.",
+                    Params = new Dictionary<string, object?> { ["limit"] = "maxFilterEntries", ["max"] = limits.MaxFilterEntries, ["count"] = entries },
+                });
+                return;
+            }
+
             var ids = new HashSet<string>(StringComparer.Ordinal);
             var index = 0;
+            var leaves = 0;
 
             foreach (var element in raw.EnumerateArray())
             {
@@ -1131,8 +1152,29 @@ public sealed class Binder
                 if (parsed is null)
                     continue;
 
+                // The filter's conditions alone over the request's bound: refused here, with nothing of it
+                // placed or bound. (The request's whole count, its stages included, is checked at the end.)
+                if ((leaves += Leaves(parsed, limits.MaxConditions + 1 - leaves)) > limits.MaxConditions)
+                {
+                    foreach (var read in filterEntries)
+                        read.Unplaced.Clear();
+
+                    filterUnplaced = 0;
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.MaxConditionsExceeded,
+                        Message = $"The request's filter has more than {limits.MaxConditions} conditions; the limit is {limits.MaxConditions}.",
+                        Stage = FilterMarker(entry),
+                        Params = new Dictionary<string, object?> { ["limit"] = "maxConditions", ["max"] = limits.MaxConditions },
+                    });
+                    return;
+                }
+
                 foreach (var conjunct in Conjuncts(parsed))
-                    filterUnits.Add(new FilterUnit(entry, conjunct, RowPaths(conjunct).Distinct(StringComparer.Ordinal).ToList()));
+                {
+                    entry.Unplaced.Add(new FilterUnit(entry, conjunct, RowPaths(conjunct).Distinct(StringComparer.Ordinal).ToList()));
+                    filterUnplaced++;
+                }
 
                 void Fail(string reason, string message)
                 {
@@ -1140,6 +1182,47 @@ public sealed class Binder
                     errors.Add(FilterError(entry, reason, message));
                 }
             }
+        }
+
+        /// <summary>
+        /// The leaf conditions of a condition (a comparison, those inside an <c>any</c> included), counted
+        /// no further than <paramref name="upTo"/>: enough to know a bound is passed.
+        /// </summary>
+        private static int Leaves(FilterCondition condition, int upTo)
+        {
+            var count = 0;
+            var open = new Stack<FilterCondition>();
+
+            open.Push(condition);
+
+            while (open.Count > 0 && count < upTo)
+            {
+                var next = open.Pop();
+                var members = 0;
+
+                foreach (var member in (next.And ?? []).Concat(next.Or ?? []))
+                {
+                    open.Push(member);
+                    members++;
+                }
+
+                if (next.Not is { } negated && !ReferenceEquals(negated, FilterCondition.EmptyGroup))
+                {
+                    open.Push(negated);
+                    members++;
+                }
+
+                if (next.Any is { } inner)
+                {
+                    open.Push(inner);
+                    members++;
+                }
+
+                if (members == 0)
+                    count++;
+            }
+
+            return count;
         }
 
         /// <summary>The longest <c>id</c> a filter entry may carry.</summary>
@@ -1185,24 +1268,46 @@ public sealed class Binder
         /// </summary>
         private void PlaceFilter(int boundary, bool last)
         {
-            if (filterUnits.Count == 0)
+            if (filterUnplaced == 0)
                 return;
+
+            // Whether a path is in the row is asked once per path at a boundary, however many conditions read it.
+            var present = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+            bool Here(string path) => present.TryGetValue(path, out var known) ? known : present[path] = InRow(path);
 
             foreach (var entry in filterEntries)
             {
+                if (entry.Unplaced.Count == 0)
+                    continue;
+
                 var conditions = new List<BoundCondition>();
                 var paths = new List<string>();
+                var named = new HashSet<string>(StringComparer.Ordinal);
+                var left = 0;
 
-                foreach (var unit in filterUnits.Where(unit => ReferenceEquals(unit.Entry, entry) && !unit.Placed))
+                // One pass over what the entry still holds: a condition placed or refused here leaves the
+                // list, so a later boundary costs what is still unplaced and nothing else.
+                for (var at = 0; at < entry.Unplaced.Count; at++)
                 {
-                    foreach (var path in unit.Paths)
-                        if (!unit.Births.ContainsKey(path) && InRow(path))
-                            unit.Births[path] = boundary;
+                    var unit = entry.Unplaced[at];
+                    var all = true;
 
-                    if (unit.Paths.All(InRow))
+                    foreach (var path in unit.Paths)
+                    {
+                        if (!Here(path))
+                            all = false;
+                        else if (!unit.Births.ContainsKey(path))
+                            unit.Births[path] = boundary;
+                    }
+
+                    if (all)
                     {
                         unit.Placed = true;
-                        paths.AddRange(unit.Paths.Where(path => !paths.Contains(path, StringComparer.Ordinal)));
+
+                        foreach (var path in unit.Paths)
+                            if (named.Add(path))
+                                paths.Add(path);
 
                         if (BindCondition(unit.Condition, shape, FilterMarker(entry), Reading.Row) is { } bound)
                             conditions.Add(bound);
@@ -1212,7 +1317,14 @@ public sealed class Binder
                         unit.Placed = true;
                         RefuseUnplaced(unit);
                     }
+                    else
+                    {
+                        entry.Unplaced[left++] = unit;
+                    }
                 }
+
+                filterUnplaced -= entry.Unplaced.Count - left;
+                entry.Unplaced.RemoveRange(left, entry.Unplaced.Count - left);
 
                 if (paths.Count > 0 || conditions.Count > 0)
                     entry.Placed.Add(new FilterPlacement(boundary, paths, shape.Grouped));

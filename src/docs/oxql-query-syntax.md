@@ -26,8 +26,11 @@ the host's `Compat:Enabled` is true (see the last section). What a bound request
   is `UNKNOWN_REQUEST_MEMBER` under contract 2. `maxTimeMs` is a ceiling on this request's time in
   milliseconds, under the host's (`Execution:MaxTimeMs`) and, in a batch, under what the batch
   leaves it: the page, the count and the owners asked end within it, and a request that does not is
-  504 `QUERY_TIMEOUT`. A value above the host's ceiling is the host's ceiling, a value below 1 is 1;
-  it changes no row and is no part of a cursor, and contract 1 ignores it. A grid sends it with the
+  504 `QUERY_TIMEOUT`. A value above the host's ceiling is the host's ceiling (however far above), a
+  value below 1 is 1; it changes no row and is no part of a cursor. It is a whole number, and
+  `timing` is `true` or `false`: a value of another kind is 400 `INVALID_OPERAND` with
+  `params { member, reason: "notAnInteger" | "notABoolean" }` under contract 2. Contract 1 has
+  neither member and ignores both, whatever they hold. A grid sends it with the
   request for its totals, so a total that is slow ends early. `timing: true` asks for the `timing` member of the
   answer (see [Response](#response)); it changes no row and is no part of a cursor. `filter` is described under
   [The request's `filter`](#the-requests-filter). The member `keyedBy`
@@ -83,9 +86,16 @@ the first point of the pipeline where that thing is in the row:**
   point where every path they read is in the row.
 - A group key over a path of the same name (`by: [{ path: "status", as: "status" }]`) is in the
   row from the entry, so a condition on it runs before the group: which rows feed the buckets is
-  which buckets there are. A name a group gives to another thing (an aggregate, a key over
-  another path) while a member of that name exists earlier binds at the earlier one; explain
-  notes it (`FILTER_BINDS_EARLIER`). A `match` stage after the group filters the group's.
+  which buckets there are. **A name a group gives to another thing** (an aggregate, a key over
+  another path) while a member of that name exists earlier binds at the earlier one: a level
+  `{ "group": { "by": [ … ], "fields": { "weight": { "sum": "weight" } } } }` with the entry
+  `{ "id": "col:weight", "where": { "weight": { "gt": 1000 } } }` filters the rows heavier than
+  1 000 that feed the groups, not the groups whose sum is. The request is not refused, and it is
+  never silent: explain notes it (`FILTER_BINDS_EARLIER`, at the group's stage, with `filter` = the
+  entry, `path`, `params { path, alias }`), and **the run's answer carries the same entry in
+  `diagnostics[]`** (the same code, text and params; rows, a count alone and a list of values
+  alike). A `match` stage after the group filters the group's; a caller that means the group's
+  output gives it a name no member has.
 - A condition whose paths are never in the row together (a collection's path OR-ed with its
   unwind's alias; a member a group removed OR-ed with an aggregate) is `FILTER_NOT_PLACEABLE`
   (`params.paths`, and `params.births`: per path the point it is first in the row at,
@@ -95,6 +105,12 @@ the first point of the pipeline where that thing is in the row:**
   no `stage`; so does a diagnostic. A malformed `filter` is `INVALID_FILTER` with `params.reason`:
   `notAnArray`, `notAnObject`, `unknownMember`, `whereRequired`, `invalidId`, `duplicateId`,
   `malformedWhere`.
+- A `filter` carries at most `Limits:MaxFilterEntries` entries (64 unless the host says otherwise;
+  health `limits.maxFilterEntries`). One more is 400 `MAX_FILTER_ENTRIES_EXCEEDED` with
+  `params { limit: "maxFilterEntries", max, count }`, one error whatever the entries hold: none is
+  read. The conditions of all entries together are held to `MaxConditions` before any is placed:
+  over it, 400 `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry that passed the bound and
+  `params { limit: "maxConditions", max }`, again one error. Explain says both with `basis: "limits"`.
 - The conditions count toward `MaxConditions`, and they are part of the cursor fingerprint: a
   cursor continues the same filter only. A filter written as `match` stages at the points the
   engine places it at is the same query and shares its cursors.
@@ -708,7 +724,7 @@ Every answer says what the engine knows of the number of matching rows under `pa
 | `state: "exact"` | every matching row was counted, or the list was walked to its end; `value` is the count |
 | `state: "atLeast"` | a proven lower bound: `value` rows were found and more exist or may exist |
 | `stoppedBy` (with `atLeast`) | `page`: only the rows the pages served, and the one that told a next page exists, are known. `step`: the count beside a page is one step of `Count:StepRows` rows and found more; the count alone goes further. `cap`: the request's `upTo` or the host's `CountCap` was reached; counting on would go no further. `budget`: a further step of the count alone was predicted not to fit the time left and was not sent. `time`: a step ran out of time; the bound is what the step before it proved |
-| `state: "unknown"` | the count that was asked for did not finish; `reason` is `timeout` or `failed` |
+| `state: "unknown"` | the count that was asked for did not finish; `reason` is `timeout` or `failed`. Beside a page a count that fails never fails the rows. The count alone (`limit: 0`) whose first step the database refuses for what the request asks (a pattern it cannot compile, a value over its limits) is refused as the same request with a page is: 400 `INVALID_REGEX`, 422 `QUERY_TOO_EXPENSIVE` |
 | `ms` | the time spent counting, when a count step was waited for |
 
 What is known without counting, on every page, asked or not:
@@ -898,8 +914,9 @@ its database; part of `db`), `resolve` (the keyed joins, with their owner calls 
 for their count) appear when they occurred; `net` is the estimated network part of `db` (round
 trips × the driver's measured round-trip time).
 
-A request that asks (`"timing": true`, or the request header `X-OxQL-Timing: 1`) also gets the
-breakdown as `timing`, the last member of the answer:
+A contract 2 request that asks (`"timing": true`, or the request header `X-OxQL-Timing: 1`) also gets the
+breakdown as `timing`, the last member of the answer, unless the host keeps it to itself
+(`Execution:TimingDetail: false`: the member and the header are accepted and answer nothing):
 
 ```jsonc
 "timing": {
@@ -976,7 +993,7 @@ carries no 'X-OxQL-Contract: 2' header." The codes are unchanged.
 
 ### Error codes
 
-The closed list, 72 codes (contract 2 has the twelve marked †):
+The closed list, 73 codes (contract 2 has the thirteen marked †):
 
 | area | codes |
 |---|---|
@@ -986,7 +1003,7 @@ The closed list, 72 codes (contract 2 has the twelve marked †):
 | operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE` (also a stage option where it does not apply), `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE`, `UNKNOWN_VARIANT`† (`is`) |
 | stage | `UNKNOWN_STAGE`, `UNKNOWN_STAGE_MEMBER`, `STAGE_AFTER_PAGE`, `MULTIPLE_PAGE_STAGES`, `MIXED_PROJECTION`, `GROUP_ON_COLLECTION`, `UNKNOWN_AGG_FUNCTION`, `INVALID_AGGREGATE_ARGUMENT`, `INVALID_DATE_TRUNC_UNIT`, `INVALID_TIMEZONE`, `INVALID_SORT_DIRECTION`, `FLATTEN_NOT_RECURSIVE`†, `LOOKUP_NOT_DECLARED`, `LOOKUP_ON_NOT_ENTITY`†, `NOT_CONTINUABLE`†, `UNION_CARDINALITY_MISMATCH`† (`byTarget`), `RESOLVE_NOT_DECLARED`, `RESOLVE_ON_COLLECTION`†, `RESOLVE_TARGET_NOT_DECLARED`†, `RESOLVE_PARENT_NOT_ITEM`†, `RESOLVE_NOT_FILTERABLE`, `RESOLVE_NOT_SORTABLE` |
-| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `VALUES_LIMIT_EXCEEDED`† (a `values` stage over the host's bounds), `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
+| limits | `MAX_PIPELINE_STAGES_EXCEEDED`, `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED`†, `MAX_FILTER_ENTRIES_EXCEEDED`† (the entries of `filter`), `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_CONDITIONS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `INVALID_PAGE_LIMIT`, `PAGE_SIZE_EXCEEDED`, `LOOKUP_LIMIT_EXCEEDED`, `VALUES_LIMIT_EXCEEDED`† (a `values` stage over the host's bounds), `MAX_OFFSET_EXCEEDED`, `BATCH_TOO_LARGE`, `REQUEST_TOO_LARGE` (413) |
 | cursor | `CURSOR_INVALID` |
 | access | `ACCESS_DENIED` (403) |
 | execution | `RESOLVE_UNAVAILABLE` (422), `RESOLVE_REFUSED` (422, wraps the owner's errors), `SEMI_JOIN_TOO_LARGE` (422), `QUERY_TOO_EXPENSIVE` (422), `QUERY_TIMEOUT` (504), `INTERNAL_ERROR` (500), `PAGE_INCOMPLETE`† (422, strict only) |

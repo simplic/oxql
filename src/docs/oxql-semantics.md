@@ -392,9 +392,15 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     order is the parents' order (every sort field before the key is a member of the entity, the
     default order included) and every row kept yields a row of the page. The unwind and the page's
     own sort then see a page's worth of rows: `limit + 1` of them, one more after a cursor (the
-    row the position lies in may have none left). Each parent yields a row because rows whose
-    collection is missing, null or empty are dropped where the unwind would drop them, and what
-    filters after the unwind is asked before it as well.
+    row the position lies in may have none left). Each parent yields a row because the rows whose
+    unwind answers none are dropped where the unwind would drop them, and what filters after the
+    unwind is asked before it as well. **What an unwind answers is asked exactly, whatever the
+    member holds**: a row per element of an array, a null element included; one row for a value that
+    is no array (a single object or a scalar where the array should be), the value itself as the
+    element, at no position; none for an empty array, a null and a member that is not stored. So a
+    parent whose array holds a null beside its elements, or nothing but nulls, is kept, and the
+    rows, the count and a walk by cursor are those of the stages as written
+    (`UnwindIrregularCollectionTests`, on a server).
     The position of the element (`includeIndex`) after the parents' members and before the key
     (`shipmentNumber, position`, or `position` alone) does not prevent it. Within one parent that
     is the order its elements have anyway; the rows of two parents that tie on the members
@@ -403,7 +409,13 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     position 0 ascending and the last element descending on a first page, and after a cursor's
     position the position's own for a tying parent whose key comes later, else the next one (a
     parent with no row left is dropped). The first `n` rows of the page then lie in the first `n`
-    parents. It needs every parent's rows to stand at the positions 0, 1, 2 … without a gap, so it
+    parents. The one row of a value that is no array stands at no position, which orders before
+    position 0: such a parent's row precedes every row at position 0 of the parents it ties with.
+    Whether a parent beyond the cut holds such a value is known only by reading it, so the first
+    position is computed for every candidate parent on every page, the first ascending one
+    included, and no index orders this cut (the parents are still cut before the unwind, which is
+    what the measured gain below comes from). It needs every parent's rows to stand at positions
+    without a gap, so it
     is not applied with `preserveNull`, with `flatten`, with a condition on the element, or when
     something other than the key follows the position; the rows are then ordered after the unwind
     as before. Measured on 25 000 shipments without an index: `shipmentNumber, position` 121 → 68 ms
@@ -411,9 +423,16 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     first position of every candidate parent is computed before they are ordered).
   - *What is asked of the element after an unwind is asked of the collection before it*
     (`UNWIND_PREFILTER`): the conditions on paths under the alias, as one "some element passes
-    them all" (`$elemMatch`), so a row without such an element is not unwound, for the page and
-    for the count. Not before an unwind with `preserveNull` (the row it keeps has no element to
-    pass anything) or `flatten`.
+    them all" (`$elemMatch`) of an array, and as they are written of a value that is no array (the
+    one element its unwind answers), so a row without such an element is not unwound, for the page
+    and for the count. Both forms read the same index (held on a server: `IndexAdviceServerTests`).
+    Not before an unwind with `preserveNull` (the row it keeps has no element to pass anything) or
+    `flatten`, and **not where an element none of whose members exists passes the conditions**: a
+    null in the array is such an element after the unwind, and `$elemMatch` looks at objects only,
+    so `neq`, `nin`, `exists: false`, `eq null`, a set that holds null and a `not` are asked after
+    the unwind alone (no `UNWIND_PREFILTER`, the parents are not cut first for them). A condition no
+    absent element passes beside one it does is asked, all of it: the conjunction fails for an
+    absent element either way.
   - *The element is written under its alias after the page is taken*: until then filters and the
     paging sort read it where the unwind left it. The three unwind placements apply to a request
     with one `unwind`; with several, the stages run as written and the page is still by value.
@@ -615,7 +634,9 @@ requests of a tree add up because each is the same rows cut another way:
   that is also a member of the entity (`{ path: "status.name", as: "status" }` where `status` is an
   object) leaves `status` in a filter entry meaning the member, not the key: the entry runs at
   the entry of the pipeline, on the member (`NOT_FILTERABLE` for an object; explain notes
-  `FILTER_BINDS_EARLIER` where it binds). A key that a condition should reach after the group
+  `FILTER_BINDS_EARLIER` where it binds, and the run's answer says the same in `diagnostics[]`).
+  The same holds for an aggregate named like a member it reads (`"weight": { "sum": "weight" }`):
+  a filter entry on `weight` filters the rows that feed the groups. A key that a condition should reach after the group
   has an alias no member has; a key over the member of the same name is the same thing either way.
 - **`countDistinct`** counts the distinct values the rows store: a stored `null` is one of them,
   a member that is absent is none.

@@ -130,7 +130,7 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 |---|---|
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; always 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. More than `Limits:MaxBatchQueries` queries is `BATCH_TOO_LARGE`. Queries run sequentially on one host. |
-| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. `engine.contract` 2 is the marker of this package: every contract 2 construct and the explain answer. Capabilities: `batch`, `group.page`, `page.offset`, `any`, `unwind.keepPath`, and with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
+| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. `engine.contract` 2 is the marker of this package: every contract 2 construct and the explain answer. Capabilities, only what depends on the host: with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. A request without the contract header on a host that answers contract 1 reads `batch`, `group.page`, `page.offset`, `any` ahead of them, as the published engine listed them. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and `null` until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
 | `POST /oxql/explain` | On by default; 404 while `Explain:Enabled` is false. Takes a query or the envelope `{ query, include?, shape?, remote?, catalog? }` and never executes it. Answers 200 with `valid`, every error, each stage with its placement and the shape of the row after it, the aliases, the types of the row's roots by reference to the services' schema documents (entity, service, revision) with a rule per root and stage that says where the members stand (`include: ["types"]` writes the member rows and their flags out for a caller without schema documents), the result columns, the owners asked, engine-behaviour notes, and on request the plan (`include: ["plan"]`: the canonical bound form, the emitted page and count stages, the collation, the owner queries) and the index advisory (`include: ["indexes"]`, which reads only `listIndexes`). Rate-limited per user (429 with `Retry-After`) and bounded in what one explain may ask of other services. See [`oxql-operations.md`](src/docs/oxql-operations.md#post-oxqlexplain). |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
@@ -187,11 +187,12 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Execution:ResolveTimeoutMs` | 2 000 | budget of one plain remote resolve call, clamped to the effective `MaxTimeMs` |
 | `Execution:ChainTimeoutMs` | 6 000 | budget of one owner call carrying continued stages or a typed, item, converted or element-wise resolve (the time left less 50 ms, at most this), clamped to the effective `MaxTimeMs` |
 | `Execution:AllowDiskUse` | `true` | a sort or group over the server's memory limit spills to disk and finishes slowly; when `false`, it is 422 `QUERY_TOO_EXPENSIVE`; unset in code (`null`) leaves the server's default |
+| `Execution:TimingDetail` | `true` | whether a contract 2 caller may ask for the breakdown of a request's time (the `timing` member: entities read, documents and bytes per command, owners asked, build); `false` answers none, whoever asks; `Server-Timing` is sent either way |
 | `Execution:SlowQueryMs` | 1 000 | a request whose whole time (binding, aggregates, count, remote resolves) exceeds it is logged at warning level with the entity, the stage kinds, whether a regex, an unbounded sort, a count or a remote resolve was involved, the duration and the row count — never an operand; `0` turns the line off |
 | `Representation:GuidTolerant` | `false` | also match legacy subtype 3 and string guids |
 | `Representation:DecimalMode` | `tolerant` | match Decimal128 and string decimals; `typed` after a migration |
 | `Representation:Collation:Locale` / `Strength` | `de` / `1` | the collation a contract 2 string comparison, sort and group key folds under; strength 1 folds case and accents, 2 case only, 3 and above tell both apart (clamped to 1–5; an empty locale falls back to `de`) |
-| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | resolved rows of the keyed fetch and, apart, semi-join ids (formerly `ResolveCacheMaxEntries`, still bound for one release; the new key wins when both are set) |
+| `Cache:ResolveTtlSeconds` / `OwnerFetchCacheMaxEntries` | 60 / 50 000 | resolved rows of the keyed fetch and, apart, semi-join ids. The published engine's key `Cache:ResolveCacheMaxEntries` is no longer read: a host that still sets it runs at the default and is told so in a warning when the engine is built; rename the key |
 | `Cache:NegativeResolveTtlSeconds` | 10 | how long a key an owner answered as not found is cached; a `strict` request reads past it; `0` caches none |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
 | `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
@@ -237,7 +238,7 @@ queries (per owning service one call to the owner's internal batch route through
 assigns the answers per row. Answers are cached per target, organisation, key and the substituted
 owner query for `Cache:ResolveTtlSeconds`. A `match` on a member of a plain remote alias is a
 semi-join: the owner is asked for the matching ids first, and binds the condition under its own
-default; `caseSensitive` or `ignoreCase` travel to it as the caller wrote them. Explain has the
+default; `caseSensitive` travels to it as the caller wrote it (a contract 1 caller's `ignoreCase: true` as `caseSensitive: false`). Explain has the
 owner bind that same query (never run it), so a condition the owner refuses is refused by explain
 as by a run, with the owner's code where the caller wrote the condition.
 
@@ -338,8 +339,8 @@ operator notice:
 
 - **Capabilities.** A `lookup` whose `from` is another service's entity (or its item
   collection, `service.entity#item`) runs through the keyed fetch at that owner (capability
-  `lookup.remote`); `unwind.keepPath: false` takes the unwound collection out of the row (capability
-  `unwind.keepPath`). A caller gates on the capability before sending either.
+  `lookup.remote`). A caller gates on the capability before sending it. A contract 2 `unwind`
+  names its alias (`as`) and always takes the collection out of the row; it has no `keepPath`.
 
 - **Joins load what the query reads.** A contract 2 `lookup` or `resolve` has no `select`
   (`UNKNOWN_STAGE_MEMBER`, `params.use: "project"`). Every member of the target can be read under
@@ -439,6 +440,82 @@ operator notice:
 - **Owner faults** reach the caller with a fixed text; an owner's exception detail never passes
   through another service.
 
+## Upgrading to 2.1
+
+What a host, a caller of either contract and an operator of a fleet notice when a service takes
+this engine over the published one. The package version is set when the package is published;
+`engine.contract` stays 2.
+
+### A contract 1 caller notices nothing
+
+A request without the contract header gets from `query` and `batch` the status, the headers and the
+body bytes the published engine sent, and the database gets the aggregates it got. That is held by
+two recorded sets on every test run (`OxQL.Tests/Fixtures/contract1/`: `pipelines.json`,
+`http.json`), not by convention; what is behind it is listed in
+[`oxql-operations.md`](src/docs/oxql-operations.md#a-contract-1-answer-is-frozen). Two things a
+contract 1 caller can still observe, both loosened, neither a new refusal:
+
+- `Limits:MaxGroupFields` is 40 (was 20): a `group` of 21 to 40 keys and aggregates was
+  `MAX_GROUP_FIELDS_EXCEEDED` and now runs. A host that needs the old bound sets it.
+- `GET /oxql/health` lists more limits and, for a caller without the header, the four capability
+  names the published engine listed ahead of the host's own. Nothing it listed is gone.
+
+### Every service's schema revision changes once
+
+The base package publishes fifteen of the engine's limits in the schema document (`limits`), and
+the document's `revision` is the hash of its bytes. Of those fifteen exactly one default changed:
+
+| published in `/schema` → `limits` | published engine | this engine |
+|---|---|---|
+| `maxGroupFields` | 20 | 40 |
+
+So **the schema revision of every service changes when it takes the package, without any change
+to its model**. A client that holds a document reloads it (the revision an explain answer names no
+longer matches), and an origin's kept explain answers of that owner are dropped with the revision
+they were keyed by. Nothing else in the document moves: the other fourteen values, the types and
+the relation names are what they were. The limits this engine adds (`maxFilterEntries`,
+`maxValuesLimit`, `valuesScanRows`, `valuesDefaultLimit`, the explain rates) are published on
+health only and are not in the document. `maxGroupFields` could live on health alone, and then no
+revision would move for a limit; it stays in the document, because a client that checks a `group`
+against the document before sending it (the fifteen are there for exactly that) would lose the
+check. The explain rates changed on health as well: `explainRatePerMinute` 20 → 120,
+`explainRateBurst` 5 → 30, with `explainOwnerRatePerMinute` 20 and `explainOwnerRateBurst` 5 new.
+
+### Two builds in one fleet
+
+**The engine and the base package are deployed together, on every service that calls or is
+called.** Health and explain publish the assembly version, and a build of this branch and the
+pushed base before it both say `2.1.0.0` and `engine.contract: 2`: no peer and no client can tell
+them apart, and nothing negotiates. While two builds run side by side, the calls between them
+fail on these paths, and only on these:
+
+| origin | owner | what is sent | what happens |
+|---|---|---|---|
+| earlier build | this build | a folding condition on the owner's member (a semi-join, a join's `filter`) as `options: { ignoreCase: true }` | the owner refuses the option (`OPTION_NOT_APPLICABLE`, `params { option: "ignoreCase", reason: "removed" }`); the origin answers 422 `RESOLVE_REFUSED`. This build writes `caseSensitive: false`, which the earlier owner takes |
+| this build | earlier build | `timing: true` on each owner query, only when the origin's caller asked for the breakdown | the owner refuses the member (`UNKNOWN_REQUEST_MEMBER`); the origin answers 422 `RESOLVE_REFUSED`. Without the breakdown asked nothing is added |
+| either | the other | `POST internal/oxql/explain` | not held by any test: each build reads members of an owner's explain answer the other does not write the same way (the advisory, the column capabilities, the condition checks) |
+| earlier build's caller | this build | a contract 2 request written for the earlier build | what this build removed is refused with `params.reason: "removed"` and what to use: `select` on a join (`project`), `page.offset` (`cursor`), `page.includeTotalCount` (`count`), `unwind.keepPath`, `options.ignoreCase` (`caseSensitive`) |
+
+An owner of this build that is sent a top-level member it does not know on the internal route
+(of a query, of `keyedBy`, of the batch) refuses it with the code it always had,
+`UNKNOWN_REQUEST_MEMBER`, and says the cause: "… The request came over the internal route, where the
+calling service's engine writes it: that engine and this one are different builds. …", with
+`params { reason: "engineBuild", members }`. The origin's `RESOLVE_REFUSED` carries that error, so
+the reader is not left with a member no caller wrote.
+
+The base package of this branch implements an interface only this engine has
+(`IReportingAddonDefinitionSource`); it does not build against the published engine, and its
+package reference is raised in the change that publishes both.
+
+### Configuration
+
+- `Limits:MaxFilterEntries` (64) is new: the most entries a contract 2 request's `filter` carries.
+- `Execution:TimingDetail` (`true`) is new: `false` keeps the `timing` breakdown off for every caller.
+- `Cache:ResolveCacheMaxEntries`, the published engine's name of `Cache:OwnerFetchCacheMaxEntries`,
+  is no longer read. A host that still sets it is warned when the engine is built
+  ("OxQL:Cache:ResolveCacheMaxEntries was N; the key is no longer read. …") and runs at the default
+  of 50 000 until the key is renamed.
+
 ## Upgrading from 1.x
 
 Version 2.0 is a new engine behind the same routes. The wire contract is kept for one release
@@ -527,8 +604,8 @@ at warning level, with what shaped it. Set it to `0` to turn the line off.
   (`Representation:Collation`, German at primary strength unless changed). `options.caseSensitive:
   true` on a condition and `{ "path": { "direction": "asc", "caseSensitive": true } }` on a sort
   entry opt out; an exact sort needs every string comparison of the request to be exact too.
-  `ignoreCase` is accepted for one release as the alias with the opposite sense
-  (`ignoreCase: false` is `caseSensitive: true`). An ordered comparison on a string orders
+  `ignoreCase` is no option under contract 2 (`OPTION_NOT_APPLICABLE`, `params.use: "caseSensitive"`).
+  An ordered comparison on a string orders
   under the collation and cannot opt out. Contract 1 folds only with `ignoreCase: true`, as
   before, and knows no `caseSensitive`.
 - A member holding a single character folds the operand's case by code point, so `eq`, `neq`,

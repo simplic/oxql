@@ -66,10 +66,11 @@ the listed status.
 | `UNBOUND_VARIABLE` | 400 | `{ "$var": … }` names a variable the request does not bind |
 | `INVALID_VARIABLE` | 400 | a variable holds an object, or an array where an element is expected; under contract 2 a name in `variables` that starts with `$`, which is reserved for the engine (`params` `name`, `reason: "reserved"`) |
 | `INVALID_FILTER` | 400 | contract 2: the request's `filter` is malformed; `params.reason` is `notAnArray`, `notAnObject`, `unknownMember`, `whereRequired`, `invalidId`, `duplicateId` or `malformedWhere`; `filter` names the entry |
+| `MAX_FILTER_ENTRIES_EXCEEDED` | 400 | contract 2: the request's `filter` carries more entries than `Limits:MaxFilterEntries`; one error, no entry is read; `params` `limit: "maxFilterEntries"`, `max`, `count`. (The filter's conditions over `MaxConditions`: `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry and `params` `limit: "maxConditions"`, `max`, before any is placed) |
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason` |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
@@ -140,11 +141,20 @@ stage's effective `onMissing`:
 
 ### Where the time went
 
-Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `desc="<commands> cmd /
+Every contract 2 `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `desc="<commands> cmd /
 <round trips> rt"`, `ours` = `total` − `db`, `bind`, `compile`, `convert`, and `addon`, `resolve`,
 `remote`, `count`, `net` where they occurred), and a request that asks (`"timing": true`, or the header
 `X-OxQL-Timing`) the breakdown as the `timing` member; the members are listed in
-[`oxql-query-syntax.md`](oxql-query-syntax.md#where-the-time-went). What a host should know:
+[`oxql-query-syntax.md`](oxql-query-syntax.md#where-the-time-went). A contract 1 answer carries
+neither ([below](#a-contract-1-answer-is-frozen)). What a host should know:
+
+- **A host can keep the breakdown to itself.** `Execution:TimingDetail` (default `true`) is whether
+  a caller may ask for the `timing` member. It names the entities a request read, the documents and
+  bytes each command returned, the owners asked with their own breakdown, and the build
+  configuration, to any caller the host admits. With it `false` the member and the header are
+  accepted and answer nothing, on the public route and for another service's origin alike, and
+  this host asks no owner for a breakdown. `Server-Timing` (durations and counts, no name) is
+  sent either way.
 
 - The split is always recorded (a timestamp pair per phase and per command); only the `bytes` of
   a command are measured on request, and that measuring is taken out of the request's total.
@@ -199,6 +209,36 @@ Every `query` and `batch` answer carries `Server-Timing` (`total`, `db` with `de
   one escapes it there. The schema document is the base package's and keeps its own spelling (its
   revision is the hash of its bytes).
 
+### A contract 1 answer is frozen
+
+What a caller without the contract header receives from `query` and `batch` (while
+`Compat:Enabled`) is what the published engine sent it: the same status, the same headers, the same
+body bytes. Everything the engine has added to an answer on the wire since is a contract 2
+answer's alone:
+
+| added for contract 2 | a contract 1 answer |
+|---|---|
+| content coding (`Content-Encoding: br` / `gzip`), and with it `Vary: Accept-Encoding` and `Content-Length` | never coded, whatever `Accept-Encoding` says; no `Vary`, no length (the body is streamed by the framework's JSON formatter, as it was) |
+| `X-Content-Type-Options: nosniff` | not sent |
+| `Server-Timing`, and `Access-Control-Expose-Headers` for a request with `Origin` | not sent |
+| the `timing` member, asked by `"timing": true` or `X-OxQL-Timing` | never in the body; the member and the header are ignored |
+| the request members `timing`, `maxTimeMs`, `filter` | ignored whatever they hold, as every member contract 1 does not know (a value of another kind is no error) |
+| `pageInfo.count`, wrapped values written unwrapped, the row order of roots | not written; rows go through the contract 1 converter |
+| a stage placed elsewhere than written, paging by value after `unwind` and `group` | the stages run as written; the aggregates and the cursor are the recorded ones |
+
+The one place that decides it is the controller (`Contract1`), and whatever is added to an answer
+next goes behind it. Two recorded sets hold it on every test run, both captured from the engine
+before the work on contract 2 answers and never re-recorded for a contract 2 change:
+`OxQL.Tests/Fixtures/contract1/pipelines.json` (what is sent to the database, and the cursor) and
+`OxQL.Tests/Fixtures/contract1/http.json` (what is sent to the caller: status, every header, the body
+bytes; a request with `Accept-Encoding`, `Origin`, `X-OxQL-Timing` and the newer members in kinds
+contract 2 would refuse; recorded at the pushed base `99e646f` and identical at the published
+`master`). A difference there is a contract 1 caller's answer changing.
+
+Not frozen, and why: `GET /oxql/health` is read by name and only grows (below); `POST /oxql/explain`
+was rebuilt for 2.1 for both contracts before any of this, so no published engine ever sent the
+answer a contract 1 explain gets now; the schema document is the base package's.
+
 ### Batch
 
 `POST /oxql/batch` answers 200 with `{ "results": [ … ] }`, one entry per query in order, unless
@@ -211,7 +251,10 @@ when it starts (never above the host's own ceiling), so the batch ends within it
 internal batch (a caller's keyed fetch, and the ones a host sends itself for its own targets) run
 side by side, `Execution:BatchConcurrency` at once, under the same one deadline and answered in the
 order asked. A member the batch does not have (a batch-level `strict`, say) is a 400
-`UNKNOWN_REQUEST_MEMBER` under contract 2.
+`UNKNOWN_REQUEST_MEMBER` under contract 2. On the internal route, where the calling service's engine
+writes the batch and each query, such a member (of the batch, of a query, of `keyedBy`) means the
+two services run different builds: the refusal says so and carries
+`params { reason: "engineBuild", members }` (see *Two builds in one fleet* in the README).
 
 ## Limits
 
@@ -220,8 +263,8 @@ registered: a value below 1 is raised to 1 (`MaxOffset` and `Cache:NegativeResol
 a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChunk` are clamped to
 `MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
 `MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
-twenty-four `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
-`chainTimeoutMs`, `negativeResolveTtlSeconds`, the explain limits and the two `Values` bounds (47 entries). The fifteen
+twenty-five `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
+`chainTimeoutMs`, `negativeResolveTtlSeconds`, the explain limits and the two `Values` bounds (48 entries). The fifteen
 a caller checks a request against before sending it are also published in the schema document's
 `limits` by the Simplic base package (column */schema*).
 
@@ -237,6 +280,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxGroupFields` | 40 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` (contract 2: `params { limit: "maxGroupFields", max, count }`) | yes | a grid derives one aggregate per column it totals; the value was 20 |
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
+| `Limits:MaxFilterEntries` | 64 | binder, the entries of a contract 2 request's `filter`; checked before an entry is read. The conditions of all entries together are held to `MaxConditions` before any is placed or bound, so a filter over either bound costs its parse and one error | `MAX_FILTER_ENTRIES_EXCEEDED` (`params { limit: "maxFilterEntries", max, count }`); over the conditions `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry and `params { limit: "maxConditions", max }` | no (health only) | an owner query carries no `filter`: a condition for an owner travels as a `match` |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
 | `Limits:MaxOffset` | 5 000 | binder, `page.offset` of contract 1 and of an internal call (a contract 2 page has none); not a cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
 | `Limits:CountCap` | 100 000 | binder and compiler: the ceiling of every count. A contract 2 count never counts further (`pageInfo.count.stoppedBy: "cap"`); a contract 1 count stops at it | contract 1: diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
@@ -330,11 +374,16 @@ Anonymous, always 200, and never waits for another service:
 - `engine.version` is the version of the `OxQL.Core` assembly the host runs, which is the package
   version.
 - `capabilities` lists only what depends on the host; what every contract 2 engine has is said by
-  `engine.contract` and is not listed (`batch`, `group.page`, `page.offset`, `any` and
-  `unwind.keepPath` are gone from the list):
+  `engine.contract` and is not listed:
   `resolve.remote`, `semiJoin`, `resolve.chain` and `lookup.remote` (a `lookup` whose `from` is another
   service's entity) when the host installed a remote query client;
   `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`.
+  **The list is read per caller.** A request without the contract header on a host that answers
+  contract 1 reads, ahead of those, the four names the published engine listed: `batch`,
+  `group.page`, `page.offset`, `any`. That host does all four for that caller, and a contract 1
+  client may gate on a name. (`unwind.keepPath`, which only an unpublished build listed, names a
+  member no engine takes any more and is listed for nobody.) Health is read by name: members and
+  limits are added, never removed or renamed.
 - `limits` are the values in force after registration adjusted them, not the configured ones;
   `chainTimeoutMs` is the effective value (clamped to `MaxTimeMs`).
 - `remote` lists every service the model references remotely, from a root member, a member of
@@ -761,7 +810,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   when a matching row does not carry that member, which only a run can tell; basis `data`, no
   effect on `executable`; `params` `alias`, `target`, `field`, `services`),
   `FILTER_BINDS_EARLIER` (a condition of the request's `filter` runs where its path
-  first exists, and a later group gives the name to another thing; `params` `path`, `alias`),
+  first exists, and a later group gives the name to another thing; `params` `path`, `alias`; a run of
+  such a request carries the same code, text and params in its `diagnostics`),
   `PROJECT_AFTER_PAGE` (the projection at this stage runs after the page is taken, on the page's
   rows), `SORT_BEFORE_UNWIND` (the rows are ordered and cut to what the page can reach before the
   unwind at this stage, also when the sort names the element's position after the parents'
@@ -941,6 +991,7 @@ compiled and from the index lists.
 ```jsonc
 "advisory": {
   "existing": "known" | "unknown",            // unknown: this host read no index list (no index source, or the read failed)
+                                              // (an index's own "existing" may be unknown although the list was read: see conditional)
   "indexes": [ {
     "id": "ix:24bbf3642b60",                  // stable for collection + keys + collation: the same index asked by two requests has one id
     "for": "rows" | "group" | "values" | "join",
@@ -1000,18 +1051,35 @@ compiled and from the index lists.
   join onto the key has the key's index and gets no advice; a join that runs at its owner (another
   service's rows, a keyed resolve) is advised by that owner's explain, not here.
 - **`existing`.** `served`: an index of the collection leads with the equality keys (in any order),
-  continues with the sort keys in the request's directions or all reversed, has the first range key
-  next where nothing is sorted, fits the collation, and holds every key where the advised index
-  `covers`. `partial`: the index named goes part of the way, `lacks` says what is missing. `missing`:
-  no index leads to it. `unknown`: no index list was read: **nothing is called missing that was not
-  looked for**. An index over part of the rows (`partialFilterExpression`), a sparse or hidden one
-  and a text, hashed, geo or wildcard index are never counted as serving.
+  continues with the sort keys in the request's directions or all reversed, holds the first range
+  key (next where nothing is sorted, anywhere behind the sort keys where something is), fits the
+  collation, and holds every key where the advised index `covers`. `partial`: the index named goes
+  part of the way, `lacks` says what is missing; an index that orders the rows and does not hold the
+  range key is partial (`lacks: ["range"]`, `without: ["scansOrganisation"]`: nothing is sorted in
+  memory, and every document the scan walks in order is read to compare the range). `missing`: no
+  index leads to it. `unknown`: no index list was read, or the index that reaches the keys is one the
+  list does not decide (next point): **nothing is called missing that was not looked for, and
+  nothing that was not judged**. A text, hashed, geo or wildcard index is never looked at.
+- **`conditional`** (absent when there is none, and whenever an index counted serves it): the
+  indexes of the list that reach the advised keys and are not counted as serving, each
+  `{ "index": <name>, "kind": "partialFilter" | "sparse" | "hidden" }`, the furthest first. An index
+  over part of the rows (`partialFilterExpression`) serves a request whose filter implies its
+  expression, a sparse one a request that cannot match a row without its first member: the index
+  list alone does not say which this request is. Where such an index goes further than every index
+  counted, `existing` is `unknown` and `used` null (no `index`, `lacks`, `without`), and the note
+  reads "Whether an index of … serves … is not known: the index 'x' reaches its keys and holds part
+  of the rows only (partialFilterExpression), which the index list alone does not decide for this
+  request; { … } serves it for certain." A hidden index serves nothing, so the verdict the counted
+  indexes give stands; the note adds "Not counted: the index 'x' reaches its keys and is hidden from
+  the planner", since unhiding it may be all that is needed.
 - **`without`**, only where it follows from the index list: `sortsInMemory` (no index orders the
   rows; with `allowDiskUse` off a large result is refused as `QUERY_TOO_EXPENSIVE`),
   `scansOrganisation` (the rows of the organisation are read to find those that match),
-  `scansCollection` (no index leads with the organisation), `scansPerRow` (the joined collection is
-  read once for every row that joins), `readsDocuments` (the documents are read where the index's
-  keys would do).
+  `scansCollection` (no index leads with the organisation), `scansPerRow` (no index of the joined
+  collection leads to the join: all of it is read once for every row that joins),
+  `scansOrganisationPerRow` (an index of the joined collection leads with the organisation and
+  stops before the member joined on: the organisation's rows of it are read once for every row
+  that joins), `readsDocuments` (the documents are read where the index's keys would do).
 - **`unbounded`**: the conditions and sort members no key bounds, each with `use`, `path`, `op`,
   `filter` or `stage`, and one `reason`: `negation` (`neq`, `nin`), `exists`, `pattern` (`contains`,
   `endsWith`, `regex`), `exactUnderCollation` (a text compared exactly while the aggregate runs under

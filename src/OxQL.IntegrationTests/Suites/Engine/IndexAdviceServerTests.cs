@@ -387,11 +387,12 @@ public class IndexAdviceServerTests
 
         await CreateAsync(seeded, advised);
 
-        // The condition is asked of the collection before the unwind, of an array and of a value that is no
-        // array alike: both read the advised index, in its order, and the page reads a page's worth of parents.
+        // The condition is asked before the unwind through the collection's path, one comparison that an element of
+        // the array or the one object in its place meets: it reads the advised index, in its order, and the page reads
+        // a page's worth of parents, each once.
         var served = await ServerAsync(seeded, Transport, Corpus.Shipment, pipeline, filter);
 
         served.Stages.Should().Contain("IXSCAN").And.NotContain("COLLSCAN", $"{served}").And.NotContain("SORT", $"the index orders the parents: {served}");
-        served.Docs.Should().BeLessThanOrEqualTo(24, $"the parents the page can reach, read at most once for each form the condition is asked in: {served}");
+        served.Docs.Should().Be(11, $"the parents the page can reach, each read once: {served}");
     }
 }

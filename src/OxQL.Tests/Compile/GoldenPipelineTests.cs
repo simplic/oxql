@@ -484,8 +484,38 @@ public class GoldenPipelineTests
     /// <summary>How many rows the unwind of <c>Items</c> answers for a row: an array's size, none for a null or a missing member, one for any other value.</summary>
     private const string ItemRows = """{ $cond: [ { $isArray: "$Items" }, { $size: "$Items" }, { $cond: [ { $in: [ { $type: "$Items" }, ["missing", "null", "undefined"] ] }, 0, 1 ] } ] }""";
 
-    /// <summary>What a parent cut before the unwind is asked: that its unwind answers a row. No equality with null or an empty array, which an array meets by an element.</summary>
-    private const string ItemsYieldARow = $$"""{ $match: { $expr: { $gt: [ {{ItemRows}}, 0 ] } } }""";
+    /// <summary>The types of a value that is no array and yields a row: every one but array, null and undefined.</summary>
+    private const string ValueTypes = "[1, 2, 3, 5, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, -1, 127]";
+
+    /// <summary>The types of an element none of whose members exists: every one but object and array.</summary>
+    private const string MemberlessTypes = "[1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, -1, 127]";
+
+    /// <summary>
+    /// What a parent cut before the unwind is asked: that its unwind answers a row, as a plain condition. "An array that
+    /// holds anything, or a value that is no array", written as neither failing so that the first is asked first; no
+    /// equality with null or an empty array, which an array meets by an element, and no expression.
+    /// </summary>
+    private const string ItemsYieldARow = $$"""{ $match: { $nor: [ { $and: [ { Items: { $not: { $elemMatch: { $exists: true } } } }, { Items: { $not: { $type: {{ValueTypes}} } } } ] } ] } }""";
+
+    /// <summary>
+    /// What rules out that the member is one value with a row of its own: an array (only an array is at least the empty
+    /// one), then a null or a member not stored. After the conditions that fail, an undefined (<see cref="ItemsUndefined"/>).
+    /// </summary>
+    private const string ItemsNoValue = """{ Items: { $gte: [] } }, { Items: { $in: [null] } }""";
+
+    private const string ItemsUndefined = """{ Items: { $type: 6 } }""";
+
+    /// <summary>The array holds an element none of whose members exists: a null, an undefined or a scalar.</summary>
+    private const string ItemsHoldMemberless = $$"""{ Items: { $elemMatch: { $type: {{MemberlessTypes}} } } }""";
+
+    /// <summary>
+    /// What a filter that only spares the unwind lets pass beside an object that passes: what holds no array of elements
+    /// (the unwind drops it, or the conditions after it judge the one value), and, where an absent member may pass, a
+    /// member that is, or holds an element, of a kind without members.
+    /// </summary>
+    private const string ItemsNoArrayOfElements = """{ Items: { $not: { $elemMatch: { $exists: true } } } }""";
+
+    private const string ItemsOfAMemberlessKind = $$"""{ Items: { $type: {{MemberlessTypes}} } }""";
 
     /// <summary>The first and the last position a parent's rows stand at: 0 … n − 1 of an array, −1 for the one row of a value that is no array.</summary>
     private const string ItemsLo = """{ $cond: [ { $isArray: "$Items" }, 0, -1 ] }""";
@@ -581,7 +611,7 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { $and: [ { Number: { $ne: "x" } }, { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } ] } }""",
+            """{ $match: { $and: [ { Number: { $ne: "x" } }, { "Items.Quantity": { $gt: 2 } } ] } }""",
             """{ $sort: { Number: 1, _id: 1 } }""",
             "{ $limit: 11 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
@@ -592,18 +622,23 @@ public class GoldenPipelineTests
             """{ $unset: "Items" }""");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } }""",
+            """{ $match: { $and: [ { Number: { $ne: "x" } }, { "Items.Quantity": { $gt: 2 } } ] } }""",
+            "{ $limit: 1001 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
             """{ $match: { $and: [ { "Items.Quantity": { $gt: 2 } }, { Number: { $ne: "x" } } ] } }""",
             "{ $limit: 1001 }",
             "{ $count: 'n' }");
+
+        // The count asks what the cut of the parents asks: every parent that passes yields a row it counts, so as many
+        // parents as it is bounded by rows hold at least that many rows, and the database stops reading there.
+        compiled.CountParentsAt.Should().Be(2);
         compiled.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
 
         // A condition on the position cannot be asked of the collection: the element one still is, the parents are not cut.
         var byPosition = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "item.quantity": { "gt": 2 }, "at": { "gte": 1 } } }, { "page": { "limit": 10 } }]""");
 
         byPosition.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, ["item.quantity"], RenameLate: true));
-        byPosition.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } }"""));
+        byPosition.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { "Items.Quantity": { $gt: 2 } } }"""));
         byPosition.PageStages[2].Contains("$unwind").Should().BeTrue();
 
         // A kept row without an element has no element to pass anything: nothing is asked before a preserving unwind.
@@ -612,21 +647,112 @@ public class GoldenPipelineTests
         preserved.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true));
         preserved.PageStages[1].Contains("$unwind").Should().BeTrue();
 
-        // What an element none of whose members exists passes (a null in the array) is not asked of the collection:
-        // $elemMatch looks at objects only and would drop the parent whose row the unwind answers. Asked after the unwind alone.
-        foreach (var absentPasses in new[] { """{ "item.quantity": { "neq": 2 } }""", """{ "item.quantity": { "nin": [1, 2] } }""", """{ "item.price.currency": { "eq": null } }""", """{ "item.price.currency": { "exists": false } }""",
-                     """{ "not": { "item.quantity": { "gt": 2 } } }""", """{ "or": [{ "item.quantity": { "gt": 2 } }, { "item.price.currency": { "in": ["a", null] } }] }""" })
-        {
-            var late = await Compile($$"""[{ "unwind": { "path": "items", "as": "item" } }, { "match": {{absentPasses}} }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+        // One comparison of one member that no absent member passes is asked through the collection's path, as above. Several
+        // conditions, a range on one member included, have to hold of one element (read through the path two elements could
+        // meet one each): some object in the array passes them all ($elemMatch), or the member is one value that passes them
+        // itself, written as "nothing rules that out": it is no array, no null and not missing, no condition fails, it is
+        // not undefined. The database asks $elemMatch first and stops there for a row an element of which passes.
+        var two = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2, "lt": 9 } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+        var twoAsked = $$"""{ $match: { $or: [ { Items: { $elemMatch: { $and: [ { Quantity: { $gt: 2 } }, { Quantity: { $lt: 9 } } ] } } }, { $nor: [ {{ItemsNoValue}}, { $nor: [ { "Items.Quantity": { $gt: 2 } } ] }, { $nor: [ { "Items.Quantity": { $lt: 9 } } ] }, {{ItemsUndefined}} ] } ] } }""";
 
-            late.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true), absentPasses);
-            late.PageStages[1].Contains("$unwind").Should().BeTrue(absentPasses);
-            late.CountStages![1].Contains("$unwind").Should().BeTrue(absentPasses);
+        two.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
+        two.PageStages[1].ShouldBeBson(BsonDocument.Parse(twoAsked));
+        two.CountStages![1].ShouldBeBson(BsonDocument.Parse(twoAsked));
+        two.CountStages![2].ShouldBeBson(BsonDocument.Parse("{ $limit: 1001 }"));
+
+        // What an element none of whose members exists passes (a null or a scalar in the array) is asked of three kinds of
+        // row: an object in the array that passes, an element without members in the array, and the one value in the array's
+        // place that passes. The parents are cut first again, and the count unwinds the rows that pass alone.
+        var negative = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "neq": 2 } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+        var negated = $$"""{ $or: [ { Items: { $elemMatch: { Quantity: { $ne: 2 } } } }, {{ItemsHoldMemberless}}, { $nor: [ {{ItemsNoValue}}, { $nor: [ { "Items.Quantity": { $ne: 2 } } ] }, {{ItemsUndefined}} ] } ] }""";
+
+        ShouldBe(negative.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            $$"""{ $match: {{negated}} }""",
+            """{ $sort: { Number: 1, _id: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
+            """{ $match: { "Items.Quantity": { $ne: 2 } } }""",
+            """{ $sort: { Number: 1, _id: 1, __oxIx0: 1 } }""",
+            "{ $limit: 11 }",
+            """{ $set: { item: "$Items" } }""",
+            """{ $unset: "Items" }""");
+        negative.CountStages![1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: {{negated}} }"""));
+        negative.CountParentsAt.Should().Be(2);
+
+        // A step of the count with another bound bounds the parents by it as well.
+        var bounded = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "neq": 2 } } }, { "page": { "limit": 0, "count": { "upTo": 500 } } }]""");
+
+        bounded.CountStages![bounded.CountParentsAt!.Value].ShouldBeBson(BsonDocument.Parse("{ $limit: 501 }"));
+        bounded.CountStages![^2].ShouldBeBson(BsonDocument.Parse("{ $limit: 501 }"));
+        negative.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
+
+        foreach (var absentPasses in new[] { """{ "item.quantity": { "nin": [1, 2] } }""", """{ "item.price.currency": { "eq": null } }""", """{ "item.price.currency": { "exists": false } }""", """{ "not": { "item.quantity": { "gt": 2 } } }""" })
+        {
+            var asked = await Compile($$"""[{ "unwind": { "path": "items", "as": "item" } }, { "match": {{absentPasses}} }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+
+            asked.Unwind!.ParentsFirst.Should().BeTrue(absentPasses);
+            asked.Unwind.Prefiltered.Should().ContainSingle(absentPasses);
+            asked.PageStages[1]["$match"]["$or"].AsBsonArray.Should().HaveCount(3, absentPasses);
+            asked.PageStages[1]["$match"]["$or"][1].ShouldBeBson(BsonDocument.Parse(ItemsHoldMemberless), absentPasses);
+            asked.PageStages[1].ToJson().Should().NotContain("__oxAbsent", absentPasses).And.NotContain("$expr");
+            asked.CountStages![1].ShouldBeBson(asked.PageStages[1], absentPasses);
         }
 
-        // Beside a condition no absent element passes, the conjunction fails for it, and all of it is asked.
-        (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2 }, "item.price.currency": { "neq": "a" } } }, { "page": { "limit": 10 } }]"""))
-            .Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity", "item.price.currency"], RenameLate: true));
+        // A parent's own condition beside it: asked first, with the organisation's.
+        var withParent = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "neq": 2 }, "number": { "gt": "a" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10 } }]""");
+
+        withParent.PageStages[1]["$match"]["$and"].AsBsonArray.Should().HaveCount(2);
+        withParent.PageStages[1]["$match"]["$and"][1].ShouldBeBson(BsonDocument.Parse(negated));
+
+        // Beside a condition no absent element passes the conjunction fails for it: no element without members is asked for.
+        var mixed = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2, "neq": 5 } } }, { "page": { "limit": 10 } }]""");
+
+        mixed.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
+        mixed.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: { $or: [ { Items: { $elemMatch: { $and: [ { Quantity: { $gt: 2 } }, { Quantity: { $ne: 5 } } ] } } }, { $nor: [ {{ItemsNoValue}}, { $nor: [ { "Items.Quantity": { $gt: 2 } } ] }, { $nor: [ { "Items.Quantity": { $ne: 5 } } ] }, {{ItemsUndefined}} ] } ] } }"""));
+
+        // Where the conditions do not say what an absent member passes (a set that holds null), the database is asked: the
+        // conditions are read at a member no row holds, of a row whose array holds an element without members ("neither is
+        // there no such element, nor does a condition fail").
+        var unsaid = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "or": [{ "item.quantity": { "gt": 7 } }, { "item.quantity": { "in": [1, null] } }] } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10 } }]""");
+
+        unsaid.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity"], RenameLate: true));
+        unsaid.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $or: [
+                { Items: { $elemMatch: { $or: [ { Quantity: { $gt: 7 } }, { Quantity: { $in: [1, null] } } ] } } },
+                { $nor: [ { $nor: [ {{ItemsHoldMemberless}} ] }, { $nor: [ { $or: [ { "__oxAbsent.Quantity": { $gt: 7 } }, { "__oxAbsent.Quantity": { $in: [1, null] } } ] } ] } ] },
+                { $nor: [ {{ItemsNoValue}}, { $nor: [ { $or: [ { "Items.Quantity": { $gt: 7 } }, { "Items.Quantity": { $in: [1, null] } } ] } ] }, {{ItemsUndefined}} ] }
+            ] } }
+            """));
+
+        // A page whose order is not the parents' cuts none: its filter only spares the unwind, and asks less of the rows that
+        // fail. It drops an array of objects none of which passes; what holds no array of elements it leaves to the unwind
+        // (which drops it, or answers the one value for the conditions after it), and where an absent member may pass, what is
+        // or holds something without members. Its count still asks exactly, and bounds the parents.
+        var byElement = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "or": [{ "item.quantity": { "gt": 7 } }, { "item.quantity": { "in": [1, null] } }] } }, { "sort": [{ "item.quantity": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+
+        byElement.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, ["item.quantity"], RenameLate: true));
+        byElement.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: { $or: [ { Items: { $elemMatch: { $or: [ { Quantity: { $gt: 7 } }, { Quantity: { $in: [1, null] } } ] } } }, {{ItemsNoArrayOfElements}}, {{ItemsOfAMemberlessKind}} ] } }"""));
+        byElement.CountStages![1].ShouldBeBson(unsaid.PageStages[1]);
+        byElement.CountParentsAt.Should().Be(2);
+
+        // Where a condition after the unwind cannot be asked before it (one on the position), no parent is known to yield a
+        // row: the count bounds its rows alone, and its filter spares the unwind as the page's does.
+        var unbounded = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "item.quantity": { "neq": 2 }, "at": { "gte": 1 } } }, { "page": { "limit": 10, "count": true } }]""");
+
+        unbounded.CountParentsAt.Should().BeNull();
+        unbounded.CountStages![1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: { $or: [ { Items: { $elemMatch: { Quantity: { $ne: 2 } } } }, {{ItemsNoArrayOfElements}}, {{ItemsOfAMemberlessKind}} ] } }"""));
+        unbounded.CountStages![2].Contains("$unwind").Should().BeTrue();
+        unbounded.PageStages[1].ShouldBeBson(unbounded.CountStages![1]);
+
+        // A text that folds under the collation is one plain comparison, asked through the path. A prefix under the collation is
+        // a range, two comparisons of the one member, which two elements of an array could meet one each: asked of one element.
+        var folded = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.price.currency": { "eq": "eur" } } }, { "page": { "limit": 10 } }]""");
+        var prefix = await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.price.currency": { "startsWith": "e" } } }, { "page": { "limit": 10 } }]""");
+
+        folded.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { "Items.Price.Currency": "eur" } }"""));
+        prefix.PageStages[1]["$match"]["$or"][0]["Items"]["$elemMatch"]["Price.Currency"].AsBsonDocument.Names.Should().Equal("$gte", "$lt");
+        prefix.PageStages[1]["$match"]["$or"].AsBsonArray.Should().HaveCount(2, "no absent member passes a prefix: an object in the array, or the one value in its place");
 
         // Two unwinds, a group after the unwind, and contract 1 run as written.
         (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.stops", "as": "stop" } }, { "page": { "limit": 10 } }]""")).Unwind.Should().BeNull();

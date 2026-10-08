@@ -91,9 +91,11 @@ public class LateJoinExecutionTests
         {
             "$and" => element.Value.AsBsonArray.All(inner => Matches(row, inner.AsBsonDocument)),
             // What an unwind answers a row for: an array that holds something, or a value that is no array; not a null, not a missing member.
-            "$expr" when element.Value is BsonDocument { ElementCount: 1 } asked && asked.GetElement(0) is { Name: "$gt", Value: BsonArray { Count: 2 } operands }
-                && operands[0] is BsonDocument rows && rows.GetValue("$cond", null) is BsonArray { Count: 3 } cond && cond[0] is BsonDocument isArray && isArray.GetValue("$isArray", null) is BsonString collection
-                => (Get(row, collection.Value.TrimStart('$')) switch { BsonArray array => array.Count, null or BsonNull or BsonUndefined => 0, _ => 1 }) > operands[1].ToInt32(),
+            // Written as "neither no element nor no value": $nor [ $and [ { c: { $not: { $elemMatch: { $exists: true } } } }, { c: { $not: { $type: [...] } } } ] ].
+            "$nor" when element.Value is BsonArray { Count: 1 } none && none[0] is BsonDocument { ElementCount: 1 } both && both.GetValue("$and", null) is BsonArray { Count: 2 } neither
+                && neither[0] is BsonDocument { ElementCount: 1 } noElement && noElement.GetElement(0) is { Name: var collection, Value: BsonDocument first } && first.GetValue("$not", null) is BsonDocument holds && holds.Contains("$elemMatch")
+                && neither[1] is BsonDocument { ElementCount: 1 } noValue && noValue.GetElement(0).Name == collection && noValue.GetElement(0).Value is BsonDocument second && second.GetValue("$not", null) is BsonDocument typed && typed.Contains("$type")
+                => Get(row, collection) switch { BsonArray array => array.Count > 0, null or BsonNull or BsonUndefined => false, _ => true },
             _ when element.Name.StartsWith('$') || element.Value is BsonDocument => throw new NotSupportedException($"The evaluator does not match {element.ToJson()}."),
             _ => Get(row, element.Name) == element.Value,
         });

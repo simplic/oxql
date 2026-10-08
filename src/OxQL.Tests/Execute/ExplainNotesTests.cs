@@ -93,6 +93,14 @@ public class ExplainNotesTests
         prefilter.Message.Should().Be("Only rows with an element of 'items' that passes what is asked of 'item' after the unwind are unwound.");
         System.Text.Json.JsonSerializer.Serialize(prefilter.Params).Should().Be("""{"path":"items","alias":"item","paths":["item.quantity"]}""");
 
+        // A condition an element without members passes (not equal, not in) is asked before the unwind as well, and the parents are cut first: both are said.
+        var negative = await NotesAsync(
+            """[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "nin": [1, 2] } } }, { "sort": [{ "number": "asc" }] }]""",
+            "probe.order", model: BindHost.Probe);
+
+        Single(negative, Notes.SortBeforeUnwind).Stage.Should().Be(0);
+        System.Text.Json.JsonSerializer.Serialize(Single(negative, Notes.UnwindPrefilter).Params).Should().Be("""{"path":"items","alias":"item","paths":["item.quantity"]}""");
+
         // Sorted on the element, the order is not the parents': nothing is cut before the unwind, and nothing says so.
         (await NotesAsync("""[{ "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "item.quantity": "asc" }] }]""", "probe.order", model: BindHost.Probe))
             .Should().NotContain(note => note.Code == Notes.SortBeforeUnwind || note.Code == Notes.UnwindPrefilter);

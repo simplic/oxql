@@ -145,7 +145,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
             try
             {
-                known = await CountLadderAsync(bound, counted, ladder, runOptions, context, cancellationToken).ConfigureAwait(false);
+                known = await CountLadderAsync(bound, counted, compiled.CountParentsAt, compiled.CountParentsFilterIsTheBounds, ladder, runOptions, context, cancellationToken).ConfigureAwait(false);
             }
             catch (CountRefused refused)
             {
@@ -578,8 +578,14 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// per power of ten. A step is sent only when ten times the last one is predicted to fit; otherwise
     /// the last bound is the answer, stopped by the budget. Each step's own time limit is what is left;
     /// one that runs out leaves the bound before it, stopped by time. Nothing counted yet is unknown.
+    /// Where the stages also bound the parents of an unwind (<paramref name="parentsAt"/>,
+    /// <see cref="CompiledQuery.CountParentsAt"/>), the first step keeps that bound: it is the step
+    /// that has to be cheap whatever follows, and the bound is what stops the database at a thousand
+    /// parents where it would otherwise read on. A later step is sized to read as much as the time
+    /// allows, so it leaves the bound out, and with it a filter that is there for the bound alone
+    /// (<paramref name="filterIsTheBounds"/>), which would be asked of every row it reads.
     /// </summary>
-    private async Task<CountInfo> CountLadderAsync(BoundPipeline bound, IReadOnlyList<BsonDocument> counted, BoundCount ladder, AggregateRunOptions runOptions, RequestContext context, CancellationToken cancellationToken)
+    private async Task<CountInfo> CountLadderAsync(BoundPipeline bound, IReadOnlyList<BsonDocument> counted, int? parentsAt, bool filterIsTheBounds, BoundCount ladder, AggregateRunOptions runOptions, RequestContext context, CancellationToken cancellationToken)
     {
         var timer = Stopwatch.StartNew();
         var budget = Math.Min(ladder.BudgetMs, runOptions.MaxTimeMs);
@@ -597,7 +603,14 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 if (left < 1)
                     throw new TimeoutException();
 
-                var rows = await runner.AggregateAsync(QueryTiming.CountRung, context.Timing, bound.Entity, [.. stages, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
+                var step = stages.ToList();
+
+                if (parentsAt is { } at && proven == 0)
+                    step[at] = new BsonDocument("$limit", rung + 1);
+                else if (parentsAt is { } later)
+                    step.RemoveRange(filterIsTheBounds ? later - 1 : later, filterIsTheBounds ? 2 : 1);
+
+                var rows = await runner.AggregateAsync(QueryTiming.CountRung, context.Timing, bound.Entity, [.. step, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
                 var found = rows is { Count: > 0 } && rows[0].TryGetValue("n", out var n) ? n.ToInt64() : 0;
                 var ms = (long)timer.Elapsed.TotalMilliseconds;
 

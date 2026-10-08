@@ -40,6 +40,9 @@ public class PageCountTests
 
         public List<(string Kind, long Bound, int MaxTimeMs)> Calls { get; } = [];
 
+        /// <summary>The stages of each count step, as sent.</summary>
+        public List<IReadOnlyList<BsonDocument>> Counted { get; } = [];
+
         public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
         {
             if (stages.Count == 0 || !stages[^1].Contains("$count"))
@@ -53,7 +56,11 @@ public class PageCountTests
 
             var bound = stages[^2]["$limit"].ToInt64() - 1;
 
-            lock (Calls) Calls.Add(("count", bound, options.MaxTimeMs));
+            lock (Calls)
+            {
+                Calls.Add(("count", bound, options.MaxTimeMs));
+                Counted.Add([.. stages]);
+            }
 
             if (OnCount is not null)
                 await OnCount(bound).WaitAsync(cancellationToken);
@@ -431,6 +438,50 @@ public class PageCountTests
 
         runner.Matching = 0;
         Wire((await Run(engine, """{ "limit": 0, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"exact","value":0}""");
+    }
+
+    [Fact]
+    public async Task A_step_of_a_count_over_unwound_rows_bounds_the_parents_that_yield_a_row_by_its_own_bound()
+    {
+        // Every parent that passes what is asked before the unwind yields a row that is counted, so as many parents as the
+        // step is bounded by rows hold at least that many rows: the database may stop reading there, and each step says so
+        // with its own bound, beside the count of a page as well.
+        const string Unwound = """{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "neq": 2 } } }""";
+        var (engine, runner) = Host(rows: 6, matching: 41_234);
+
+        async Task<QueryResult> Unwinding(string page) =>
+            (await engine.ExecuteAsync(BindHost.Request(Order, $$"""[{{Unwound}}, { "page": {{page}} }]"""), BindHost.Context())).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+
+        Wire((await Unwinding("""{ "limit": 0, "count": { "budgetMs": 5000 } }""")).PageInfo.Count).Should().Be("""{"state":"exact","value":41234}""");
+        runner.Calls.Select(call => call.Bound).Should().Equal(1_000L, 100_000L);
+
+        static List<long> Limits(IReadOnlyList<BsonDocument> stages) => stages.Where(stage => stage.Contains("$limit")).Select(stage => stage["$limit"].ToInt64()).ToList();
+
+        Limits(runner.Counted[0]).Should().Equal([1_001L, 1_001L], "the parents and the rows of the first step");
+        Limits(runner.Counted[1]).Should().Equal([100_001L], "a later step is sized to read as much as the time allows: no bound on the parents");
+
+        static List<string> Kinds(IReadOnlyList<BsonDocument> stages) => stages.Select(stage => stage.GetElement(0).Name).ToList();
+
+        Kinds(runner.Counted[0]).Should().Equal("$match", "$match", "$limit", "$unwind", "$match", "$limit", "$count");
+        Kinds(runner.Counted[1]).Should().Equal(["$match", "$match", "$unwind", "$match", "$limit", "$count"], "the condition on the element is still asked before the unwind");
+        runner.Counted[1][1].Should().BeEquivalentTo(runner.Counted[0][1]);
+        runner.Counted[0][1].ToJson().Should().NotContain("$expr");
+
+        // A first step with a bound of the request's own bounds the parents by it.
+        runner.Counted.Clear();
+        await Unwinding("""{ "limit": 0, "count": { "budgetMs": 5000, "upTo": 400 } }""");
+        runner.Counted.Select(Limits).Should().BeEquivalentTo(new[] { new List<long> { 401, 401 } }, options => options.WithStrictOrdering());
+
+        // Without a condition, the filter before the unwind is there for the bound alone, and goes where the bound goes.
+        runner.Counted.Clear();
+        (await engine.ExecuteAsync(BindHost.Request(Order, """[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 0, "count": { "budgetMs": 5000 } } }]"""), BindHost.Context())).Should().BeOfType<QueryOutcome.Success>();
+        Kinds(runner.Counted[0]).Should().Equal("$match", "$match", "$limit", "$unwind", "$limit", "$count");
+        Kinds(runner.Counted[1]).Should().Equal("$match", "$unwind", "$limit", "$count");
+
+        // The count beside a page is one step of the first bound: it bounds the parents.
+        runner.Counted.Clear();
+        await Unwinding("""{ "limit": 5, "count": true }""");
+        Limits(runner.Counted.Should().ContainSingle().Subject).Should().Equal(1_001L, 1_001L);
     }
 
     [Fact]

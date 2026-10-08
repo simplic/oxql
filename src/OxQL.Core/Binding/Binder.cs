@@ -4256,8 +4256,8 @@ public sealed class Binder
             // offset, and so does an internal call: a semi-join walks its owner's ids by offset.
             var cursorOnly = contract2 && !context.Internal;
 
-            // count is a contract 2 member; under contract 1 it is one the stage does not have.
-            IReadOnlyList<string> unknown = contract2 || stage.Count is null ? stage.Unknown : [.. stage.Unknown, "count"];
+            // count is a contract 2 member; under contract 1 it is one the stage does not have, named where it was written.
+            IReadOnlyList<string> unknown = contract2 || stage.CountWrittenAt is not { } written ? stage.Unknown : [.. stage.Unknown.Take(written), "count", .. stage.Unknown.Skip(written)];
 
             if (!CheckStageMembers(unknown, "page", cursorOnly ? PublicPageMembers : contract2 ? "limit, offset, cursor, includeTotalCount, count" : "limit, offset, cursor, includeTotalCount", index))
                 return;
@@ -4290,6 +4290,21 @@ public sealed class Binder
             if (page is not null)
             {
                 errors.Add(Error(Codes.MultiplePageStages, "A pipeline has at most one page stage.", index, null));
+                return;
+            }
+
+            // Only an internal contract 2 call can write both ways of asking for a count. They are two
+            // answers of one count aggregate (totalCount, and pageInfo.count): a page that carried both
+            // would answer a total of rows nobody counted, so it is refused.
+            if (contract2 && stage.IncludeTotalCount && stage.Count is { Asked: true })
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidPageLimit,
+                    Message = "A page asks for its count one way: 'includeTotalCount' or 'count', not both.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = "page", ["members"] = new[] { "includeTotalCount", "count" }, ["reason"] = "exclusive" },
+                });
                 return;
             }
 

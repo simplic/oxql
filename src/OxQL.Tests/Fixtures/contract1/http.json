@@ -38,5 +38,21 @@
     },
     "bytes": "eyJ0eXBlIjoidmFsaWRhdGlvbl9lcnJvciIsInRpdGxlIjoiVGhlIHJlcXVlc3QgY291bGQgbm90IGJlIGJvdW5kLiIsImVycm9ycyI6W3siY29kZSI6IlVOS05PV05fUEFUSCIsIm1lc3NhZ2UiOiInbm9wZScgaXMgbm90IGEgcGF0aCBvZiBwcm9iZS5vcmRlci4iLCJzdGFnZSI6MCwicGF0aCI6Im5vcGUifV19",
     "body": "{\u0022type\u0022:\u0022validation_error\u0022,\u0022title\u0022:\u0022The request could not be bound.\u0022,\u0022errors\u0022:[{\u0022code\u0022:\u0022UNKNOWN_PATH\u0022,\u0022message\u0022:\u0022\u0027nope\u0027 is not a path of probe.order.\u0022,\u0022stage\u0022:0,\u0022path\u0022:\u0022nope\u0022}]}"
+  },
+  "query-refused-newer-stage-member-null": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "bytes": "eyJ0eXBlIjoidmFsaWRhdGlvbl9lcnJvciIsInRpdGxlIjoiVGhlIHJlcXVlc3QgY291bGQgbm90IGJlIGJvdW5kLiIsImVycm9ycyI6W3siY29kZSI6IkxFR0FDWV9TVEFHRV9VTlNVUFBPUlRFRCIsIm1lc3NhZ2UiOiInY291bnQnIGlzIG5vdCBhIG1lbWJlciBvZiBwYWdlOyBwYWdlIGNhcnJpZXMgbGltaXQsIG9mZnNldCwgY3Vyc29yLCBpbmNsdWRlVG90YWxDb3VudC4iLCJzdGFnZSI6MH1dfQ==",
+    "body": "{\u0022type\u0022:\u0022validation_error\u0022,\u0022title\u0022:\u0022The request could not be bound.\u0022,\u0022errors\u0022:[{\u0022code\u0022:\u0022LEGACY_STAGE_UNSUPPORTED\u0022,\u0022message\u0022:\u0022\u0027count\u0027 is not a member of page; page carries limit, offset, cursor, includeTotalCount.\u0022,\u0022stage\u0022:0}]}"
+  },
+  "query-refused-newer-stage-members": {
+    "status": 400,
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "bytes": "eyJ0eXBlIjoidmFsaWRhdGlvbl9lcnJvciIsInRpdGxlIjoiVGhlIHJlcXVlc3QgY291bGQgbm90IGJlIGJvdW5kLiIsImVycm9ycyI6W3siY29kZSI6IkxFR0FDWV9TVEFHRV9VTlNVUFBPUlRFRCIsIm1lc3NhZ2UiOiInY291bnQsIHNraXAsIHVwVG8nIGlzIG5vdCBhIG1lbWJlciBvZiBwYWdlOyBwYWdlIGNhcnJpZXMgbGltaXQsIG9mZnNldCwgY3Vyc29yLCBpbmNsdWRlVG90YWxDb3VudC4iLCJzdGFnZSI6MH1dfQ==",
+    "body": "{\u0022type\u0022:\u0022validation_error\u0022,\u0022title\u0022:\u0022The request could not be bound.\u0022,\u0022errors\u0022:[{\u0022code\u0022:\u0022LEGACY_STAGE_UNSUPPORTED\u0022,\u0022message\u0022:\u0022\u0027count, skip, upTo\u0027 is not a member of page; page carries limit, offset, cursor, includeTotalCount.\u0022,\u0022stage\u0022:0}]}"
   }
 }

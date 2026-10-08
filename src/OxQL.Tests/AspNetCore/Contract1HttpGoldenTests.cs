@@ -45,6 +45,9 @@ public class Contract1HttpGoldenTests
         { "query-newer-members", "/OxQL/query", $$"""{ "entityType": "probe.order", "timing": true, "maxTimeMs": 1, "filter": [{ "where": { "number": { "eq": "none" } } }], "pipeline": [{{Page}}] }""" },
         { "query-newer-members-of-another-kind", "/OxQL/query", $$"""{ "entityType": "probe.order", "timing": "yes", "maxTimeMs": { "ms": "soon" }, "filter": 5, "pipeline": [{{Page}}] }""" },
         { "query-refused", "/OxQL/query", """{ "entityType": "probe.order", "timing": 1, "pipeline": [{ "match": { "nope": { "eq": 1 } } }] }""" },
+        // A member contract 2 added to a stage is one contract 1 does not have: named among the unknown ones where it was written.
+        { "query-refused-newer-stage-members", "/OxQL/query", """{ "entityType": "probe.order", "pipeline": [{ "page": { "count": true, "skip": 5, "upTo": 1 } }] }""" },
+        { "query-refused-newer-stage-member-null", "/OxQL/query", """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 5, "count": null } }] }""" },
         { "batch", "/OxQL/batch", $$"""{ "maxTimeMs": 5000, "queries": [{ "entityType": "probe.order", "timing": true, "pipeline": [{{Page}}] }, { "entityType": "probe.order", "timing": [1], "maxTimeMs": "x", "pipeline": [{ "match": { "nope": { "eq": 1 } } }] }, { "entityType": "probe.order", "pipeline": [{ "page": { "limit": 2 } }] }] }""" },
     };
 

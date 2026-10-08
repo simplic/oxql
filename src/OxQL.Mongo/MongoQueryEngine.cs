@@ -141,7 +141,20 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A count-only request reads no page: the count is refined step by step within its budget.
         if (bound.Page is { CountOnly: true, Count: { } ladder } && compiled.CountStages is { } counted)
         {
-            var known = await CountLadderAsync(bound, counted, ladder, runOptions, context, cancellationToken).ConfigureAwait(false);
+            CountInfo known;
+
+            try
+            {
+                known = await CountLadderAsync(bound, counted, ladder, runOptions, context, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CountRefused refused)
+            {
+                // What the database refuses of the request itself (a pattern it cannot compile, a value over
+                // its limits) is the refusal the same request with a page gets, not a count nobody knows.
+                Log(compiled, timer, 0, false, false, context, refused.Refusal, resolveCalls, 0);
+
+                return QueryOutcome.Of(refused.Refusal);
+            }
 
             Log(compiled, timer, 0, false, known is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, 0);
 
@@ -616,6 +629,11 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 var timeout = exception is TimeoutException or OperationCanceledException or MongoExecutionTimeoutException or MongoCommandException { Code: 50 };
                 var ms = (long)timer.Elapsed.TotalMilliseconds;
 
+                // The first step failing for what the request asks is the request's refusal, as with a page; a
+                // fault of the database or the network leaves the count unknown, and a later step leaves its bound.
+                if (!timeout && proven == 0 && RequestError(exception) is { } refusal)
+                    throw new CountRefused(refusal);
+
                 if (!timeout)
                     logger.LogWarning(exception, "OxQL count step failed. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
 
@@ -625,6 +643,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                     : new CountInfo { State = CountInfo.Unknown, Reason = timeout ? CountInfo.Timeout : CountInfo.Failed, Ms = ms };
             }
         }
+    }
+
+    /// <summary>The refusal a count-only request ends in when the database refuses what the request asks.</summary>
+    private sealed class CountRefused(Refusal refusal) : Exception
+    {
+        public Refusal Refusal { get; } = refusal;
     }
 
     /// <summary>Stops what a request still runs beside its page when the request ends, however it ends.</summary>
@@ -841,31 +865,44 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             case MongoCommandException command when command.Code == 50:
                 return Refusal.Timeout("The query exceeded its time budget.");
 
-            // 5414201: a keyed window ($setWindowFields) over its memory limit, which a remote
-            // lookup ranking many children per key without an index can reach.
-            case MongoCommandException command when command.Code is 292 or 16819 or 16820 or 16945 or 5414201:
-                return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match.");
-
-            // An accumulator over its memory cap, which spilling to disk does not lift, and a
-            // row that outgrew the document size limit: both are the query's cost, not a fault.
-            case MongoCommandException command when command.Code is 146 or 10334:
-                return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query builds a value larger than the server allows, typically a push or countDistinct over too many rows; narrow the match or group by more keys.");
-
-            // The binder validates a pattern with the .NET parser and the server compiles it
-            // with PCRE2; a construct only the first accepts is rejected here.
-            case MongoCommandException command when IsPatternRejection(command):
-                return Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]);
-
-            // The binder bounds how deep a condition nests; a pipeline the driver still cannot
-            // serialize this deep is the query's cost, not a fault of the host.
-            case BsonSerializationException:
-                return Refusal.NotExecutable(Codes.QueryTooExpensive, "The query nests deeper than the database accepts; flatten its conditions or joins.");
+            case var _ when RequestError(exception) is { } refusal:
+                return refusal;
 
             default:
                 logger.LogError(exception, "OxQL engine fault");
                 return Refusal.Internal(includeErrorDetails ? exception.Message : null);
         }
     }
+
+    /// <summary>
+    /// The refusal of a driver error that is the request's doing and not a fault or a timeout: what
+    /// it asks costs more than the database allows, or the database cannot compile a pattern of it.
+    /// Null for anything else.
+    /// </summary>
+    private static Refusal? RequestError(Exception exception) => exception switch
+    {
+        // 5414201: a keyed window ($setWindowFields) over its memory limit, which a remote
+        // lookup ranking many children per key without an index can reach.
+        MongoCommandException { Code: 292 or 16819 or 16820 or 16945 or 5414201 } =>
+            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match."),
+
+        // An accumulator over its memory cap, which spilling to disk does not lift, and a
+        // row that outgrew the document size limit: both are the query's cost, not a fault.
+        MongoCommandException { Code: 146 or 10334 } =>
+            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query builds a value larger than the server allows, typically a push or countDistinct over too many rows; narrow the match or group by more keys."),
+
+        // The binder validates a pattern with the .NET parser and the server compiles it
+        // with PCRE2; a construct only the first accepts is rejected here.
+        MongoCommandException command when IsPatternRejection(command) =>
+            Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]),
+
+        // The binder bounds how deep a condition nests; a pipeline the driver still cannot
+        // serialize this deep is the query's cost, not a fault of the host.
+        BsonSerializationException =>
+            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query nests deeper than the database accepts; flatten its conditions or joins."),
+
+        _ => null,
+    };
 
     /// <summary>
     /// Whether the server refused to compile a pattern: its dedicated code, or the generic

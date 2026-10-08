@@ -553,4 +553,46 @@ public class PageCountTests
         Wire((await Run(engine, """{ "limit": 0, "count": { "budgetMs": 200 } }""")).PageInfo.Count).Should().Be("""{"state":"unknown","reason":"failed"}""");
         watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
+
+    [Fact]
+    public async Task An_internal_page_that_asks_for_its_count_both_ways_is_refused_and_either_way_alone_is_answered()
+    {
+        var (engine, runner) = Host(rows: 6, matching: 40);
+        var owner = BindHost.Context() with { Internal = true };
+
+        // Only an internal call can write includeTotalCount under contract 2; with 'count' beside it the total would be of rows nobody counted.
+        var both = (await engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5, "includeTotalCount": true, "count": true } }]"""), owner)).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal;
+
+        both.Status.Should().Be(400);
+        both.Errors.Should().ContainSingle().Which.Should().Match<QueryValidationError>(error => error.Code == Codes.InvalidPageLimit && error.Stage == 0);
+        runner.Calls.Should().BeEmpty();
+
+        (await Run(engine, """{ "limit": 5, "includeTotalCount": true }""", owner)).PageInfo.TotalCount.Should().Be(40);
+        Wire((await Run(engine, """{ "limit": 5, "count": true, "includeTotalCount": false }""", owner)).PageInfo.Count).Should().Be("""{"state":"exact","value":40}""");
+    }
+
+    [Fact]
+    public async Task What_the_database_refuses_of_the_request_refuses_the_count_alone_as_it_refuses_a_page()
+    {
+        var (engine, runner) = Host(rows: 0, matching: 500_000);
+        const string Alone = """[{ "page": { "limit": 0, "count": { "budgetMs": 200 } } }]""";
+
+        // A request the database cannot run at all: the same request with a page is 422, and so is its count.
+        runner.OnCount = _ => Task.FromException(new BsonSerializationException("nested too deep"));
+
+        var refused = (await engine.ExecuteAsync(BindHost.Request(Order, Alone), BindHost.Context())).Should().BeOfType<QueryOutcome.Refused>("a 200 with an unknown count would hide why").Subject.Refusal;
+
+        refused.Status.Should().Be(422);
+        refused.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
+
+        // A later step that fails so leaves the bound the first proved: something is known.
+        runner.OnCount = bound => bound == 1_000 ? Task.CompletedTask : Task.FromException(new BsonSerializationException("nested too deep"));
+        Wire((await Run(engine, """{ "limit": 0, "count": { "budgetMs": 200 } }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":1000,"stoppedBy":"time"}""");
+
+        // Beside a page a count that fails never fails the rows.
+        var (paged, beside) = Host(rows: 6, matching: 500_000);
+
+        beside.OnCount = _ => Task.FromException(new BsonSerializationException("nested too deep"));
+        Wire((await Run(paged, """{ "limit": 5, "count": true }""")).PageInfo.Count).Should().Be("""{"state":"unknown","reason":"failed"}""");
+    }
 }

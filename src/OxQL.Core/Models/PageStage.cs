@@ -47,6 +47,14 @@ public sealed record PageStage
     public PageCount? Count { get; init; }
 
     /// <summary>
+    /// Where the caller wrote <c>count</c> among the members the stage does not have (the number of
+    /// such members written before it); null when it was not written. Contract 1 never had the
+    /// member: there it is one of them, named in the place it was written, whatever it holds.
+    /// </summary>
+    [JsonIgnore]
+    public int? CountWrittenAt { get; init; }
+
+    /// <summary>
     /// Member names the caller wrote that the stage does not have — <c>skip</c> for
     /// <c>offset</c> among them. The binder refuses them: a dropped member would take the page
     /// from the top.
@@ -147,7 +155,7 @@ internal sealed class PageStageConverter : JsonConverter<PageStage>
                 case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
                 case "cursor": stage = stage with { Cursor = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null }; break;
                 case "offset": stage = stage with { Offset = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null, OffsetWritten = true }; break;
-                case "count": stage = stage with { Count = PageCount.Read(property.Value) }; break;
+                case "count": stage = stage with { Count = PageCount.Read(property.Value), CountWrittenAt = unknown.Count }; break;
                 case "includeTotalCount":
                     stage = stage with { IncludeTotalCountWritten = true };
                     stage = property.Value.ValueKind switch

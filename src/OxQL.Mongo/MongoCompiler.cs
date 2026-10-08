@@ -825,7 +825,7 @@ public static class MongoCompiler
         var cuttable = !grouped && !reshaped && !sortsCollection
             && bound.PagingMode == PagingMode.Keyset && bound.Sort is not null
             && filter.Exact
-            && (filter.Element.Count == 0 || unwind is { PreserveNull: false, Flatten: null });
+            && (filter.Element.Count == 0 || (unwind is { PreserveNull: false, Flatten: null } && filter.AskedOfCollection));
 
         // The element's position after the parents' members and before the key (`number, position`):
         // within one parent it is the order the elements have anyway, but two parents that tie on the
@@ -840,7 +840,7 @@ public static class MongoCompiler
 
         var parentsFirst = cuttable && (byPosition || rest.Count == 0 || IsKey(rest[0]));
 
-        var prefiltered = unwind is { PreserveNull: false, Flatten: null, As: not null } ? filter.ElementPaths : [];
+        var prefiltered = unwind is { PreserveNull: false, Flatten: null, As: not null } && filter.AskedOfCollection ? filter.ElementPaths : [];
 
         return parentsFirst || renameLate || prefiltered.Count > 0
             ? new UnwindPlacement(at, parentsFirst, prefiltered, renameLate) { IndexAscending = parentsFirst && byPosition ? rest[0].Ascending : null }
@@ -855,18 +855,45 @@ public static class MongoCompiler
     private const string ReservedFirst = Aliases.ReservedPrefix + "oxFirst";
 
     /// <summary>
+    /// How many rows the database's <c>$unwind</c> answers for a row, as an expression over the row
+    /// before it: the size of an array, its null elements counted (each is a row), none for a null or
+    /// a member that is not stored, and one for any other value (the unwind of a value that is no
+    /// array answers the value itself). It is what the engine asks before an unwind wherever it must
+    /// know whether, or how many, rows a parent yields.
+    /// </summary>
+    private static BsonDocument UnwoundRows(string storage)
+    {
+        var collection = "$" + storage;
+        var absent = new BsonDocument("$in", new BsonArray { new BsonDocument("$type", collection), new BsonArray { "missing", "null", "undefined" } });
+
+        return new BsonDocument("$cond", new BsonArray
+        {
+            new BsonDocument("$isArray", collection),
+            new BsonDocument("$size", collection),
+            new BsonDocument("$cond", new BsonArray { absent, 0, 1 }),
+        });
+    }
+
+    /// <summary>
     /// The order and the cut of the parents of a page sorted by the entity's members, then the
     /// position of the element, then the key (<see cref="UnwindPlacement.IndexAscending"/>).
     /// <para>
     /// The rows of the parents that tie on the members interleave: all their rows at one position
     /// before any at the next, by the key within a position. A parent's rows stand at the positions
-    /// 0 … n − 1 without a gap, so its rows still to come start at one position, its first: 0
-    /// ascending and n − 1 descending on a first page; after a cursor's position <c>(members, p, key)</c>
-    /// a parent that ties with it on the members starts at <c>p</c> when its key comes after the
-    /// position's, else one position further, and has no row left when that lies outside its
-    /// collection. Ordered by the members, that first position and the key, a parent stands before
-    /// every parent whose first row to come follows its own, so the first <c>n</c> rows of the page lie
-    /// in the first <c>n</c> parents: each parent before a row's own has a row to come that precedes it.
+    /// <c>lo … hi</c> without a gap: 0 … n − 1 for an array of n, and the one row of a value that is no
+    /// array at the position the database gives it, none (null), which orders before 0 and is counted
+    /// here as −1. Its rows still to come start at one position, its first: <c>lo</c> ascending and
+    /// <c>hi</c> descending on a first page; after a cursor's position <c>(members, p, key)</c> a parent
+    /// that ties with it on the members starts at <c>p</c> when its key comes after the position's, else
+    /// one position further, and has no row left when that lies outside <c>lo … hi</c>. Ordered by the
+    /// members, that first position and the key, a parent stands before every parent whose first row
+    /// to come follows its own, so the first <c>n</c> rows of the page lie in the first <c>n</c>
+    /// parents: each parent before a row's own has a row to come that precedes it.
+    /// </para>
+    /// <para>
+    /// The first position is computed for every page, the first ascending one included: whether a
+    /// parent beyond the cut holds a value that is no array, whose row precedes every row at position
+    /// 0 of the parents it ties with, is known only by reading it. No index orders the cut.
     /// </para>
     /// </summary>
     private static List<BsonDocument> ParentsByPosition(BoundStage.Unwind unwind, IReadOnlyList<BoundSortField> sortFields, bool ascending, CursorPayload? position, long reach)
@@ -878,18 +905,10 @@ public static class MongoCompiler
         foreach (var field in leading)
             order[field.Path.Storage!] = field.Ascending ? 1 : -1;
 
-        // Ascending on a first page every parent starts at position 0: the members and the key order them.
-        if (ascending && position is null)
-        {
-            order[KeyStorage] = keyAscending ? 1 : -1;
-
-            return [new BsonDocument("$sort", order), new BsonDocument("$limit", reach)];
-        }
-
-        var collection = "$" + unwind.Path.Storage;
-        var size = new BsonDocument("$cond", new BsonArray { new BsonDocument("$isArray", collection), new BsonDocument("$size", collection), 0 });
-        BsonValue last = new BsonDocument("$subtract", new BsonArray { size, 1 });
-        BsonValue first = ascending ? 0 : last;
+        // The positions a parent's rows stand at: lo … hi, hi below lo where it has none.
+        BsonValue lo = new BsonDocument("$cond", new BsonArray { new BsonDocument("$isArray", "$" + unwind.Path.Storage), 0, NoPosition });
+        BsonValue hi = new BsonDocument("$subtract", new BsonArray { new BsonDocument("$add", new BsonArray { lo, UnwoundRows(unwind.Path.Storage!) }), 1 });
+        BsonValue first = ascending ? lo : hi;
         var stages = new List<BsonDocument>();
 
         if (position is not null)
@@ -899,7 +918,8 @@ public static class MongoCompiler
             // A value of the position is data, never a field path or an operator.
             static BsonDocument Literal(BsonValue value) => new("$literal", value);
 
-            var at = At(unwind.IncludeIndex!) is { IsNumeric: true } number ? number.ToInt64() : 0;
+            // The position of a row of a value that is no array is none: before every position of an array.
+            var at = At(unwind.IncludeIndex!) is { IsNumeric: true } number ? number.ToInt64() : NoPosition;
             var ties = leading
                 .Select(field => (BsonValue)new BsonDocument("$eq", new BsonArray { new BsonDocument("$ifNull", new BsonArray { "$" + field.Path.Storage, BsonNull.Value }), Literal(At(field.Path.Wire) is { IsBsonNull: false, IsBsonUndefined: false } value ? value : BsonNull.Value) }))
                 .ToList();
@@ -907,16 +927,16 @@ public static class MongoCompiler
             var later = new BsonDocument(keyAscending ? "$gt" : "$lt", new BsonArray { "$" + KeyStorage, Literal(At(KeyStorage)) });
             BsonValue next = new BsonDocument("$cond", new BsonArray { later, at, ascending ? at + 1 : at - 1 });
 
-            first = new BsonDocument("$cond", new BsonArray { tied, ascending ? next : new BsonDocument("$min", new BsonArray { last, next }), first });
+            first = new BsonDocument("$cond", new BsonArray { tied, new BsonDocument(ascending ? "$max" : "$min", new BsonArray { first, next }), first });
         }
 
         stages.Add(new BsonDocument("$set", new BsonDocument(ReservedFirst, first)));
 
-        // A parent the position has passed has no row left: ascending its first lies beyond its collection, descending before it.
+        // A parent the position has passed has no row left: ascending its first lies beyond its last position, descending before its first.
         if (position is not null)
-            stages.Add(new BsonDocument("$match", ascending
-                ? new BsonDocument("$expr", new BsonDocument("$lt", new BsonArray { "$" + ReservedFirst, size }))
-                : new BsonDocument(ReservedFirst, new BsonDocument("$gte", 0))));
+            stages.Add(new BsonDocument("$match", new BsonDocument("$expr", ascending
+                ? new BsonDocument("$lte", new BsonArray { "$" + ReservedFirst, hi })
+                : new BsonDocument("$gte", new BsonArray { "$" + ReservedFirst, lo }))));
 
         order[ReservedFirst] = ascending ? 1 : -1;
         order[KeyStorage] = keyAscending ? 1 : -1;
@@ -927,6 +947,9 @@ public static class MongoCompiler
 
         return stages;
     }
+
+    /// <summary>The position of the one row of a value that is no array, as the cut of the parents counts it: the database writes none (null), which orders before 0.</summary>
+    private const int NoPosition = -1;
 
     /// <summary>Whether a sort field is the entity's key, from which on the order lies within one parent.</summary>
     private static bool IsKey(BoundSortField field) => field.Path.Storage == KeyStorage && field.Path.Root.StoragePrefix.Length == 0;
@@ -957,6 +980,42 @@ public static class MongoCompiler
     {
         /// <summary>The paths the element conditions read, in the order they are written.</summary>
         public IReadOnlyList<string> ElementPaths => Element.SelectMany(Paths).Select(path => path.Wire).Distinct(StringComparer.Ordinal).ToList();
+
+        /// <summary>
+        /// Whether the element conditions can be asked of the collection before the unwind: there are
+        /// some, and an element that is no object (a null in the array, a scalar) passes none of them
+        /// together, as it passes none after the unwind, where every path under its alias is absent.
+        /// <c>$elemMatch</c> looks at objects only, so conditions an absent member passes (<c>neq</c>,
+        /// <c>nin</c>, <c>exists: false</c>, <c>eq null</c>, a <c>not</c>) would drop the parent of a null
+        /// element whose row the unwind answers; such conditions are asked after the unwind alone.
+        /// </summary>
+        public bool AskedOfCollection => Element.Count > 0 && !Element.All(PassedByAbsent);
+
+        /// <summary>
+        /// Whether a condition may hold of an element none of whose members exists. Exact where it says
+        /// no (a comparison with a value, a pattern, a variant, an <c>any</c>); yes wherever it is not
+        /// certain, so a condition is asked of the collection only when no absent element can pass it.
+        /// </summary>
+        private static bool PassedByAbsent(BoundCondition condition) => condition switch
+        {
+            BoundCondition.And and => and.Conditions.All(PassedByAbsent),
+            BoundCondition.Or or => or.Conditions.Any(PassedByAbsent),
+            BoundCondition.Any => false,
+            BoundCondition.Leaf { Operand: BoundOperand.Raw } => true,
+            BoundCondition.Leaf { Op: "eq" or "gt" or "gte" or "lt" or "lte" } leaf => leaf.Operand is BoundOperand.Null || Values(leaf.Operand).Any(value => value.IsBsonNull),
+            BoundCondition.Leaf { Op: "in" } leaf => leaf.Operand is BoundOperand.Null || Values(leaf.Operand).Any(value => value.IsBsonNull),
+            BoundCondition.Leaf { Op: "exists" } leaf => !(leaf.Operand is BoundOperand.Single { Value: BsonBoolean { Value: true } }),
+            BoundCondition.Leaf { Op: "contains" or "startsWith" or "endsWith" or "regex" or "is" } => false,
+            _ => true,
+        };
+
+        private static IEnumerable<BsonValue> Values(BoundOperand operand) => operand switch
+        {
+            BoundOperand.Single single => [single.Value],
+            BoundOperand.Set set => set.Values,
+            BoundOperand.Tolerant tolerant => tolerant.Alternatives,
+            _ => [],
+        };
 
         public static UnwindFilter Of(BoundPipeline bound, int at)
         {
@@ -1004,11 +1063,21 @@ public static class MongoCompiler
 
     /// <summary>
     /// The filter asked of a row before its collection is unwound; null when there is nothing to ask.
-    /// The conditions on the element, written after the unwind, as one <c>$elemMatch</c>: some element
-    /// passes them all, which is exactly "the row yields a row after the unwind and its filters".
+    /// It keeps exactly the rows that yield a row after the unwind and its filters, whatever the
+    /// member holds (<see cref="UnwoundRows"/>).
+    /// <para>
+    /// The conditions on the element, written after the unwind, are asked of the collection where no
+    /// absent element passes them (<see cref="UnwindFilter.AskedOfCollection"/>): of an array as one
+    /// <c>$elemMatch</c> (some element passes them all), and of a value that is no array as they are
+    /// written, on the value itself, which is the one element its unwind answers.
+    /// </para>
+    /// <para>
     /// With <paramref name="parents"/> (the parents are cut before the unwind) every row kept has to
     /// yield one, so the conditions on the entity's own members are asked here as well, and a row
-    /// whose collection holds nothing is dropped where the unwind would drop it.
+    /// whose collection yields none is dropped where the unwind would drop it: an empty array, a null
+    /// and a member that is not stored, and nothing else. An array that holds a null beside its
+    /// elements, or nothing but nulls, yields a row for each.
+    /// </para>
     /// </summary>
     private static BsonDocument? UnwindPrefilter(BoundPipeline bound, int at, bool collated, bool parents)
     {
@@ -1021,16 +1090,24 @@ public static class MongoCompiler
             foreach (var condition in filter.Parent)
                 conditions.Add(Filter(condition, null, collated));
 
-        if (filter.Element.Count > 0 && unwind is { PreserveNull: false, Flatten: null, As: not null })
+        if (filter.AskedOfCollection && unwind is { PreserveNull: false, Flatten: null, As: not null })
         {
             var asked = new BsonArray(filter.Element.Select(condition => (BsonValue)Renamed(Filter(condition, null, collated), (unwind.As!, ""))));
+            var ofValue = new BsonArray { new BsonDocument(storage, new BsonDocument("$not", new BsonDocument("$type", "array"))) };
 
-            conditions.Add(new BsonDocument(storage, new BsonDocument("$elemMatch", asked.Count == 1 ? asked[0] : new BsonDocument("$and", asked))));
+            ofValue.AddRange(filter.Element.Select(condition => (BsonValue)Renamed(Filter(condition, null, collated), (unwind.As!, storage))));
+
+            conditions.Add(new BsonDocument("$or", new BsonArray
+            {
+                new BsonDocument(storage, new BsonDocument("$elemMatch", asked.Count == 1 ? asked[0] : new BsonDocument("$and", asked))),
+                new BsonDocument("$and", ofValue),
+            }));
         }
         else if (parents && !unwind.PreserveNull)
         {
-            // What an unwind that does not preserve drops: a collection that is missing, null or empty.
-            conditions.Add(new BsonDocument(storage, new BsonDocument("$nin", new BsonArray { BsonNull.Value, new BsonArray() })));
+            // What an unwind that does not preserve drops, and only that: no equality with null or with
+            // an empty array, which an array also meets by one of its elements.
+            conditions.Add(new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { UnwoundRows(storage), 0 })));
         }
 
         return conditions.Count switch

@@ -77,7 +77,7 @@ public class VariantCompileTests
 
         MatchOf(any).ShouldBeBson(BsonDocument.Parse("""{ "Stalls": { "$elemMatch": { "Occupant._t": { "$in": ["Cat"] } } } }"""));
         unwound.PageStages.Should().Contain(stage => stage.ToJson() == BsonDocument.Parse("""{ "$match": { "Stalls.Occupant._t": { "$in": ["Cat"] } } }""").ToJson(), "the element is read where the unwind left it until the page is taken");
-        unwound.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ "$match": { "Stalls": { "$elemMatch": { "Occupant._t": { "$in": ["Cat"] } } } } }"""), "and asked of the collection before the unwind, relative to the element as inside any");
+        unwound.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ "$match": { "$or": [ { "Stalls": { "$elemMatch": { "Occupant._t": { "$in": ["Cat"] } } } }, { "$and": [ { "Stalls": { "$not": { "$type": "array" } } }, { "Stalls.Occupant._t": { "$in": ["Cat"] } } ] } ] } }"""), "and asked of the collection before the unwind, relative to the element as inside any");
         MongoCompiler.Compile(unwound.Bound, new CompileOptions(10_000, null, 100_000) { AsWritten = true }).PageStages
             .Should().Contain(stage => stage.ToJson() == BsonDocument.Parse("""{ "$match": { "stall.Occupant._t": { "$in": ["Cat"] } } }""").ToJson(), "as written, under the alias");
     }

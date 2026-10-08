@@ -257,7 +257,7 @@ public class LateJoinTests
         // The parents with a child that passes the match, in key order, cut to the page's reach; the unwind; the
         // match on the child where the unwind left it; the page; then the child under the name the unwind writes.
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit", "$unwind", "$match", "$sort", "$limit", "$set", "$unset", "$project");
-        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { orders: { $elemMatch: { Number: "n-1" } } } }"""), "a parent no child of which passes is not unwound");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { orders: { $elemMatch: { Number: "n-1" } } }, { $and: [ { orders: { $not: { $type: "array" } } }, { "orders.Number": "n-1" } ] } ] } }"""), "a parent no child of which passes is not unwound");
         compiled.PageStages[7]["$match"].AsBsonDocument.Names.Should().Equal(["orders.Number"], "the child's member where the unwind left the child");
         compiled.PageStages[10].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
 

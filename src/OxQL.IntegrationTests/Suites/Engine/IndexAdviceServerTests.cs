@@ -354,4 +354,44 @@ public class IndexAdviceServerTests
         lookupAfter["indexesUsed"].AsBsonArray.Select(name => name.AsString).Should().NotContain("_id_").And.ContainSingle();
         lookupAfter["totalDocsExamined"].ToInt64().Should().Be(2_000, "each joined row is read once, for the row it belongs to");
     }
+
+    [Fact]
+    public async Task The_index_explain_advises_for_unwound_rows_bounds_what_is_asked_of_the_collection_and_orders_the_parents()
+    {
+        // 3 000 shipments of two items each, one in fifty holding an item of the order number asked for.
+        await using var seeded = new Seeded(await MongoFixture.CreateDatabaseAsync("index_advice_unwind"));
+        var day = new DateTime(2026, 1, 1, 8, 0, 0, DateTimeKind.Utc);
+
+        await seeded.Database.GetCollection<BsonDocument>(Collection).InsertManyAsync(Enumerable.Range(0, 3_000).Select(n => new BsonDocument
+        {
+            ["_id"] = new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard),
+            ["OrganizationId"] = EngineDirect.OrganisationValue,
+            ["ShipmentNumber"] = "S-" + n,
+            ["LoadStart"] = day.AddMinutes(n),
+            ["Items"] = new BsonArray { new BsonDocument { ["OrderNumber"] = n % 50, ["Text"] = "a" }, new BsonDocument { ["OrderNumber"] = 1_000 + n % 50, ["Text"] = "b" } },
+            ["Notes"] = new string('x', 600),
+        }));
+
+        const string pipeline = """[{ "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [{ "loadStart": "asc" }] }, { "page": { "limit": 10 } }]""";
+        const string filter = """[{ "id": "col:order", "where": { "item.orderNumber": { "eq": 7 } } }]""";
+
+        var before = await ServerAsync(seeded, Transport, Corpus.Shipment, pipeline, filter);
+
+        before.Stages.Should().Contain("COLLSCAN", $"{before}");
+        before.Docs.Should().Be(3_000);
+
+        var advised = Of(await AdvisoryAsync(seeded, Transport, Corpus.Shipment, pipeline, filter), "rows");
+
+        advised["key"]!.ToJsonString().Should().Be("""{"OrganizationId":1,"Items.OrderNumber":1,"LoadStart":1,"_id":1}""");
+        advised["multikey"]!.GetValue<bool>().Should().BeTrue();
+
+        await CreateAsync(seeded, advised);
+
+        // The condition is asked of the collection before the unwind, of an array and of a value that is no
+        // array alike: both read the advised index, in its order, and the page reads a page's worth of parents.
+        var served = await ServerAsync(seeded, Transport, Corpus.Shipment, pipeline, filter);
+
+        served.Stages.Should().Contain("IXSCAN").And.NotContain("COLLSCAN", $"{served}").And.NotContain("SORT", $"the index orders the parents: {served}");
+        served.Docs.Should().BeLessThanOrEqualTo(24, $"the parents the page can reach, read at most once for each form the condition is asked in: {served}");
+    }
 }

@@ -442,7 +442,7 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { Items: { $nin: [null, []] } } }""",
+            ItemsYieldARow,
             """{ $sort: { _id: 1 } }""",
             "{ $limit: 11 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
@@ -464,7 +464,7 @@ public class GoldenPipelineTests
 
         ShouldBe(next.PageStages,
             $$"""{ $match: { $and: [ {{OrgJson}}, { _id: { $gte: {{id.ToJson()}} } } ] } }""",
-            """{ $match: { Items: { $nin: [null, []] } } }""",
+            ItemsYieldARow,
             """{ $sort: { _id: 1 } }""",
             "{ $limit: 12 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
@@ -481,19 +481,34 @@ public class GoldenPipelineTests
             BsonDocument.Parse("{ $limit: 31 }").ToJson(), BsonDocument.Parse("{ $skip: 20 }").ToJson(), BsonDocument.Parse("{ $limit: 11 }").ToJson());
     }
 
+    /// <summary>How many rows the unwind of <c>Items</c> answers for a row: an array's size, none for a null or a missing member, one for any other value.</summary>
+    private const string ItemRows = """{ $cond: [ { $isArray: "$Items" }, { $size: "$Items" }, { $cond: [ { $in: [ { $type: "$Items" }, ["missing", "null", "undefined"] ] }, 0, 1 ] } ] }""";
+
+    /// <summary>What a parent cut before the unwind is asked: that its unwind answers a row. No equality with null or an empty array, which an array meets by an element.</summary>
+    private const string ItemsYieldARow = $$"""{ $match: { $expr: { $gt: [ {{ItemRows}}, 0 ] } } }""";
+
+    /// <summary>The first and the last position a parent's rows stand at: 0 … n − 1 of an array, −1 for the one row of a value that is no array.</summary>
+    private const string ItemsLo = """{ $cond: [ { $isArray: "$Items" }, 0, -1 ] }""";
+
+    private const string ItemsHi = $$"""{ $subtract: [ { $add: [ {{ItemsLo}}, {{ItemRows}} ] }, 1 ] }""";
+
     [Fact]
     public async Task The_position_after_the_parents_members_does_not_keep_the_parents_from_being_cut_first()
     {
-        // `number, position`: within a parent the position is the order its elements have anyway. Ascending on
-        // a first page every parent starts at position 0, so the members and the key order the parents.
+        // `number, position`: within a parent the position is the order its elements have anyway. Each parent is
+        // numbered by the first position it has a row at (0 for an array, before it for a value that is no array),
+        // and the members, that position and the key order the parents: on a first page too, since the one row of
+        // a value that is no array precedes every row at position 0 of the parents it ties with.
         const string Pipeline = """[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "number": "asc" }, { "at": "asc" }] }, { "page": { "limit": 10 } }]""";
         var compiled = await Compile(Pipeline);
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { Items: { $nin: [null, []] } } }""",
-            """{ $sort: { Number: 1, _id: 1 } }""",
+            ItemsYieldARow,
+            $$"""{ $set: { __oxFirst: {{ItemsLo}} } }""",
+            """{ $sort: { Number: 1, __oxFirst: 1, _id: 1 } }""",
             "{ $limit: 11 }",
+            """{ $unset: "__oxFirst" }""",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "at" } }""",
             """{ $sort: { Number: 1, at: 1, _id: 1 } }""",
             "{ $limit: 11 }",
@@ -507,13 +522,12 @@ public class GoldenPipelineTests
         var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
         var payload = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["Number"] = "$n", ["at"] = 3 }, served: 10);
         var next = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(payload)}}" }"""));
-        const string Size = """{ $cond: [ { $isArray: "$Items" }, { $size: "$Items" }, 0 ] }""";
 
         ShouldBe(next.PageStages,
             $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "$n" } } ] } }""",
-            """{ $match: { Items: { $nin: [null, []] } } }""",
-            $$"""{ $set: { __oxFirst: { $cond: [ { $eq: [ { $ifNull: [ "$Number", null ] }, { $literal: "$n" } ] }, { $cond: [ { $gt: [ "$_id", { $literal: {{id.ToJson()}} } ] }, NumberLong(3), NumberLong(4) ] }, 0 ] } } }""",
-            $$"""{ $match: { $expr: { $lt: [ "$__oxFirst", {{Size}} ] } } }""",
+            ItemsYieldARow,
+            $$"""{ $set: { __oxFirst: { $cond: [ { $eq: [ { $ifNull: [ "$Number", null ] }, { $literal: "$n" } ] }, { $max: [ {{ItemsLo}}, { $cond: [ { $gt: [ "$_id", { $literal: {{id.ToJson()}} } ] }, NumberLong(3), NumberLong(4) ] } ] }, {{ItemsLo}} ] } } }""",
+            $$"""{ $match: { $expr: { $lte: [ "$__oxFirst", {{ItemsHi}} ] } } }""",
             """{ $sort: { Number: 1, __oxFirst: 1, _id: 1 } }""",
             "{ $limit: 12 }",
             """{ $unset: "__oxFirst" }""",
@@ -524,20 +538,27 @@ public class GoldenPipelineTests
             """{ $set: { item: "$Items" } }""",
             """{ $unset: "Items" }""");
 
-        // Descending the first row of a parent is its last element: the parents are ordered by how many they hold.
+        // Descending the first row of a parent is its last element: the parents are ordered by the last position they hold a row at.
         var descending = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "number": "asc" }, { "at": "desc" }, { "id": "desc" }] }, { "page": { "limit": 10 } }]""");
 
         ShouldBe(descending.PageStages.Skip(2).Take(4).ToList(),
-            $$"""{ $set: { __oxFirst: { $subtract: [ {{Size}}, 1 ] } } }""",
+            $$"""{ $set: { __oxFirst: {{ItemsHi}} } }""",
             """{ $sort: { Number: 1, __oxFirst: -1, _id: -1 } }""",
             "{ $limit: 11 }",
             """{ $unset: "__oxFirst" }""");
         descending.Unwind!.IndexAscending.Should().BeFalse();
 
-        // The position alone: every parent ties, so the key orders them and nothing bounds a later page but the position.
+        // The position alone: every parent ties, so the first position and the key order them and nothing bounds a later page but the position.
         var alone = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "sort": [{ "at": "asc" }] }, { "page": { "limit": 10 } }]""");
 
-        ShouldBe(alone.PageStages.Take(4).ToList(), $"{{ $match: {OrgJson} }}", """{ $match: { Items: { $nin: [null, []] } } }""", """{ $sort: { _id: 1 } }""", "{ $limit: 11 }");
+        ShouldBe(alone.PageStages.Take(5).ToList(), $"{{ $match: {OrgJson} }}", ItemsYieldARow, $$"""{ $set: { __oxFirst: {{ItemsLo}} } }""", """{ $sort: { __oxFirst: 1, _id: 1 } }""", "{ $limit: 11 }");
+
+        // A position that is none (the row of a value that is no array) lies before every position of an array.
+        var none = MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = id, ["Number"] = "$n", ["at"] = BsonNull.Value }, served: 10);
+        var afterNone = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(none)}}" }"""));
+
+        afterNone.PageStages[2].ShouldBeBson(BsonDocument.Parse(
+            $$"""{ $set: { __oxFirst: { $cond: [ { $eq: [ { $ifNull: [ "$Number", null ] }, { $literal: "$n" } ] }, { $max: [ {{ItemsLo}}, { $cond: [ { $gt: [ "$_id", { $literal: {{id.ToJson()}} } ] }, -1, 0 ] } ] }, {{ItemsLo}} ] } } }"""));
     }
 
     [Theory]
@@ -560,7 +581,7 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { $and: [ { Number: { $ne: "x" } }, { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } ] } }""",
+            """{ $match: { $and: [ { Number: { $ne: "x" } }, { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } ] } }""",
             """{ $sort: { Number: 1, _id: 1 } }""",
             "{ $limit: 11 }",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
@@ -571,7 +592,7 @@ public class GoldenPipelineTests
             """{ $unset: "Items" }""");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            """{ $match: { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } }""",
+            """{ $match: { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } }""",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "__oxIx0" } }""",
             """{ $match: { $and: [ { "Items.Quantity": { $gt: 2 } }, { Number: { $ne: "x" } } ] } }""",
             "{ $limit: 1001 }",
@@ -582,7 +603,7 @@ public class GoldenPipelineTests
         var byPosition = await Compile("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "item.quantity": { "gt": 2 }, "at": { "gte": 1 } } }, { "page": { "limit": 10 } }]""");
 
         byPosition.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, ["item.quantity"], RenameLate: true));
-        byPosition.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { Items: { $elemMatch: { Quantity: { $gt: 2 } } } } }"""));
+        byPosition.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { Items: { $elemMatch: { Quantity: { $gt: 2 } } } }, { $and: [ { Items: { $not: { $type: "array" } } }, { "Items.Quantity": { $gt: 2 } } ] } ] } }"""));
         byPosition.PageStages[2].Contains("$unwind").Should().BeTrue();
 
         // A kept row without an element has no element to pass anything: nothing is asked before a preserving unwind.
@@ -590,6 +611,22 @@ public class GoldenPipelineTests
 
         preserved.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true));
         preserved.PageStages[1].Contains("$unwind").Should().BeTrue();
+
+        // What an element none of whose members exists passes (a null in the array) is not asked of the collection:
+        // $elemMatch looks at objects only and would drop the parent whose row the unwind answers. Asked after the unwind alone.
+        foreach (var absentPasses in new[] { """{ "item.quantity": { "neq": 2 } }""", """{ "item.quantity": { "nin": [1, 2] } }""", """{ "item.price.currency": { "eq": null } }""", """{ "item.price.currency": { "exists": false } }""",
+                     """{ "not": { "item.quantity": { "gt": 2 } } }""", """{ "or": [{ "item.quantity": { "gt": 2 } }, { "item.price.currency": { "in": ["a", null] } }] }""" })
+        {
+            var late = await Compile($$"""[{ "unwind": { "path": "items", "as": "item" } }, { "match": {{absentPasses}} }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
+
+            late.Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: false, [], RenameLate: true), absentPasses);
+            late.PageStages[1].Contains("$unwind").Should().BeTrue(absentPasses);
+            late.CountStages![1].Contains("$unwind").Should().BeTrue(absentPasses);
+        }
+
+        // Beside a condition no absent element passes, the conjunction fails for it, and all of it is asked.
+        (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 2 }, "item.price.currency": { "neq": "a" } } }, { "page": { "limit": 10 } }]"""))
+            .Unwind.Should().BeEquivalentTo(new UnwindPlacement(0, ParentsFirst: true, ["item.quantity", "item.price.currency"], RenameLate: true));
 
         // Two unwinds, a group after the unwind, and contract 1 run as written.
         (await Compile("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.stops", "as": "stop" } }, { "page": { "limit": 10 } }]""")).Unwind.Should().BeNull();

@@ -191,17 +191,17 @@ public class IndexAdvisorTests
         exact["index"]!.GetValue<string>().Should().Be("grid");
         exact.ContainsKey("without").Should().BeFalse();
 
-        // The sort keys all reversed order the rows the same way read backwards; the range key is not needed behind a sort.
-        var reversed = Only(await AdviseAsync(GridRows, GridFilter, [Index("back", ("State", 1), ("OrganizationId", 1), ("Count", 1), ("_id", -1))]));
+        // The sort keys all reversed order the rows the same way read backwards; the range key stands behind them, in either direction.
+        var reversed = Only(await AdviseAsync(GridRows, GridFilter, [Index("back", ("State", 1), ("OrganizationId", 1), ("Count", 1), ("_id", -1), ("When", -1))]));
 
-        reversed["existing"]!.GetValue<string>().Should().Be("served", "equality keys in any order, then the sort");
+        reversed["existing"]!.GetValue<string>().Should().Be("served", "equality keys in any order, then the sort, then the range");
         reversed["index"]!.GetValue<string>().Should().Be("back");
 
         var half = Only(await AdviseAsync(GridRows, GridFilter, [Index("half", ("OrganizationId", 1), ("State", 1), ("Count", -1), ("_id", -1))]));
 
         half["existing"]!.GetValue<string>().Should().Be("partial", "one sort key reversed and the other not orders nothing");
-        Texts(half["lacks"]).Should().Equal("sort");
-        Texts(half["without"]).Should().Equal("sortsInMemory");
+        Texts(half["lacks"]).Should().Equal(["sort", "range"], "and what does not order the rows holds no range key behind the order");
+        Texts(half["without"]).Should().Equal("sortsInMemory", "scansOrganisation");
     }
 
     [Fact]
@@ -212,13 +212,13 @@ public class IndexAdvisorTests
         scoped["existing"]!.GetValue<string>().Should().Be("partial");
         scoped["used"]!.GetValue<bool>().Should().BeFalse();
         scoped["index"]!.GetValue<string>().Should().Be("org");
-        Texts(scoped["lacks"]).Should().Equal("equality", "sort");
+        Texts(scoped["lacks"]).Should().Equal("equality", "sort", "range");
         Texts(scoped["without"]).Should().Equal("sortsInMemory", "scansOrganisation");
 
         // An index that orders the rows but does not hold the equality: no sort in memory, the organisation's rows read.
         var ordered = Only(await AdviseAsync(GridRows, GridFilter, [Index("org_count", ("OrganizationId", 1), ("Count", -1), ("_id", 1))]));
 
-        Texts(ordered["lacks"]).Should().Equal("equality");
+        Texts(ordered["lacks"]).Should().Equal("equality", "range");
         Texts(ordered["without"]).Should().Equal("scansOrganisation");
 
         // Nothing leads with the organisation: every row of the collection is a candidate.
@@ -257,7 +257,108 @@ public class IndexAdvisorTests
         var partial = Collated(Index("some", keys));
 
         partial["partialFilterExpression"] = new BsonDocument("IsDeleted", false);
-        Only(await AdviseAsync(pipeline, indexes: [partial]))["existing"]!.GetValue<string>().Should().Be("missing", "an index over part of the rows cannot be counted on");
+
+        var undecided = Only(await AdviseAsync(pipeline, indexes: [partial]));
+
+        undecided["existing"]!.GetValue<string>().Should().NotBe("served", "an index over part of the rows cannot be counted on");
+    }
+
+    [Fact]
+    public async Task An_index_over_part_of_the_rows_or_a_sparse_one_is_named_and_not_called_missing_and_a_hidden_one_is_named_beside_the_verdict()
+    {
+        const string pipeline = """[{ "match": { "number": { "eq": "x" } } }]""";
+        var keys = new[] { ("OrganizationId", 1), ("Number", 1), ("_id", 1) };
+
+        BsonDocument With(string name, string member, BsonValue value)
+        {
+            var index = Collated(Index(name, keys));
+
+            index[member] = value;
+
+            return index;
+        }
+
+        var partial = With("active_only", "partialFilterExpression", new BsonDocument("IsDeleted", false));
+        var sparse = With("numbered", "sparse", true);
+        var hidden = With("parked", "hidden", true);
+
+        // The only index that reaches the keys holds part of the rows: whether it serves this request the list does not say.
+        foreach (var (index, kind) in new[] { (partial, "partialFilter"), (sparse, "sparse") })
+        {
+            var advisory = await AdviseAsync(pipeline, indexes: [Index("_id_", ("_id", 1)), index]);
+            var advised = Only(advisory);
+
+            advised["existing"]!.GetValue<string>().Should().Be("unknown", $"{kind}: neither served nor missing is known");
+            advised["used"].Should().BeNull();
+            advised.ContainsKey("lacks").Should().BeFalse();
+            advised.ContainsKey("without").Should().BeFalse("no consequence is claimed of an index that may serve the request");
+            advised.ContainsKey("index").Should().BeFalse();
+            advised["conditional"]!.ToJsonString().Should().Be($$"""[{"index":"{{index["name"]}}","kind":"{{kind}}"}]""");
+            advisory["existing"]!.GetValue<string>().Should().Be("known", "the index list was read");
+
+            var note = IndexAdvisor.NotesOf(advisory).Should().ContainSingle().Subject;
+
+            note.Message.Should().StartWith($"Whether an index of 'orders' serves the request's filter and order is not known: the index '{index["name"]}' reaches its keys and holds ")
+                .And.Contain(kind == "sparse" ? "(sparse)" : "(partialFilterExpression)").And.NotContain("read no index list").And.NotContain("No index of");
+            note.Params.Should().Contain("existing", "unknown").And.Contain("used", null);
+        }
+
+        // A hidden index serves nothing, so the verdict stands; that it exists is said, since unhiding it is all that is needed.
+        var parked = await AdviseAsync(pipeline, indexes: [hidden]);
+
+        Only(parked)["existing"]!.GetValue<string>().Should().Be("missing");
+        Only(parked)["used"]!.GetValue<bool>().Should().BeFalse();
+        Only(parked)["conditional"]!.ToJsonString().Should().Be("""[{"index":"parked","kind":"hidden"}]""");
+        IndexAdvisor.NotesOf(parked).Should().ContainSingle().Which.Message.Should().StartWith("No index of 'orders' serves").And.EndWith(" Not counted: the index 'parked' reaches its keys and is hidden from the planner.");
+
+        // An index that is counted and serves it ends the matter: nothing else is named.
+        var served = Only(await AdviseAsync(pipeline, indexes: [partial, Collated(Index("all", keys))]));
+
+        served["existing"]!.GetValue<string>().Should().Be("served");
+        served.ContainsKey("conditional").Should().BeFalse();
+
+        // Beside an index that is counted and goes as far, the verdict is that index's; the other is named.
+        var beside = Only(await AdviseAsync(pipeline, indexes: [sparse, Index("org", ("OrganizationId", 1), ("Number", 1))]));
+
+        beside["existing"]!.GetValue<string>().Should().Be("unknown", "the sparse index reaches the text under the collation, the counted one does not");
+
+        var level = Only(await AdviseAsync("""[{ "match": { "count": { "eq": 3 } } }]""", indexes: [new BsonDocument { ["name"] = "sparse_count", ["key"] = new BsonDocument { ["OrganizationId"] = 1, ["Count"] = 1, ["_id"] = 1 }, ["sparse"] = true }, Index("org", ("OrganizationId", 1))]));
+
+        level["existing"]!.GetValue<string>().Should().Be("unknown", "the sparse index goes further than the counted one");
+
+        var same = Only(await AdviseAsync("""[{ "match": { "count": { "eq": 3 } } }]""", indexes: [new BsonDocument { ["name"] = "sparse_org", ["key"] = new BsonDocument { ["OrganizationId"] = 1 }, ["sparse"] = true }, Index("org", ("OrganizationId", 1))]));
+
+        same["existing"]!.GetValue<string>().Should().Be("partial", "an index that is counted goes as far: its verdict stands");
+        same["index"]!.GetValue<string>().Should().Be("org");
+        same["conditional"]!.ToJsonString().Should().Be("""[{"index":"sparse_org","kind":"sparse"}]""");
+    }
+
+    [Fact]
+    public async Task Behind_a_sort_an_index_that_does_not_hold_the_range_key_serves_the_order_and_not_all_of_it()
+    {
+        // equality, sort, range: the advised index ends in the range key.
+        const string filter = """[{ "id": "col:state", "where": { "state": { "eq": 1 } } }, { "id": "col:when", "where": { "when": { "gte": "2026-01-01T00:00:00Z" } } }]""";
+        const string pipeline = """[{ "sort": [{ "count": "desc" }] }, { "page": { "limit": 10 } }]""";
+
+        var advisedKey = Key(Only(await AdviseAsync(pipeline, filter)));
+
+        advisedKey.Should().Be("""{"OrganizationId":1,"State":1,"Count":-1,"_id":1,"When":1}""");
+
+        // Without the range key the index orders the rows, and every document it walks is read to compare the date.
+        var ordered = Only(await AdviseAsync(pipeline, filter, indexes: [Index("ordered", ("OrganizationId", 1), ("State", 1), ("Count", -1), ("_id", 1))]));
+
+        ordered["existing"]!.GetValue<string>().Should().Be("partial", "it lacks the key the range is read off");
+        ordered["used"]!.GetValue<bool>().Should().BeFalse();
+        ordered["index"]!.GetValue<string>().Should().Be("ordered");
+        Texts(ordered["lacks"]).Should().Equal("range");
+        Texts(ordered["without"]).Should().Equal(["scansOrganisation"], "nothing is ordered in memory: the rows are read in order to find those in the range");
+
+        // With it, anywhere behind the sort keys, the index serves all of it.
+        foreach (var keys in new[] { new[] { ("OrganizationId", 1), ("State", 1), ("Count", -1), ("_id", 1), ("When", 1) }, [("OrganizationId", 1), ("State", 1), ("Count", 1), ("_id", -1), ("Flag", 1), ("When", -1)] })
+            Only(await AdviseAsync(pipeline, filter, indexes: [Index("full", keys)]))["existing"]!.GetValue<string>().Should().Be("served");
+
+        // The range key before the sort keys bounds the range and no longer orders: the sort is what it lacks.
+        Texts(Only(await AdviseAsync(pipeline, filter, indexes: [Index("ranged", ("OrganizationId", 1), ("State", 1), ("When", 1), ("Count", -1), ("_id", 1))]))["lacks"]).Should().Contain("sort");
     }
 
     // ---- values, groups, joins, unwound rows ------------------------------------------------
@@ -345,6 +446,16 @@ public class IndexAdvisorTests
 
         scanned["existing"]!.GetValue<string>().Should().Be("missing");
         Texts(scanned["without"]).Should().Equal("scansPerRow");
+
+        // An index that leads with the organisation and stops there: the organisation's rows of the joined collection are read per row, not all of them.
+        listed["orders"] = [Index("org", ("OrganizationId", 1))];
+
+        var scoped = await AdviseAsync(pipeline, entity: Customer, indexes: [], joined: listed);
+
+        Of(scoped, "join")["existing"]!.GetValue<string>().Should().Be("partial");
+        Texts(Of(scoped, "join")["without"]).Should().Equal("scansOrganisationPerRow");
+        IndexAdvisor.NotesOf(scoped).Single(note => note.Message.Contains("the join 'orders'")).Message
+            .Should().Contain("reads the organisation's rows of the joined collection once for every row that joins").And.NotContain("every row of the joined collection");
 
         listed["orders"] = [Index("customer", ("CustomerId", 1))];
 

@@ -75,8 +75,22 @@ public static class IndexAdvisor
         public const string Partial = "partial";
         /// <summary>No index of the collection leads to it.</summary>
         public const string Missing = "missing";
-        /// <summary>This host read no index list of the collection.</summary>
+        /// <summary>
+        /// This host read no index list of the collection, or the only index that reaches the advised
+        /// keys is one the advisory does not judge (over part of the rows, or sparse; <c>conditional</c> names it).
+        /// </summary>
         public const string Unknown = "unknown";
+    }
+
+    /// <summary>Why an index of the list is not judged: what makes it serve some requests and not others, which the index list alone does not decide.</summary>
+    public static class Conditional
+    {
+        /// <summary>It holds only the rows its <c>partialFilterExpression</c> admits: it serves a request whose filter implies that expression.</summary>
+        public const string PartialFilter = "partialFilter";
+        /// <summary>It holds no row without its first member: it serves a request that cannot match such a row.</summary>
+        public const string Sparse = "sparse";
+        /// <summary>The planner is told to ignore it: it serves nothing until it is unhidden.</summary>
+        public const string Hidden = "hidden";
     }
 
     private enum Bound
@@ -134,7 +148,11 @@ public static class IndexAdvisor
         }
     }
 
-    private sealed record IndexDef(string Name, IReadOnlyList<(string Field, int Direction)> Keys, (string Locale, int Strength)? Collation);
+    private sealed record IndexDef(string Name, IReadOnlyList<(string Field, int Direction)> Keys, (string Locale, int Strength)? Collation)
+    {
+        /// <summary>Why the index is not counted as serving (<see cref="IndexAdvisor.Conditional"/>); null for an index over every row that the planner may use.</summary>
+        public string? Conditional { get; init; }
+    }
 
     /// <summary>
     /// The advisory of a bound and compiled request. <paramref name="indexes"/> are the index list of
@@ -646,9 +664,12 @@ public static class IndexAdvisor
         if (!index.TryGetValue("key", out var key) || key is not BsonDocument keys)
             return null;
 
-        // An index over part of the rows, one that skips rows without the member, and one the planner is told to ignore serve no request for certain.
-        if (index.Contains("partialFilterExpression") || index.GetValue("sparse", false).ToBoolean() || index.GetValue("hidden", false).ToBoolean())
-            return null;
+        // An index over part of the rows, one that skips rows without the member, and one the planner is told to
+        // ignore serve no request for certain: none is counted as serving, and each is named where it reaches the keys.
+        var conditional = index.GetValue("hidden", false).ToBoolean() ? Conditional.Hidden
+            : index.Contains("partialFilterExpression") ? Conditional.PartialFilter
+            : index.GetValue("sparse", false).ToBoolean() ? Conditional.Sparse
+            : null;
 
         var list = new List<(string, int)>();
 
@@ -665,7 +686,7 @@ public static class IndexAdvisor
             ? (locale, document.GetValue("strength", 3).ToInt32())
             : null;
 
-        return new IndexDef(index.TryGetValue("name", out var name) ? name.ToString() ?? "" : "", list, collation);
+        return new IndexDef(index.TryGetValue("name", out var name) ? name.ToString() ?? "" : "", list, collation) { Conditional = conditional };
     }
 
     private sealed record Match(IndexDef Index, bool Served, List<string> Lacks, int Score, int Reached, bool Scoped);
@@ -697,7 +718,11 @@ public static class IndexAdvisor
             ? equality.Where(key => key.Role == Roles.Join).All(key => reached.Contains(key.Field))
             : reached.Count == equality.Count;
         var sorted = sort.Count == 0 || (sort.All(Usable) && Follows(existing, position, sort));
-        var ranged = range is null || sort.Count > 0 || (allEqual && Usable(range) && position < existing.Keys.Count && existing.Keys[position].Field == range.Field);
+        // Where nothing is sorted the first range key follows the equality keys; behind a sort it stands after the sort
+        // keys, where the scan reads it off the index instead of off every document it walks in order.
+        var ranged = range is null || (allEqual && Usable(range) && (sort.Count > 0
+            ? sorted && existing.Keys.Skip(position + sort.Count).Any(held => held.Field == range.Field)
+            : position < existing.Keys.Count && existing.Keys[position].Field == range.Field));
         // An index that stands for the documents holds the stored values: it has no collation, and every key.
         var covering = !advised.Covers || (existing.Collation is null && advised.Keys.All(key => existing.Keys.Any(held => held.Field == key.Field)));
         var lacks = new List<string>();
@@ -778,21 +803,32 @@ public static class IndexAdvisor
         if (advised.Covers)
             written["covers"] = true;
 
-        var matches = advised.Listed?.Select(Parse).Where(index => index is not null).Select(index => Compare(advised, index!)).ToList();
+        var listed = advised.Listed?.Select(Parse).Where(index => index is not null).Select(index => Compare(advised, index!)).ToList();
+        // Only an index over every row that the planner may use is counted: as serving, or as going part of the way.
+        var matches = listed?.Where(match => match.Index.Conditional is null).ToList();
         var served = matches?.Where(match => match.Served).OrderBy(match => match.Index.Keys.Count).FirstOrDefault();
         var best = served ?? matches?.Where(match => match.Reached > 0).OrderByDescending(match => match.Score).ThenBy(match => match.Index.Keys.Count).FirstOrDefault();
+        // The ones not counted that reach the advised keys, the furthest first: named, never judged.
+        var conditional = served is not null ? [] : (listed ?? []).Where(match => match.Index.Conditional is not null && (match.Served || match.Reached > 0))
+            .OrderByDescending(match => match.Score).ThenBy(match => match.Index.Keys.Count).ToList();
+        // An index over part of the rows, or a sparse one, that goes further than every index counted may serve this
+        // request or not: the index list does not say, so neither "missing" nor "partial" is claimed. A hidden one serves nothing.
+        var undecided = conditional.Any(match => match.Index.Conditional != Conditional.Hidden && (best is null || match.Score > best.Score));
 
-        written["existing"] = matches is null ? Existing.Unknown : served is not null ? Existing.Served : best is not null ? Existing.Partial : Existing.Missing;
-        written["used"] = matches is null ? null : served is not null;
+        written["existing"] = matches is null || undecided ? Existing.Unknown : served is not null ? Existing.Served : best is not null ? Existing.Partial : Existing.Missing;
+        written["used"] = matches is null || undecided ? null : served is not null;
 
-        if (best is not null)
+        if (best is not null && !undecided)
             written["index"] = best.Index.Name;
 
-        if (best is { Served: false })
+        if (best is { Served: false } && !undecided)
             written["lacks"] = new JsonArray(best.Lacks.Select(lack => (JsonNode)lack).ToArray());
 
-        if (matches is not null && served is null && Without(advised, best) is { Count: > 0 } without)
+        if (matches is not null && served is null && !undecided && Without(advised, best) is { Count: > 0 } without)
             written["without"] = new JsonArray(without.Select(each => (JsonNode)each).ToArray());
+
+        if (conditional.Count > 0)
+            written["conditional"] = new JsonArray(conditional.Select(match => (JsonNode)new JsonObject { ["index"] = match.Index.Name, ["kind"] = match.Index.Conditional }).ToArray());
 
         written["serves"] = new JsonArray(advised.Serves.Select(serve => (JsonNode)serve.DeepClone()).ToArray());
         written["command"] = Command(advised, key);
@@ -810,8 +846,10 @@ public static class IndexAdvisor
         var lacks = best?.Lacks ?? ["equality", "sort", "range", "covering"];
         var bounded = advised.Keys.Any(key => key.Role is Roles.Equality or Roles.Range);
 
+        // A join no index serves reads the joined collection once per row that joins: all of it, or, where an
+        // index leads with the organisation, the organisation's rows of it.
         if (advised.Purpose == Purposes.Join)
-            return ["scansPerRow"];
+            return [best is { Scoped: true } && advised.Keys.Any(key => key.Role == Roles.Scope) ? "scansOrganisationPerRow" : "scansPerRow"];
 
         if (advised.Keys.Any(key => key.Role == Roles.Sort) && lacks.Contains("sort"))
             without.Add("sortsInMemory");
@@ -876,13 +914,21 @@ public static class IndexAdvisor
             var without = index["without"] is JsonArray consequences && consequences.Count > 0
                 ? " Without it the request " + string.Join(", ", consequences.Select(each => Consequence(each!.GetValue<string>()))) + "."
                 : "";
+            // The indexes that reach the keys and are not judged: what each is, in the words of the index list.
+            var conditional = (index["conditional"] as JsonArray ?? []).Select(node => node!.AsObject()).ToList();
+            var named = string.Join("; ", conditional.Select(each => $"'{each["index"]!.GetValue<string>()}' {NotCounted(each["kind"]!.GetValue<string>())}"));
             var message = existing switch
             {
                 Existing.Served => $"The index '{name}' of '{collection}' serves {what}.",
                 Existing.Partial => $"The index '{name}' of '{collection}' serves {what} in part (it lacks: {string.Join(", ", index["lacks"]!.AsArray().Select(lack => lack!.GetValue<string>()))}); {definition} serves all of it.{without}",
                 Existing.Missing => $"No index of '{collection}' serves {what}; {definition} would.{without}",
+                _ when conditional.Count > 0 => $"Whether an index of '{collection}' serves {what} is not known: the index {named}, which the index list alone does not decide for this request; {definition} serves it for certain.",
                 _ => $"Whether an index of '{collection}' serves {what} is not known, this host read no index list of it; the index that serves it is {definition}.",
             };
+
+            // Beside a verdict the list does decide, an index that is not counted is still said: unhiding it may be all that is needed.
+            if (existing is Existing.Partial or Existing.Missing && conditional.Count > 0)
+                message += $" Not counted: the index {named}.";
 
             yield return new Diagnostic
             {
@@ -904,12 +950,21 @@ public static class IndexAdvisor
         }
     }
 
+    private static string NotCounted(string kind) => kind switch
+    {
+        Conditional.PartialFilter => "reaches its keys and holds part of the rows only (partialFilterExpression)",
+        Conditional.Sparse => "reaches its keys and holds no row without its first member (sparse)",
+        Conditional.Hidden => "reaches its keys and is hidden from the planner",
+        _ => kind,
+    };
+
     private static string Consequence(string code) => code switch
     {
         "sortsInMemory" => "orders its rows in memory",
         "scansOrganisation" => "reads the organisation's rows to find those that match",
         "scansCollection" => "reads the collection's rows, other organisations' among them",
         "scansPerRow" => "reads every row of the joined collection once for every row that joins",
+        "scansOrganisationPerRow" => "reads the organisation's rows of the joined collection once for every row that joins",
         "readsDocuments" => "reads the documents where the index's keys would do",
         _ => code,
     };

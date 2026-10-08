@@ -188,7 +188,8 @@ public class HostTests
     {
         using var host = new SampleHost();
 
-        var response = await host.CreateClient().GetAsync("/OxQL/health");
+        // A contract 2 caller; what a caller without the contract header reads is held by Contract1HttpGoldenTests.
+        var response = await host.Client(contract: 2).GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);

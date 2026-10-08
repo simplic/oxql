@@ -345,6 +345,23 @@ lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
   that finds no more than its bound is exact. A further step is sent only when ten times the last
   one is predicted to fit; otherwise the last bound is the answer (`stoppedBy: "budget"`).
 - After `unwind` a count counts element rows, after `group` groups.
+- **A step over unwound rows also bounds the parents** (contract 2, one `unwind`, where nothing
+  between the unwind and the page reshapes, groups or joins the rows and what filters after the
+  unwind can be asked before it): before the unwind it asks what the cut of the parents asks (see
+  *Where the engine places a stage*), which keeps exactly the parents that yield a row the count
+  counts, then `$limit bound + 1`. As many parents as the step is bounded by rows hold at least
+  that many rows, so the answer of the step is the same, and the database stops reading at that
+  many parents. Without it a database before 8.0 fills a buffer of rows narrowed to the collection
+  before the first is unwound, and that buffer holds most of a collection: the "cheap first step"
+  then read nearly everything, and the count alone stopped at `atLeast 1000`, `stoppedBy:
+  "budget"` for lists whose exact count took a tenth of the budget. The step beside a page and the
+  first step of the count alone keep the bound; a later step, sized to read as much as the time
+  allows, leaves it out, and with it the filter where that only asks whether a parent yields a
+  row. Measured on the volume below (count alone, default budget, the ladder's own commands):
+  MongoDB 7.0, no condition 122 ms in three commands → 73 ms in two; `neq` of the frequent value 91
+  → 78 ms; `eq` of the frequent value 145 → 86 ms; two conditions `atLeast 10000` → `exact`; MongoDB
+  8.3, which stops by itself: unchanged without a condition and with a positive one, 55 → 71 ms for
+  `neq` of the frequent value (what asking exactly costs, see there).
 - A count is as expensive as the rows it has to find: cheap where matches are dense, a scan of
   the organisation's rows where they are sparse. That is why the count beside a page is one
   bounded step, and why a list asks for the count alone, in parallel, when it wants more.
@@ -400,7 +417,16 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     element, at no position; none for an empty array, a null and a member that is not stored. So a
     parent whose array holds a null beside its elements, or nothing but nulls, is kept, and the
     rows, the count and a walk by cursor are those of the stages as written
-    (`UnwindIrregularCollectionTests`, on a server).
+    (`UnwindIrregularCollectionTests`, on a server; MongoDB 6, 7 and 8).
+    Whether a parent yields a row is asked as a plain condition, never an expression (`$expr`):
+    "an array that holds anything, or a value that is no array, null or undefined", written
+    `$nor [ $and [ { c: { $not: { $elemMatch: { $exists: true } } } }, { c: { $not: { $type: [every type but array, null, undefined] } } } ] ]`.
+    It is written as "neither fails" for what it costs: the database asks the conditions of a
+    filter in an order of its own, by their kind, and each condition on the collection walks the
+    stored row to the member again. Written this way it asks the organisation first, and of a row
+    with elements one condition on the collection, as the list did before the cut was made exact;
+    a row without elements is asked the second. Measured (table below): what the cut cost as an
+    expression is gone.
     The position of the element (`includeIndex`) after the parents' members and before the key
     (`shipmentNumber, position`, or `position` alone) does not prevent it. Within one parent that
     is the order its elements have anyway; the rows of two parents that tie on the members
@@ -422,17 +448,85 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     for a first block (what `shipmentNumber` alone takes) and 173 → 158 ms for block 31 (there the
     first position of every candidate parent is computed before they are ordered).
   - *What is asked of the element after an unwind is asked of the collection before it*
-    (`UNWIND_PREFILTER`): the conditions on paths under the alias, as one "some element passes
-    them all" (`$elemMatch`) of an array, and as they are written of a value that is no array (the
-    one element its unwind answers), so a row without such an element is not unwound, for the page
-    and for the count. Both forms read the same index (held on a server: `IndexAdviceServerTests`).
+    (`UNWIND_PREFILTER`): the conditions on paths under the alias, so a row none of whose unwound
+    rows passes them is not unwound, for the page and for the count; and where the page's order is
+    the parents', the parents are cut first for every such condition (`SORT_BEFORE_UNWIND`), a
+    `neq` or `nin` included. It keeps **exactly** the rows that yield a row after the unwind and
+    its conditions, whatever the member holds. The rows of an unwind are of three kinds, and each
+    is asked in its own way:
+    - *an element that is an object*: "some element passes them all" (`$elemMatch`, the conditions
+      read relative to the element);
+    - *an element without members* (a null, an undefined or a scalar in the array): after the
+      unwind every path under the alias is absent, so it passes or fails the conditions whatever
+      it is. It passes `neq`, `nin`, `exists: false`, `eq null` and the `not` of a comparison; it
+      fails a comparison with a value, a pattern, `exists: true`, `is` and `any`. Where it passes,
+      "the array holds such an element" is asked (`$elemMatch { $type: [every type but object and
+      array] }`); where it fails, nothing; where the conditions do not say by themselves (a set
+      that holds null, a comparison with a null operand under `or` or `not`), the conditions are
+      also read at a member no row holds (`__oxAbsent`), and the database answers what an absent
+      member passes;
+    - *a value that is no array* (one object, or a scalar, where the array should be): the one
+      row its unwind answers is the value, so the conditions as written, read at the member, of a
+      member that is no array, no null, no undefined and stored.
+
+    **One comparison of one member that no absent element passes** (`eq`, `gt` …, `in`, a pattern,
+    `exists: true`, `is` of named variants) needs none of the three: read through the collection
+    (`"Items.Status.Name": "x"`) it holds exactly when an object in the array, or the one object
+    in its place, meets it, and an index on that path bounds it (held on a server:
+    `IndexAdviceServerTests`). Two comparisons of one member (a range, a folded `startsWith`) are
+    not asked that way: two elements could meet one bound each.
+
+    Otherwise the three are the branches of one `$or`:
+    `{ $or: [ { c: { $elemMatch: … } }, { c: { $elemMatch: { $type: […] } } }, { $nor: [ { c: { $gte: [] } }, { c: { $in: [null] } }, { $nor: [ …on c ] }, { c: { $type: 6 } } ] } ] }`.
+    The last is "nothing rules out that the member is one value that passes": it is an array (only
+    an array is at least the empty one), it is null or not stored, a condition fails, it is
+    undefined. None of it is an expression. The kinds are chosen for the order the database asks
+    them in: `$elemMatch` first, which answers alone for a row an element of which passes. A row
+    of the usual form that fails it is asked one more plain condition per further branch (does the
+    array hold an element without members; is the member an array). **That is the price of a
+    condition an absent element passes**, over the list before the unwind was made exact, which
+    asked `$elemMatch` alone and lost the rows of the other two kinds: no single plain condition
+    tells an array of objects from both an array that also holds a null and one object in the
+    array's place (a type test sees an object in both; an element test sees no value that is no
+    array), so two more are asked of the rows that fail, and none of the rows that pass.
+
     Not before an unwind with `preserveNull` (the row it keeps has no element to pass anything) or
-    `flatten`, and **not where an element none of whose members exists passes the conditions**: a
-    null in the array is such an element after the unwind, and `$elemMatch` looks at objects only,
-    so `neq`, `nin`, `exists: false`, `eq null`, a set that holds null and a `not` are asked after
-    the unwind alone (no `UNWIND_PREFILTER`, the parents are not cut first for them). A condition no
-    absent element passes beside one it does is asked, all of it: the conjunction fails for an
-    absent element either way.
+    `flatten`.
+
+    **Not exact: an element that is itself an array, under a condition on the element.** After the
+    unwind a condition on a path under the alias reads through that inner array (it holds when an
+    object in it meets the condition); before the unwind no plain condition does, so such a row
+    can be missing from the list, or a parent kept that yields none. Without a condition on the
+    element its rows are exact (`UnwindIrregularCollectionTests`). A collection of collections is
+    not what a member of an entity is typed as.
+
+    Measured on 25 000 shipments of about 7 KB without an index (three in four with one to three
+    lines, the rest an empty array, a null or no member; first block of 200 rows ordered by the
+    parent, the plans of three builds run alternately on one connection, median of 25, ms;
+    `UnwindCutBench`), MongoDB 8.3 (6.0 and 7.0 are 2 to 9 ms slower in every column, in the same
+    proportions):
+
+    | request | before the unwind was exact | exact by an expression and without the cut | exact by plain conditions |
+    |---|---|---|---|
+    | no condition on the element | 40.1 | 54.6 | 40.9 |
+    | `eq` a value most lines hold | 41.5 | 58.8 | 42.8 |
+    | `eq` a value few lines hold | 34.1 | 46.5 | 35.6 |
+    | two conditions on one element | 42.3 | 66.1 | 49.3 |
+    | `neq` a value few lines hold (most rows pass) | 42.4 | 73.4 | 47.7 |
+    | `neq` / `nin` a value most lines hold (most rows fail) | 37.5 | 65.5 | 55.3 |
+    | ordered by `number, position` | 41.4 | 79.8 | 70.3 |
+
+    The first three are what they were. A condition an absent element passes costs the rows that
+    fail it two more conditions; the list is still faster than without the cut, and its count is
+    asked of the parents with a passing row alone again. The position before the key still
+    computes each parent's first position (above).
+
+    Where the parents are **not** cut first (the order is the elements', or a condition after the
+    unwind cannot be asked before it), the filter only spares the unwind and asks less of the rows
+    that fail: `{ $or: [ { c: { $elemMatch: … } }, { c: { $not: { $elemMatch: { $exists: true } } } }, { c: { $type: [every type but object and array] } } ] }`
+    (the last branch only where an absent element may pass). It drops an array of objects none of
+    which passes; what holds no array of elements it leaves to the unwind, which drops it or
+    answers the one value for the conditions after it.
   - *The element is written under its alias after the page is taken*: until then filters and the
     paging sort read it where the unwind left it. The three unwind placements apply to a request
     with one `unwind`; with several, the stages run as written and the page is still by value.

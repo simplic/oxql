@@ -181,6 +181,10 @@ neither ([below](#a-contract-1-answer-is-frozen)). What a host should know:
   each of two requests sent together, and under 1 ms for the first date range or `in` after
   them; the second request of the same kind pays nothing. It shows in `bindMs` and `parseMs`,
   never in `db`. The opt-in `FirstUseBench` (`OXQL_PERF_FIRSTUSE=<file>`, Release) measures it.
+  What a block of unwound rows costs the database, this build's stages beside another build's run
+  alternately over one volume, is measured by the opt-in `UnwindCutBench`
+  (`OXQL_UNWIND_BENCH=<file>`; `OXQL_UNWIND_PLANS=<dir>` with `OXQL_UNWIND_LABEL` writes a build's
+  stages to compare with).
   The engine does not warm itself at start.
 - The owner queries a host runs for its own join targets are the request's own commands
   (`kind: "resolve"`). Another service's owner is asked for its timing only when the origin's
@@ -816,7 +820,8 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   rows), `SORT_BEFORE_UNWIND` (the rows are ordered and cut to what the page can reach before the
   unwind at this stage, also when the sort names the element's position after the parents'
   members; `params` `path`, `alias`), `UNWIND_PREFILTER` (what is asked of the element
-  after the unwind is asked of the collection before it; `params` `path`, `alias`, `paths`) — the
+  after the unwind is asked of the collection before it, whatever the condition: one an absent
+  element passes, `neq` and `nin` among them, as well; `params` `path`, `alias`, `paths`) — the
   three say where the engine places a stage of a contract 2 request (see
   [`oxql-semantics.md`](oxql-semantics.md)); the rows are those of the request as written,
   `GROUP_SCANS` (contract 2, once per request, at its first `group`: the groups, or the totals of

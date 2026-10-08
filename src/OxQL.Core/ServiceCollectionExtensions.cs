@@ -29,8 +29,18 @@ public static class ServiceCollectionExtensions
         section.Bind(options);
         configure?.Invoke(options);
 
+        // The published engine named the owner-fetch cache's budget ResolveCacheMaxEntries. The key is
+        // gone; a host that still sets it is told at start that the value was not applied, not left to
+        // find out that its cache runs at the default.
+        if (section[FormerCacheBudgetKey] is { } former)
+            services.AddSingleton(new OxQLOptionsAdjustment(
+                $"OxQL:{FormerCacheBudgetKey} was {former}; the key is no longer read. The budget of the owner-fetch cache is OxQL:Cache:{nameof(CacheOptions.OwnerFetchCacheMaxEntries)}, now {options.Cache.OwnerFetchCacheMaxEntries}: rename the key."));
+
         return services.AddOxQLCore(options);
     }
+
+    /// <summary>The configuration key the published engine read the owner-fetch cache's budget from, under the <c>OxQL</c> section.</summary>
+    public const string FormerCacheBudgetKey = "Cache:ResolveCacheMaxEntries";
 
     private static IServiceCollection AddOxQLCore(this IServiceCollection services, OxQLOptions options)
     {

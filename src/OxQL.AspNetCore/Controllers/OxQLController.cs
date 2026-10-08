@@ -92,9 +92,9 @@ public class OxQLController : ControllerBase
     /// the probed service's own probes.
     /// <para>
     /// <c>capabilities</c> is read per caller: a request without the contract header on a host that
-    /// answers contract 1 gets the names every engine listed before contract 2 (batches, paging after a
-    /// group and by offset, <c>any</c>, <c>unwind.keepPath</c>) ahead of the host's own, since that host
-    /// does all of them for that caller. Members and limits are only ever added.
+    /// answers contract 1 gets the names the published engine listed before contract 2 (batches, paging
+    /// after a group and by offset, <c>any</c>) ahead of the host's own, since that host does all of them
+    /// for that caller. Members and limits are only ever added.
     /// </para>
     /// </summary>
     [HttpGet("health")]

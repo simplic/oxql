@@ -110,9 +110,9 @@ public class NonQueryTests
         foreach (var service in LabService.All)
             Strings((await (await Lab.ClientAsync(service)).HealthAsync()).Body!["capabilities"]).Should().Equal(expectedFleet, service.Key);
 
-        // A contract 1 caller reads what it read from the engine it was written against: the five earlier names, then the host's.
+        // A contract 1 caller reads what it read from the published engine: the four earlier names, then the host's.
         Strings((await (await Lab.ClientAsync(LabService.Transport)).Contract(null).HealthAsync()).Body!["capabilities"])
-            .Should().Equal(["batch", "group.page", "page.offset", "any", "unwind.keepPath", .. expectedFleet]);
+            .Should().Equal(["batch", "group.page", "page.offset", "any", .. expectedFleet]);
 
         var shared = await CorpusFleet.SharedAsync();
 

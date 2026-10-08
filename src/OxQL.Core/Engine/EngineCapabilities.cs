@@ -30,20 +30,21 @@ public static class EngineCapabilities
     public static string? Version { get; } = typeof(EngineCapabilities).Assembly.GetName().Version?.ToString();
 
     /// <summary>
-    /// What every engine listed before contract 2 became the marker: batches, paging after a group,
-    /// paging by offset, <c>any</c>, and an unwind that takes its collection out of the row. A host
-    /// that answers contract 1 still does all five for such a caller, and a contract 1 client may gate
-    /// on a name, so the list a contract 1 caller reads keeps them (<see cref="Of"/>).
+    /// What the published engine listed before contract 2 became the marker: batches, paging after a
+    /// group, paging by offset and <c>any</c>. A host that answers contract 1 still does all four for
+    /// such a caller, and a contract 1 client may gate on a name, so the list a contract 1 caller reads
+    /// keeps them (<see cref="Of"/>). <c>unwind.keepPath</c>, which only an unpublished build listed,
+    /// names a member no engine takes any more and is not among them.
     /// </summary>
-    public static IReadOnlyList<string> Contract1 { get; } = ["batch", "group.page", "page.offset", "any", "unwind.keepPath"];
+    public static IReadOnlyList<string> Contract1 { get; } = ["batch", "group.page", "page.offset", "any"];
 
     /// <summary>
     /// The capabilities of a host with the given features and options: only what depends on the host.
     /// What every contract 2 engine has (batches, paging after a group, <c>any</c>) is not listed; the
     /// contract number says it (DG2 M12). For a contract 1 caller (<paramref name="contract1"/>: the
     /// request carries no contract header while the host answers contract 1) the list begins with
-    /// <see cref="Contract1"/>, as it did when that caller was written: of those, <c>page.offset</c>
-    /// and <c>unwind.keepPath</c> are contract 1 syntax only.
+    /// <see cref="Contract1"/>, as it did when that caller was written; of those, <c>page.offset</c>
+    /// is contract 1 syntax only.
     /// </summary>
     public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain, bool contract1 = false)
     {

@@ -92,8 +92,9 @@ public class Contract1HttpGoldenTests
     /// <summary>
     /// Health is read by name, so it may grow and never shrinks for a caller that knew it: a request
     /// without the contract header reads every member, every limit and every capability the published
-    /// engine listed (and <c>unwind.keepPath</c>, which the pushed base added), in the order it listed
-    /// them, before whatever the host lists now. A contract 2 caller reads the short list.
+    /// engine listed, in the order it listed them, before whatever the host lists now. A contract 2
+    /// caller reads the short list. (<c>unwind.keepPath</c>, which only the unpublished base listed,
+    /// names a member no engine takes any more: nobody reads it.)
     /// </summary>
     [Fact]
     public async Task Health_lists_for_a_contract_1_caller_everything_the_engine_listed_before()
@@ -110,8 +111,9 @@ public class Contract1HttpGoldenTests
         var listed = legacy["capabilities"]!.AsArray().Select(name => name!.GetValue<string>()).ToList();
         var now = current["capabilities"]!.AsArray().Select(name => name!.GetValue<string>()).ToList();
 
-        listed.Take(5).Should().Equal("batch", "group.page", "page.offset", "any", "unwind.keepPath");
-        listed.Skip(5).Should().Equal(now, "what depends on the host follows, as before");
+        listed.Take(4).Should().Equal("batch", "group.page", "page.offset", "any");
+        listed.Skip(4).Should().Equal(now, "what depends on the host follows, as before");
+        listed.Should().NotContain("unwind.keepPath", "no engine takes the member");
         now.Should().NotContain(["batch", "group.page", "page.offset", "any", "unwind.keepPath"], "a contract 2 caller gates on the contract number");
         now.Should().Contain("compat.v1");
 

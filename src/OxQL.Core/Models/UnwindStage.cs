@@ -53,10 +53,6 @@ public sealed record UnwindStage
     [JsonIgnore]
     public bool KeepPathWritten { get; init; }
 
-    /// <summary>Whether the caller wrote <c>keepPath</c> as something other than <c>true</c> or <c>false</c>; the binder refuses it.</summary>
-    [JsonIgnore]
-    public bool KeepPathInvalid { get; init; }
-
     /// <summary>
     /// Member names the caller wrote that the stage does not have. System.Text.Json skips an
     /// unmapped member by default, so they are recorded here and the binder refuses them:
@@ -89,7 +85,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
                 case "flatten": stage = stage with { Flatten = property.Value.ValueKind switch { JsonValueKind.String => property.Value.GetString(), JsonValueKind.Null => null, _ => property.Value.GetRawText() } }; break;
                 case "keepPath": stage = property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
                     ? stage with { KeepPath = property.Value.ValueKind == JsonValueKind.True, KeepPathWritten = true }
-                    : stage with { KeepPathWritten = true, KeepPathInvalid = true }; break;
+                    : stage with { KeepPathWritten = true }; break;
                 default: unknown.Add(property.Name); break;
             }
         }

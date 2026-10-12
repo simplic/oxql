@@ -363,6 +363,11 @@ In short:
 4. Every service's schema revision changes once.
 5. To turn the legacy pipeline off: `OxQL:Compat:Legacy:Enabled=false` (the rewrite alone answers
    contract 1) or `OxQL:Compat:Enabled=false` (every request is contract 2).
+6. `GET /OxQL/types` is not a route of this package: the host's `GET /schema` document describes
+   the entities, their members and what each can be filtered, sorted and joined by.
+7. A caller that moves to contract 2 sends `X-OxQL-Contract: 2` with its first contract 2 body.
+   Without the header the body is read as contract 1 (see *What a caller meets when it moves to
+   contract 2* in [`src/docs/UPGRADING-1.x.md`](src/docs/UPGRADING-1.x.md)).
 
 ### What changes with no configuration change
 

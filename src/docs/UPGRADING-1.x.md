@@ -2,9 +2,21 @@
 
 Version 2 is a new engine behind the same routes. Contract 1 requests keep their answers through
 the compatibility mode (README, *Contract header and compatibility mode*); the package surface is
-not kept. A host that only bumps the package versions does not compile, and one that compiles
-does not start until the two mandatory requirements below are met. What 2.1 changed against the
-published 2.0 package is in the README, *Upgrading*.
+not kept. What 2.1 changed against the published 2.0 package is in the README, *Upgrading*.
+
+Who this document is for depends on how a service uses the engine:
+
+- **A host that registers the engine itself** (`AddOxQLCore`, `AddOxQLMongo`, `AddOxQLAspNetCore`
+  in its own start-up) does not compile after raising the package versions alone: the entry points
+  below are gone or changed. Once it compiles it does not start until the two mandatory
+  requirements below are met. This document lists what to change.
+- **A service on the Simplic base package** (`Simplic.OxS.Server`) calls none of those entry
+  points: the base package registers the engine, the scope provider and the cursor key for it. It
+  compiles after raising the versions, and what it has to look at is its model and its schema, not
+  this list: the upgrade section of the base package's
+  [`OX_SCHEMA.md`](https://github.com/simplic/simplic-oxs/blob/master/OX_SCHEMA.md) (*Upgrading a
+  service to this package version*). What follows from *What a caller meets when it moves to
+  contract 2* on holds for its callers all the same.
 
 ## Packages
 
@@ -67,6 +79,16 @@ A request without the contract header is contract 1 and keeps its answers while 
 is true (the default); each is logged under `OxQL.Compat.Legacy` (or `OxQL.Compat` on the rewrite
 path) with the user, the organisation and the correlation id, so a host sees who still needs
 migrating. What follows holds for a caller once it sends `X-OxQL-Contract: 2`.
+
+**The header comes with the first contract 2 body.** The first thing a migrating caller meets is
+its own request sent without the header: the host reads it as contract 1, where paths are the
+stored names, an operand is written in that contract's forms and the members contract 2 added do
+not exist. Such a request is not refused for being contract 2: it is answered as the contract 1
+request it reads as, which for a condition on a contract 2 path or operand is 200 with no rows.
+A caller that gets an empty page it does not expect checks the header first. The same holds for
+explain: without the header it explains the request as contract 1 (`contract: 1` in the answer),
+which is not how a contract 2 run reads it. `GET /OxQL/health` with the header lists what
+contract 2 offers; without it, what contract 1 does.
 
 - Under contract 2 an entity id is matched case-sensitively and has to be spelled as the
   schema publishes it (`UNKNOWN_ENTITY` otherwise); contract 1 requests keep v1's

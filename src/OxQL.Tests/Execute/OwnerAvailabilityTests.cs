@@ -29,7 +29,7 @@ public class OaResource
 {
     public string Type { get; set; } = "";
 
-    [OxQLReferenceWhen("type", "driver", "hr.employee", Field = "id")]
+    [OxQLReferenceWhen("type", "driver", "staff.employee", Field = "id")]
     [OxQLReferenceWhen("type", "vehicle", "fleet.vehicle", Field = "id")]
     public Guid Id { get; set; }
 }
@@ -99,26 +99,26 @@ public class OwnerAvailabilityTests
         var time = new ManualTime();
         var availability = new OwnerAvailability(TimeSpan.FromSeconds(5), time);
 
-        availability.TryEnter("hr", out _).Should().BeTrue("nothing is remembered of it");
+        availability.TryEnter("staff", out _).Should().BeTrue("nothing is remembered of it");
 
-        availability.Failed("hr", OwnerAvailability.Unreachable);
+        availability.Failed("staff", OwnerAvailability.Unreachable);
         time.Advance(TimeSpan.FromSeconds(2));
 
-        availability.TryEnter("hr", out var outage).Should().BeFalse();
+        availability.TryEnter("staff", out var outage).Should().BeFalse();
         outage.Should().Be(new OwnerOutage(OwnerAvailability.Unreachable, null, TimeSpan.FromSeconds(3)));
         availability.TryEnter("fleet", out _).Should().BeTrue("another owner is not concerned");
 
         time.Advance(TimeSpan.FromSeconds(3));
 
-        availability.OutageOf("hr").Should().BeNull("a read lets nobody in and holds nobody back once the time is over");
-        availability.TryEnter("hr", out _).Should().BeTrue("the time is over: one caller tries");
-        availability.TryEnter("hr", out outage).Should().BeFalse("the others keep the answer until that call lands");
+        availability.OutageOf("staff").Should().BeNull("a read lets nobody in and holds nobody back once the time is over");
+        availability.TryEnter("staff", out _).Should().BeTrue("the time is over: one caller tries");
+        availability.TryEnter("staff", out outage).Should().BeFalse("the others keep the answer until that call lands");
         outage!.Reason.Should().Be(OwnerAvailability.Unreachable);
 
-        availability.Succeeded("hr");
+        availability.Succeeded("staff");
 
-        availability.TryEnter("hr", out _).Should().BeTrue("the call landed and the owner answered");
-        availability.OutageOf("hr").Should().BeNull();
+        availability.TryEnter("staff", out _).Should().BeTrue("the call landed and the owner answered");
+        availability.OutageOf("staff").Should().BeNull();
     }
 
     [Fact]
@@ -127,13 +127,13 @@ public class OwnerAvailabilityTests
         var time = new ManualTime();
         var availability = new OwnerAvailability(TimeSpan.FromSeconds(5), time);
 
-        availability.Failed("hr", OwnerAvailability.Timeout);
+        availability.Failed("staff", OwnerAvailability.Timeout);
         time.Advance(TimeSpan.FromSeconds(5));
-        availability.TryEnter("hr", out _).Should().BeTrue();
+        availability.TryEnter("staff", out _).Should().BeTrue();
 
         time.Advance(TimeSpan.FromSeconds(5));
 
-        availability.TryEnter("hr", out _).Should().BeTrue("the caller that tried was stopped before it could say how the call ended");
+        availability.TryEnter("staff", out _).Should().BeTrue("the caller that tried was stopped before it could say how the call ended");
     }
 
     [Fact]
@@ -141,13 +141,13 @@ public class OwnerAvailabilityTests
     {
         var availability = new OwnerAvailability(TimeSpan.FromSeconds(5), new ManualTime());
 
-        availability.Failed("hr", OwnerAvailability.Unreachable);
+        availability.Failed("staff", OwnerAvailability.Unreachable);
         availability.Failed("fleet", OwnerAvailability.Route, 404);
 
-        availability.Succeeded("hr", keepRoute: true);
+        availability.Succeeded("staff", keepRoute: true);
         availability.Succeeded("fleet", keepRoute: true);
 
-        availability.OutageOf("hr").Should().BeNull();
+        availability.OutageOf("staff").Should().BeNull();
         availability.OutageOf("fleet").Should().Be(new OwnerOutage(OwnerAvailability.Route, 404, TimeSpan.FromSeconds(5)), "an answering health says nothing of the internal query route");
     }
 
@@ -156,9 +156,9 @@ public class OwnerAvailabilityTests
     {
         var availability = new OwnerAvailability(BindHost.Options(options => options.Cache.OwnerUnavailableTtlSeconds = 0));
 
-        availability.Failed("hr", OwnerAvailability.Unreachable);
+        availability.Failed("staff", OwnerAvailability.Unreachable);
 
-        availability.TryEnter("hr", out _).Should().BeTrue();
+        availability.TryEnter("staff", out _).Should().BeTrue();
     }
 
     [Fact]
@@ -175,13 +175,13 @@ public class OwnerAvailabilityTests
         var (engine, runner, client, _) = Host();
 
         runner.PageRows = [Row("driver", Driver)];
-        client.Unreachable.Add("hr");
+        client.Unreachable.Add("staff");
 
         var first = await RunAsync(engine);
         var second = await RunAsync(engine);
 
         client.Calls.Should().ContainSingle("the owner is not called again while the host remembers that it did not answer");
-        client.Probed.Should().Equal(["hr"], "nor asked for its facts");
+        client.Probed.Should().Equal(["staff"], "nor asked for its facts");
 
         first.Items[0]!["res"].Should().BeNull();
         second.Items[0]!["res"].Should().BeNull();
@@ -192,7 +192,7 @@ public class OwnerAvailabilityTests
 
         diagnostic.Code.Should().Be(Codes.ResolveUnreachable);
         diagnostic.Message.Should().Contain("was not asked").And.Contain("could not be reached a moment ago").And.Contain("'res' is null on this page");
-        diagnostic.Params.Should().Contain("service", "hr").And.Contain("reason", "unreachable").And.Contain("remembered", true).And.Contain("retryAfterMs", 5000);
+        diagnostic.Params.Should().Contain("service", "staff").And.Contain("reason", "unreachable").And.Contain("remembered", true).And.Contain("retryAfterMs", 5000);
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public class OwnerAvailabilityTests
         var (engine, runner, client, _) = Host();
 
         runner.PageRows = [Row("driver", Driver)];
-        client.Unreachable.Add("hr");
+        client.Unreachable.Add("staff");
         await RunAsync(engine);
 
         var reported = await RunAsync(engine, """[{ "resolve": { "path": "resource.id", "as": "res", "outcomeAs": "resOutcome" } }, { "page": { "limit": 10 } }]""");
@@ -220,7 +220,7 @@ public class OwnerAvailabilityTests
         var (engine, runner, client, time) = Host();
 
         runner.PageRows = [Row("driver", Driver)];
-        client.Unreachable.Add("hr");
+        client.Unreachable.Add("staff");
         await RunAsync(engine);
 
         time.Advance(TimeSpan.FromSeconds(5));
@@ -240,7 +240,7 @@ public class OwnerAvailabilityTests
 
         answered.Items[0]!["res"]!["name"]!.GetValue<string>().Should().Be("Ada");
         answered.Diagnostics.Should().BeNullOrEmpty();
-        engine.Availability.OutageOf("hr").Should().BeNull();
+        engine.Availability.OutageOf("staff").Should().BeNull();
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class OwnerAvailabilityTests
 
         var diagnostic = second.Diagnostics.Should().ContainSingle().Subject;
 
-        diagnostic.Message.Should().Contain("HTTP 404").And.Contain("InternalApiVersions:hr");
+        diagnostic.Message.Should().Contain("HTTP 404").And.Contain("InternalApiVersions:staff");
         diagnostic.Params.Should().Contain("reason", "route").And.Contain("status", 404).And.Contain("remembered", true);
     }
 
@@ -291,12 +291,12 @@ public class OwnerAvailabilityTests
         var (engine, runner, client, _) = Host(options => options.Execution.ResolveTimeoutMs = 60);
 
         runner.PageRows = [Row("driver", Driver)];
-        client.Silent.Add("hr");
+        client.Silent.Add("staff");
 
         var late = await RunAsync(engine);
 
         late.Diagnostics.Should().ContainSingle().Which.Code.Should().Be(Codes.ResolveTimeout);
-        engine.Availability.OutageOf("hr")!.Reason.Should().Be(OwnerAvailability.Timeout);
+        engine.Availability.OutageOf("staff")!.Reason.Should().Be(OwnerAvailability.Timeout);
 
         var second = await RunAsync(engine);
 
@@ -307,12 +307,12 @@ public class OwnerAvailabilityTests
         var (hurried, hurriedRunner, hurriedClient, _) = Host(options => options.Execution.ResolveTimeoutMs = 2_000);
 
         hurriedRunner.PageRows = [Row("driver", Driver)];
-        hurriedClient.Silent.Add("hr");
+        hurriedClient.Silent.Add("staff");
 
         await hurried.ExecuteAsync(BindHost.Parse($$"""{ "entityType": "{{Tour}}", "maxTimeMs": 300, "pipeline": {{Resolve}} }"""), BindHost.Context());
 
         hurriedClient.Calls.Should().ContainSingle();
-        hurried.Availability.OutageOf("hr").Should().BeNull("the request ran out of time, which says nothing of the owner");
+        hurried.Availability.OutageOf("staff").Should().BeNull("the request ran out of time, which says nothing of the owner");
     }
 
     [Fact]
@@ -361,8 +361,8 @@ public class OwnerAvailabilityTests
         var result = await RunAsync(engine);
 
         result.Items[0]!["res"]!["name"]!.GetValue<string>().Should().Be("Ada");
-        client.Probed.Should().Equal(["hr"], "the owner of the vehicles has no key on this page");
-        client.Calls.Select(call => call.Service).Should().Equal("hr");
+        client.Probed.Should().Equal(["staff"], "the owner of the vehicles has no key on this page");
+        client.Calls.Select(call => call.Service).Should().Equal("staff");
     }
 
     [Fact]
@@ -374,8 +374,8 @@ public class OwnerAvailabilityTests
 
         await RunAsync(engine);
 
-        client.Probed.Should().BeEquivalentTo(["hr", "fleet"]);
-        client.Calls.Select(call => call.Service).Should().BeEquivalentTo(["hr", "fleet"]);
+        client.Probed.Should().BeEquivalentTo(["staff", "fleet"]);
+        client.Calls.Select(call => call.Service).Should().BeEquivalentTo(["staff", "fleet"]);
     }
 
     [Fact]
@@ -405,14 +405,14 @@ public class OwnerAvailabilityTests
         var options = BindHost.Options();
         var availability = new OwnerAvailability(options);
         var probe = new RemoteHealthProbe(options) { Availability = availability };
-        var client = new FakeRemoteClient { Reachable = { "hr" } };
+        var client = new FakeRemoteClient { Reachable = { "staff" } };
 
-        availability.Failed("hr", OwnerAvailability.Unreachable);
+        availability.Failed("staff", OwnerAvailability.Unreachable);
 
         probe.State(model.Value, client);
         await probe.Refreshing;
 
-        availability.OutageOf("hr").Should().BeNull("health saw the owner answer");
+        availability.OutageOf("staff").Should().BeNull("health saw the owner answer");
         availability.OutageOf("fleet")!.Reason.Should().Be(OwnerAvailability.Unreachable, "health found it not answering");
     }
 

@@ -104,7 +104,7 @@ public class ExplainUncheckedOwnerTests
     [InlineData(1, "it names contract 1")]
     public async Task An_owner_whose_health_names_another_contract_or_none_is_noted_unchecked(int? contract, string said)
     {
-        var client = new FakeRemoteClient { Owners = { ["crm"] = new RemoteOwnerInfo(contract is null ? null : "1.1.0", contract, null) } };
+        var client = new FakeRemoteClient { Owners = { ["crm"] = new RemoteOwnerInfo(contract is null ? null : "1.0.0", contract, null) } };
 
         var result = await ExplainAsync(client);
 
@@ -117,7 +117,7 @@ public class ExplainUncheckedOwnerTests
         result.OwnerOf("crm")["reason"]!.GetValue<string>().Should().Be(RemoteExplain.Engine);
 
         if (contract is not null)
-            result.OwnerOf("crm")["engine"]!.ToJsonString().Should().Be("""{"version":"1.1.0","contract":1}""");
+            result.OwnerOf("crm")["engine"]!.ToJsonString().Should().Be("""{"version":"1.0.0","contract":1}""");
     }
 
     [Fact]

@@ -229,9 +229,9 @@ public class HostHardeningHealthTests
     [Fact]
     public async Task An_owner_on_another_contract_is_not_usable_and_says_which_it_speaks()
     {
-        var states = await MeasuredAsync(new FactsClient(_ => new RemoteOwnerInfo("1.1.0", 1, 10)));
+        var states = await MeasuredAsync(new FactsClient(_ => new RemoteOwnerInfo("1.0.0", 1, 10)));
 
-        states.Should().OnlyContain(state => state.Usable == false && state.Reason == RemoteServiceState.Engine && state.Contract == 1 && state.EngineVersion == "1.1.0");
+        states.Should().OnlyContain(state => state.Usable == false && state.Reason == RemoteServiceState.Engine && state.Contract == 1 && state.EngineVersion == "1.0.0");
     }
 
     [Fact]

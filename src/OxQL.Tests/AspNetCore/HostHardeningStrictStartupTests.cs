@@ -78,20 +78,20 @@ public class HostHardeningStrictStartupTests
     {
         RemoteReference[] findings =
         [
-            new("logistics.tour", "driver.id", "hr.employee"),
-            new("logistics.tour", "codriver.id", "hr.employee"),
-            new("logistics.shipment", "vehicleId", "vehicle.vehicle"),
-            new("logistics.tour", "resource.id", "hr.employee"),
+            new("transport.tour", "driver.id", "staff.employee"),
+            new("transport.tour", "codriver.id", "staff.employee"),
+            new("transport.shipment", "vehicleId", "fleet.vehicle"),
+            new("transport.tour", "resource.id", "staff.employee"),
         ];
 
         var lines = RemoteReferenceCheck.DescribeByService(findings);
 
         lines.Should().HaveCount(2, "a line per service, not per reference path");
-        lines[0].Should().StartWith("service 'hr' is not configured on this host: 3 declared references need it ('logistics.tour#driver.id' -> 'hr.employee' and 2 more)")
-            .And.Contain("InternalHosts:hr").And.Contain("""  "InternalHosts": { "hr": "<host:port>" }  """.Trim())
-            .And.Contain("when the owner does not answer on API version v1, also InternalApiVersions:hr").And.Contain("""  "InternalApiVersions": { "hr": "<version>" }  """.Trim());
-        lines[1].Should().StartWith("service 'vehicle' is not configured on this host: 1 declared reference needs it ('logistics.shipment#vehicleId' -> 'vehicle.vehicle')")
-            .And.Contain("InternalHosts:vehicle").And.Contain("InternalApiVersions:vehicle");
+        lines[1].Should().StartWith("service 'staff' is not configured on this host: 3 declared references need it ('transport.tour#driver.id' -> 'staff.employee' and 2 more)")
+            .And.Contain("InternalHosts:staff").And.Contain("""  "InternalHosts": { "staff": "<host:port>" }  """.Trim())
+            .And.Contain("when the owner does not answer on API version v1, also InternalApiVersions:staff").And.Contain("""  "InternalApiVersions": { "staff": "<version>" }  """.Trim());
+        lines[0].Should().StartWith("service 'fleet' is not configured on this host: 1 declared reference needs it ('transport.shipment#vehicleId' -> 'fleet.vehicle')")
+            .And.Contain("InternalHosts:fleet").And.Contain("InternalApiVersions:fleet");
     }
 
     [Fact]

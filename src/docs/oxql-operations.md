@@ -386,7 +386,7 @@ Anonymous, always 200, and never waits for another service:
   "remote": [
     { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true,
       "references": { "declared": 3, "validated": true, "revision": "sha256:…", "unknownTargets": [] } },
-    { "service": "hr", "configured": true, "reachable": true, "usable": false, "reason": "engine",
+    { "service": "staff", "configured": true, "reachable": true, "usable": false, "reason": "engine",
       "references": { "declared": 14, "validated": false, "unknownTargets": [], "reason": "unavailable" } }
   ],
   "model": { "entities": 12, "degraded": false }

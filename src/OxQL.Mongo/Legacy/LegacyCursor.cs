@@ -178,7 +178,7 @@ internal static class LegacyCursor
 }
 
 /// <summary>A refusal the 1.1 engine raised while it built the aggregate: a cursor that does not fit.</summary>
-internal sealed class LegacyRefusalException(string code, string message, string? path = null) : Exception(message)
+internal sealed class LegacyRefusalException(string code, string message) : Exception(message)
 {
-    public QueryValidationError Error { get; } = new() { Code = code, Message = message, Path = path };
+    public QueryValidationError Error { get; } = new() { Code = code, Message = message };
 }

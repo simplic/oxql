@@ -15,13 +15,8 @@ namespace OxQL.Mongo.Legacy;
 internal sealed class LegacyAggregate
 {
     private readonly LegacyVariables? variables;
-    private readonly int regexMaxLength;
 
-    private LegacyAggregate(LegacyVariables? variables, int regexMaxLength)
-    {
-        this.variables = variables;
-        this.regexMaxLength = regexMaxLength;
-    }
+    private LegacyAggregate(LegacyVariables? variables) => this.variables = variables;
 
     /// <summary>The stages of the page, with one row more than the limit so a next page shows.</summary>
     public IReadOnlyList<BsonDocument> Page { get; private set; } = [];
@@ -39,9 +34,9 @@ internal sealed class LegacyAggregate
     /// organisation: it is matched before any stage of the request, merged into the first match and
     /// into every lookup's filter, so nothing is read, grouped or cut to a page before it.
     /// </summary>
-    public static LegacyAggregate Build(LegacyRequest request, BsonDocument organisation, int defaultPageSize, int maxPageSize, int regexMaxLength)
+    public static LegacyAggregate Build(LegacyRequest request, BsonDocument organisation, int defaultPageSize, int maxPageSize)
     {
-        var builder = new LegacyAggregate(request.Variables, regexMaxLength);
+        var builder = new LegacyAggregate(request.Variables);
         var scoped = new LegacyCondition { Built = organisation };
         var pipeline = Normalise(Scope(request.Pipeline, scoped), defaultPageSize, maxPageSize);
         var sort = pipeline.Where(stage => stage.Sort is not null).SelectMany(stage => stage.Sort!).ToList();
@@ -409,7 +404,7 @@ internal sealed class LegacyAggregate
             return new BsonDocument("$nor", new BsonArray { Condition(condition.Not) });
 
         var path = Translate(condition.Path!);
-        var value = Bounded(Operand(condition.Value), condition);
+        var value = Operand(condition.Value);
 
         return condition.Op?.ToLowerInvariant() switch
         {
@@ -428,27 +423,6 @@ internal sealed class LegacyAggregate
             "regex" => new BsonDocument(path, new BsonDocument("$regex", new BsonRegularExpression(value.AsString))),
             _ => throw new InvalidOperationException($"Unknown operator: {condition.Op}"),
         };
-    }
-
-    /// <summary>
-    /// The operand, once every pattern in it is within <c>Limits:RegexMaxLength</c>: the text of a
-    /// <c>regex</c> however it was written (as text or as a variable) and a pattern given by the
-    /// <c>$regex</c> hint, also inside a list.
-    /// </summary>
-    private BsonValue Bounded(BsonValue operand, LegacyCondition condition)
-    {
-        var patterns = operand switch
-        {
-            BsonRegularExpression pattern => [pattern.Pattern],
-            BsonArray items => items.OfType<BsonRegularExpression>().Select(pattern => pattern.Pattern),
-            BsonString text when string.Equals(condition.Op, "regex", StringComparison.OrdinalIgnoreCase) => [text.Value],
-            _ => Enumerable.Empty<string>(),
-        };
-
-        if (patterns.Any(pattern => pattern.Length > regexMaxLength))
-            throw new LegacyRefusalException("REGEX_TOO_LONG", $"Regex pattern exceeds maximum length of {regexMaxLength}.", condition.Path);
-
-        return operand;
     }
 
     /// <summary>An equality; a text that is a GUID matches the value stored as a UUID of either subtype and as that text.</summary>

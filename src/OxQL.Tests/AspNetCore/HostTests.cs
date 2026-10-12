@@ -472,18 +472,13 @@ public class HostTests
         host.Runner.Calls.Single().Stages.Single(stage => stage.Contains("$group"))["$group"]["total"].ToJson().Should().Be("""{ "$sum" : { "$multiply" : ["$Count", "2"] } }""");
     }
 
-    [Theory]
-    [InlineData("""{ "regex": { "$var": "pattern" } }""")]
-    [InlineData("""{ "eq": { "$regex": "PATTERN" } }""")]
-    [InlineData("""{ "in": ["a", { "$regex": "PATTERN" }] }""")]
-    [InlineData("""{ "regex": "PATTERN" }""")]
-    public async Task A_pattern_over_the_limit_is_refused_however_a_legacy_request_writes_it(string condition)
+    [Fact]
+    public async Task A_regex_written_as_text_over_the_limit_is_refused_under_the_legacy_pipeline()
     {
         using var host = new SampleHost(options => options.Limits.RegexMaxLength = 8);
-        const string Long = "^abcdefgh";
 
-        var request = $$"""{ "entityType": "probe.order", "variables": { "pattern": "{{Long}}" }, "pipeline": [{ "match": { "Number": {{condition.Replace("PATTERN", Long)}} } }] }""";
-        var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(request));
+        var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(
+            """{ "entityType": "probe.order", "pipeline": [{ "match": { "Number": { "regex": "^abcdefgh" } } }] }"""));
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body?.ToJsonString());
@@ -491,10 +486,43 @@ public class HostTests
         body["errors"]![0]!["message"]!.GetValue<string>().Should().Be("Regex pattern exceeds maximum length of 8.");
         host.Runner.Calls.Should().BeEmpty();
 
-        // A pattern within the limit runs, whichever way it is written.
-        var within = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(request.Replace(Long, "^abc")));
+        var within = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(
+            """{ "entityType": "probe.order", "pipeline": [{ "match": { "Number": { "regex": "^abc" } } }] }"""));
 
         within.StatusCode.Should().Be(HttpStatusCode.OK, await within.Content.ReadAsStringAsync());
+    }
+
+    [Theory]
+    [InlineData("""{ "regex": { "$var": "pattern" } }""")]
+    [InlineData("""{ "eq": { "$regex": "^abcdefgh" } }""")]
+    [InlineData("""{ "in": ["a", { "$regex": "^abcdefgh" }] }""")]
+    public async Task The_legacy_pattern_limit_covers_a_regex_written_as_text_and_no_other_form(string condition)
+    {
+        using var host = new SampleHost(options => options.Limits.RegexMaxLength = 8);
+
+        var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(
+            $$"""{ "entityType": "probe.order", "variables": { "pattern": "^abcdefgh" }, "pipeline": [{ "match": { "Number": {{condition}} } }] }"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        host.Runner.Calls.Single().Stages.Should().Contain(stage => stage.ToJson().Contains("^abcdefgh"), "the pattern is handed to the database as written");
+    }
+
+    [Fact]
+    public async Task A_row_the_legacy_encoding_does_not_write_is_a_fault_in_the_legacy_form()
+    {
+        using var host = new SampleHost();
+        var row = SampleHost.Row(Id1, "a");
+        row["Legacy"] = new BsonBinaryData(Id1, GuidRepresentation.CSharpLegacy);
+        host.Runner.PageRows = [row];
+
+        var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(StorageSpelled));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError, body?.ToJsonString());
+        body!["type"]!.GetValue<string>().Should().Be("internal_error");
+        body["status"]!.GetValue<int>().Should().Be(500);
+        body["errors"]![0]!["code"]!.GetValue<string>().Should().Be("INTERNAL_ERROR");
+        host.Logs.Of(OxQL.AspNetCore.Legacy.LegacyRoute.LogCategory).Single().Should().Contain("refused=INTERNAL_ERROR");
     }
 
     [Fact]

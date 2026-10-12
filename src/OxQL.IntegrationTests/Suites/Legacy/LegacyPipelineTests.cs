@@ -442,7 +442,10 @@ public class LegacyPipelineTests
             """);
 
         answer.StatusCode.Should().Be(500, answer.ToString());
+        answer.Type.Should().Be("internal_error");
+        answer.Body!["status"]!.GetValue<int>().Should().Be(500);
         answer.ErrorCodes.Should().Equal("INTERNAL_ERROR");
+        answer.Body["errors"]![0]!["message"]!.GetValue<string>().Should().Contain("the contract 1 encoding does not write");
     }
 
     [Fact]

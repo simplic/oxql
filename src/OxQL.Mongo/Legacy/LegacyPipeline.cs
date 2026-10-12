@@ -82,8 +82,7 @@ internal sealed class LegacyPipeline : ILegacyPipeline
                 read,
                 LegacyAggregate.Equality(legacy.OrganisationPath, new BsonString(organisation.ToString()), negate: false, ignoreCase: false),
                 options.Limits.DefaultPageSize,
-                options.Limits.MaxPageSize,
-                options.Limits.RegexMaxLength);
+                options.Limits.MaxPageSize);
         }
         catch (LegacyRefusalException refusal)
         {
@@ -111,30 +110,21 @@ internal sealed class LegacyPipeline : ILegacyPipeline
         // One ceiling for the request: the count runs under what the page left of it.
         AggregateRunOptions Run() => new((int)Math.Max(1, ceiling - (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds), AllowDiskUse: null) { Comment = context.CorrelationId };
 
+        List<BsonDocument> rows;
+        bool more;
+        long? total = null;
+
         try
         {
-            var rows = (await runner.AggregateAsync(entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
-            var more = rows.Count > aggregate.Limit;
+            rows = (await runner.AggregateAsync(entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
+            more = rows.Count > aggregate.Limit;
 
             if (more)
                 rows.RemoveRange(aggregate.Limit, rows.Count - aggregate.Limit);
 
-            long? total = null;
-
             // The count follows the page, as it did: one aggregate after the other.
             if (aggregate.Count is { } count)
                 total = (await runner.AggregateAsync(entity, count, Run(), cancellationToken).ConfigureAwait(false)).FirstOrDefault() is { } counted && counted.Contains("totalCount") ? counted["totalCount"].ToInt64() : 0;
-
-            return QueryOutcome.Of(new QueryResult
-            {
-                Items = rows.Select(CompatRows.Encode).ToList<JsonNode?>(),
-                PageInfo = new PageInfo
-                {
-                    HasNextPage = more,
-                    NextCursor = more && rows.Count > 0 ? LegacyCursor.Write(aggregate.Sort, rows[^1]) : null,
-                    TotalCount = total,
-                },
-            });
         }
         catch (Exception exception) when (exception is MongoExecutionTimeoutException or TimeoutException)
         {
@@ -147,6 +137,31 @@ internal sealed class LegacyPipeline : ILegacyPipeline
 
             return Fault($"The database refused the query ({exception.CodeName}); the detail is in the service log under the correlation id '{context.CorrelationId}'.");
         }
+
+        List<JsonNode?> items;
+
+        try
+        {
+            items = rows.Select(CompatRows.Encode).ToList();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or FormatException or JsonException)
+        {
+            // A stored value the v1 encoding does not write, a UUID of the legacy subtype for one.
+            logger.LogInformation(exception, "OxQL legacy pipeline could not encode a row of a contract 1 request for {Entity} correlation={CorrelationId}", entity.Id, context.CorrelationId);
+
+            return Fault($"A row holds a value the contract 1 encoding does not write; the detail is in the service log under the correlation id '{context.CorrelationId}'.");
+        }
+
+        return QueryOutcome.Of(new QueryResult
+        {
+            Items = items,
+            PageInfo = new PageInfo
+            {
+                HasNextPage = more,
+                NextCursor = more && rows.Count > 0 ? LegacyCursor.Write(aggregate.Sort, rows[^1]) : null,
+                TotalCount = total,
+            },
+        });
     }
 
     /// <summary>The contract 1 answer to a fault: 500 under its type and title, the status repeated in the body, one error <c>INTERNAL_ERROR</c>.</summary>

@@ -121,8 +121,9 @@ cache are not ported.
 - **Time.** Every database call carries a time limit: page and count together run under
   `OxQL:Compat:Legacy:MaxTimeMs`. A request over it is `QUERY_TIMEOUT` (504). A request its caller
   abandons is cancelled at the database.
-- **Patterns.** A pattern longer than `Limits:RegexMaxLength` is `REGEX_TOO_LONG`, however it is
-  written (`regex` as text or `$var`, the `$regex` hint, also inside `in`).
+- **Patterns.** A `regex` operand written as text and longer than `Limits:RegexMaxLength` is
+  `REGEX_TOO_LONG`. The limit covers that form only: a pattern given by `$var` or by the `$regex`
+  hint (also inside `in`) is handed to the database as written, whatever its length.
 
 Held by `LegacyPipelineTests` (S01 to S07, F01 to F04) and the legacy block of `HostTests`.
 
@@ -138,7 +139,8 @@ Held by `LegacyPipelineTests` (S01 to S07, F01 to F04) and the legacy block of `
 
 The pipeline checks a request against the host's `OxQL:Limits` (`MaxPageSize`, `DefaultPageSize`,
 `MaxPipelineStages`, `MaxLookupStages`, `MaxUnwindStages`, `MaxGroupFields`,
-`MaxProjectionFields`, `RegexMaxLength`), under the contract 1 codes.
+`MaxProjectionFields`, `RegexMaxLength` for a `regex` operand written as text), under the
+contract 1 codes.
 
 ## Health
 
@@ -165,8 +167,8 @@ where the legacy pipeline answers it first reads that pipeline's capabilities an
   `engine.contract`, `limits.maxBatchQueries` and `limits.maxPageSize` from it.
 - `capabilities` has `batch` and `compat.v1` and nothing else: no `page.offset`, no `any`, no
   `group.page`, none of the remote names, no `explain`.
-- `limits` has the ten values the pipeline and its two routes check. The time ceiling has no
-  entry.
+- `limits` has the ten values the pipeline and its two routes check. `regexMaxLength` is the
+  length of a `regex` operand written as text. The time ceiling has no entry.
 
 With `X-OxQL-Contract: 2` the answer is the contract 2 engine's. With `Compat:Legacy:Always=false`
 or `Compat:Legacy:Enabled=false` a contract 1 caller reads the rewrite path's list (`batch`,
@@ -283,9 +285,21 @@ compiles. `OxQL:Compat:Legacy:*` configuration keys are then ignored without a w
      with `LabFleet.Contract1AsShipped` and the `contract1AsShipped` parameter of
      `CorpusFleet.CreateAsync`; the same key set in `Suites/Entity/RetiredIdHost.cs` goes;
      `ContractATests.A04b` and `A32_A33_…` and `Contract1PlannerTests.W3_03` expect the refusals
-     again (`UNKNOWN_PATH`, `LEGACY_STAGE_UNSUPPORTED`) and `A32c` is deleted.
-5. Remove the sections on the legacy pipeline from `oxql-operations.md`, `oxql-conformance.md`,
-   `oxql-query-syntax.md` and the README.
+     again (`UNKNOWN_PATH`, `LEGACY_STAGE_UNSUPPORTED`) and `A32c` is deleted. In
+     `Suites/NonQuery/NonQueryTests` the health of the host that sets nothing lists the
+     rewrite's capabilities again.
+   - Comments that name the legacy pipeline or `Compat:Legacy:Always`: the summaries of
+     `Contract1PipelineTests`, `HostHardeningCompatEntityCaseTests` and
+     `HostHardeningCompatNullTests`.
+5. Remove what the documents say of the legacy pipeline
+   (`grep -rniE "legacy pipeline|Compat[:.]Legacy|LEGACY\.md" README.md src/docs` finds every
+   place):
+   - `oxql-operations.md`, `oxql-conformance.md`, `oxql-query-syntax.md` and the README: the
+     sections and table rows on it;
+   - `oxql-semantics.md`: the paragraph of the introduction on what answers contract 1 and the
+     parenthesis on `_t` under the stored discriminator;
+   - `UPGRADING-1.x.md`: the parenthesis on `Compat:Legacy:AllowedLookupSources` and the log
+     category `OxQL.Compat.Legacy`.
 
 Contract 1 compatibility itself (the rewrite, `Compat:Enabled`) is not part of this and goes when
 contract 1 goes.

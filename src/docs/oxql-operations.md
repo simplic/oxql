@@ -401,7 +401,8 @@ Anonymous, always 200, and never waits for another service:
   reads what that pipeline honours: `capabilities` is `["batch", "compat.v1"]` and `limits` has
   `maxPageSize`, `defaultPageSize`, `maxPipelineStages`, `maxLookupStages`, `maxUnwindStages`,
   `maxGroupFields`, `maxProjectionFields`, `maxRequestBytes`, `maxBatchQueries` and
-  `regexMaxLength`. There is no `page.offset` and no `maxOffset`: that caller pages by cursor only.
+  `regexMaxLength` (there the length of a `regex` operand written as text). There is no
+  `page.offset` and no `maxOffset`: that caller pages by cursor only.
   `status`, `service`, `engine` and `remote` are the same for every caller, so a host that reads
   another's shallow health without the header finds the engine's version and contract and the two
   limits it sizes its batches by.

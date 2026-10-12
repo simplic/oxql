@@ -550,8 +550,9 @@ Anonymous, always 200, and never waits for another service:
   facts. `reason` is `notConfigured` (no `InternalHosts` entry), `unreachable` (its health did not
   answer; a wrong `InternalApiVersions` entry looks the same) or `engine` (it answered and names no
   contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
-  `usable: false` degrades `status` as `reachable: false` does. A caller without the contract
-  header reads the three members `service`, `configured`, `reachable` and the same `status`.
+  `usable: false` degrades the `status` a contract 2 caller reads, as `reachable: false` does. A
+  caller without the contract header reads the three members `service`, `configured`, `reachable`,
+  and a `status` that only a service that is not configured or not reachable degrades.
 - `references` of a `remote` entry (contract 2) is the host's check of the references it declares
   into that service against the owner's schema document: `declared` (how many), `validated`
   (whether the check could be made), the `revision` of the document it was made against, and

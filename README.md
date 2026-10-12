@@ -521,6 +521,9 @@ caller reads the new members by name.
 - **Explain.** An owner no check asked carries `engine` and a `reason` (`unknown`, `engine`,
   `unreachable`, `timeout`, `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak
   contract 2; the owner reason `budget`; the note `REFERENCE_TARGET_UNKNOWN`.
+- **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
+  starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
+  (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
 - **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
   `OxQLEndpointOptions.StrictRemoteReferences`.
 - **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix

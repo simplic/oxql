@@ -2568,8 +2568,50 @@ internal static class MongoCompiler
         if (key.Trunc.Unit == "week")
             trunc["startOfWeek"] = key.Trunc.WeekStart ?? "monday";
 
-        return new BsonDocument("$dateTrunc", trunc);
+        return InCalendar(new BsonDocument("$dateTrunc", trunc));
     }
+
+    /// <summary>The first instant a date on the wire can name: midnight of 1 January of year 1, UTC.</summary>
+    internal static readonly BsonDateTime FirstInstant = new(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc));
+
+    /// <summary>The last instant a date on the wire can name, in the milliseconds the database keeps: the end of year 9999, UTC.</summary>
+    internal static readonly BsonDateTime LastInstant = new(DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc));
+
+    /// <summary>
+    /// A bucket's key, kept within the calendar a date on the wire can name. A bucket starts at a
+    /// local boundary, so the bucket of a row at the very start of the calendar can start before
+    /// it (the first of January of year 1 lies in the last hours of the year before in every zone
+    /// east of its meridian, and in the week before for a week that starts on another day): that
+    /// bucket is keyed with the first instant, and one past the end with the last. The key is
+    /// clamped in the group itself, so the rows of every bucket outside the calendar are one
+    /// group, and a sort and a cursor read the key the row shows. No date gives no key, as before.
+    /// </summary>
+    private static BsonDocument InCalendar(BsonDocument bucket) => new("$let", new BsonDocument
+    {
+        ["vars"] = new BsonDocument("bucket", bucket),
+        ["in"] = new BsonDocument("$switch", new BsonDocument
+        {
+            ["branches"] = new BsonArray
+            {
+                // Null sorts below every date, so the lower bound asks for a date first.
+                new BsonDocument
+                {
+                    ["case"] = new BsonDocument("$and", new BsonArray
+                    {
+                        new BsonDocument("$gt", new BsonArray { "$$bucket", BsonNull.Value }),
+                        new BsonDocument("$lt", new BsonArray { "$$bucket", FirstInstant }),
+                    }),
+                    ["then"] = FirstInstant,
+                },
+                new BsonDocument
+                {
+                    ["case"] = new BsonDocument("$gt", new BsonArray { "$$bucket", LastInstant }),
+                    ["then"] = LastInstant,
+                },
+            },
+            ["default"] = "$$bucket",
+        }),
+    });
 
     /// <summary>
     /// The instant a truncation starts from. A date has no time of day and is stored as the

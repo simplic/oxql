@@ -684,6 +684,15 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   bucket is local midnight of that day, in every zone. A `dateTime` truncates as the instant it
   holds.
 - The path must be a `date` or `dateTime` outside any collection that is not unwound.
+- **A key is always a date.** A bucket starts at a local boundary, so the bucket of a row at the
+  very start of the calendar can start before it: the instant `0001-01-01T00:00:00Z` (what a .NET
+  service stores for a date that was never set) lies in the year before in every zone east of
+  Greenwich, in the month before west of it, and in the week before when weeks start on another day
+  than Monday. That bucket is keyed `0001-01-01T00:00:00Z`, the first instant a date on the wire
+  can name; a bucket past the end of year 9999 is keyed with the last instant. The key is clamped
+  in the group itself: the rows of every bucket outside the calendar are one group at each end, the
+  keys of a level are distinct, and a sort and a cursor over the groups read the key the row shows.
+  The range for such a group's rows starts at its key, as for every other.
 - **`day` and coarser buckets are calendar ranges in the zone.** A `day`, `week`, `month`,
   `quarter` or `year` bucket holds the instants from the start of its first day in the zone to the
   start of the first day of the next bucket, where the start of a day is the first instant from

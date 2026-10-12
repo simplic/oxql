@@ -1096,7 +1096,7 @@ sixteen marked †); the legacy pipeline answers with the contract 1 codes
 | area | codes |
 |---|---|
 | entity | `UNKNOWN_ENTITY` |
-| request | `UNKNOWN_REQUEST_MEMBER`† (a top-level member a request or a batch does not have; a contract header that names neither contract) |
+| request | `UNKNOWN_REQUEST_MEMBER`† (a top-level member a request, a batch or an explain envelope does not have; a contract header that names neither contract), `INVALID_REQUEST_BODY`† (a body that does not read into a request: no JSON, empty, a value of another JSON kind than its place takes, a required member missing; see *A body that does not read* in [`oxql-operations.md`](oxql-operations.md)) |
 | path | `INVALID_PATH`, `UNKNOWN_PATH`, `NOT_STORED`, `NOT_FILTERABLE`, `NOT_SORTABLE`, `NOT_A_COLLECTION`, `UNWIND_ORDER`, `ALIAS_COLLISION`, `INVALID_ALIAS` |
 | operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE` (also a stage option where it does not apply), `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE`, `UNKNOWN_VARIANT`† (`is`) |
@@ -1147,8 +1147,9 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 
 - A body with `entityType` at the top is a plain query, which is the envelope with its defaults:
   `include` `shape` and `notes`, remote `check`, no catalog. An envelope
-  member other than these five, or a member of the wrong kind, is a 400 ProblemDetails (`budget`,
-  the internal route's member, is 400 `UNKNOWN_REQUEST_MEMBER`). More than
+  member other than these five is 400 `UNKNOWN_REQUEST_MEMBER` (`params.member`; so is `budget`,
+  the internal route's member), a member of the wrong kind 400 `INVALID_REQUEST_BODY`
+  (`params.path`, `expected`, `actual`). More than
   `Explain:MaxStages` stages or `MaxCatalogEntries` catalog entries, a `shape.depth` above
   `MaxShapeDepth`, and an `include` or `remote` value the engine does not know are 400
   `EXPLAIN_LIMIT`, before anything is bound.
@@ -1193,7 +1194,9 @@ full success body or a refusal envelope. `maxTimeMs` bounds the whole batch: the
 after another, each under what is left, never above the host's ceiling. The batch itself is
 refused whole, with 400: more than `MaxBatchQueries` queries (`BATCH_TOO_LARGE`), a member other
 than `queries` and `maxTimeMs` under contract 2 (`UNKNOWN_REQUEST_MEMBER`; `strict` is each
-query's own), a body without `queries` (`UNKNOWN_STAGE`).
+query's own), a body without a `queries` array (`INVALID_REQUEST_BODY`). An entry the host cannot
+read (a `sort` that is an object, a `null`) is refused in its place with `INVALID_REQUEST_BODY` and
+`params.entry`; the other entries run.
 
 ## Contract 1 (compatibility mode)
 

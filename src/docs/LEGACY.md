@@ -252,6 +252,7 @@ Edited (each place carries the marker unless said otherwise; remove the marked l
 | `OxQL.AspNetCore/ServiceCollectionExtensions.cs` | the registration of `LegacyRoute` |
 | `OxQL.AspNetCore/Controllers/OxQLController.cs` | the `LegacyBodyFilter` attribute; in `Health` the marked line and the two `legacy?.… ??` it feeds, so `capabilities` and `limits` are `EngineCapabilities.Of(…)` and `Limits(options)` again; the sentence on the legacy pipeline in `Health`'s summary (no marker: it is an XML doc) |
 | `OxQL.AspNetCore/OxQLQueryService.cs` | the `legacy` field and constructor parameter; in the contract 1 branch `return await Rewritten();` remains |
+| `OxQL.AspNetCore/Binding/OxQLRequestBodyAttribute.cs` | the marked branch that writes the line of a contract 1 request the host could not bind (`LegacyRoute.UnboundAsync`); a contract 1 request is then left to the host without a line |
 | `OxQL.AspNetCore/Compat/CompatBinder.cs` | the wording of `LEGACY_STAGE_UNSUPPORTED` for a join names the legacy pipeline; reword it |
 
 ## Removing it

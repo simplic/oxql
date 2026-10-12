@@ -800,8 +800,13 @@ public class HostTests
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "a batch answers per query");
-        body!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
+        body!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody);
         body["results"]![0]!["type"]!.GetValue<string>().Should().Be("validation_error");
+
+        // A caller without the contract header reads the code it always read.
+        var legacy = await SampleHost.Body(await host.Client(contract: null).PostAsync("/OxQL/batch", SampleHost.Json("""{ "queries": [null] }""")));
+
+        legacy!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
     }
 
     /// <summary>R5. A null pipeline element is a caller error too, not a fault.</summary>

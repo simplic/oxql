@@ -521,6 +521,16 @@ caller reads the new members by name.
 - **Explain.** An owner no check asked carries `engine` and a `reason` (`unknown`, `engine`,
   `unreachable`, `timeout`, `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak
   contract 2; the owner reason `budget`; the note `REFERENCE_TARGET_UNKNOWN`.
+- **A body that does not read (contract 2).** A request whose body the host cannot bind is
+  answered in the refusal envelope: 400 `validation_error` with the new code
+  `INVALID_REQUEST_BODY` and `params { reason, path, expected, actual, line, position }`
+  (`reason`: `json`, `empty`, `depth`, `kind`, `missing`), or with `INVALID_PAGE_LIMIT`,
+  `LOOKUP_LIMIT_EXCEEDED` or `UNKNOWN_REQUEST_MEMBER` where one of them names the mistake. A batch
+  answers an entry that does not read in its place (`params.entry`) and runs the others; a `null`
+  entry is such an entry. A caller without the contract header gets the host's answer, as before.
+  The filter is public (`OxQLRequestBodyAttribute`, `OxQL.AspNetCore.Binding`) for a host's own
+  controller over an OxQL body. See *A body that does not read* in
+  [`oxql-operations.md`](src/docs/oxql-operations.md).
 - **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
   starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
   (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).

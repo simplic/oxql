@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using OxQL.AspNetCore.Batch;
+using OxQL.AspNetCore.Binding;
 using OxQL.AspNetCore.Health;
 using OxQL.AspNetCore.Models;
 using OxQL.Core.Engine;
@@ -11,10 +12,14 @@ using OxQL.Core.Models;
 
 namespace OxQL.AspNetCore.Controllers;
 
-/// <summary>The query surface: <c>POST query</c>, <c>POST batch</c>, <c>GET health</c>, <c>POST explain</c>.</summary>
+/// <summary>
+/// The query surface: <c>POST query</c>, <c>POST batch</c>, <c>GET health</c>, <c>POST explain</c>.
+/// A contract 2 body the host cannot bind is refused in the envelope (<see cref="OxQLRequestBodyAttribute"/>).
+/// </summary>
 [ApiController]
 [Route("[controller]")]
 [TypeFilter(typeof(RequestSizeFilter))]
+[OxQLRequestBody]
 // LEGACY(compat.v1): keeps a contract 1 body readable for the legacy pipeline; remove with src/OxQL.AspNetCore/Legacy.
 [TypeFilter(typeof(Legacy.LegacyBodyFilter))]
 public class OxQLController : ControllerBase

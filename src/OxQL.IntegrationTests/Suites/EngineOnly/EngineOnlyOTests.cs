@@ -269,12 +269,15 @@ public class EngineOnlyOTests
     }
 
     [Fact]
-    public async Task O25_a_null_pipeline_element_is_a_coded_refusal_and_a_non_object_element_is_a_ProblemDetails_400()
+    public async Task O25_a_null_pipeline_element_and_a_non_object_element_are_coded_refusals()
     {
         var notAnObject = await Send("""[ "match", { "page": { "limit": 1 } } ]""");
-        notAnObject.StatusCode.Should().Be(400, notAnObject.ToString());
-        notAnObject.IsProblemDetails.Should().BeTrue("the converter rejects a non-object before the body is a request: " + notAnObject);
-        notAnObject.ErrorCodes.Should().BeEmpty();
+        var kind = notAnObject.ShouldRefuse("INVALID_REQUEST_BODY", 400);
+        notAnObject.IsProblemDetails.Should().BeFalse(notAnObject.ToString());
+        kind["stage"]!.GetValue<int>().Should().Be(0);
+        kind["params"]!["path"]!.GetValue<string>().Should().Be("$.pipeline[0]");
+        kind["params"]!["expected"]!.GetValue<string>().Should().Be("object");
+        kind["params"]!["actual"]!.GetValue<string>().Should().Be("string");
 
         // A null element is answered, not a fault of the host.
         var nullElement = await Send("""[ null, { "page": { "limit": 1 } } ]""");

@@ -309,7 +309,7 @@ public class BatchConcurrencyTests
 
         results[0]!["items"].Should().NotBeNull();
         results[1]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownPath);
-        results[2]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
+        results[2]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody);
         results[3]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownEntity);
         results[4]!["items"].Should().NotBeNull();
         runner.Calls.Should().HaveCount(2, "the refused entries ran nothing and stopped nothing");

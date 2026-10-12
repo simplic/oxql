@@ -130,6 +130,49 @@ public sealed class LegacyRoute
         }
     }
 
+    /// <summary>
+    /// Writes the line of a contract 1 request whose body the host could not bind, so it never came
+    /// to the pipeline: it is a contract 1 request all the same, and whoever counts the callers that
+    /// still send no contract header counts this one too (<c>reason=unbound</c>). The host answered
+    /// it, as it always has. Under <see cref="LogCategory"/> while the legacy pipeline answers
+    /// contract 1, else under the compatibility category.
+    /// </summary>
+    internal static async Task UnboundAsync(HttpContext http, OxQLOptions options, string route)
+    {
+        if (!options.Compat.Enabled || http.RequestServices.GetService(typeof(ILoggerFactory)) is not ILoggerFactory loggers)
+            return;
+
+        var legacy = options.Compat.Legacy.Enabled && http.RequestServices.GetService(typeof(ILegacyPipeline)) is not null;
+        var scope = http.RequestServices.GetService(typeof(Scope.IOxQLScopeProvider)) as Scope.IOxQLScopeProvider;
+        Guid? organisation = null;
+        string? user = null, correlation = null;
+
+        try
+        {
+            if (scope is not null)
+            {
+                organisation = await scope.OrganisationAsync(http, http.RequestAborted).ConfigureAwait(false);
+                user = scope.UserId(http);
+                correlation = scope.CorrelationId(http);
+            }
+        }
+        catch (Exception)
+        {
+            // The line is written without what the scope provider could not say.
+        }
+
+        var category = legacy ? LogCategory : OxQLQueryService.CompatLogCategory;
+
+        loggers.CreateLogger(category).LogInformation(
+            "{Category} contract 1 request with a body the host could not bind, answered by the host: reason={Reason} route={Route} user={UserId} org={OrganisationId} correlation={CorrelationId}",
+            category,
+            "unbound",
+            route,
+            user,
+            organisation,
+            LogText.Of(correlation ?? http.TraceIdentifier));
+    }
+
     /// <summary>Why the legacy pipeline answers a request the rewrite or the binder refused, or null when the refusal stands.</summary>
     internal static string? Reason(QueryRequest request, Refusal refusal)
     {

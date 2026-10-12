@@ -58,7 +58,7 @@ public static class Basis
         [Codes.UnknownStageMember] = Request, [Codes.StageAfterPage] = Request, [Codes.MultiplePageStages] = Request, [Codes.MixedProjection] = Request,
         [Codes.UnknownAggFunction] = Request, [Codes.InvalidDateTruncUnit] = Request, [Codes.InvalidTimezone] = Request, [Codes.InvalidSortDirection] = Request,
         [Codes.InvalidPageLimit] = Request, [Codes.UnboundVariable] = Request, [Codes.InvalidVariable] = Request, [Codes.LegacyStageUnsupported] = Request,
-        [Codes.FilterNotPlaceable] = Request, [Codes.InvalidFilter] = Request,
+        [Codes.FilterNotPlaceable] = Request, [Codes.InvalidFilter] = Request, [Codes.InvalidRequestBody] = Request,
 
         // against the model of the service that binds it
         [Codes.UnknownEntity] = Model, [Codes.UnknownPath] = Model, [Codes.NotStored] = Model, [Codes.NotFilterable] = Model, [Codes.NotSortable] = Model,

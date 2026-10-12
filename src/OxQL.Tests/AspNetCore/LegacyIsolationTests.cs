@@ -23,6 +23,7 @@ public class LegacyIsolationTests
     /// <summary>The files outside the legacy folders that name a legacy type: the seams. Removing the legacy support edits exactly these.</summary>
     private static readonly string[] Seams =
     [
+        "OxQL.AspNetCore/Binding/OxQLRequestBodyAttribute.cs",
         "OxQL.AspNetCore/Controllers/OxQLController.cs",
         "OxQL.AspNetCore/OxQLQueryService.cs",
         "OxQL.AspNetCore/ServiceCollectionExtensions.cs",

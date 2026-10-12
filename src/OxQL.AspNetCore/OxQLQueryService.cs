@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OxQL.AspNetCore.Batch;
+using OxQL.AspNetCore.Binding;
 using OxQL.AspNetCore.Compat;
 using OxQL.AspNetCore.Scope;
 using OxQL.Core.Binding;
@@ -87,11 +88,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
         // A null query is a caller error, not a fault: the batch route can carry one
         // ({"queries":[null]}) and the body of the query route can be the literal `null`.
         if (request is null)
-            return QueryOutcome.Of(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The request is empty; a query carries an entityType and a pipeline.",
-            }]));
+            return QueryOutcome.Of(NoRequest(RequestBodyReader.Root, "a query carries an entityType and a pipeline", "The request is empty; a query carries an entityType and a pipeline."));
 
         if (shared is null && ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return QueryOutcome.Of(unknownContract);
@@ -134,11 +131,10 @@ public sealed class OxQLQueryService : IOxQLQueryService
     private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken)
     {
         if (batch is null || batch.Queries is null)
-            return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The batch is empty; a batch carries a queries array.",
-            }]));
+            return new BatchOutcome.Refused(NoRequest(
+                batch is null ? RequestBodyReader.Root : RequestBodyReader.Join(RequestBodyReader.Root, "queries"),
+                "a batch carries a queries array",
+                "The batch is empty; a batch carries a queries array."));
 
         if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return new BatchOutcome.Refused(unknownContract);
@@ -184,11 +180,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         var measured = new System.Collections.Concurrent.ConcurrentQueue<QueryTiming>();
 
-        var results = await BatchRun.RunAsync(batch.Queries, degree, async (query, token) =>
+        // The entries the host could not read are answered in their places with what is wrong with them.
+        var unread = httpContextAccessor?.HttpContext?.Items[OxQLRequestBodyAttribute.EntriesItem] as IReadOnlyDictionary<int, Refusal>;
+        var contract2 = ContractOf(options, httpContextAccessor?.HttpContext) != 1;
+
+        var results = await BatchRun.RunAsync(Enumerable.Range(0, batch.Queries.Count).ToList(), degree, async (index, token) =>
         {
+            var query = batch.Queries[index];
             var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
-            var outcome = unscoped is not null && query is not null
-                ? QueryOutcome.Of(unscoped)
+            var outcome = query is null && unread is not null && unread.TryGetValue(index, out var wrong) ? QueryOutcome.Of(wrong)
+                : query is null && contract2 ? QueryOutcome.Of(NullEntry(index))
+                : unscoped is not null && query is not null ? QueryOutcome.Of(unscoped)
                 : await ExecuteAsync(query!, left, internalCall, shared, token).ConfigureAwait(false);
 
             if (outcome is QueryOutcome.Success { Result.Measured: { } timing })
@@ -216,11 +218,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
     private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken)
     {
         if (request?.Query is null)
-            return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The request is empty; a query carries an entityType and a pipeline.",
-            }]));
+            return new ExplainOutcome.Refused(NoRequest(RequestBodyReader.Root, "a query carries an entityType and a pipeline", "The request is empty; a query carries an entityType and a pipeline."));
 
         // An explain past its bounds costs its parse and nothing else: no scope, model, binder or owner.
         if (ExplainLimits.Check(request, options.Explain) is { } limited)
@@ -326,6 +324,32 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         return new ExplainBatchOutcome.Success(new ExplainBatchResponse { Answers = answers });
     }
+
+    /// <summary>
+    /// The refusal of a request that is not there (a body that is the literal <c>null</c>, a batch
+    /// without its <c>queries</c>): under contract 2 a body that does not read, said with the place
+    /// that is missing; under contract 1 the code and the words that caller has always read.
+    /// </summary>
+    private Refusal NoRequest(string at, string carries, string contract1)
+    {
+        if (ContractOf(options, httpContextAccessor?.HttpContext) == 1)
+            return Refusal.Validation([new QueryValidationError { Code = Codes.UnknownStage, Message = contract1 }]);
+
+        return Refusal.Validation([new QueryValidationError
+        {
+            Code = Codes.InvalidRequestBody,
+            Message = $"'{at}' is missing; {carries}.",
+            Params = new Dictionary<string, object?> { ["reason"] = RequestBodyReader.ReasonMissing, ["path"] = at },
+        }]);
+    }
+
+    /// <summary>The refusal of a batch entry written as <c>null</c> under contract 2: it is no query, and the others run.</summary>
+    private static Refusal NullEntry(int index) => Refusal.Validation([new QueryValidationError
+    {
+        Code = Codes.InvalidRequestBody,
+        Message = $"The entry {index} of 'queries' is null; an entry is a query: an object with an entityType and a pipeline.",
+        Params = new Dictionary<string, object?> { ["reason"] = RequestBodyReader.ReasonKind, ["path"] = RequestBodyReader.Root, ["expected"] = "object", ["actual"] = "null", ["entry"] = index },
+    }]);
 
     /// <summary>The engine block of an explain answer: the version and this host's capabilities.</summary>
     private ExplainEngine EngineOf() => new()

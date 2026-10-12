@@ -317,19 +317,62 @@ public class ContractATests
     }
 
     [Fact]
-    public async Task A11_A12_A13_malformed_JSON_and_a_missing_required_member_are_ProblemDetails_not_an_OxQL_refusal()
+    public async Task A11_A12_A13_a_body_that_does_not_read_is_an_OxQL_refusal_under_contract_2()
     {
         var transport = await Transport();
 
+        // body, reason, the place in the body (null: the body as a whole)
+        var cases = new (string Body, string Reason, string? Path)[]
+        {
+            ($$"""{ "pipeline": [ {{Page1}} ] }""", "missing", "$.entityType"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}" }""", "missing", "$.pipeline"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": {} }""", "kind", "$.pipeline"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": null }""", "kind", "$.pipeline"),
+            ($$"""{ "entityType": 5, "pipeline": [] }""", "kind", "$.entityType"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": [ {{Page1}} ], "strict": "true" }""", "kind", "$.strict"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": [ {{Page1}} ], "variables": [] }""", "kind", "$.variables"),
+            ($$"""[ { "entityType": "{{Corpus.Shipment}}", "pipeline": [] } ]""", "kind", "$"),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": [ {{Page1}}, ] }""", "json", null),
+            ($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": [ """, "json", null),
+            ("", "empty", null),
+        };
+
+        foreach (var (body, reason, path) in cases)
+        {
+            var answer = await transport.PostAsync("OxQL/query", body);
+            var error = answer.ShouldRefuse("INVALID_REQUEST_BODY", 400);
+
+            answer.Type.Should().Be("validation_error", answer.ToString());
+            answer.IsProblemDetails.Should().BeFalse(answer.ToString());
+            answer.Body!["errors"].Should().BeOfType<JsonArray>(answer.ToString());
+            error["params"]!["reason"]!.GetValue<string>().Should().Be(reason, answer.ToString());
+            error["params"]!["path"]?.GetValue<string>().Should().Be(path, answer.ToString());
+            answer.Text.Should().NotContain("System.").And.NotContain("OxQL.Core").And.NotContain("LineNumber");
+
+            if (reason == "json")
+            {
+                error["params"]!["line"]!.GetValue<int>().Should().Be(1);
+                error["params"]!["position"]!.GetValue<int>().Should().BeGreaterThan(1);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A11_A12_A13_without_the_contract_header_a_body_that_does_not_read_is_the_hosts_answer()
+    {
+        var transport = await Transport(contract: null);
+
         var noEntity = await transport.QueryAsync($$"""{ "pipeline": [ {{Page1}} ] }""");
         var noPipeline = await transport.QueryAsync($$"""{ "entityType": "{{Corpus.Shipment}}" }""");
+        var notAList = await transport.QueryAsync($$"""{ "entityType": "{{Corpus.Shipment}}", "pipeline": {} }""");
 
-        foreach (var answer in new[] { noEntity, noPipeline })
+        foreach (var answer in new[] { noEntity, noPipeline, notAList })
         {
             answer.StatusCode.Should().Be(400, answer.ToString());
             answer.IsProblemDetails.Should().BeTrue(answer.ToString());
             answer.Body!["errors"].Should().BeOfType<JsonObject>("errors is an object here, not the OxQL list: " + answer);
             answer.ErrorCodes.Should().BeEmpty();
+            answer.Body!.AsObject().Select(member => member.Key).Should().Equal("type", "title", "status", "errors", "traceId");
         }
 
         var malformed = await transport.PostAsync("OxQL/query", "");

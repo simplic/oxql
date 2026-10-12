@@ -28,20 +28,50 @@ at once. The HTTP status follows from `type` and is not repeated in the body:
 The engine turns every exception on the query path into an `INTERNAL_ERROR` envelope, so a 500
 from the query routes without an envelope did not come from the engine.
 
+**A body that does not read.** A contract 2 request whose body cannot be read into the request
+model is refused in the envelope like every other caller error: 400 `validation_error` with
+`INVALID_REQUEST_BODY` (or the stage's own code where one names the mistake: `INVALID_PAGE_LIMIT`
+for a page `limit` or `offset` that is no whole number, `LOOKUP_LIMIT_EXCEEDED` for such a lookup
+`limit`, `UNKNOWN_REQUEST_MEMBER` for a member an explain envelope does not have). `params` says
+what a client needs to render it, and neither it nor the message ever names a type of the runtime:
+
+| `params.reason` | when | further `params` |
+|---|---|---|
+| `json` | the body is no well-formed JSON (a trailing comma, a body cut short) | `line`, `position`: where the reader stopped, both counted from 1, the position in bytes within the line |
+| `empty` | the body is empty | — |
+| `depth` | the body nests deeper than the host reads | `max` |
+| `kind` | a value is of another JSON kind than its place takes: a body or a stage that is no object, a `pipeline`, `sort`, `and`, `or`, `group.by` or `queries` that is no array, a condition, a `not`, an aggregate or a `variables` that is no object, an `entityType` that is no string, a `strict` that is no boolean, a fraction where a whole number is read | `path`, `expected` and `actual` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`); a place only known as a whole (a stage) carries `path` alone |
+| `missing` | a required member is not written: `entityType`, `pipeline`, a batch's `queries`, an explain envelope's `query`, the `path` or `unit` of a `dateTrunc` | `path` |
+
+`params.path` is the place in the body as a JSON path from its root (`$.pipeline[2].sort`,
+`$.pipeline[0].match['address.city'].any.and`), and the error carries `stage` when the place lies in
+a stage. In a batch an entry that does not read is refused in its place of `results` and the other
+entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.entry` is its index
+in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
+itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
+that is no whole number.
+
+The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
+`OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the
+attribute on it. It runs before the framework's automatic 400 and before a host's own filters at
+the default order, so a host changes nothing for it. A request without the contract header is not
+touched: the host answers it as before (below).
+
 **Framework responses** come from the host's ASP.NET Core pipeline before the engine sees the
 request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | the body cannot be read into the request model: not JSON; `entityType` or `pipeline` missing or `null`; a pipeline element that is a number, string or array; a condition that is not an object; `and`/`or` that is not an array; `not` that is not an object; an aggregate that is not an object; a `group.by` or `sort` of the wrong JSON type; a non-integral number where an integer is read; an explain envelope with a member other than `query`, `include`, `shape`, `remote`, `catalog`, or one of the wrong JSON kind (an `include` or `remote` value the engine does not know is the 400 `EXPLAIN_LIMIT` envelope) |
+| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
 | 415 | the request is not `application/json` |
 
 A client that maps statuses to messages treats a 400 ProblemDetails as a caller error, like a
-`validation_error`, never as an unreachable service. A pipeline element that is `null` and a
-`null` entry of a batch are refusals (`UNKNOWN_STAGE`), not ProblemDetails.
+`validation_error`, never as an unreachable service. A pipeline element that is `null` is a
+refusal (`UNKNOWN_STAGE`) under both contracts; a `null` entry of a batch is `UNKNOWN_STAGE` for a
+contract 1 caller and `INVALID_REQUEST_BODY` under contract 2.
 
 ### Codes
 
@@ -77,7 +107,8 @@ the listed status.
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
-| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; a `null` query in a batch |
+| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind` or `missing`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
+| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; contract 1: a `null` query in a batch |
 | `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
@@ -260,8 +291,9 @@ next goes behind it.
 ### Batch
 
 `POST /oxql/batch` answers 200 with `{ "results": [ … ] }`, one entry per query in order, unless
-the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a framework
-response (a body without a `queries` array is a 400 ProblemDetails). An entry is either a success body (it has `items`)
+the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a body that is no
+batch (without a `queries` array: 400 `INVALID_REQUEST_BODY` under contract 2, the host's 400
+ProblemDetails for a caller without the header). An entry is either a success body (it has `items`)
 or a refusal envelope (it has `type`); an entry carries no status of its own, so a caller derives
 it from `type` with the table above. Queries of a public batch run one after another on the host;
 `maxTimeMs` bounds the whole batch: it is one deadline, and each query runs under what is left of it

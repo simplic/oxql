@@ -137,6 +137,63 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
+    public async Task M04_explain_judges_an_owner_it_did_not_ask_by_what_the_host_knows_of_it()
+    {
+        // The alias whole and no path under it: nothing for the owner to bind, and no shape asked for, so no check asks it.
+        var host = Remembering("remembering-explain");
+        var envelope = JsonNode.Parse($$"""
+            {
+              "query": { "entityType": "{{Corpus.Conformance}}", "pipeline": [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } }, { "project": { "id": 1, "w": 1 } }, { "page": { "limit": 5 } } ] },
+              "remote": "check",
+              "include": ["notes"]
+            }
+            """)!;
+        var mark = Owner.Mark();
+
+        static JsonObject OwnerOf(WireAnswer answer) => answer.Body!["owners"]!.AsArray().Select(owner => owner!.AsObject()).Single(owner => owner["service"]!.GetValue<string>() == LabFleet.ExternalOwner);
+
+        static IReadOnlyList<JsonObject> Unchecked(WireAnswer answer) =>
+            answer.Body!["notes"]!.AsArray().Select(note => note!.AsObject()).Where(note => note["code"]!.GetValue<string>() == "REMOTE_UNCHECKED").ToList();
+
+        // Nothing is known of the owner yet: this host has not measured it.
+        var before = await host.ExplainHereAsync(envelope);
+
+        before.Body!["valid"]!.GetValue<bool>().Should().BeTrue();
+        before.Body!["executable"]!.GetValue<string>().Should().Be("unknown");
+        before.Body!["cache"]!["complete"]!.GetValue<bool>().Should().BeFalse();
+        Unchecked(before).Should().ContainSingle().Which["params"]!["reason"]!.GetValue<string>().Should().Be("unknown");
+        OwnerOf(before)["reason"]!.GetValue<string>().Should().Be("unknown");
+
+        // The host's health measures the owner and keeps what its health names.
+        var services = (await host.HostAsync()).Services;
+
+        await host.HealthAsync();
+        await services.GetRequiredService<OxQL.AspNetCore.Health.RemoteHealthProbe>().Refreshing;
+
+        var known = await host.ExplainHereAsync(envelope);
+
+        known.Body!["executable"]!.GetValue<string>().Should().Be("yes");
+        known.Body!["cache"]!["complete"]!.GetValue<bool>().Should().BeTrue();
+        Unchecked(known).Should().BeEmpty();
+        OwnerOf(known)["engine"]!["contract"]!.GetValue<int>().Should().Be(2);
+        OwnerOf(known)["calls"]!.GetValue<int>().Should().Be(0);
+        OwnerOf(known)["answered"].Should().BeNull("it was not asked");
+
+        // A call to the owner failed since: the explain does not say the join runs.
+        var availability = services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>();
+
+        availability.Failed(LabFleet.ExternalOwner, OxQL.Core.Engine.OwnerAvailability.Unreachable);
+
+        var failed = await host.ExplainHereAsync(envelope);
+
+        failed.Body!["executable"]!.GetValue<string>().Should().Be("unknown");
+        Unchecked(failed).Should().ContainSingle().Which["params"]!["reason"]!.GetValue<string>().Should().Be("unreachable");
+
+        availability.Succeeded(LabFleet.ExternalOwner);
+        Owner.BatchesSince(mark).Should().BeEmpty("an explain never runs the query");
+    }
+
+    [Fact]
     public async Task M03_a_semi_join_into_an_owner_that_failed_is_refused_at_once_without_a_call()
     {
         var host = Remembering("remembering-semijoin");

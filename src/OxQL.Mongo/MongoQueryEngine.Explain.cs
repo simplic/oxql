@@ -113,11 +113,12 @@ public sealed partial class MongoQueryEngine
         draft.Strict = strict;
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
-        // as a run does, within the explain budget: those of the keyed stages' owners and of the
-        // semi-joins', whose page they size. The cached tier asks no owner anything: it plans by the
-        // facts already known.
+        // as a run does, within the slice of the time a run gives them: those of the keyed stages'
+        // owners and of the semi-joins', whose page they size. An owner whose health is slow leaves
+        // its facts unknown rather than taking the time its check needs. The cached tier asks no owner
+        // anything: it plans by the facts already known.
         if (request.Remote != ExplainRequest.RemoteCached)
-            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled, owners.Remaining, cancellationToken).ConfigureAwait(false);
+            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled, KeyedFetch.OwnerFactsSlice(owners.Remaining), cancellationToken).ConfigureAwait(false);
 
         draft.Indexes = Notes.CallerIndexes(bound, request.Query);
         draft.Notes.AddRange(Notes.Of(bound, request.Query, draft.Indexes, strict, context.Contract, options));
@@ -418,11 +419,12 @@ public sealed partial class MongoQueryEngine
         var catalog = await draft.Types.CatalogAsync(request, draft.Owners).ConfigureAwait(false);
 
         owners.Read(draft.Owners);
+        Unasked(draft, owners);
 
         var notes = draft.Notes.Concat(draft.Owners.LimitNotes)
             .Where(note => request.IncludesNotes || IsAboutTheAnswer(note) || (note.Code == Notes.IndexAdvice && request.IncludesIndexes))
             .ToList();
-        // Complete while every owner asked answered, no limit left a part out, and every alias has its type.
+        // Complete while every owner asked answered, every owner not asked is known to answer, no limit left a part out, and every alias has its type.
         var complete = draft.Owners.Complete && aliases.All(alias => alias.Value?["complete"]?.GetValue<bool>() != false);
         // This host's document, and each owner's as its answer named it (its own owners' among them).
         var schema = new SortedDictionary<string, string?>(StringComparer.Ordinal);
@@ -845,6 +847,51 @@ public sealed partial class MongoQueryEngine
 
                 if (use.Engine is not null)
                     entry["engine"] = use.Engine.DeepClone();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The remote owners no check asked, under <c>remote: "check"</c>: each is listed with what the
+    /// host knows of it (<c>engine</c> from its health facts, a <c>reason</c> when it is not taken to
+    /// answer), and one that is not is noted <c>REMOTE_UNCHECKED</c> (<see cref="RemoteExplain.Unasked"/>),
+    /// which makes the verdict <c>unknown</c>. The cached tier asks nobody and says so by its own notes.
+    /// </summary>
+    private void Unasked(Draft draft, OwnerList owners)
+    {
+        if (draft.Request.Remote == ExplainRequest.RemoteCached || draft.Bound is not { } bound)
+            return;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>())
+        {
+            if (!draft.Explained.TryGetValue(resolve.As, out var explained))
+                continue;
+
+            foreach (var query in explained)
+            {
+                if (!query.Remote || draft.Owners.Considered(query.Service) || !seen.Add(query.Service))
+                    continue;
+
+                var entry = owners.Entries[owners.IndexOf(query.Service, remote: true)];
+                var facts = (remote as IRemoteOwnerInfo)?.OwnerOf(query.Service);
+
+                if (facts is not null && (facts.EngineVersion is not null || facts.Contract is not null))
+                {
+                    var engine = new JsonObject();
+
+                    if (facts.EngineVersion is { } version)
+                        engine["version"] = version;
+
+                    if (facts.Contract is { } contract)
+                        engine["contract"] = contract;
+
+                    entry["engine"] = engine;
+                }
+
+                if (draft.Owners.Unasked(query.Service, query.Target, resolve.As, bound.CallerIndexOf(resolve), facts, availability.OutageOf(query.Service), draft.Notes) is { } reason)
+                    entry["reason"] = reason;
             }
         }
     }

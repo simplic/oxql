@@ -329,7 +329,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
 | `Cache:OwnerUnavailableTtlSeconds` | 5 (`0` remembers nothing) | keyed fetch and semi-join: how long an owner is not called again after a call that reached nobody, got no answer within a whole call budget, or found no internal query route (HTTP 404; also 502, 503, 504). Until then the request gets the failed call's answer at once | `RESOLVE_UNREACHABLE` with `params.remembered: true`, `retryAfterMs`; a semi-join 422 `RESOLVE_UNAVAILABLE` | no (health only, contract 2: `ownerUnavailableTtlSeconds`) | one record per host, which its health probe writes too: a measurement that finds the owner answering ends the wait early |
 | `Explain:Enabled` | `true` | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
-| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries) | note `REMOTE_UNCHECKED` | no | — |
+| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries), from the first round an owner is asked in | note `REMOTE_UNCHECKED` (`reason: "timeout"` for an owner that was asked, `"budget"` for a part nothing was sent for) | no | — |
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
 | `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
 | `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too |
@@ -352,6 +352,7 @@ Fixed bounds, not configurable:
 | `Execution:MaxTimeMs` ceiling | 60 000 ms | — |
 | health reachability probe | 2 s per service | the service counts as not reachable |
 | listed indexes for the explain advisory | cached 60 s per collection | — |
+| what a run or an explain learned a union target lacks (the paths dropped for it) | kept for `Cache:ResolveTtlSeconds` per organisation, owner and target, under the revision of the owner's schema an answer last named; what was learned before any revision was named counts as learned of the first one named | — |
 | owner answers to explain's remote check and forwarded catalog entries | kept 30 s per organisation, user, owner, owner schema revision and forwarded body, at most 1 000 entries and 16 MB; failures and answers that were not complete are not kept, and an answer naming another revision of a service retires what was kept for the old one | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
 | ask-again rounds for a remote union target without the paths it lacks | 2 per request | — |
@@ -836,9 +837,15 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this
   host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,
   `IRemoteOwnerInfo.ApiVersionOf`, absent when it does not say), `answered` (`null`: never asked),
-  `reason` when it did not (`unsupported`, `unreachable`, `timeout`, `limit`), `calls` (one per round
+  `reason` when it did not (`unsupported`, `unreachable`, `timeout`, `limit`, `cached`; `budget` for
+  a part nothing was sent for because what was asked before it spent the owners' budget, so
+  `timeout` always means the owner was asked and did not answer in time), `calls` (one per round
   it was asked in), `cached`, `ms` and its `engine`; its schema revision is
-  `revision.schema[service]`. With `include: ["plan"]` an owner also lists the
+  `revision.schema[service]`. An owner no check asked (`answered: null`, `calls: 0`) carries, under
+  `remote: "check"`, the `engine` its health named, as far as the host's remote client knows it,
+  and a `reason` when it is not taken to answer: `unknown` (nothing is known of it), `engine` (its
+  health names another contract than this engine's, or none), or what the last call this host made
+  to it ended in (`unreachable`, `timeout`, `route`). With `include: ["plan"]` an owner also lists the
   `queries` it is sent, each once: `stage`, `alias`, `target`, `grouped`, the `query` with keys and
   the page limit elided as `"…"`, and the stages `continued` and `notApplicable`.
 - **`catalog`**: one answer per `catalog` entry of the request, in order: `id`, `entity`, the `type`
@@ -909,9 +916,22 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
 - **`remote`.** With `check` (the default) the owner queries of every keyed stage are bound by their
   owners' internal explain: an owner error becomes this request's error at the caller's stage
   (`params.owner` as in a refusal) and the stage's status `error`. All owner calls of one explain
-  share `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (a client that cannot explain,
-  unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED` note with `params.reason`,
-  never an error.
+  share `Explain:RemoteTimeoutMs` (1 500 ms), which runs from the first round an owner is asked in
+  (binding and reading the owners' health facts come before it; the facts are read within the
+  slice a run gives them, a tenth of the time left and at most 250 ms); a part no owner answered (a
+  client that cannot explain, unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED`
+  note with `params.reason`, never an error.
+  - *Owners that are not asked.* An owner is asked when there is something for it to bind: stages
+    continued at it, paths asked under its alias, a filter, or the target's type (`include` with
+    `shape`, the default). A join that shows the owner's row whole under an `include` without
+    `shape` gives the owner nothing to bind, and no check asks it. The answer then goes by what
+    the host knows of the owner and never says more than was checked: an owner whose health names
+    this engine's contract is taken to answer (`executable` may be `yes`, the owner's entry carries
+    its `engine`); an owner nothing is known of, one on another contract or none, and one the host
+    remembers as not answering (`Cache:OwnerUnavailableTtlSeconds`) leaves a `REMOTE_UNCHECKED` note
+    at the join's stage with `params { service, target, reason }` (`unknown`, `engine`,
+    `unreachable`, `timeout`, `route`), `cache.complete: false` and `executable: "unknown"`. The
+    cached tier asks nobody and is not judged this way.
   - *Conditions at owners.* A condition on a member of another service's rows (a semi-join) is bound
     by that owner when the query runs, before the page. Explain has the owner bind the query the run
     sends it first for the condition (the condition relative to the target, the target field
@@ -938,7 +958,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     a run stops at the first owner that refuses. A condition no owner was asked
     for is never valid by silence: it leaves a `REMOTE_UNCHECKED` note at the same place, with
     `path` and `params { service, target, reason, condition }` (`reason: "cached"` under the cached
-    tier without a kept answer, else `unsupported`, `unreachable`, `timeout`), or the
+    tier without a kept answer, else `unsupported`, `unreachable`, `timeout`, `budget`), or the
     `EXPLAIN_LIMIT` note of the limit that left it out (once per limit and service, and once more
     with `filter` for each entry of the request's `filter` a left-out condition belongs to);
     `cache.complete` is then false and

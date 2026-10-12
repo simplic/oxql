@@ -152,17 +152,22 @@ public class OxQLController : ControllerBase
     {
         public static ModelHealth Of(IEntityModelProvider models)
         {
-            if (ModelOrNull(models) is not { } model)
-                return new ModelHealth(0, true, "unavailable");
-
-            var entities = model.Entities.Count;
-
-            return models.Degraded switch
+            try
             {
-                true => new ModelHealth(entities, true, "build"),
-                null when entities == 0 => new ModelHealth(0, true, "empty"),
-                _ => new ModelHealth(entities, false, null),
-            };
+                var entities = models.Model.Entities.Count;
+
+                return models.Degraded switch
+                {
+                    true => new ModelHealth(entities, true, "build"),
+                    null when entities == 0 => new ModelHealth(0, true, "empty"),
+                    _ => new ModelHealth(entities, false, null),
+                };
+            }
+            catch (Exception)
+            {
+                // Health answers whatever the model does: a provider without a model, or one whose build throws, has none to bind against.
+                return new ModelHealth(0, true, "unavailable");
+            }
         }
     }
 

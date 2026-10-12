@@ -350,6 +350,15 @@ public class HostHardeningHealthTests
     }
 
     [Fact]
+    public async Task A_model_whose_build_throws_does_not_fail_health()
+    {
+        var body = await HealthAsync(new LazyEntityModelProvider(() => throw new NotSupportedException("a serializer the build cannot read")), route: "/OxQL/health?shallow=true");
+
+        body["status"]!.GetValue<string>().Should().Be("degraded");
+        body["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"unavailable"}""");
+    }
+
+    [Fact]
     public async Task Health_without_the_contract_header_has_no_model_member_and_the_same_status()
     {
         var healthy = await HealthAsync(null, contract: null);

@@ -524,8 +524,7 @@ caller reads the new members by name.
 - **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
   `OxQLEndpointOptions.StrictRemoteReferences`.
 - **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix
-  that is no entity of the host emits no reference, where it was taken for a reference into a
-  service named after the id.
+  that is no entity of the host names no owning service and emits no reference.
 - **API.** `OwnerAvailability` and `OwnerOutage`; `RemoteReferenceValidator`,
   `RemoteReferenceValidation`, `IRemoteSchemaSource` and `RemoteSchemaEntities` (a remote client
   may implement the source; without it the references stay not validated);

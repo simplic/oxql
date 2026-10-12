@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
@@ -57,6 +58,102 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     private LabClient Fast() => fleet.Conformance(variant: "timeout-500", configuration: ShortTimeout);
 
     private LabClient LoweredPosture() => fleet.Conformance(variant: "lowered", configuration: Lowered);
+
+    /// <summary>A host that remembers an owner that failed for the default time, as a host that sets nothing does.</summary>
+    private LabClient Remembering(string variant) =>
+        fleet.Conformance(variant: variant, configuration: new Dictionary<string, string?> { ["OxQL:Cache:OwnerUnavailableTtlSeconds"] = "5" });
+
+    // ── M: what a host remembers of an owner that failed ──────────────────────────────────
+
+    [Fact]
+    public async Task M01_an_owner_that_failed_is_not_called_by_the_next_request_which_answers_the_same_nulls_at_once()
+    {
+        var host = Remembering("remembering-closed");
+
+        Owner.Set(ChaosMode.Closed);
+        var mark = Owner.Mark();
+
+        var first = await host.SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-01"));
+        var second = await host.SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-01"));
+
+        Owner.BatchesSince(mark).Should().ContainSingle("the second request does not call the owner again");
+
+        foreach (var answer in new[] { first, second })
+        {
+            answer.ShouldHaveIds(RowIds());
+            answer.Values("w").Should().OnlyContain(alias => alias == null);
+            answer.DiagnosticCodes.Should().Equal("RESOLVE_UNREACHABLE");
+        }
+
+        first.Diagnostics[0]["params"]!.AsObject().ContainsKey("remembered").Should().BeFalse();
+
+        var parameters = second.Diagnostics[0]["params"]!;
+
+        parameters["service"]!.GetValue<string>().Should().Be(LabFleet.ExternalOwner);
+        parameters["reason"]!.GetValue<string>().Should().Be("unreachable");
+        parameters["remembered"]!.GetValue<bool>().Should().BeTrue();
+        parameters["retryAfterMs"]!.GetValue<int>().Should().BeInRange(1, 5_000);
+        second.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(1_000));
+
+        // The owner is back and the host learns it, as it does when its health probe measures the owner.
+        Owner.Set(ChaosMode.Ok);
+        (await host.HostAsync()).Services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>().Succeeded(LabFleet.ExternalOwner);
+
+        var back = await host.SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-01"));
+
+        back.ShouldHaveNoDiagnostics();
+        back.Strings("w.name").Should().Equal(OwnerFleet.WidgetNames());
+    }
+
+    [Fact]
+    public async Task M02_an_owner_without_the_internal_query_route_is_named_as_such_and_not_called_again_at_once()
+    {
+        var host = Remembering("remembering-route");
+
+        Owner.Set(new ChaosSettings { Mode = ChaosMode.Status, Status = HttpStatusCode.NotFound });
+        var mark = Owner.Mark();
+
+        var first = await host.SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-02"));
+        var second = await host.SendAsync(Corpus.Conformance, OwnerFleet.Resolve("M-02"));
+
+        Owner.BatchesSince(mark).Should().ContainSingle();
+
+        foreach (var answer in new[] { first, second })
+        {
+            var diagnostic = answer.Diagnostics.Should().ContainSingle().Subject;
+
+            diagnostic["code"]!.GetValue<string>().Should().Be("RESOLVE_UNREACHABLE");
+            diagnostic["message"]!.GetValue<string>().Should().Contain("HTTP 404").And.Contain("internal query route").And.Contain($"InternalApiVersions:{LabFleet.ExternalOwner}");
+            diagnostic["params"]!["reason"]!.GetValue<string>().Should().Be("route");
+            diagnostic["params"]!["status"]!.GetValue<int>().Should().Be(404);
+        }
+
+        // The measurement that finds the owner's health answering leaves the missing route remembered.
+        var availability = (await host.HostAsync()).Services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>();
+
+        availability.Succeeded(LabFleet.ExternalOwner, keepRoute: true);
+        availability.OutageOf(LabFleet.ExternalOwner)!.Reason.Should().Be("route");
+        availability.Succeeded(LabFleet.ExternalOwner);
+    }
+
+    [Fact]
+    public async Task M03_a_semi_join_into_an_owner_that_failed_is_refused_at_once_without_a_call()
+    {
+        var host = Remembering("remembering-semijoin");
+
+        Owner.Set(ChaosMode.Closed);
+        var mark = Owner.Mark();
+
+        (await host.SendAsync(Corpus.Conformance, OwnerFleet.SemiJoin("M-03"))).ShouldRefuse("RESOLVE_UNAVAILABLE", 422);
+
+        var second = await host.SendAsync(Corpus.Conformance, OwnerFleet.SemiJoin("M-03"));
+
+        second.ShouldRefuse("RESOLVE_UNAVAILABLE", 422);
+        second.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(1_000));
+        Owner.BatchesSince(mark).Should().ContainSingle();
+
+        (await host.HostAsync()).Services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>().Succeeded(LabFleet.ExternalOwner);
+    }
 
     private static readonly int RowCount = OwnerFleet.Rows().Count;
 

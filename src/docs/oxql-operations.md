@@ -128,7 +128,7 @@ stage's effective `onMissing`:
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
 | `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
 | `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"` | an owner did not answer within its budget; the aliases are `null` on this page |
-| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered) | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner's host has no internal query route under the address this host calls (the owner runs an engine without that route, or `InternalApiVersions:<service>` names another API version than the owner serves; the message says both), `reason: "status"` with the status for any other |
+| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered); `remembered: true` and `retryAfterMs` when no call went out | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner's host has no internal query route under the address this host calls (the owner runs an engine without that route, or `InternalApiVersions:<service>` names another API version than the owner serves; the message says both), `reason: "status"` with the status for any other. An owner that just failed is not called again for `Cache:OwnerUnavailableTtlSeconds`: the diagnostic then says so, with the `reason` (`unreachable`, `timeout` or `route`) of the call that failed, `remembered: true` and the milliseconds until the owner is tried again |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
 | `RESOLVE_MISSING` (loss by `onMissing`) | `alias`, `count`, `truncated`, `rows` `[{ row, element?, key, outcome }]` | under `onMissing` `report` or `refuse`: references that resolved to `not_found`, `invalid_key` or `owner_unanswered`; one per stage; `rows` capped at `MaxReportedRows` |
 | `RESOLVE_AMBIGUOUS` (loss) | as `RESOLVE_MISSING` | always: keys more than one record holds; the alias holds the first by target order, then key |
@@ -327,6 +327,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
+| `Cache:OwnerUnavailableTtlSeconds` | 5 (`0` remembers nothing) | keyed fetch and semi-join: how long an owner is not called again after a call that reached nobody, got no answer within a whole call budget, or found no internal query route (HTTP 404; also 502, 503, 504). Until then the request gets the failed call's answer at once | `RESOLVE_UNREACHABLE` with `params.remembered: true`, `retryAfterMs`; a semi-join 422 `RESOLVE_UNAVAILABLE` | no (health only, contract 2: `ownerUnavailableTtlSeconds`) | one record per host, which its health probe writes too: a measurement that finds the owner answering ends the wait early |
 | `Explain:Enabled` | `true` | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
 | `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries) | note `REMOTE_UNCHECKED` | no | — |
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
@@ -374,7 +375,7 @@ Anonymous, always 200, and never waits for another service:
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
     "maxValuesLimit": 500, "valuesScanRows": 50000, "valuesDefaultLimit": 100,
-    "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10,
+    "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10, "ownerUnavailableTtlSeconds": 5,
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
     "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
@@ -411,7 +412,8 @@ Anonymous, always 200, and never waits for another service:
   limits it sizes its batches by.
   On a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`, or the
   legacy support off) a request without the header reads, ahead of the host's own names,
-  `batch`, `group.page`, `page.offset`, `any`, and every limit. That
+  `batch`, `group.page`, `page.offset`, `any`, and the limits that caller has always read (what is
+  added to the list later is a contract 2 caller's: `ownerUnavailableTtlSeconds`). That
   host does all four for that caller, and a contract 1 client may gate on a name.
   For a contract 2 caller health is read by name: members and
   limits are added, never removed or renamed.
@@ -1237,6 +1239,23 @@ owning service, owners in parallel:
   `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run reports
   `RESOLVE_UNREACHABLE` (and refuses under `strict`) and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
   gate.
+- **Owners that do not answer.** A host keeps one record of the owners whose last call failed
+  (`OwnerAvailability`, a singleton `AddOxQLCore` registers): a call no connection reached, a call
+  that got no answer although it had at least half of its ceiling (`ResolveTimeoutMs`, or
+  `ChainTimeoutMs` for a chain), and an owner whose host answered 404, 502, 503 or 504. For
+  `Cache:OwnerUnavailableTtlSeconds` such an owner is not called and not asked for its facts: its keys
+  are `owner_unanswered` with `RESOLVE_UNREACHABLE` at once (`params.remembered: true`), a semi-join
+  into it is refused at once, exactly as a failed call answers, without the wait. Then one request
+  tries the owner while the others keep the remembered answer until that call lands; an answer ends
+  the record. Any other HTTP error (401, 413, 400, 500) is the owner's word on one request and is
+  not remembered. The health probe writes the same record: an owner it measures as not answering is
+  not called, and one it measures as answering is called again at once (a remembered missing route
+  stays, since a health answer says nothing of the internal route). A request whose own time was
+  nearly spent when it called says nothing of the owner and leaves no record.
+- **What a page asks.** The keys a page needs are collected first, from its rows and less what the
+  cache holds; only owners with at least one key are asked for their facts and sent a query. A page
+  without rows, a page the cache answers, and a typed reference whose other case no row of the page
+  has cost no owner anything.
 - **Remote lookups** rank each key's children at the owner in the lookup's sort, then by record key;
   elements of one owning row that tie there come back in no guaranteed order (sort by an element
   member to fix it).

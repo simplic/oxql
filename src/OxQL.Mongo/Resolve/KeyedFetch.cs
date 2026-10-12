@@ -401,6 +401,13 @@ internal sealed class KeyedFetch
         this.logger = logger ?? NullLogger.Instance;
     }
 
+    /// <summary>
+    /// What the host remembers of owners that did not answer (null: nothing is remembered). An owner
+    /// it holds is not called: its keys are unanswered at once, with the diagnostic of the call that
+    /// failed, and a call that fails or succeeds is written to it.
+    /// </summary>
+    public OwnerAvailability? Availability { get; set; }
+
     /// <summary>The service key a target entity is owned by: its namespace, the host's <c>InternalHosts</c> key.</summary>
     public static string ServiceKeyOf(string targetEntity) => targetEntity.Split('.')[0];
 
@@ -813,11 +820,23 @@ internal sealed class KeyedFetch
         // The deadline is taken first: reading the owners' facts is part of the phase's time.
         var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
 
-        // The owners' facts gate and size what is sent them, so they are read before the plan.
-        await ReadOwnersAsync(compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
-            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), remaining, cancellationToken).ConfigureAwait(false);
+        // The keys each target is asked for are known from the rows alone. The owners' facts size what
+        // is sent them, so they are read before the keys are cut into queries, and only of the owners
+        // this page has keys for: a page without rows, a page the cache answers and a typed reference
+        // whose variant no row has read no owner's facts and call no owner.
         var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
+
+        await ReadOwnersAsync(targets.Where(target => target.Service != SelfService && target.Asked.Count > 0).Select(target => target.Service), remaining, cancellationToken).ConfigureAwait(false);
+
+        foreach (var target in targets)
+        {
+            var chunk = ChunkOf(target);
+
+            for (var start = 0; start < target.Asked.Count; start += chunk)
+                target.Chunks.Add(target.Asked.Skip(start).Take(chunk).ToList());
+        }
+
         var cacheHits = targets.Sum(target => target.CacheHits);
         var calls = 0;
 
@@ -1035,7 +1054,9 @@ internal sealed class KeyedFetch
         var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
 
         var nulled = $"'{string.Join("', '", aliases)}' is null on this page.";
-        var reason = failure == Failure.Timeout ? ReasonTimeout
+        var remembered = call.Outcome.Remembered;
+        var reason = remembered is not null ? remembered.Reason
+            : failure == Failure.Timeout ? ReasonTimeout
             : call.Outcome.Status is null ? ReasonUnreachable
             : call.Outcome.Status == NoRoute ? ReasonRoute
             : ReasonStatus;
@@ -1044,10 +1065,16 @@ internal sealed class KeyedFetch
         if (call.Outcome.Status is { } answered)
             parameters["status"] = answered;
 
+        if (remembered is not null)
+        {
+            parameters["remembered"] = true;
+            parameters["retryAfterMs"] = (int)Math.Ceiling(remembered.RetryAfter.TotalMilliseconds);
+        }
+
         diagnostics.Add(new Diagnostic
         {
             Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
-            Message = reason switch
+            Message = remembered is not null ? $"{owner} was not asked: {Last(remembered, call.Service)}, and it is asked again in {Math.Max(1, (int)Math.Ceiling(remembered.RetryAfter.TotalSeconds))} s at the latest; {nulled}" : reason switch
             {
                 ReasonTimeout => $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; {nulled}",
                 // The owner's host answered and has no such route: the two causes a host can act on are named.
@@ -1063,6 +1090,15 @@ internal sealed class KeyedFetch
 
         return true;
     }
+
+    /// <summary>What the last call to an owner the host does not ask right now ended in, as a clause.</summary>
+    private static string Last(OwnerOutage remembered, string service) => remembered.Reason switch
+    {
+        OwnerAvailability.Timeout => "its last call did not answer in time",
+        OwnerAvailability.Route => $"its last call answered with HTTP {NoRoute}, so it does not serve the internal query route (it runs an engine without that route, or InternalApiVersions:{service} names another API version than the owner serves)",
+        _ when remembered.Status is { } status => $"its last call answered with HTTP {status}",
+        _ => "it could not be reached a moment ago",
+    };
 
     /// <summary>
     /// An owner answer with a next page: the owner cut rows, so the chunk's
@@ -1573,6 +1609,9 @@ internal sealed class KeyedFetch
         public List<JsonObject> OwnerTimings { get; } = [];
 
         public List<string> Misses { get; } = [];
+
+        /// <summary>The keys the owner is asked for: the misses the request's key budget grants.</summary>
+        public IReadOnlyList<string> Asked { get; set; } = [];
 
         public List<IReadOnlyList<string>> Chunks { get; } = [];
 
@@ -2303,9 +2342,9 @@ internal sealed class KeyedFetch
 
     /// <summary>
     /// Plans one keyed stage: per row the slots its reference yields with their case, key or
-    /// provisional outcome; per target the keys to ask for, less what the cache holds and beyond
-    /// what the request's key budget leaves (<c>RESOLVE_PARTIAL</c>), in chunks the owner answers in
-    /// one page each.
+    /// provisional outcome; per target the keys to ask for (<c>Asked</c>), less what the cache holds
+    /// and beyond what the request's key budget leaves (<c>RESOLVE_PARTIAL</c>). Nothing here needs an
+    /// owner's facts: the keys are cut into the queries an owner answers in one page each afterwards.
     /// </summary>
     private StagePlan Plan(BoundPipeline bound, BoundStage.Resolve stage, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
     {
@@ -2377,10 +2416,7 @@ internal sealed class KeyedFetch
                 misses = asked;
             }
 
-            var chunk = ChunkOf(target);
-
-            for (var start = 0; start < misses.Count; start += chunk)
-                target.Chunks.Add(misses.Skip(start).Take(chunk).ToList());
+            target.Asked = misses;
         }
 
         return plan;
@@ -2762,6 +2798,9 @@ internal sealed class KeyedFetch
     {
         public TimeSpan Budget { get; init; }
 
+        /// <summary>Set when no call went out: the host remembers that the owner did not answer (<see cref="OwnerAvailability"/>).</summary>
+        public OwnerOutage? Remembered { get; init; }
+
         /// <summary>How many batches went out for it, a split batch counted per part.</summary>
         public int Calls { get; init; } = 1;
     }
@@ -2813,10 +2852,14 @@ internal sealed class KeyedFetch
             var left = deadline - DateTime.UtcNow;
             var budget = chain ? ChainBudget(left) : Budget(left);
             var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
-            var outcome = await CallAsync(owner, service, request, budget, context, cancellationToken).ConfigureAwait(false);
+
+            // A call that had at least half of what one call may take and got no answer says something
+            // of the owner; one the request's own time had already cut short says nothing of it.
+            var whole = budget.TotalMilliseconds * 2 >= (chain ? options.Execution.EffectiveChainTimeoutMs : options.Execution.EffectiveResolveTimeoutMs);
+            var outcome = await CallAsync(owner, service, request, budget, whole, context, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
-                return outcome with { Budget = budget, Calls = calls };
+                return outcome with { Budget = budget, Calls = outcome.Remembered is null ? calls : calls - 1 };
 
             results.AddRange(outcome.Results);
         }
@@ -2974,8 +3017,20 @@ internal sealed class KeyedFetch
     /// logged with the service, the organisation and the correlation id, never with what was asked:
     /// this host's own in full, another service's client's by its type alone.
     /// </summary>
-    private async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, RequestContext context, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Another service's owner the host remembers as not answering (<see cref="OwnerAvailability"/>) is
+    /// not called: the outcome is the remembered failure, at once. What the call ends in is written
+    /// there: a success, a call no connection reached, one that ran out of a <paramref name="whole"/>
+    /// budget, and an owner whose host has no internal query route (404) or whose gateway says it is
+    /// away (502, 503, 504). Any other HTTP error is the owner's word on this request and is not kept.
+    /// </remarks>
+    private async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, bool whole, RequestContext context, CancellationToken cancellationToken)
     {
+        var known = service == SelfService ? null : Availability;
+
+        if (known is not null && !known.TryEnter(service, out var outage) && outage is not null)
+            return new CallOutcome([], Failure.Unreachable, outage.Status) { Remembered = outage };
+
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         timeout.CancelAfter(budget);
@@ -2984,10 +3039,15 @@ internal sealed class KeyedFetch
         {
             var response = await owner.BatchAsync(service, request, budget, timeout.Token).ConfigureAwait(false);
 
+            known?.Succeeded(service);
+
             return new CallOutcome(response.Results, null);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            if (whole)
+                known?.Failed(service, OwnerAvailability.Timeout);
+
             return new CallOutcome([], Failure.Timeout);
         }
         catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested && exception.StatusCode is { } status)
@@ -2995,6 +3055,11 @@ internal sealed class KeyedFetch
             // The owner was reached and said no: a rejected key, a body over its cap, a fault of
             // its own. The status keeps that apart from a network that is down.
             logger.LogWarning("OxQL owner call refused. service={Service} status={Status} org={OrganisationId} correlation={CorrelationId}", service, (int)status, context.Organisation, context.CorrelationId);
+
+            if ((int)status == NoRoute)
+                known?.Failed(service, OwnerAvailability.Route, NoRoute);
+            else if (status is System.Net.HttpStatusCode.BadGateway or System.Net.HttpStatusCode.ServiceUnavailable or System.Net.HttpStatusCode.GatewayTimeout)
+                known?.Failed(service, OwnerAvailability.Unreachable, (int)status);
 
             return new CallOutcome([], Failure.Unreachable, (int)status);
         }
@@ -3004,6 +3069,8 @@ internal sealed class KeyedFetch
                 logger.LogError(exception, "OxQL keyed fetch on this host failed. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
             else
                 logger.LogWarning("OxQL owner call failed. service={Service} fault={Fault} org={OrganisationId} correlation={CorrelationId}", service, exception.GetType().Name, context.Organisation, context.CorrelationId);
+
+            known?.Failed(service, OwnerAvailability.Unreachable);
 
             return new CallOutcome([], Failure.Unreachable);
         }
@@ -3242,12 +3309,18 @@ internal sealed class KeyedFetch
     // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
     // its facts unknown and this host's own caps apply, rather than the probe eating the time
     // the owner's answer needs.
+    // An owner the host remembers as not answering is not asked for its facts either: it is not called.
     private Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken) =>
-        ReadOwnersAsync(client, services, OwnerFactsSlice(remaining), cancellationToken);
+        ReadOwnersAsync(client, services.Where(service => Availability?.OutageOf(service) is null), OwnerFactsSlice(remaining), cancellationToken);
 
     private static async Task ReadOwnersAsync(IRemoteQueryClient? client, IEnumerable<string> services, TimeSpan slice, CancellationToken cancellationToken)
     {
         if (client is not IRemoteOwnerInfo owners)
+            return;
+
+        var asked = services.Distinct(StringComparer.Ordinal).ToList();
+
+        if (asked.Count == 0)
             return;
 
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -3256,7 +3329,7 @@ internal sealed class KeyedFetch
 
         try
         {
-            await Task.WhenAll(services.Distinct(StringComparer.Ordinal).Select(service => owners.OwnerOfAsync(service, bounded.Token).AsTask())).ConfigureAwait(false);
+            await Task.WhenAll(asked.Select(service => owners.OwnerOfAsync(service, bounded.Token).AsTask())).ConfigureAwait(false);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {

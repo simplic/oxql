@@ -31,6 +31,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IRemoteQueryClient? remote;
     private readonly ExplainForwardCache explainCache;
     private readonly OwnerFetchCache ownerCache;
+    private readonly OwnerAvailability availability;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -61,7 +62,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // remote target needs the remote client.
         ownerCache = cache ?? new OwnerFetchCache(this.options);
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
-        fetch = new KeyedFetch(remote, this, ownerCache, this.options, this.logger);
+        availability = new OwnerAvailability(this.options, time);
+        fetch = new KeyedFetch(remote, this, ownerCache, this.options, this.logger) { Availability = availability };
         remoteClient = remote is not null;
         this.remote = remote;
         this.explainCache = explainCache ?? new ExplainForwardCache();
@@ -75,6 +77,21 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
     /// <summary>What this engine keeps of its owners' keyed fetches and of what they said a target lacks.</summary>
     public OwnerFetchCache OwnerCache => ownerCache;
+
+    /// <summary>
+    /// What this engine remembers of owners that did not answer, so that the next request does not
+    /// wait for them again. An engine has a record of its own; a host hands in the one its health
+    /// probe writes too (<c>AddOxQLMongo</c> does), so both say the same of an owner.
+    /// </summary>
+    public OwnerAvailability Availability
+    {
+        get => availability;
+        init
+        {
+            availability = value ?? availability;
+            fetch.Availability = availability;
+        }
+    }
 
     /// <inheritdoc/>
     public bool RemoteResolve => remoteClient;

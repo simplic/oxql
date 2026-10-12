@@ -96,7 +96,11 @@ public static class ServiceCollectionExtensions
                 logger,
                 mongoOptions.IncludeErrorDetails,
                 provider.GetService<IIndexSource>(),
-                provider.GetRequiredService<OwnerFetchCache>());
+                provider.GetRequiredService<OwnerFetchCache>())
+            {
+                // The host's one record, shared with its health probe; an engine built by hand has its own.
+                Availability = provider.GetService<OwnerAvailability>(),
+            };
         });
 
         return services;

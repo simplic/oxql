@@ -621,6 +621,15 @@ public sealed class CacheOptions
     /// endpoint is asked. Freshness is worth less here than the endpoint staying cheap.
     /// </summary>
     public int HealthProbeTtlSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// How long an owner that did not answer is not called again (<c>OwnerAvailability</c>): after
+    /// a call that reached nobody, ran out of its budget, or found no internal query route (HTTP 404)
+    /// at the owner's host. Until then a request that needs the owner gets the answer of a failed call
+    /// at once (the alias <c>null</c> with <c>RESOLVE_UNREACHABLE</c>, a semi-join refused) instead of
+    /// waiting for the call's budget again; afterwards one caller tries the owner. 0 remembers nothing.
+    /// </summary>
+    public int OwnerUnavailableTtlSeconds { get; set; } = 5;
 }
 
 /// <summary>Cursor signing.</summary>

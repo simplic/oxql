@@ -46,7 +46,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
         // LEGACY(compat.v1): the legacy pipeline's route; remove with src/OxQL.AspNetCore/Legacy.
         services.TryAddScoped<Legacy.LegacyRoute>();
-        services.TryAddSingleton<Health.RemoteHealthProbe>();
+        services.TryAddSingleton(provider => new Health.RemoteHealthProbe(
+            provider.GetRequiredService<OxQLOptions>(),
+            provider.GetService<Microsoft.Extensions.Logging.ILogger<Health.RemoteHealthProbe>>(),
+            provider.GetService<TimeProvider>())
+        {
+            // What the probe measures of an owner is what the keyed fetch goes by, and the other way round.
+            Availability = provider.GetService<Core.Engine.OwnerAvailability>(),
+        });
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();
 

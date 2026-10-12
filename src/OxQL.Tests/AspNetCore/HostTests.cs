@@ -255,7 +255,7 @@ public class HostTests
         var current = (await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health")))!.AsObject();
 
         Names(current["capabilities"]).Should().Equal("explain", "compat.v1");
-        current["limits"]!.AsObject().Count.Should().Be(48);
+        current["limits"]!.AsObject().Count.Should().Be(49);
 
         // Always off: the rewrite answers a caller without the header first, and health lists what it does.
         using var rewrite = new SampleHost(options =>
@@ -266,7 +266,8 @@ public class HostTests
         var listed = (await SampleHost.Body(await rewrite.Client(contract: null).GetAsync("/OxQL/health")))!.AsObject();
 
         Names(listed["capabilities"]).Should().Equal("batch", "group.page", "page.offset", "any", "explain", "compat.v1");
-        listed["limits"]!.AsObject().Count.Should().Be(48);
+        listed["limits"]!.AsObject().Count.Should().Be(48, "a caller without the header reads the list it always read; what is added since is a contract 2 caller's");
+        listed["limits"]!.AsObject().ContainsKey("ownerUnavailableTtlSeconds").Should().BeFalse();
         listed["limits"]!.AsObject().ContainsKey("maxOffset").Should().BeTrue();
 
         var named = (await SampleHost.Body(await rewrite.Client(contract: 2).GetAsync("/OxQL/health")))!.AsObject();
@@ -672,7 +673,8 @@ public class HostTests
         limits["valuesScanRows"]!.GetValue<int>().Should().Be(50_000);
         limits["valuesDefaultLimit"]!.GetValue<int>().Should().Be(100);
         limits["maxFilterEntries"]!.GetValue<int>().Should().Be(64);
-        limits.Count.Should().Be(48,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["ownerUnavailableTtlSeconds"]!.GetValue<int>().Should().Be(5);
+        limits.Count.Should().Be(49, "health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 

@@ -102,6 +102,14 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     /// <summary>How long one service may take to answer before it counts as not reachable.</summary>
     public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// The host's record of owners that did not answer, which the keyed fetch reads before it calls:
+    /// a measurement that finds an owner unreachable is remembered there, and one that finds it
+    /// answering forgets it, so a join stops waiting for an owner health already knows is down and
+    /// asks it again as soon as health sees it back. Null: the probe only reports.
+    /// </summary>
+    public OwnerAvailability? Availability { get; init; }
+
     /// <summary>The measurement that is running, or a completed task when none is. The request path never awaits it.</summary>
     public Task Refreshing
     {
@@ -175,12 +183,19 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             // WaitAsync bounds a client that does not observe the token.
             var reachable = await client.IsReachableAsync(service, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
 
+            // An answering health says the owner's host is up, not that it has the internal query route.
+            if (reachable)
+                Availability?.Succeeded(service, keepRoute: true);
+            else
+                Availability?.Failed(service, OwnerAvailability.Unreachable);
+
             // The client keeps what the owner's health said of it where it measures reachability.
             return RemoteServiceState.Measured(service, reachable, reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null);
         }
         catch (Exception exception)
         {
             logger.LogDebug(exception, "OxQL health probe of {Service} failed", service);
+            Availability?.Failed(service, OwnerAvailability.Unreachable);
 
             return RemoteServiceState.Measured(service, false, null);
         }

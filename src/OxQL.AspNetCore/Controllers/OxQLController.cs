@@ -131,7 +131,7 @@ public class OxQLController : ControllerBase
                 contract = EngineCapabilities.Contract,
             },
             capabilities = legacy?.Capabilities ?? EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
-            limits = legacy?.Limits ?? Limits(options),
+            limits = legacy?.Limits ?? (Contract1 ? Limits(options) : Limits2(options)),
             remote = Contract1 ? services?.Select(Contract1State).ToList() : (object?)services,
         });
     }
@@ -204,6 +204,19 @@ public class OxQLController : ControllerBase
             explainMaxConcurrentPerHost = options.Explain.MaxConcurrentPerHost,
             explainMaxConcurrentPerCaller = options.Explain.MaxConcurrentPerCaller,
         };
+    }
+
+    /// <summary>
+    /// The limits a contract 2 caller reads: every limit, and what was added to the list since a
+    /// caller without the header first read it, which that caller's list does not grow by.
+    /// </summary>
+    private static JsonObject Limits2(Core.Models.OxQLOptions options)
+    {
+        var limits = System.Text.Json.JsonSerializer.SerializeToNode(Limits(options))!.AsObject();
+
+        limits["ownerUnavailableTtlSeconds"] = Math.Max(0, options.Cache.OwnerUnavailableTtlSeconds);
+
+        return limits;
     }
 
     private static Model.EntityModel? ModelOrNull(IEntityModelProvider models)

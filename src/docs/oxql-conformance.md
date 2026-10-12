@@ -67,7 +67,11 @@ service served by a mounted handler (the chaos owner, a scripted owner) is poste
 exactly as between real services, and a chain across services continues at each owner in process.
 Hosts are started on first use and shared by the whole run; a *variant* is the same service and
 database under changed configuration (`OxQL:Limits:MaxPageSize`, `OxQL:Explain:Enabled`, …).
-Explain is on by default, as on a real host.
+Explain is on by default, as on a real host. A fleet's hosts remember nothing of an owner that
+failed (`OxQL:Cache:OwnerUnavailableTtlSeconds=0`), since the suites drive one owner through a
+failure and back within a case; `Suites/RemoteChaos` holds the memory itself on variants that set
+the default (the `M` cases), and `OxQL.Tests` `Execute/OwnerAvailabilityTests` holds the record, the
+half-open retry and what a page asks of owners.
 
 **The lab model.** Synthetic entities under neutral names; the shapes carry the storage hazards
 real services have. The member names, nesting, polymorphism and reference declarations of

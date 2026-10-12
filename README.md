@@ -512,15 +512,19 @@ For code outside the packages (the Simplic base package is adapted with its pin)
 
 ### Added since 2.1.126.1012
 
-Everything here is additive: a host built against 2.1.126.1012 compiles and runs unchanged, and a
-caller reads the new members by name.
+Everything here is additive for a host: one built against 2.1.126.1012 compiles and runs
+unchanged, and a caller reads the new members by name. Three answers to a contract 2 caller are
+others than before, and their entries say so: a body the host cannot bind (the refusal envelope
+in place of the host's own 400), a `null` entry of a batch (its code), and the `null` of a
+`values` list under a collection. A caller without the contract header reads what it always read.
 
 - **Health (contract 2).** Per remote service `contract`, `engineVersion`, `usable`, `reason` and
   `references { declared, validated, revision, unknownTargets, reason }`; `model { entities,
   degraded, reason }`; the limits `ownerUnavailableTtlSeconds`, `countStepRows`, `countBudgetMs`
-  and `countMaxBudgetMs` (where the count beside a page ends and the time a count has). `status` is also `degraded` for an
-  owner that is not usable, a declared target its owner does not publish, and a degraded model. A
-  caller without the contract header reads the members it always read.
+  and `countMaxBudgetMs` (where the count beside a page ends and the time a count has). `status`
+  is also `degraded` for an owner that is not usable, a declared target its owner does not
+  publish, and a degraded model. A caller without the contract header reads the members it always
+  read.
 - **Diagnostics.** `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` carry `params.reason` (`timeout`,
   `unreachable`, `route`, `status`), `status` when the owner answered, and `remembered` with
   `retryAfterMs` when the owner was not called. A refusal for a target the owner does not have

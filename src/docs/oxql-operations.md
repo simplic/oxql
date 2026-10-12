@@ -363,7 +363,7 @@ Anonymous, always 200, and never waits for another service:
 
 ```jsonc
 {
-  "status": "healthy",                    // "degraded" when a referenced service is not configured, was last measured unreachable or is not usable
+  "status": "healthy",                    // "degraded" when a referenced service is not configured, was last measured unreachable or is not usable, or the model is degraded
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
   "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
@@ -385,7 +385,8 @@ Anonymous, always 200, and never waits for another service:
   "remote": [
     { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true },
     { "service": "hr", "configured": true, "reachable": true, "usable": false, "reason": "engine" }
-  ]
+  ],
+  "model": { "entities": 12, "degraded": false }
 }
 ```
 
@@ -436,6 +437,13 @@ Anonymous, always 200, and never waits for another service:
   contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
   `usable: false` degrades `status` as `reachable: false` does. A caller without the contract
   header reads the three members `service`, `configured`, `reachable` and the same `status`.
+- `model` (contract 2, also with `?shallow=true`) says what the host binds against: `entities`, the
+  number of entities of its model, and `degraded`, with a `reason` when true: `build` (the model
+  provider says the host's build failed and it serves what was left, `IEntityModelProvider.Degraded`),
+  `empty` (the model has no entity and its provider does not say that this is meant) or
+  `unavailable` (the provider has no model). A degraded model degrades `status`: every request
+  for an entity the model lacks is `UNKNOWN_ENTITY`. A service that has no entities of its own is
+  healthy when its provider answers `Degraded: false`.
 - `?shallow=true` starts no measurement. It is the form one host uses to ask another, so a probe
   never sets off the probed service's own probes. The same answer tells the asking host the owner's
   `engine.version` and `limits.maxBatchQueries`.

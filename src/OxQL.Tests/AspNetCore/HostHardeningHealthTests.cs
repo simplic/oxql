@@ -1,6 +1,7 @@
 using System.Net;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OxQL.AspNetCore.Health;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
@@ -274,6 +275,87 @@ public class HostHardeningHealthTests
             .Should().Be("""{"service":"crm","configured":true,"reachable":true,"usable":false,"reason":"engine"}""");
         remote.Single(entry => entry["service"]!.GetValue<string>() == "vehicle").ToJsonString()
             .Should().Be("""{"service":"vehicle","configured":true,"reachable":true,"contract":2,"engineVersion":"2.1.0","usable":true}""");
+    }
+
+    /// <summary>A model provider that says what its build left, or has no model at all.</summary>
+    private sealed class SayingModels(OxQL.Model.EntityModel? model, bool? degraded) : IEntityModelProvider
+    {
+        public OxQL.Model.EntityModel Model => model ?? throw new InvalidOperationException("The host has not built a model.");
+
+        public bool? Degraded => degraded;
+    }
+
+    private static readonly OxQL.Model.EntityModel NoEntities =
+        OxQL.Model.Build.ClrModelBuilder.Build(Array.Empty<OxQL.Model.Build.EntityDeclaration>(), retiredIds: null, new OxQL.Model.Build.ReferenceDeclarations());
+
+    private static async Task<System.Text.Json.Nodes.JsonObject> HealthAsync(IEntityModelProvider? models, int? contract = 2, string route = "/OxQL/health")
+    {
+        using var host = new SampleHost(configure: services =>
+        {
+            if (models is null)
+                return;
+
+            services.RemoveAll<IEntityModelProvider>();
+            services.AddSingleton(models);
+        });
+
+        return (await SampleHost.Body(await host.Client(contract).GetAsync(route)))!.AsObject();
+    }
+
+    [Fact]
+    public async Task Health_under_contract_2_says_how_many_entities_the_model_has()
+    {
+        foreach (var route in new[] { "/OxQL/health", "/OxQL/health?shallow=true" })
+        {
+            var body = await HealthAsync(null, route: route);
+
+            body["status"]!.GetValue<string>().Should().Be("healthy");
+            body["model"]!.ToJsonString().Should().Be($$"""{"entities":{{BindHost.Probe.Entities.Count}},"degraded":false}""", route);
+        }
+    }
+
+    [Fact]
+    public async Task A_model_a_failed_build_left_degrades_the_status_and_says_so()
+    {
+        var body = await HealthAsync(new SayingModels(NoEntities, degraded: true));
+
+        body["status"]!.GetValue<string>().Should().Be("degraded");
+        body["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"build"}""");
+    }
+
+    [Fact]
+    public async Task A_model_without_entities_is_degraded_unless_its_provider_says_it_is_meant()
+    {
+        var silent = await HealthAsync(new StaticEntityModelProvider(NoEntities));
+
+        silent["status"]!.GetValue<string>().Should().Be("degraded", "a provider that does not say what its build left is taken to have lost its entities");
+        silent["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"empty"}""");
+
+        var meant = await HealthAsync(new SayingModels(NoEntities, degraded: false));
+
+        meant["status"]!.GetValue<string>().Should().Be("healthy", "a service without entities of its own is not a finding");
+        meant["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":false}""");
+    }
+
+    [Fact]
+    public async Task A_host_without_a_model_says_it_is_unavailable()
+    {
+        var body = await HealthAsync(new SayingModels(null, degraded: null));
+
+        body["status"]!.GetValue<string>().Should().Be("degraded");
+        body["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"unavailable"}""");
+    }
+
+    [Fact]
+    public async Task Health_without_the_contract_header_has_no_model_member_and_the_same_status()
+    {
+        var healthy = await HealthAsync(null, contract: null);
+        var degraded = await HealthAsync(new SayingModels(NoEntities, degraded: true), contract: null);
+
+        healthy.ContainsKey("model").Should().BeFalse();
+        degraded.ContainsKey("model").Should().BeFalse();
+        healthy["status"]!.GetValue<string>().Should().Be("healthy");
+        degraded["status"]!.GetValue<string>().Should().Be("degraded", "the status says what the host is, for every caller");
     }
 
     [Fact]

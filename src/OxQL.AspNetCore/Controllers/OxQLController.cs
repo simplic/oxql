@@ -91,8 +91,10 @@ public class OxQLController : ControllerBase
     /// <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is null until the first
     /// measurement has finished. Under contract 2 each service also says what its owner's engine
     /// can do for this host (<c>contract</c>, <c>engineVersion</c>, <c>usable</c>, and a
-    /// <c>reason</c> when it is not usable); the status is <c>degraded</c> while a service is not
-    /// configured, does not answer or is not usable. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
+    /// <c>reason</c> when it is not usable), and the answer says how many entities the host's model
+    /// has and whether it is what a failed build left (<c>model { entities, degraded, reason }</c>).
+    /// The status is <c>degraded</c> while a service is not configured, does not answer or is not
+    /// usable, and while the model is degraded. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
     /// starts no measurement; that is the form one host asks of another, so a probe never sets off
     /// the probed service's own probes.
     /// <para>
@@ -116,7 +118,8 @@ public class OxQLController : ControllerBase
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
         var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
-        var degraded = services is not null && services.Any(state => state.Degrades);
+        var model = ModelHealth.Of(models);
+        var degraded = model.Degraded || (services is not null && services.Any(state => state.Degrades));
 
         // LEGACY(compat.v1): a caller the legacy pipeline answers reads what that pipeline honours; remove with src/OxQL.AspNetCore/Legacy.
         var legacy = Legacy.LegacyHealth.For(options, HttpContext);
@@ -132,8 +135,35 @@ public class OxQLController : ControllerBase
             },
             capabilities = legacy?.Capabilities ?? EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
             limits = legacy?.Limits ?? (Contract1 ? Limits(options) : Limits2(options)),
+            // What a caller without the header reads ends with remote; the members after it are a contract 2 answer's.
             remote = Contract1 ? services?.Select(Contract1State).ToList() : (object?)services,
+            model = Contract1 ? null : model,
         });
+    }
+
+    /// <summary>
+    /// The state of the host's entity model on health: how many entities it has, and whether it is
+    /// what a failed build left, with the reason: <c>build</c> (the provider says the build failed),
+    /// <c>empty</c> (no entity, and the provider does not say that is meant) or <c>unavailable</c>
+    /// (the provider has no model to hand out). A degraded model degrades the status: no query binds
+    /// against an entity the model lacks.
+    /// </summary>
+    private sealed record ModelHealth(int Entities, bool Degraded, string? Reason)
+    {
+        public static ModelHealth Of(IEntityModelProvider models)
+        {
+            if (ModelOrNull(models) is not { } model)
+                return new ModelHealth(0, true, "unavailable");
+
+            var entities = model.Entities.Count;
+
+            return models.Degraded switch
+            {
+                true => new ModelHealth(entities, true, "build"),
+                null when entities == 0 => new ModelHealth(0, true, "empty"),
+                _ => new ModelHealth(entities, false, null),
+            };
+        }
     }
 
     /// <summary>

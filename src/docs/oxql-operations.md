@@ -180,7 +180,7 @@ stage's effective `onMissing`:
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
 | `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
 | `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"`; `remembered: true` and `retryAfterMs` when no call went out | an owner did not answer within its budget; the aliases are `null` on this page. While the host remembers that call (`Cache:OwnerUnavailableTtlSeconds`) the owner is not called and the diagnostic says so under the same code |
-| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered); `remembered: true` and `retryAfterMs` when no call went out | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner's host has no internal query route under the address this host calls (the owner runs an engine without that route, or `InternalApiVersions:<service>` names another API version than the owner serves; the message says both), `reason: "status"` with the status for any other. An owner that just failed is not called again for `Cache:OwnerUnavailableTtlSeconds`: the diagnostic then says so, with the code, the `reason` and the `status` of the call that failed, `remembered: true` and the milliseconds until the owner is tried again |
+| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered); `remembered: true` and `retryAfterMs` when no call went out | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner did not answer on its query route (the message says no more than that; the causes are for the host's operator, see *An owner without the query route* under *Keyed fetch and remote continuation*), `reason: "status"` with the status for any other. An owner that just failed is not called again for `Cache:OwnerUnavailableTtlSeconds`: the diagnostic then says so, with the code, the `reason` and the `status` of the call that failed, `remembered: true` and the milliseconds until the owner is tried again |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
 | `RESOLVE_MISSING` (loss by `onMissing`) | `alias`, `count`, `truncated`, `rows` `[{ row, element?, key, outcome }]` | under `onMissing` `report` or `refuse`: references that resolved to `not_found`, `invalid_key` or `owner_unanswered`; one per stage; `rows` capped at `MaxReportedRows` |
 | `RESOLVE_AMBIGUOUS` (loss) | as `RESOLVE_MISSING` | always: keys more than one record holds; the alias holds the first by target order, then key |
@@ -1437,6 +1437,19 @@ owning service, owners in parallel:
   answered `false` or got an HTTP error leaves the record as it is: the health route is not the
   route a join calls, so only a join's own call says that one fails. A request whose own time was
   nearly spent when it called says nothing of the owner and leaves no record.
+- **An owner without the query route.** A call answered with HTTP 404 means that the owner does
+  not serve the internal query route under the configured API version. A caller reads only that
+  the owner did not answer on its query route (`RESOLVE_UNREACHABLE`, or a semi-join's
+  `RESOLVE_UNAVAILABLE`, with `params.reason: "route"` and `status: 404`). The host that made the
+  call writes a warning line (category `OxQL.Mongo.MongoQueryEngine`, `OxQL owner call found no
+  query route`) with the service, the API version it called and the request's correlation id, once
+  per call that went out, so at most once per `Cache:OwnerUnavailableTtlSeconds` and owner. There
+  are two likely causes. The owner's host does not map the route: its internal OxQL routes are
+  mapped by the base package, and a host that does not reference it in a version with those routes
+  has none. Or this host calls the owner under another API version than the owner serves:
+  `InternalApiVersions:<service>` names it and defaults to `v1`. Check that entry and the
+  `InternalHosts:<service>` address; the owner's `GET /oxql/health` under contract 2 says which
+  contract its engine speaks.
 - **What a page asks.** The keys a page needs are collected first, from its rows and less what the
   cache holds; only owners with at least one key are asked for their facts and sent a query. A page
   without rows, a page the cache answers, and a typed reference whose other case no row of the page

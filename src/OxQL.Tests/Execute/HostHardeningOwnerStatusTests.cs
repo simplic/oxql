@@ -73,18 +73,58 @@ public class HostHardeningOwnerStatusTests
     }
 
     [Fact]
-    public async Task A_resolve_whose_owner_has_no_internal_query_route_names_the_two_causes_a_host_can_act_on()
+    public async Task A_resolve_whose_owner_has_no_internal_query_route_tells_the_caller_that_it_did_not_answer_there_and_the_host_why()
     {
-        var result = (await RunAsync(HttpStatusCode.NotFound, Resolve)).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
-        var diagnostic = result.Diagnostics.Should().ContainSingle().Subject;
+        var log = new Recorder();
+        var options = BindHost.Options();
+        var availability = new OwnerAvailability(options);
+        var runner = new FakeAggregateRunner
+        {
+            PageRows = [new BsonDocument { ["_id"] = new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard), ["Number"] = "a", ["ContactNumber"] = "c1" }],
+        };
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, new AnsweringWith(HttpStatusCode.NotFound), log, cache: new OwnerFetchCache(options))
+        {
+            Availability = availability,
+        };
+
+        var first = (await engine.ExecuteAsync(BindHost.Request("probe.order", Resolve), BindHost.Context() with { CorrelationId = "corr-9" })).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+        var second = (await engine.ExecuteAsync(BindHost.Request("probe.order", Resolve), BindHost.Context() with { CorrelationId = "corr-10" })).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+
+        var diagnostic = first.Diagnostics.Should().ContainSingle().Subject;
+        var remembered = second.Diagnostics.Should().ContainSingle().Subject;
 
         diagnostic.Code.Should().Be(Codes.ResolveUnreachable);
-        diagnostic.Message.Should().Contain("HTTP 404")
-            .And.Contain("does not serve the internal query route")
-            .And.Contain("an engine without that route")
-            .And.Contain("InternalApiVersions:crm");
+        diagnostic.Message.Should().Be("The owner of 'crm' did not answer on its query route; 'contact' is null on this page.");
         diagnostic.Params.Should().Contain("service", "crm").And.Contain("reason", "route").And.Contain("status", 404);
-        result.Items[0]!["contact"].Should().BeNull();
+        first.Items[0]!["contact"].Should().BeNull();
+
+        remembered.Message.Should().StartWith("The owner of 'crm' was not asked: it did not answer on its query route a moment ago, and it is asked again in");
+        remembered.Params.Should().Contain("reason", "route").And.Contain("status", 404).And.Contain("remembered", true);
+
+        // What a caller reads names no configuration key and nothing of what the owner's host runs.
+        foreach (var message in new[] { diagnostic.Message, remembered.Message })
+            message.Should().NotContain("InternalApiVersions").And.NotContain("InternalHosts").And.NotContain("engine").And.NotContain("API version").And.NotContain("404");
+
+        // The host's log has the cause, once: the remembered answer made no call.
+        var (level, line, _) = log.Entries.Should().ContainSingle(entry => entry.Message.StartsWith("OxQL owner call found no query route")).Subject;
+
+        level.Should().Be(LogLevel.Warning);
+        line.Should().Contain("service=crm").And.Contain("status=404").And.Contain("correlation=corr-9")
+            .And.Contain("does not serve the internal query route under the configured API version")
+            .And.Contain("its host does not map the route")
+            .And.Contain("another API version than the owner serves")
+            .And.Contain("InternalApiVersions:crm").And.Contain("InternalHosts:crm");
+        log.Entries.Should().NotContain(entry => entry.Message.StartsWith("OxQL owner call refused"), "the route's line stands for it");
+    }
+
+    [Fact]
+    public async Task A_semi_join_whose_owner_has_no_internal_query_route_names_the_status_and_no_configuration()
+    {
+        var error = (await RunAsync(HttpStatusCode.NotFound, SemiJoin)).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal.Errors![0];
+
+        error.Code.Should().Be(Codes.ResolveUnavailable);
+        error.Message.Should().Be("The owner of 'vehicle' answered the semi-join with HTTP 404; the condition cannot be evaluated.");
+        error.Params.Should().Contain("reason", "route").And.Contain("status", 404);
     }
 
     [Fact]

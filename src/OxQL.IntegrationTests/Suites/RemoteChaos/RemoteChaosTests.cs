@@ -123,7 +123,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
             var diagnostic = answer.Diagnostics.Should().ContainSingle().Subject;
 
             diagnostic["code"]!.GetValue<string>().Should().Be("RESOLVE_UNREACHABLE");
-            diagnostic["message"]!.GetValue<string>().Should().Contain("HTTP 404").And.Contain("internal query route").And.Contain($"InternalApiVersions:{LabFleet.ExternalOwner}");
+            diagnostic["message"]!.GetValue<string>().Should().Contain("did not answer on its query route").And.NotContain("InternalApiVersions");
             diagnostic["params"]!["reason"]!.GetValue<string>().Should().Be("route");
             diagnostic["params"]!["status"]!.GetValue<int>().Should().Be(404);
         }

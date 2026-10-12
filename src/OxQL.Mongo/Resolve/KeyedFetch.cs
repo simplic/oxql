@@ -1099,11 +1099,12 @@ internal sealed class KeyedFetch
         diagnostics.Add(new Diagnostic
         {
             Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
-            Message = remembered is not null ? $"{owner} was not asked: {Last(remembered, call.Service)}, and it is asked again in {Math.Max(1, (int)Math.Ceiling(remembered.RetryAfter.TotalSeconds))} s at the latest; {nulled}" : reason switch
+            Message = remembered is not null ? $"{owner} was not asked: {Last(remembered)}, and it is asked again in {Math.Max(1, (int)Math.Ceiling(remembered.RetryAfter.TotalSeconds))} s at the latest; {nulled}" : reason switch
             {
                 ReasonTimeout => $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; {nulled}",
-                // The owner's host answered and has no such route: the two causes a host can act on are named.
-                ReasonRoute => $"{owner} answered with HTTP {NoRoute}: it does not serve the internal query route. It runs an engine without that route, or this host routes it to another API version than the owner serves (InternalApiVersions:{call.Service}); {nulled}",
+                // What a caller reads names no configuration and nothing of the owner's host: the cause is the host's to
+                // find, in its log line of the call (CallAsync) and in the operations guide.
+                ReasonRoute => $"{owner} did not answer on its query route; {nulled}",
                 ReasonStatus => $"{owner} answered with HTTP {call.Outcome.Status}; {nulled}",
                 _ => $"{owner} could not be reached; {nulled}",
             },
@@ -1128,10 +1129,10 @@ internal sealed class KeyedFetch
         : ReasonStatus;
 
     /// <summary>What the last call to an owner the host does not ask right now ended in, as a clause.</summary>
-    private static string Last(OwnerOutage remembered, string service) => remembered.Reason switch
+    private static string Last(OwnerOutage remembered) => remembered.Reason switch
     {
         OwnerAvailability.Timeout => "its last call did not answer in time",
-        OwnerAvailability.Route => $"its last call answered with HTTP {NoRoute}, so it does not serve the internal query route (it runs an engine without that route, or InternalApiVersions:{service} names another API version than the owner serves)",
+        OwnerAvailability.Route => "it did not answer on its query route a moment ago",
         _ when remembered.Status is { } status => $"its last call answered with HTTP {status}",
         _ => "it could not be reached a moment ago",
     };
@@ -3058,7 +3059,9 @@ internal sealed class KeyedFetch
     /// exception. Once the caller has given up, whatever the call ends in (a connection the abort
     /// reset, say) travels as the caller's cancellation, not as a fault of its own. A fault is
     /// logged with the service, the organisation and the correlation id, never with what was asked:
-    /// this host's own in full, another service's client's by its type alone.
+    /// this host's own in full, another service's client's by its type alone. An owner without the
+    /// internal query route (404) is logged with the two causes and the configuration to check,
+    /// which the diagnostic a caller reads leaves out.
     /// </summary>
     /// <remarks>
     /// Another service's owner the host remembers as not answering (<see cref="OwnerAvailability"/>) is
@@ -3098,7 +3101,19 @@ internal sealed class KeyedFetch
         {
             // The owner was reached and said no: a rejected key, a body over its cap, a fault of
             // its own. The status keeps that apart from a network that is down.
-            logger.LogWarning("OxQL owner call refused. service={Service} status={Status} org={OrganisationId} correlation={CorrelationId}", service, (int)status, context.Organisation, context.CorrelationId);
+            if ((int)status == NoRoute)
+            {
+                // The line for whoever runs this host: what a caller is told of it names neither cause nor configuration.
+                logger.LogWarning(
+                    "OxQL owner call found no query route. service={Service} status={Status} apiVersion={ApiVersion} org={OrganisationId} correlation={CorrelationId}. "
+                    + "The owner does not serve the internal query route under the configured API version: either its host does not map the route, "
+                    + "or this host calls it under another API version than the owner serves. Check InternalApiVersions:{ServiceKey} and InternalHosts:{HostKey}.",
+                    service, NoRoute, (owner as IRemoteOwnerInfo)?.ApiVersionOf(service) ?? "(not known)", context.Organisation, context.CorrelationId, service, service);
+            }
+            else
+            {
+                logger.LogWarning("OxQL owner call refused. service={Service} status={Status} org={OrganisationId} correlation={CorrelationId}", service, (int)status, context.Organisation, context.CorrelationId);
+            }
 
             if ((int)status == NoRoute)
                 known?.Failed(service, OwnerAvailability.Route, NoRoute);

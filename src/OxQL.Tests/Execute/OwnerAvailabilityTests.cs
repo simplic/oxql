@@ -264,7 +264,7 @@ public class OwnerAvailabilityTests
 
         var diagnostic = second.Diagnostics.Should().ContainSingle().Subject;
 
-        diagnostic.Message.Should().Contain("HTTP 404").And.Contain("InternalApiVersions:staff");
+        diagnostic.Message.Should().Contain("did not answer on its query route a moment ago").And.NotContain("InternalApiVersions");
         diagnostic.Params.Should().Contain("reason", "route").And.Contain("status", 404).And.Contain("remembered", true);
     }
 

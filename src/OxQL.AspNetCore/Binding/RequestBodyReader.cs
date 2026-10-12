@@ -8,7 +8,10 @@ namespace OxQL.AspNetCore.Binding;
 /// <summary>
 /// Says why a request body does not read into the request model, in the terms of the wire: where
 /// in the body (a JSON path), what stands there and what the place takes. It is asked only for a
-/// body the host could not bind, so it costs a request that binds nothing.
+/// body the host could not bind. What a request that binds pays is the copy the reader would
+/// read from: a contract 2 request with a body has its bytes kept beside the model binder while
+/// they are read (<see cref="OxQLRequestBodyAttribute"/>), once and at most as many as a request
+/// may be long, and the copy is let go with the request.
 /// <para>
 /// It knows the places where a value of another JSON kind stops the typed read (the request's own
 /// members, a stage that is no object, a condition, a sort, a group's keys and aggregates, the

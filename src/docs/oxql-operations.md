@@ -267,6 +267,32 @@ neither ([below](#contract-1-answers)). What a host should know:
   one escapes it there. The schema document is the base package's and keeps its own spelling (its
   revision is the hash of its bytes).
 
+### What a host measures
+
+The engine has one meter, named `OxQL` (`OxQLMetrics.MeterName`), which a host exports with its
+metrics pipeline (`AddMeter("OxQL")`; the base package does). It costs nothing while nobody listens.
+
+| instrument | kind, unit | what one measurement is |
+|---|---|---|
+| `oxql.requests` | counter, `{request}` | one query answered: a request of the query route, each entry of a batch, an explain |
+| `oxql.request.duration` | histogram, `s` | the time that query took on this host, from when the host had read it to its answer |
+
+Both carry the same four tags, and no other:
+
+| tag | values |
+|---|---|
+| `contract` | `1` or `2`: the contract the request was written for (no header is `1` while `Compat:Enabled`) |
+| `route` | `query`, `batch` (each entry of a batch, and a batch refused whole), `explain` |
+| `entity` | the id of the entity the request names, as the host's model has it (a retired id is its current one); `(unknown)` for a name the model does not have, `(none)` for a request refused before the host looked at the entity it names (a body that does not read, a batch refused whole, an explain past its bounds). What a caller types is never a tag |
+| `outcome` | `ok`, or the first code of the refusal (`UNKNOWN_PATH`, `QUERY_TIMEOUT`, `INTERNAL_ERROR`, …); `cancelled` for a request its caller gave up on; `unbound` for a contract 1 request whose body the host could not bind and answered itself |
+
+The tags are bounded by the model and the code list. Neither the user nor the organisation is a
+tag: they are in the log lines (the request line of the engine, and `OxQL.Compat.Legacy` for a
+contract 1 request, see [`LEGACY.md`](LEGACY.md#who-still-sends-contract-1)). An explain that
+answers `valid: false` is `ok`: it was answered. `sum(rate(oxql_requests{contract="1"}))` by
+`entity` is the contract 1 traffic of a service; the same by `outcome` says how much of it is
+refused.
+
 ### Contract 1 answers
 
 While `Compat:Enabled` is true, the header `X-OxQL-Contract` decides the contract: absent or

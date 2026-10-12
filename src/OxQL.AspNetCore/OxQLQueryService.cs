@@ -78,12 +78,71 @@ public sealed class OxQLQueryService : IOxQLQueryService
         ExecuteAsync(request, maxTimeMs, internalCall: false, cancellationToken);
 
     private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken) =>
-        ExecuteAsync(request, maxTimeMs, internalCall, null, cancellationToken);
+        ExecuteAsync(request, maxTimeMs, internalCall, null, OxQLMetrics.RouteQuery, cancellationToken);
 
-    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken) =>
-        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, internalCall, shared, cancellationToken), cancellationToken);
+    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, string route, CancellationToken cancellationToken) =>
+        Measured(
+            route,
+            request?.EntityType,
+            outcome => (outcome as QueryOutcome.Refused)?.Refusal,
+            reached => Guarded(QueryOutcome.Of, () => RunAsync(request!, maxTimeMs, internalCall, shared, reached, cancellationToken), cancellationToken));
 
-    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs one query and counts it on the engine's meter (<see cref="OxQLMetrics"/>): the contract it
+    /// was written for, the route, the entity and how it ended, with the time it took. A query its
+    /// caller gave up on is counted as that and the cancellation travels on.
+    /// </summary>
+    private async Task<T> Measured<T>(string route, string? entity, Func<T, Refusal?> refused, Func<System.Runtime.CompilerServices.StrongBox<bool>, Task<T>> work)
+    {
+        // Set by the work once it is past what refuses a request before the model is read.
+        var reached = new System.Runtime.CompilerServices.StrongBox<bool>();
+
+        if (!OxQLMetrics.Enabled)
+            return await work(reached).ConfigureAwait(false);
+
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        try
+        {
+            var outcome = await work(reached).ConfigureAwait(false);
+
+            Count(route, reached.Value ? entity : null, OxQLMetrics.OutcomeOf(refused(outcome)), started);
+
+            return outcome;
+        }
+        catch (OperationCanceledException)
+        {
+            Count(route, reached.Value ? entity : null, OxQLMetrics.Cancelled, started);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Counts one query that ended in <paramref name="outcome"/>. The model is read only for the tag
+    /// of an entity the request came to name: a request refused before that (<paramref name="entity"/>
+    /// null) costs the model nothing, and a model that cannot be read tags the entity unknown.
+    /// </summary>
+    private void Count(string route, string? entity, string outcome, long started)
+    {
+        if (!OxQLMetrics.Enabled)
+            return;
+
+        Model.EntityModel? model = null;
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(entity))
+                model = models.Model;
+        }
+        catch (Exception)
+        {
+            // A host without a model still counts its requests.
+        }
+
+        OxQLMetrics.Record(ContractOf(options, httpContextAccessor?.HttpContext), route, OxQLMetrics.EntityOf(model, entity), outcome, System.Diagnostics.Stopwatch.GetElapsedTime(started));
+    }
+
+    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, System.Runtime.CompilerServices.StrongBox<bool> reached, CancellationToken cancellationToken)
     {
         // A null query is a caller error, not a fault: the batch route can carry one
         // ({"queries":[null]}) and the body of the query route can be the literal `null`.
@@ -92,6 +151,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         if (shared is null && ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return QueryOutcome.Of(unknownContract);
+
+        reached.Value = true;
 
         // The queries of a batch that run side by side share the context their batch read once;
         // each is measured on its own, from when it starts.
@@ -125,8 +186,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
         BatchAsync(batch, internalCall: false, cancellationToken);
 
     /// <inheritdoc/>
-    public Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, internalCall, cancellationToken), cancellationToken);
+    public async Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var outcome = await Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, internalCall, cancellationToken), cancellationToken).ConfigureAwait(false);
+
+        // A batch that runs is counted by its entries; one refused whole is counted once, without an entity.
+        if (outcome is BatchOutcome.Refused refused)
+            Count(OxQLMetrics.RouteBatch, null, OxQLMetrics.OutcomeOf(refused.Refusal), started);
+
+        return outcome;
+    }
 
     private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken)
     {
@@ -193,10 +263,17 @@ public sealed class OxQLQueryService : IOxQLQueryService
         {
             var query = batch.Queries[index];
             var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
+            var entered = System.Diagnostics.Stopwatch.GetTimestamp();
             var outcome = query is null && unread is not null && unread.TryGetValue(index, out var wrong) ? QueryOutcome.Of(wrong)
                 : query is null && contract2 ? QueryOutcome.Of(NullEntry(index))
                 : unscoped is not null && query is not null ? QueryOutcome.Of(unscoped)
-                : await ExecuteAsync(query!, left, internalCall, shared, token).ConfigureAwait(false);
+                : null;
+
+            // An entry answered here never reaches a query of its own: it is counted here, the others where they run.
+            if (outcome is QueryOutcome.Refused answered)
+                Count(OxQLMetrics.RouteBatch, query?.EntityType, OxQLMetrics.OutcomeOf(answered.Refusal), entered);
+
+            outcome ??= await ExecuteAsync(query!, left, internalCall, shared, OxQLMetrics.RouteBatch, token).ConfigureAwait(false);
 
             if (outcome is QueryOutcome.Success { Result.Measured: { } timing })
                 measured.Enqueue(timing);
@@ -218,9 +295,13 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, internalCall, cancellationToken), cancellationToken);
+        Measured(
+            OxQLMetrics.RouteExplain,
+            request?.Query?.EntityType,
+            outcome => (outcome as ExplainOutcome.Refused)?.Refusal,
+            reached => Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request!, internalCall, reached, cancellationToken), cancellationToken));
 
-    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken)
+    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, System.Runtime.CompilerServices.StrongBox<bool> reached, CancellationToken cancellationToken)
     {
         if (request?.Query is null)
             return new ExplainOutcome.Refused(NoRequest(RequestBodyReader.Root, "a query carries an entityType and a pipeline", "The request is empty; a query carries an entityType and a pipeline."));
@@ -240,6 +321,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return new ExplainOutcome.Refused(unknownContract);
+
+        reached.Value = true;
 
         var context = await ContextAsync(null, internalCall, cancellationToken);
 

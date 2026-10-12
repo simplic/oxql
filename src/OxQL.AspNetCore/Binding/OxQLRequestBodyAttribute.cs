@@ -103,12 +103,13 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             // LEGACY(compat.v1): the host answers; the request is counted where every contract 1 request is. Remove with src/OxQL.AspNetCore/Legacy.
             await next().ConfigureAwait(false);
             await Legacy.LegacyRoute.UnboundAsync(http, options, RouteOf(parameter.ParameterType)).ConfigureAwait(false);
+            OxQLMetrics.Record(1, RouteOf(parameter.ParameterType), OxQLMetrics.NoEntity, OxQLMetrics.Unbound, TimeSpan.Zero);
             return;
         }
 
         if (OxQLQueryService.ContractRefusal(options, http) is { } unknownContract)
         {
-            context.Result = Refused(http, unknownContract);
+            context.Result = Refused(http, options, parameter, unknownContract);
             return;
         }
 
@@ -118,13 +119,13 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         if (body is null)
         {
             // Nothing to read again (the body was longer than a request may be, or the stream gave none): said without a place.
-            context.Result = Refused(http, Refusal.Validation([RequestBodyReader.Unreadable(RequestBodyReader.Root, null)]));
+            context.Result = Refused(http, options, parameter, Refusal.Validation([RequestBodyReader.Unreadable(RequestBodyReader.Root, null)]));
             return;
         }
 
         if (RequestBodyReader.Parse(body.Value, json.MaxDepth == 0 ? 64 : json.MaxDepth, out var document) is { } unparsed)
         {
-            context.Result = Refused(http, Refusal.Validation([unparsed]));
+            context.Result = Refused(http, options, parameter, Refusal.Validation([unparsed]));
             return;
         }
 
@@ -162,7 +163,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                     }
                 }
 
-                context.Result = Refused(http, Refusal.Validation(batch.Count > 0 ? batch : Whole(context.ModelState, parameter.Name, bound)));
+                context.Result = Refused(http, options, parameter, Refusal.Validation(batch.Count > 0 ? batch : Whole(context.ModelState, parameter.Name, bound)));
                 return;
             }
 
@@ -170,7 +171,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                 : parameter.ParameterType == typeof(ExplainRequest) ? RequestBodyReader.Explain(root, json)
                 : RequestBodyReader.Other(root, parameter.ParameterType, json);
 
-            context.Result = Refused(http, Refusal.Validation(errors.Count > 0 ? errors : Whole(context.ModelState, parameter.Name, bound)));
+            context.Result = Refused(http, options, parameter, Refusal.Validation(errors.Count > 0 ? errors : Whole(context.ModelState, parameter.Name, bound)));
         }
     }
 
@@ -179,11 +180,23 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         action.Parameters.FirstOrDefault(parameter => parameter.BindingInfo?.BindingSource == BindingSource.Body);
 
     private static string RouteOf(Type model) =>
-        model == typeof(BatchRequest) ? "batch" : model == typeof(ExplainRequest) || model == typeof(ExplainBatchRequest) ? "explain" : "query";
+        model == typeof(BatchRequest) ? OxQLMetrics.RouteBatch
+        : model == typeof(ExplainRequest) || model == typeof(ExplainBatchRequest) ? OxQLMetrics.RouteExplain
+        : OxQLMetrics.RouteQuery;
 
-    /// <summary>The refusal as the action's result, logged as the controller logs a refusal.</summary>
-    private static IActionResult Refused(HttpContext http, Refusal refusal)
+    /// <summary>
+    /// The refusal as the action's result, logged as the controller logs a refusal and counted as a
+    /// request on the engine's meter: it never reaches the query service, where requests are counted.
+    /// </summary>
+    private static IActionResult Refused(HttpContext http, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter, Refusal refusal)
     {
+        OxQLMetrics.Record(
+            OxQLQueryService.ContractOf(options, http),
+            RouteOf(parameter.ParameterType),
+            OxQLMetrics.NoEntity,
+            OxQLMetrics.OutcomeOf(refusal),
+            http.Items.TryGetValue(QueryTiming.StartItem, out var taken) && taken is long started ? System.Diagnostics.Stopwatch.GetElapsedTime(started) : TimeSpan.Zero);
+
         http.RequestServices.GetService<ILogger<OxQLRequestBodyAttribute>>()?.LogInformation(
             "OxQL refusal {Type} {Code}: {Message}",
             refusal.Type,

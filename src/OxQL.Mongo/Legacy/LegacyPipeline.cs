@@ -24,10 +24,9 @@ namespace OxQL.Mongo.Legacy;
 internal sealed class LegacyPipeline : ILegacyPipeline
 {
     private readonly IEntityModelProvider models;
-    private readonly IAggregateRunner runner;
+    private readonly TimedAggregateRunner runner;
     private readonly OxQLOptions options;
     private readonly ILogger logger;
-    private readonly AggregateDeadline deadline;
 
     /// <summary>
     /// The pipeline over <paramref name="models"/>' collections, run by <paramref name="runner"/>.
@@ -36,12 +35,16 @@ internal sealed class LegacyPipeline : ILegacyPipeline
     public LegacyPipeline(IEntityModelProvider models, IAggregateRunner runner, OxQLOptions options, ILogger<LegacyPipeline>? logger = null, TimeProvider? time = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
-        this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.logger = logger ?? NullLogger<LegacyPipeline>.Instance;
 
-        // The ceiling stays the pipeline's own; an aggregate the database says nothing of by then, and the margin after it, is given up on.
-        deadline = new AggregateDeadline(time ?? TimeProvider.System, options.Execution.ClientDeadlineMarginMs);
+        // Every aggregate is measured into the request's own collector, which the line of a contract 1 request reads the
+        // database's share from, and the ceiling stays the pipeline's own: an aggregate the database says nothing of by
+        // then, and the margin after it, is given up on.
+        this.runner = new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)))
+        {
+            Deadline = new AggregateDeadline(time ?? TimeProvider.System, options.Execution.ClientDeadlineMarginMs),
+        };
     }
 
     /// <inheritdoc/>
@@ -123,7 +126,7 @@ internal sealed class LegacyPipeline : ILegacyPipeline
 
         try
         {
-            rows = (await deadline.RunAsync(runner, entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
+            rows = (await runner.AggregateAsync(QueryTiming.Page, context.Timing, entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
             more = rows.Count > aggregate.Limit;
 
             if (more)
@@ -131,7 +134,7 @@ internal sealed class LegacyPipeline : ILegacyPipeline
 
             // The count follows the page, as it did: one aggregate after the other.
             if (aggregate.Count is { } count)
-                total = (await deadline.RunAsync(runner, entity, count, Run(), cancellationToken).ConfigureAwait(false)).FirstOrDefault() is { } counted && counted.Contains("totalCount") ? counted["totalCount"].ToInt64() : 0;
+                total = (await runner.AggregateAsync(QueryTiming.Count, context.Timing, entity, count, Run(), cancellationToken).ConfigureAwait(false)).FirstOrDefault() is { } counted && counted.Contains("totalCount") ? counted["totalCount"].ToInt64() : 0;
         }
         catch (Exception exception) when (exception is MongoExecutionTimeoutException or TimeoutException)
         {

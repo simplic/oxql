@@ -551,6 +551,12 @@ caller reads the new members by name.
 - **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
   starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
   (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
+- **What a host measures.** The meter `OxQL` (`OxQLMetrics`) with the counter `oxql.requests` and
+  the histogram `oxql.request.duration` (seconds), tagged `contract`, `route`, `entity` and
+  `outcome`, for both contracts. The line of the log category `OxQL.Compat.Legacy` also carries
+  `route`, `status`, `rows`, `elapsedMs`, `dbMs` and `dbCommands`, and a contract 1 request whose
+  body the host could not bind writes a line there too (`reason=unbound`). See *Who still sends
+  contract 1* in [`LEGACY.md`](src/docs/LEGACY.md).
 - **A deadline on the host's side.** Every aggregate, the legacy pipeline's included, is given up
   on when the database has said nothing by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs`
   (1 000) after it, and the request is answered 504 `QUERY_TIMEOUT` as the limit's own expiry is.
@@ -565,6 +571,7 @@ caller reads the new members by name.
   `EngineVersion`, `Usable`, `Reason`, `References`, `Degrades`; `MongoQueryEngine.Availability`
   and `ReferenceValidator`; `RemoteHealthProbe.Availability`;
   `OxQLRequestBodyAttribute` (`OxQL.AspNetCore.Binding`); `Codes.InvalidRequestBody`;
+  `OxQLMetrics` (`OxQL.Core.Engine`); `ExecutionOptions.ClientDeadlineMarginMs`;
   `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
   and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
@@ -573,8 +580,8 @@ caller reads the new members by name.
 
 ### Turning the legacy pipeline off
 
-Count the lines of the log category `OxQL.Compat.Legacy` per service: each is a caller without
-the header. When it is quiet, `OxQL:Compat:Legacy:Enabled=false` leaves contract 1 to the rewrite
+Count the lines of the log category `OxQL.Compat.Legacy` per service, or read `oxql.requests`
+with `contract="1"` on its metrics: each is a caller without the header. When it is quiet, `OxQL:Compat:Legacy:Enabled=false` leaves contract 1 to the rewrite
 (what it cannot express is refused), and `OxQL:Compat:Enabled=false` ends contract 1 on the host.
 Removing the code is described in [`src/docs/LEGACY.md`](src/docs/LEGACY.md#removing-it) and is a
 breaking change of the packages' public API.

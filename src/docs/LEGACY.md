@@ -39,8 +39,37 @@ with `reason=unreadable`.
 
 Every answer of the legacy pipeline writes one line in the log category `OxQL.Compat.Legacy`: the
 entity, the reason, the refusal code if any (`INTERNAL_ERROR` for a fault, `CANCELLED` for a
-request its caller abandoned), the user, the organisation and the correlation id. Counting those
-lines per service says who still calls without the header, and when the pipeline can go.
+request its caller abandoned), the user, the organisation and the correlation id, then the route
+(`query` or `batch`), the status it was answered with, the rows it returned, the time it took and
+the database's share of it. Counting those lines per service says who still calls without the
+header, and when the pipeline can go.
+
+### Who still sends contract 1
+
+Two sources answer it, and they agree:
+
+- **The log**, per request and with the caller. The line of the category `OxQL.Compat.Legacy`:
+
+  ```
+  OxQL.Compat.Legacy contract 1 request for {Entity} answered by the legacy pipeline: reason={Reason}
+    refused={Refused} user={UserId} org={OrganisationId} correlation={CorrelationId}
+    route={Route} status={Status} rows={Rows} elapsedMs={ElapsedMs} dbMs={DbMs} dbCommands={DbCommands}
+  ```
+
+  `UserId` and `OrganisationId` are what the host's scope provider says of the request, so a
+  report server's technical user and a person's session are told apart; `CorrelationId` leads to
+  the caller's own log. Group the lines by `UserId` and `Entity` to get the list of callers to
+  move; `rows` and `elapsedMs` say how heavy each is, `status` and `refused` whether it works at
+  all. A contract 1 request whose body the host could not bind never reaches the pipeline and
+  is answered by the host; it writes the line `… with a body the host could not bind, answered by
+  the host: reason=unbound route={Route} …` in the same category, so it is counted too. With
+  `Compat:Legacy:Enabled` off the lines of contract 1 requests are in the category `OxQL.Compat`.
+- **The meter**, as a rate without the caller. `oxql.requests` and `oxql.request.duration` of the
+  meter `OxQL` carry the tag `contract` (`1` or `2`) beside `route`, `entity` and `outcome` (see
+  *What a host measures* in [`oxql-operations.md`](oxql-operations.md#what-a-host-measures)). The
+  series with `contract="1"` is the traffic that still depends on this pipeline, per entity; when
+  it has been flat at zero for the agreed time on every service, nobody sends contract 1 any more.
+  The meter has no user and no organisation on purpose: who it is, the log says.
 
 ## What it answers
 
@@ -265,7 +294,9 @@ contract 1 request is the rewrite's (the published 2.0 behaviour), until contrac
 the constructor of `OxQLQueryService` loses a parameter. A host that names any of them no longer
 compiles. `OxQL:Compat:Legacy:*` configuration keys are then ignored without a word.
 
-1. Confirm in each service's log that `OxQL.Compat.Legacy` has had no line for the agreed time.
+1. Confirm in each service's log that `OxQL.Compat.Legacy` has had no line for the agreed time, and
+   on its metrics that `oxql.requests` with `contract="1"` has stayed at zero
+   (see [Who still sends contract 1](#who-still-sends-contract-1)).
    (`OxQL:Compat:Legacy:Enabled=false` on one service is the rehearsal.)
 2. Delete the three `Legacy` folders, `OxQL.IntegrationTests/Suites/Legacy`,
    `OxQL.Tests/AspNetCore/LegacyIsolationTests.cs`, `OxQL.Tests/Fixtures/contract1/http.json` and

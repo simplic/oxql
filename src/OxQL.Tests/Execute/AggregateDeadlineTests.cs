@@ -163,9 +163,9 @@ public class AggregateDeadlineTests
 
         await time.Armed();
 
-        time.Due.Should().Equal([11_000L], "the host's 10 000 ms and the margin of 1 000 ms after them");
+        time.Due.Should().Equal([15_000L], "the host's 10 000 ms and the margin of 5 000 ms after them");
 
-        time.Advance(TimeSpan.FromMilliseconds(10_999));
+        time.Advance(TimeSpan.FromMilliseconds(14_999));
         await Task.Yield();
         running.IsCompleted.Should().BeFalse("the deadline has not passed");
         runner.GivenUp.Should().Be(0);
@@ -208,7 +208,7 @@ public class AggregateDeadlineTests
         var running = engine.ExecuteAsync(BindHost.Request(Order, """[{ "values": { "path": "number" } }]"""), BindHost.Context());
 
         await time.Armed();
-        time.Advance(TimeSpan.FromSeconds(11));
+        time.Advance(TimeSpan.FromSeconds(15));
 
         TimedOut(await running).Code.Should().Be(Codes.QueryTimeout);
         runner.GivenUp.Should().Be(1);
@@ -280,6 +280,94 @@ public class AggregateDeadlineTests
         await FluentActions.Awaiting(() => running).Should().ThrowAsync<OperationCanceledException>();
     }
 
+    /// <summary>A database whose aggregate ends when the test says so, in a fault.</summary>
+    private sealed class FaultingRunner : IAggregateRunner
+    {
+        private readonly TaskCompletionSource<IReadOnlyList<BsonDocument>> ending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int GivenUp;
+
+        public void Fault(Exception exception) => ending.TrySetException(exception);
+
+        public Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
+        {
+            cancellationToken.Register(() => Interlocked.Increment(ref GivenUp));
+
+            return ending.Task;
+        }
+    }
+
+    /// <summary>A clock whose timers do something of the test's in the instant they fire, before the one who waits is told.</summary>
+    private sealed class InstantTime(Action onFire) : TimeProvider
+    {
+        private readonly TaskCompletionSource<Action> armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The firing of the first timer that was started.</summary>
+        public Task<Action> Armed => armed.Task;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            armed.TrySetResult(() =>
+            {
+                onFire();
+                callback(state);
+            });
+
+            return new NoTimer();
+        }
+
+        private sealed class NoTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private static MongoExecutionTimeoutException Expiry() =>
+        new(new MongoDB.Driver.Core.Connections.ConnectionId(new MongoDB.Driver.Core.Servers.ServerId(new MongoDB.Driver.Core.Clusters.ClusterId(), new System.Net.DnsEndPoint("localhost", 27017))), "operation exceeded time limit");
+
+    [Fact]
+    public async Task What_the_runner_ends_in_the_instant_the_deadline_passes_is_what_surfaces()
+    {
+        var entity = BindHost.Probe.Entities.Values.First();
+
+        foreach (var fault in new Exception[] { Expiry(), new InvalidOperationException("the connection was closed"), new TimeoutException("A timeout occurred selecting a server.") })
+        {
+            var runner = new FaultingRunner();
+            var time = new InstantTime(() => runner.Fault(fault));
+            var deadline = new AggregateDeadline(time, 5_000);
+
+            var running = deadline.RunAsync(runner, entity, [], new AggregateRunOptions(10_000, null), CancellationToken.None);
+
+            (await time.Armed)();
+
+            (await FluentActions.Awaiting(() => running).Should().ThrowAsync<Exception>()).Which.Should().BeSameAs(fault, "the runner's own end stands, and no timeout of the wait takes its place");
+            runner.GivenUp.Should().Be(0, "an aggregate that has ended is not given up on");
+        }
+    }
+
+    [Fact]
+    public async Task The_limits_expiry_said_in_the_instant_the_deadline_passes_is_answered_as_the_expiry()
+    {
+        var runner = new FaultingRunner();
+        var time = new InstantTime(() => runner.Fault(Expiry()));
+        var engine = Engine(runner, time);
+
+        var running = engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5 } }]"""), BindHost.Context());
+
+        (await time.Armed)();
+
+        var error = TimedOut(await running);
+
+        error.Code.Should().Be(Codes.QueryTimeout);
+        JsonSerializer.Serialize(error.Params).Should().Be("""{"maxTimeMs":10000}""");
+    }
+
     // ---- the legacy pipeline --------------------------------------------------------------------
 
     [Fact]
@@ -296,9 +384,9 @@ public class AggregateDeadlineTests
         await time.Armed();
 
         runner.Calls.Should().ContainSingle().Which.MaxTimeMs.Should().BeInRange(119_000, 120_000, "the ceiling is the pipeline's own, not the engine's 10 000 ms");
-        time.Due.Single().Should().BeInRange(120_000, 121_000);
+        time.Due.Single().Should().BeInRange(124_000, 125_000);
 
-        time.Advance(TimeSpan.FromMilliseconds(119_000));
+        time.Advance(TimeSpan.FromMilliseconds(123_000));
         await Task.Yield();
         running.IsCompleted.Should().BeFalse();
 

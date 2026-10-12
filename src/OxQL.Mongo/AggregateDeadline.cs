@@ -23,6 +23,11 @@ internal sealed class AggregateDeadlineException(int maxTimeMs, int marginMs)
 /// the aggregate is given up on (its cancellation is asked for) and the request is answered as one
 /// that timed out, instead of waiting for as long as the connection does.
 /// <para>
+/// The time is wall-clock on this host from the call of the runner to its answer: the selection of
+/// a server, the wait for a pooled connection and the transfer of the rows are in it, the limit of
+/// the database is for its own work alone. The margin is what covers the difference.
+/// </para>
+/// <para>
 /// The clock is <see cref="Time"/>, so a test moves it. A margin below zero switches the deadline off.
 /// </para>
 /// </summary>
@@ -55,10 +60,11 @@ internal sealed record AggregateDeadline(TimeProvider Time, int MarginMs)
             // what the caller of this method sees, as without a deadline: only the deadline is waited for here.
             return await running.WaitAsync(TimeSpan.FromMilliseconds((long)options.MaxTimeMs + MarginMs), Time, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (TimeoutException) when (!running.IsFaulted && !running.IsCanceled)
+        catch (TimeoutException)
         {
-            // The answer and the deadline at once: the answer stands.
-            if (running.IsCompletedSuccessfully)
+            // The runner ended, in a timeout of its own or in the instant the deadline passed: what it ended in stands,
+            // its answer as much as its fault or its cancellation.
+            if (running.IsCompleted)
                 return await running.ConfigureAwait(false);
 
             await abandoned.CancelAsync().ConfigureAwait(false);

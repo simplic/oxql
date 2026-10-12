@@ -202,7 +202,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Limits:MaxRequestBytes` / `MaxBatchQueries` / `RegexMaxLength` | 262 144 / 10 / 200 | |
 | `Limits:MaxLookupLimit` | 100 | rows one lookup returns per parent |
 | `Execution:MaxTimeMs` | 10 000 | `maxTimeMS` on every aggregate, clamped to 60 000; a timeout is 504 `QUERY_TIMEOUT` |
-| `Execution:ClientDeadlineMarginMs` | 1 000 | how long after an aggregate's `maxTimeMS` the host waits for the database's answer before it gives the aggregate up and answers 504 `QUERY_TIMEOUT` itself; below 0 switches the deadline off |
+| `Execution:ClientDeadlineMarginMs` | 5 000 | how long after an aggregate's `maxTimeMS` the host waits for the database's answer before it gives the aggregate up and answers 504 `QUERY_TIMEOUT` itself. The deadline is wall-clock on the host, so server selection, the wait for a pooled connection and the transfer of the rows count against it; below 0 switches it off, and the database keeps to its `maxTimeMS` either way |
 | `Execution:ResolveTimeoutMs` | 2 000 | budget of one plain remote resolve call, clamped to the effective `MaxTimeMs` |
 | `Execution:ChainTimeoutMs` | 6 000 | budget of one owner call carrying continued stages or a typed, item, converted or element-wise resolve (the time left less 50 ms, at most this), clamped to the effective `MaxTimeMs` |
 | `Execution:BatchConcurrency` | 4 | queries of one internal batch that run at once (1 to 16); a public batch runs one after another |
@@ -575,9 +575,12 @@ in place of the host's own 400), a `null` entry of a batch (its code), and the `
   contract 1* in [`LEGACY.md`](src/docs/LEGACY.md).
 - **A deadline on the host's side.** Every aggregate, the legacy pipeline's included, is given up
   on when the database has said nothing by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs`
-  (1 000) after it, and the request is answered 504 `QUERY_TIMEOUT` as the limit's own expiry is.
+  (5 000) after it, and the request is answered 504 `QUERY_TIMEOUT` as the limit's own expiry is.
+  The deadline runs on the host's clock from when the aggregate is handed to the driver, so the
+  selection of a server, the wait for a pooled connection and the transfer of the rows are in it;
+  a margin below 0 switches it off, and the database's own limit holds either way.
 - **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
-  `OxQLEndpointOptions.StrictRemoteReferences`, `Execution:ClientDeadlineMarginMs` (1 000).
+  `OxQLEndpointOptions.StrictRemoteReferences`, `Execution:ClientDeadlineMarginMs` (5 000).
 - **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix
   that is no entity of the host names no owning service and emits no reference.
 - **API.** `OwnerAvailability` and `OwnerOutage`; `RemoteReferenceValidator`,

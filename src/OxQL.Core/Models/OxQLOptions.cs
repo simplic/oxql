@@ -503,9 +503,13 @@ public sealed class ExecutionOptions
     /// How long after an aggregate's time limit this host still waits for the database to answer
     /// before it gives the aggregate up and answers 504 <c>QUERY_TIMEOUT</c> itself, in
     /// milliseconds. The database ends an aggregate at its limit and says so; this is the deadline
-    /// for the case in which nothing comes back. A value below zero switches the deadline off.
+    /// for the case in which nothing comes back. The deadline is wall-clock time on the host from
+    /// when the aggregate is handed to the driver, so the selection of a server, the wait for a
+    /// pooled connection and the transfer of the rows count against it while the database's limit
+    /// counts its own work only; the margin is the room for them. A value below zero switches the
+    /// deadline off; the database keeps to its limit either way.
     /// </summary>
-    public int ClientDeadlineMarginMs { get; set; } = 1_000;
+    public int ClientDeadlineMarginMs { get; set; } = 5_000;
 
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;

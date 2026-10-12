@@ -26,7 +26,8 @@ public sealed record OwnerOutage(string Reason, int? Status, TimeSpan RetryAfter
 /// <para>
 /// A failure is a call that got no answer (no connection, no answer in time) or an owner whose host
 /// has no internal query route (HTTP 404). Any other HTTP error says something about the request
-/// that was sent, not about whether the owner answers, and is not remembered.
+/// that was sent, not about whether the owner answers, and is not remembered; nor is an answer the
+/// host's client could not read.
 /// </para>
 /// </summary>
 public sealed class OwnerAvailability

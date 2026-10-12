@@ -3067,9 +3067,11 @@ internal sealed class KeyedFetch
     /// Another service's owner the host remembers as not answering (<see cref="OwnerAvailability"/>) is
     /// not called: the outcome is the remembered failure, at once and under the code the call that
     /// failed had (<c>RESOLVE_TIMEOUT</c> for one that timed out). What the call ends in is written
-    /// there: a success, a call no connection reached, one that ran out of a <paramref name="whole"/>
-    /// budget, and an owner whose host has no internal query route (404) or whose gateway says it is
-    /// away (502, 503, 504). Any other HTTP error is the owner's word on this request and is not kept.
+    /// there: a success, a call the transport failed (<see cref="Transport"/>), one that ran out of a
+    /// <paramref name="whole"/> budget, and an owner whose host has no internal query route (404) or
+    /// whose gateway says it is away (502, 503, 504). Any other HTTP error is the owner's word on this
+    /// request and is not kept, and neither is an answer the client could not read: the owner
+    /// answered, so the next request asks it again.
     /// </remarks>
     private async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, bool whole, RequestContext context, CancellationToken cancellationToken)
     {
@@ -3129,7 +3131,8 @@ internal sealed class KeyedFetch
             else
                 logger.LogWarning("OxQL owner call failed. service={Service} fault={Fault} org={OrganisationId} correlation={CorrelationId}", service, exception.GetType().Name, context.Organisation, context.CorrelationId);
 
-            known?.Failed(service, OwnerAvailability.Unreachable);
+            if (Transport(exception))
+                known?.Failed(service, OwnerAvailability.Unreachable);
 
             return new CallOutcome([], Failure.Unreachable);
         }
@@ -3137,6 +3140,21 @@ internal sealed class KeyedFetch
         {
             throw new OperationCanceledException("The caller gave up on the request while an owner was being asked.", exception, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Whether a fault of an owner call is the transport's: no connection, or one that broke before
+    /// the answer was there (an HTTP request that failed without a status, a socket or stream
+    /// error, anywhere in the chain of causes). Anything else is a fault of reading what an owner
+    /// that answered sent, or of the client itself, and says nothing of whether the owner answers.
+    /// </summary>
+    private static bool Transport(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current is HttpRequestException or System.Net.Sockets.SocketException or IOException)
+                return true;
+
+        return false;
     }
 
     private static bool Succeeded(JsonNode result) => result is JsonObject success && success["items"] is JsonArray;

@@ -1430,7 +1430,9 @@ owning service, owners in parallel:
   answered, without the wait. Then one request
   tries the owner while the others keep the remembered answer until that call lands; an answer ends
   the record. Any other HTTP error (401, 413, 400, 500) is the owner's word on one request and is
-  not remembered. The health probe writes the same record: an owner it measures as answering is
+  not remembered, and neither is an answer the host's client could not read (it is
+  `RESOLVE_UNREACHABLE` for that request, and the next request asks the owner again). A caller
+  that gives up while an owner is being asked leaves no record either. The health probe writes the same record: an owner it measures as answering is
   called again at once (a remembered missing route stays, since a health answer says nothing of the
   internal route), and an owner it could make no connection to (refused, a name without an address,
   a connect that timed out at the socket) is not called. A probe that ran out of its own time, was

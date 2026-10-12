@@ -416,6 +416,108 @@ public class OwnerAvailabilityTests
         second.Params.Should().Contain("reason", reason).And.Contain("remembered", true);
     }
 
+    public static TheoryData<string, Exception, bool> Faults => new()
+    {
+        { "no connection", new HttpRequestException("No connection could be made."), true },
+        { "the connection broke", new InvalidOperationException("The answer could not be read.", new IOException("The connection was reset.")), true },
+        { "a socket error", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionReset), true },
+        { "no JSON", new System.Text.Json.JsonException("'<' is an invalid start of a value."), false },
+        { "another shape", new InvalidOperationException("The answer has no results."), false },
+        { "a fault of the client", new NotSupportedException("The serializer has no converter."), false },
+    };
+
+    [Theory]
+    [MemberData(nameof(Faults))]
+    public async Task Only_a_fault_of_the_transport_is_remembered_and_an_answer_that_could_not_be_read_is_not(string cause, Exception fault, bool kept)
+    {
+        var (engine, client) = Ending(_ => throw fault);
+
+        var first = (await RunAsync(engine)).Diagnostics.Should().ContainSingle().Subject;
+
+        first.Code.Should().Be(Codes.ResolveUnreachable, cause);
+        first.Params.Should().Contain("reason", "unreachable");
+
+        if (kept)
+            engine.Availability.OutageOf("staff")!.Reason.Should().Be(OwnerAvailability.Unreachable, cause);
+        else
+            engine.Availability.OutageOf("staff").Should().BeNull("the owner answered, and what it sent this time says nothing of the next: " + cause);
+
+        var second = (await RunAsync(engine)).Diagnostics.Should().ContainSingle().Subject;
+
+        client.Calls.Should().Be(kept ? 1 : 2, cause);
+        second.Params!.ContainsKey("remembered").Should().Be(kept, cause);
+    }
+
+    [Fact]
+    public async Task A_caller_that_gives_up_while_an_owner_is_asked_leaves_nothing_remembered()
+    {
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (engine, client) = Ending(token =>
+        {
+            asked.TrySetResult();
+
+            return Never(token);
+        });
+        using var caller = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(BindHost.Request(Tour, Resolve), BindHost.Context(), caller.Token);
+
+        await asked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await caller.CancelAsync();
+
+        await FluentActions.Awaiting(() => running).Should().ThrowAsync<OperationCanceledException>();
+
+        client.Calls.Should().Be(1);
+        engine.Availability.OutageOf("staff").Should().BeNull("the caller's own end says nothing of the owner");
+        engine.Availability.TryEnter("staff", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_caller_that_gives_up_while_an_owner_fails_leaves_nothing_remembered()
+    {
+        using var caller = new CancellationTokenSource();
+        var (engine, _) = Ending(_ =>
+        {
+            // The connection the caller's abort reset: the fault comes after the caller has gone.
+            caller.Cancel();
+
+            throw new HttpRequestException("The connection was reset.");
+        });
+
+        await FluentActions.Awaiting(() => engine.ExecuteAsync(BindHost.Request(Tour, Resolve), BindHost.Context(), caller.Token)).Should().ThrowAsync<OperationCanceledException>();
+
+        engine.Availability.OutageOf("staff").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_page_in_several_batches_after_the_time_is_over_is_whole_when_the_owner_answers_again()
+    {
+        var drivers = Enumerable.Range(1, 4).Select(index => Guid.Parse($"d0000000-0000-0000-0000-00000000000{index}")).ToList();
+        var (engine, runner, client, time) = Host(options => options.Limits.ResolveKeyChunk = 1);
+
+        // The owner takes one query per batch, so the page's four chunks go out as four batches.
+        client.Owners["staff"] = new RemoteOwnerInfo("2.1.0", EngineCapabilities.Contract, 1);
+        runner.PageRows = drivers.Select(driver => Row("driver", driver)).ToList();
+        client.Unreachable.Add("staff");
+
+        var down = await RunAsync(engine);
+
+        down.Items.Should().OnlyContain(item => item!["res"] == null);
+        client.Calls.Should().ContainSingle("the first batch failed and the others were not sent");
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        client.Unreachable.Clear();
+        client.Calls.Clear();
+        client.Script = (_, query, _) => new FakeRemoteClient.Answer.Rows(drivers.Where(driver => System.Text.Json.JsonSerializer.Serialize(query).Contains(driver.ToString())).Select(driver => FakeRemoteClient.Row("id", driver.ToString(), ("name", "N-" + driver.ToString()[^1]))).ToArray());
+
+        var back = await RunAsync(engine);
+
+        back.Diagnostics.Should().BeNullOrEmpty("the batch that tries the owner lands before the next one is sent, so none of them is answered from memory");
+        back.Items.Select(item => item!["res"]?["name"]?.GetValue<string>()).Should().Equal("N-1", "N-2", "N-3", "N-4");
+        client.Calls.Should().HaveCount(4);
+        engine.Availability.OutageOf("staff").Should().BeNull();
+    }
+
     [Fact]
     public async Task A_semi_join_into_an_owner_that_just_failed_is_refused_at_once()
     {

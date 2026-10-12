@@ -203,5 +203,6 @@ public class HostHardeningOwnerStatusTests
         message.Should().Contain("service=crm").And.Contain("fault=InvalidOperationException").And.Contain("correlation=corr-7").And.Contain(BindHost.Organisation.ToString());
         message.Should().NotContain("secret-token").And.NotContain("c1", "neither the client's text nor a key is written");
         exception.Should().BeNull("another service's client may carry what it sent in its exception");
+        engine.Availability.OutageOf("crm").Should().BeNull("an answer that could not be read is no owner that does not answer");
     }
 }

@@ -13,7 +13,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The contract 2 unwind (DG2 M2): it names its element under <c>as</c>, and the collection leaves
+/// The contract 2 unwind: it names its element under <c>as</c>, and the collection leaves
 /// the row, so a path names one thing along the whole pipeline: the collection before the unwind,
 /// the element's alias after it. A later path under the collection is an unknown path that says
 /// where the element went. There is nothing to choose: <c>keepPath</c> is not a member. Contract 1

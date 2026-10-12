@@ -52,7 +52,7 @@ internal static class FleetClassMaps
 /// <summary>
 /// The host-side reference declarations of each lab service: references on members its classes
 /// cannot annotate. <c>transport.resource</c>'s <c>id</c> is inherited from the organisation
-/// document; which service it names depends on the stored variant (DESIGN §3.3.2, Appendix A).
+/// document; which service it names depends on the stored variant.
 /// </summary>
 public static class FleetReferences
 {

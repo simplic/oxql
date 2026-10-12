@@ -69,7 +69,7 @@ public sealed record PageInfo
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? TotalCountCapped { get; init; }
 
-    /// <summary>What a contract 2 answer knows of how many rows match (DG2 M3); on every contract 2 page.</summary>
+    /// <summary>What a contract 2 answer knows of how many rows match; on every contract 2 page.</summary>
     [JsonPropertyName("count")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CountInfo? Count { get; init; }
@@ -174,7 +174,7 @@ public sealed record QueryResult
 /// <summary>Why a request was aborted: the reason class, an HTTP status by that class, and the details.</summary>
 public sealed record Refusal
 {
-    /// <summary>The reason class: <c>validation_error</c>, <c>access_denied</c>, <c>not_executable</c>, <c>timeout</c>, <c>internal_error</c>.</summary>
+    /// <summary>The reason class: <c>validation_error</c>, <c>access_denied</c>, <c>not_executable</c>, <c>timeout</c>, <c>rate_limited</c>, <c>internal_error</c>.</summary>
     [JsonPropertyName("type")]
     public required string Type { get; init; }
 
@@ -185,6 +185,12 @@ public sealed record Refusal
     /// <summary>The HTTP status the host answers with; not part of the body.</summary>
     [JsonIgnore]
     public int Status { get; init; }
+
+    // LEGACY(compat.v1): the 1.1 engine repeated the HTTP status in the body of a refusal, and only the legacy pipeline sets this; remove with src/OxQL.Core/Legacy.
+    /// <summary>The status as a member of the body, where the answer is the 1.1 engine's; null everywhere else, and then not written.</summary>
+    [JsonPropertyName("status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StatusInBody { get; init; }
 
     /// <summary>The details, when any.</summary>
     [JsonPropertyName("errors")]
@@ -219,8 +225,8 @@ public sealed record Refusal
     };
 
     /// <summary>
-    /// A request that would lose data under <c>strict</c> or <c>onMissing: "refuse"</c> (DESIGN
-    /// §3.4.3, §3.6): 422, carrying every would-be diagnostic as an error with its code, message,
+    /// A request that would lose data under <c>strict</c> or <c>onMissing: "refuse"</c>:
+    /// 422, carrying every would-be diagnostic as an error with its code, message,
     /// stage, path and params.
     /// </summary>
     public static Refusal DataLoss(IReadOnlyList<Diagnostic> losses)
@@ -270,7 +276,9 @@ public sealed record Refusal
     };
 
     /// <summary>
-    /// More explains than a caller may send or have in flight: 429, refused before the body is read.
+    /// More explains than a caller may send or have in flight: 429 of type <c>rate_limited</c>, refused
+    /// before the body is read. It carries <c>EXPLAIN_LIMIT</c>, as the explain bounds of a body do with
+    /// 400: the status and <c>params.limit</c> tell the one that passes with time from the one that does not.
     /// <paramref name="limit"/> is <c>rate</c>, <c>concurrentPerUser</c>, <c>concurrentPerHost</c> or
     /// <c>concurrentPerCaller</c>; the host answers <paramref name="retryAfterSeconds"/> as <c>Retry-After</c>.
     /// </summary>
@@ -318,8 +326,10 @@ public abstract record QueryOutcome
 
 /// <summary>
 /// The outcome of an explain: the answer, or a refusal. A request that does not bind is an answer
-/// (<see cref="ExplainResult.Valid"/> false, DESIGN §4.1); a refusal is left only for what stops
-/// explain before binding: no organisation (403), a body past the explain bounds (400), an engine fault (500).
+/// (<see cref="ExplainResult.Valid"/> false); a refusal is left only for what stops
+/// explain before binding: no organisation (403), a body past the explain bounds (400) or the body
+/// limit (413), more explains than the caller may send (429), the time of the explain it belongs to
+/// run out (504), an engine fault (500).
 /// </summary>
 public abstract record ExplainOutcome
 {
@@ -756,7 +766,7 @@ public sealed record ExplainResult
     [JsonPropertyName("diagnostics")]
     public required IReadOnlyList<Diagnostic> Diagnostics { get; init; }
 
-    /// <summary>Engine-behaviour notes (DESIGN §4.4); always present, empty without <c>include: "notes"</c> except the notes about the answer itself.</summary>
+    /// <summary>Engine-behaviour notes; always present, empty without <c>include: "notes"</c> except the notes about the answer itself.</summary>
     [JsonPropertyName("notes")]
     public required IReadOnlyList<Diagnostic> Notes { get; init; }
 
@@ -976,7 +986,7 @@ public sealed record ExplainStage
     [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public string? Kind { get; init; }
 
-    /// <summary><c>ok</c>, <c>error</c>, or <c>skipped</c>: it failed only under an alias an earlier stage failed to create (DESIGN §3.8).</summary>
+    /// <summary><c>ok</c>, <c>error</c>, or <c>skipped</c>: it failed only under an alias an earlier stage failed to create.</summary>
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
@@ -987,7 +997,7 @@ public sealed record ExplainStage
 
     /// <summary>
     /// The paths the stage reads off the row, <c>{ path, use, alias? }</c> each, from the binder's read
-    /// ledger (improvement plan §3.S): <c>use</c> one of <c>match, sort, project, unwind, groupKey,
+    /// ledger: <c>use</c> one of <c>match, sort, project, unwind, groupKey,
     /// aggregate, resolveKey, caseCondition, lookupOn</c>; <c>alias</c> the join whose rows hold the
     /// path, which loads it. A stage continued at an owner carries the reads its owner answered.
     /// </summary>
@@ -1029,7 +1039,7 @@ public sealed record ExplainPlacement
 /// <summary>What the rows look like at one point of the pipeline.</summary>
 public sealed record ExplainShape
 {
-    /// <summary><c>cursor</c> while every row is one entity row with its key (keyset paging); <c>offset</c> after an unwind or a group.</summary>
+    /// <summary>How a page of this shape continues. Contract 2: always <c>cursor</c>. Contract 1: <c>cursor</c> while every row is one entity row with its key, <c>offset</c> after an unwind or a group.</summary>
     [JsonPropertyName("paging")]
     public required string Paging { get; init; }
 
@@ -1056,7 +1066,7 @@ public sealed record ExplainShape
 
     /// <summary>
     /// The paths that left the row and are not named by <see cref="Projection"/>: what an exclusion
-    /// projection removed and the collections an unwind with <c>keepPath: false</c> took out, as wire
+    /// projection removed and the collections a contract 2 unwind took out, as wire
     /// paths in ordinal order. A path at or under one is not in the row. Absent when there is none.
     /// </summary>
     [JsonPropertyName("removed")]

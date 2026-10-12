@@ -8,9 +8,11 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// A request without the contract header goes through the contract 1 rewrite before the
-/// binder. Whatever is null in it is the caller's error and the binder's to refuse: the rewrite
-/// hands it on untouched instead of failing on it.
+/// On a host that answers contract 1 by the rewrite first (<c>Compat:Legacy:Always</c> off), a
+/// request without the contract header goes through the contract 1 rewrite before the binder.
+/// Whatever is null in it is the caller's error and the binder's to refuse: the rewrite hands it
+/// on untouched instead of failing on it. (By default the legacy pipeline answers it, as the 1.1
+/// engine did: <c>LegacyGoldenTests</c>, the <c>stage-null</c> cases.)
 /// </summary>
 public class HostHardeningCompatNullTests
 {
@@ -63,7 +65,7 @@ public class HostHardeningCompatNullTests
     [InlineData("""{ "entityType": "probe.order", "pipeline": [{ "match": { "Number": { "eq": "a" } } }, null] }""")]
     public async Task A_null_stage_without_the_contract_header_is_refused_with_a_code(string body)
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         var response = await host.Client(contract: null).PostAsync("/OxQL/query", SampleHost.Json(body));
         var answer = await SampleHost.Body(response);
@@ -75,7 +77,7 @@ public class HostHardeningCompatNullTests
     [Fact]
     public async Task A_null_stage_in_a_batch_without_the_contract_header_is_refused_per_entry()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         var response = await host.Client(contract: null).PostAsync("/OxQL/batch", SampleHost.Json("""{ "queries": [{ "entityType": "probe.order", "pipeline": [null] }] }"""));
         var answer = await SampleHost.Body(response);

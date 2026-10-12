@@ -361,7 +361,6 @@ public class ClrModelBuilderTests
         reference.TargetField.Should().Be("id");
         reference.DeclaredBy.Should().Be(ReferenceSource.Attribute);
         reference.IsRemote.Should().BeFalse();
-        reference.Direction.Should().Be(ReferenceDirection.Forward);
     }
 
     [Fact]
@@ -376,7 +375,7 @@ public class ClrModelBuilderTests
     }
 
     /// <summary>
-    /// F-ENT-001. A remote target's key cannot be read on this host, and defaulting the field
+    /// A remote target's key cannot be read on this host, and defaulting the field
     /// to <c>"id"</c> was a guess: asked for the ids of an owner keyed on something else, the
     /// owner answered rows keyed by whatever member happens to be called <c>id</c>, and every
     /// row of the join was wrong with a 200 and no diagnostic. Proven on the lab's

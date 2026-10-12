@@ -12,7 +12,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// Per-row join outcomes and their policy on a real server (DESIGN §3.6, §3.4.3): a missing
+/// Per-row join outcomes and their policy on a real server: a missing
 /// reference is <c>null</c> by default, <c>RESOLVE_MISSING</c> under <c>onMissing: "report"</c> and a
 /// 422 under <c>"refuse"</c> or <c>strict</c>; an ambiguous key and a truncated <c>elements: "all"</c>
 /// always travel and refuse under strict, as do a truncated lookup, a flatten cut at its depth and

@@ -121,14 +121,29 @@ public class ShapeCPathsTests
     }
 
     [Fact]
-    public async Task C11_an_unstored_member_is_projectable_and_simply_absent_from_the_row()
+    public async Task C11_a_projection_of_an_unstored_member_is_refused_by_name_and_no_row_carries_the_member()
     {
         var target = Corpus.Rows(Corpus.Conformance)[0].Id;
 
-        var answer = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1, "computed": 1 } }, { "page": { "limit": 5 } } ]""");
+        // No row can carry what is not stored: a projection that asks for it says so, once per member.
+        var asked = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1, "computed": 1 } }, { "page": { "limit": 5 } } ]""");
 
-        answer.ShouldHaveIds([target]);
-        answer.Items[0]!.AsObject().Select(member => member.Key).Should().Equal("id");
+        asked.StatusCode.Should().Be(400, asked.ToString());
+        asked.ErrorCodes.Should().Equal("NOT_STORED", "NOT_STORED");
+        asked.Body!["errors"]!.AsArray().Select(error => error!["path"]!.GetValue<string>()).Should().Equal("scratch", "computed");
+        asked.Body["errors"]![0]!["params"]!["reason"]!.GetValue<string>().Should().Be("notStored");
+        asked.Body["errors"]![0]!["message"]!.GetValue<string>().Should().Contain("no row can carry it");
+
+        // The whole row, and a projection that leaves the members out by name, are without them.
+        var whole = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "page": { "limit": 5 } } ]""");
+
+        whole.ShouldHaveIds([target]);
+        whole.Items[0]!.AsObject().Select(member => member.Key).Should().NotContain(["scratch", "computed"]);
+
+        var excluded = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "scratch": 0, "computed": 0 } }, { "page": { "limit": 5 } } ]""");
+
+        excluded.ShouldHaveIds([target]);
+        excluded.Items[0]!.ToJsonString().Should().Be(whole.Items[0]!.ToJsonString(), "an exclusion of what no row carries asks for nothing");
     }
 
     [Fact]

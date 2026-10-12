@@ -10,13 +10,14 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Mongo;
+using OxQL.Mongo.Resolve;
 using OxQL.Tests.Bind;
 using Xunit;
 
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// A strict request's truncation probes (DESIGN §3.4.3) are sent with the page and the count, not
+/// A strict request's truncation probes are sent with the page and the count, not
 /// after them: a probe reads the rows up to a truncation and needs nothing of the page. Sent at the
 /// same moment under the same <c>maxTimeMS</c>, they share the request's deadline, so the time limit
 /// is a ceiling for the whole request and not a budget per probe; and a probe that runs out of it is
@@ -92,7 +93,7 @@ public class StrictProbeTests
         outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
         runner.Calls.Select(call => call.Kind).Should().BeEquivalentTo(["page", "count", "probe"]);
         runner.Calls.Where(call => call.Kind != "count").Select(call => call.Options.MaxTimeMs).Distinct().Should().ContainSingle("one deadline for the request, not a budget per probe");
-        runner.Calls.Single(call => call.Kind == "count").Options.MaxTimeMs.Should().Be(BindHost.Options().Count.BudgetMs, "the count step has its own budget and never holds the rows back longer (DG2 M3)");
+        runner.Calls.Single(call => call.Kind == "count").Options.MaxTimeMs.Should().Be(BindHost.Options().Count.BudgetMs, "the count step has its own budget and never holds the rows back longer");
         runner.Calls.Single(call => call.Kind == "probe").Options.BatchSize.Should().BeNull("a probe returns one row");
     }
 
@@ -130,5 +131,31 @@ public class StrictProbeTests
 
         refusal.Status.Should().Be(504);
         refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.QueryTimeout);
+    }
+
+    [Fact]
+    public async Task A_probe_reads_the_rows_a_semi_join_before_the_truncation_selects()
+    {
+        var vehicle = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
+        var runner = new FakeAggregateRunner();
+        var client = new FakeRemoteClient { Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", vehicle.ToString())) };
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options));
+
+        var outcome = await engine.ExecuteAsync(BindHost.Request("probe.order", """
+            [{ "resolve": { "path": "vehicleId", "as": "veh" } },
+             { "match": { "veh.matchCode": { "eq": "V-1" } } },
+             { "resolve": { "path": "customerId", "as": "cust" } },
+             { "lookup": { "from": "probe.order", "path": "customerId", "on": "cust", "as": "siblings", "limit": 2 } },
+             { "match": { "siblings.number": { "eq": "x" } } },
+             { "page": { "limit": 10 } }]
+            """) with { Strict = true }, BindHost.Context());
+
+        outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? BindHost.Describe(refused.Refusal) : "");
+
+        var selected = new BsonDocument("$match", new BsonDocument("VehicleId", new BsonDocument("$in", new BsonArray { new BsonBinaryData(vehicle, GuidRepresentation.Standard) })));
+        var probe = runner.Calls.Select(call => call.Stages).Where(stages => stages[^1].Contains("$project") && stages[^2].Contains("$limit") && stages[^2]["$limit"] == 1).Should().ContainSingle("one truncation, one probe").Subject;
+
+        probe.Should().Contain(stage => stage.Equals(selected), "the probe looks for a truncation among the rows the page reads: those of the owner's ids");
     }
 }

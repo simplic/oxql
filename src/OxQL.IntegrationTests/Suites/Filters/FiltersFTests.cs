@@ -59,9 +59,9 @@ public class FiltersFTests
         (await fleet.Ids(Corpus.Vehicle, new JsonObject { ["matchCode"] = new JsonObject { ["eq"] = row["matchCode"]!.DeepClone() } })).Should().Contain(source.Id);
         (await fleet.Ids(Corpus.Vehicle, new JsonObject { ["createDateTime"] = new JsonObject { ["eq"] = row["createDateTime"]!.DeepClone() } })).Should().Contain(source.Id);
 
-        // The wire renders every decimal in its one canonical spelling, whichever form stored it,
-        // and that spelling is an operand that finds the row again.
-        row["mileage"]!.GetValue<string>().Should().Be("125000");
+        // The wire renders every decimal as a number in its one canonical spelling, whichever form
+        // stored it (here the text 125000.00), and that number is an operand that finds the row again.
+        row["mileage"]!.ToJsonString().Should().Be("125000");
         (await fleet.Ids(Corpus.Vehicle, new JsonObject { ["mileage"] = new JsonObject { ["eq"] = row["mileage"]!.DeepClone() } })).Should().Contain(source.Id);
     }
 
@@ -143,7 +143,7 @@ public class FiltersFTests
     }
 
     [Fact]
-    public async Task F10_a_long_in_the_addon_bag_comes_back_as_a_string_and_that_string_finds_its_row()
+    public async Task F10_a_long_in_the_addon_bag_comes_back_as_a_number_with_every_digit_and_that_number_finds_its_row()
     {
         var staff = await StaffClient();
         var answer = await staff.SendAsync(Corpus.Employee, """
@@ -154,9 +154,12 @@ public class FiltersFTests
         var tourCount = Json.At(answer.Items[0], "addon.tourCount") as JsonValue;
 
         tourCount.Should().NotBeNull(answer.ToString());
-        tourCount!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.String, "a long travels as a string so a JavaScript client keeps it");
-        tourCount.GetValue<string>().Should().Be("9007199254740993");
-        (await staff.Ids(Corpus.Employee, new JsonObject { ["addon.tourCount"] = new JsonObject { ["eq"] = tourCount.DeepClone() } })).Should().Equal(AddonRich());
+        tourCount!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "a long travels as a number");
+        // The number's own text in the body: above 2^53 every digit is written, where a double would say …992.
+        tourCount.ToJsonString().Should().Be("9007199254740993");
+        var operand = new JsonObject { ["addon.tourCount"] = new JsonObject { ["eq"] = tourCount.DeepClone() } };
+        operand.ToJsonString().Should().Contain("9007199254740993", "the operand goes back digit for digit");
+        (await staff.Ids(Corpus.Employee, operand)).Should().Equal(AddonRich());
     }
 
     [Fact]
@@ -249,7 +252,8 @@ public class FiltersFTests
             """);
 
         projected.ShouldHaveIds(Keys(Corpus.Transaction, "dec-decimal128", "dec-string"));
-        projected.Strings("totalPrice").Should().Equal("1000", "1000");
+        // One number in one spelling, from the Decimal128 1000.00 and from the text "1000.00" alike.
+        projected.Values("totalPrice").Select(value => value?.ToJsonString()).Should().Equal("1000", "1000");
     }
 
     // ── booleans, guids, temporals and durations ────────────────────────────────────────────

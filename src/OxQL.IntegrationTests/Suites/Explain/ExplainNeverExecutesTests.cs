@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// Explain never executes the query (DESIGN §4.1): a command monitor on the engine's own client
+/// Explain never executes the query: a command monitor on the engine's own client
 /// watches every command sent to the fleet database. Without <c>include</c> explain sends none;
 /// with <c>include: ["indexes"]</c> it sends <c>listIndexes</c> and nothing else — no
 /// <c>aggregate</c>, no <c>explain</c> (the <c>executionStats</c> explain ran the page pipeline).

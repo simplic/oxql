@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -99,7 +100,6 @@ internal static class ModelAssembler
             retired,
             pool,
             findings,
-            DateTimeOffset.UtcNow,
             Fingerprint(entityIndex.Values, pool.Values));
     }
 
@@ -311,13 +311,9 @@ internal static class ModelAssembler
             return null;
         }
 
-        // A local target's key is right there to read, and the local branch above reads
-        // it. A remote target's is not, and defaulting to "id" is a guess: asked for the
-        // ids of an owner keyed on something else, the owner answers rows keyed by a
-        // member that happens to be called `id` and every row of the join is wrong, with
-        // a 200 and no diagnostic. A declaration this host cannot complete is a finding,
-        // and no reference is emitted, so the resolve is refused instead of answered
-        // wrongly. The fix is one argument on the attribute: [OxQLReference(target, field)].
+        // A remote target's key cannot be read here and none is assumed: a declaration that does
+        // not name it is a finding and emits no reference, so a resolve over it is refused. The
+        // declaration names the field: [OxQLReference(target, field)].
         if (declared.Field is null)
         {
             findings.Add(new BuildFinding(
@@ -395,6 +391,9 @@ internal static class ModelAssembler
                 if (path.Member.Reference is null && path.Member.References.Count > 0)
                     text.Append("\treferenceCases=").Append(string.Join(";", path.Member.References));
 
+                if (path.Member.ByVariant is { } byVariant)
+                    text.Append("\tbyVariant=").Append(string.Join(",", byVariant.Select(pair => $"{pair.Key}:{pair.Value}")));
+
                 text.Append('\n');
             }
         }
@@ -410,7 +409,7 @@ internal static class ModelAssembler
             text.Append('\n');
 
             foreach (var value in type.EnumValues)
-                text.Append("enum\t").Append(value.Name).Append('\t').Append(value.Value).Append('\t').Append(value.Active).Append('\n');
+                text.Append("enum\t").Append(value.Name).Append('\t').Append(value.Value.ToString(CultureInfo.InvariantCulture)).Append('\t').Append(value.Active).Append('\n');
         }
 
         return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));

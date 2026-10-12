@@ -9,9 +9,8 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The request member <c>strict</c> and the capture of unknown request members (DESIGN §3.0,
-/// §3.4.3), the report page, and the contract 1 hint on every refusal of a contract 2 construct
-/// (§3.12).
+/// The request member <c>strict</c> and the capture of unknown request members,
+/// the report page, and the contract 1 hint on every refusal of a contract 2 construct.
 /// </summary>
 public class StrictRequestBindTests
 {
@@ -82,7 +81,7 @@ public class StrictRequestBindTests
 
         error.Code.Should().Be(Codes.UnknownRequestMember);
         error.Stage.Should().BeNull();
-        error.Message.Should().Be("'strictness, limit' is not a member of a request; a request carries entityType, variables, filter, pipeline, strict, timing, maxTimeMs.");
+        error.Message.Should().Be("'strictness, limit' is not a member of a request; a request carries entityType, variables, filter, pipeline, strict, onMissing, timing, maxTimeMs.");
     }
 
     [Fact]

@@ -60,7 +60,7 @@ public sealed class ExplainLease : IDisposable
 }
 
 /// <summary>
-/// The rate and concurrency limits of explain (improvement plan §3.E protection), built on the
+/// The rate and concurrency limits of explain, built on the
 /// ASP.NET Core rate limiters and separate from every other route, so explain traffic never queues
 /// a run and nothing waits: an explain over a limit is refused at once.
 /// <list type="bullet">
@@ -204,15 +204,28 @@ public sealed class ExplainRateLimiter : IDisposable
 
     /// <summary>
     /// A token bucket that refills by a clock it reads when asked, one token per <c>period</c> up to
-    /// <c>burst</c>: no timer, so an idle partition costs nothing and a test moves the clock itself.
+    /// <c>burst</c>: no timer of its own, so a test moves the clock itself. A bucket that is full again
+    /// says how long nobody has asked it, so the partition of an identity that went away is dropped;
+    /// the next one of that identity starts full, which is what it would have been.
     /// </summary>
-    private sealed class ManualTokenBucket(int burst, TimeSpan period, TimeProvider time) : RateLimiter
+    internal sealed class ManualTokenBucket(int burst, TimeSpan period, TimeProvider time) : RateLimiter
     {
         private readonly object gate = new();
         private double available = burst;
         private long last = time.GetTimestamp();
 
-        public override TimeSpan? IdleDuration => null;
+        public override TimeSpan? IdleDuration
+        {
+            get
+            {
+                lock (gate)
+                {
+                    var idle = time.GetElapsedTime(last, time.GetTimestamp());
+
+                    return available + idle / period >= burst ? idle : null;
+                }
+            }
+        }
 
         public override RateLimiterStatistics? GetStatistics() => null;
 
@@ -267,7 +280,7 @@ public sealed class ExplainRateLimiter : IDisposable
 /// scope provider reads them; a request with neither is limited by its remote address. A host whose
 /// explain is switched off is not limited: the route answers 404.
 /// </summary>
-public sealed class ExplainRateFilter(OxQLOptions options) : IAsyncResourceFilter
+internal sealed class ExplainRateFilter(OxQLOptions options) : IAsyncResourceFilter
 {
     /// <summary>The <c>HttpContext.Items</c> key under which the filter leaves the identity it admitted the explain for.</summary>
     public const string IdentityItem = "OxQL.Explain.Identity";
@@ -286,8 +299,22 @@ public sealed class ExplainRateFilter(OxQLOptions options) : IAsyncResourceFilte
 
         var httpContext = context.HttpContext;
         var scope = httpContext.RequestServices.GetService<IOxQLScopeProvider>();
-        var organisation = scope is null ? null : await scope.OrganisationAsync(httpContext, httpContext.RequestAborted);
-        var user = scope?.UserId(httpContext);
+        Guid? organisation = null;
+        string? user = null;
+
+        // A scope provider that fails is the action's to answer, with the envelope every route gives;
+        // here such a caller is limited by its address.
+        try
+        {
+            organisation = scope is null ? null : await scope.OrganisationAsync(httpContext, httpContext.RequestAborted);
+            user = scope?.UserId(httpContext);
+        }
+        catch (Exception) when (!httpContext.RequestAborted.IsCancellationRequested)
+        {
+            organisation = null;
+            user = null;
+        }
+
         var identity = organisation is null && user is null
             ? "address|" + httpContext.Connection.RemoteIpAddress
             : $"{organisation:N}|{user}";

@@ -276,7 +276,7 @@ public class EngineOnlyOTests
         notAnObject.IsProblemDetails.Should().BeTrue("the converter rejects a non-object before the body is a request: " + notAnObject);
         notAnObject.ErrorCodes.Should().BeEmpty();
 
-        // Legacy R5 (closed): a null element used to fall out of the host as an unhandled 500.
+        // A null element is answered, not a fault of the host.
         var nullElement = await Send("""[ null, { "page": { "limit": 1 } } ]""");
         nullElement.Type.Should().Be("validation_error", nullElement.ToString());
         var error = nullElement.ShouldRefuse("UNKNOWN_STAGE", 400);

@@ -1,0 +1,63 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "IsDeleted": {
+              "eq": false
+            }
+          },
+          {
+            "IsMirroredTour": {
+              "eq": false
+            }
+          },
+          {
+            "or": [
+              {
+                "Status.Name": {
+                  "eq": "planned"
+                }
+              },
+              {
+                "Status.Name": {
+                  "eq": "partially_planned"
+                }
+              }
+            ]
+          },
+          {
+            "StartDateTime": {
+              "gte": {
+                "$date": "2026-05-31T22:00:00.000Z"
+              }
+            }
+          },
+          {
+            "StartDateTime": {
+              "lte": {
+                "$date": "2026-06-30T21:59:59.999Z"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sort": [
+        {
+          "EndDateTime": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 1,
+        "cursor": "@cursor:consumer-plan-pool-page-1",
+        "includeTotalCount": false
+      }
+    }
+  ]
+}

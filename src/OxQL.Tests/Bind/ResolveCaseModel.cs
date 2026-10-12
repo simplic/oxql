@@ -1,4 +1,4 @@
-// The graph the resolve binding tests bind against (DESIGN §3.4.1): every reference form a
+// The graph the resolve binding tests bind against: every reference form a
 // resolve meets — simple local and remote, a collection, typed cases with item targets, a
 // converted key, a variant condition — on entities with an organisation member, so a request
 // scopes. None carries [OxQLType]; the entities are declared by hand. The slot variants' class

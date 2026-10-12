@@ -44,6 +44,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddHttpContextAccessor();
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
+        // LEGACY(compat.v1): the legacy pipeline's route; remove with src/OxQL.AspNetCore/Legacy.
+        services.TryAddScoped<Legacy.LegacyRoute>();
         services.TryAddSingleton<Health.RemoteHealthProbe>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();

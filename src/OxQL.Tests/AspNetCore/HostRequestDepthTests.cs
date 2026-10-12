@@ -7,7 +7,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The host reads request bodies to <see cref="OxQLJson.MaxDepth"/> (RE-27): the depth MVC needs to
+/// The host reads request bodies to <see cref="OxQLJson.MaxDepth"/>: the depth MVC needs to
 /// write explain's deep answers is the depth it reads, so a request nested past System.Text.Json's
 /// default of 64 is read and bound (every host of the fleet runs the same limit, so a forwarded body
 /// the origin accepted is read by its owner too), and one past the limit is refused as a body that

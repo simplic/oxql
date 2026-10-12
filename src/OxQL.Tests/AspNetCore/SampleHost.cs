@@ -103,6 +103,14 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
         return host;
     }
 
+    /// <summary>
+    /// The options of a host that answers contract 1 by the compatibility rewrite first
+    /// (<c>Compat:Legacy:Always</c> off), as the published 2.0 engine did. A host that sets nothing
+    /// answers every contract 1 request by the legacy pipeline; a test of the rewrite's own behaviour
+    /// through a host says so with this.
+    /// </summary>
+    public static void RewriteFirst(OxQLOptions options) => options.Compat.Legacy.Always = false;
+
     /// <summary>A client under one contract (null: no header) for one organisation.</summary>
     public HttpClient Client(int? contract = 2, Guid? organisation = null)
     {

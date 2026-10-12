@@ -29,7 +29,7 @@ public sealed record RemoteOwnerInfo(string? EngineVersion, int? Contract, int? 
 /// shallow health. The client reads that health where it measures reachability
 /// (<see cref="IRemoteQueryClient.IsReachableAsync"/>, which the host's health probe drives) and
 /// keeps it; the keyed fetch splits an owner's batch at the owner's own
-/// <see cref="RemoteOwnerInfo.MaxBatchQueries"/> (DESIGN §3.5.2 step 4), and falls back to this
+/// <see cref="RemoteOwnerInfo.MaxBatchQueries"/>, and falls back to this
 /// host's cap while nothing is known. A client without the capability is an owner of unknown facts.
 /// </summary>
 public interface IRemoteOwnerInfo

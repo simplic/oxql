@@ -7,10 +7,10 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// A variable in a remote resolve's filter (DESIGN §3.5.5): the origin binds it and sends the value,
+/// A variable in a remote resolve's filter: the origin binds it and sends the value,
 /// since an owner never receives <c>variables</c>. Sent with its wrapper the filter would travel unbound and
 /// the owner refused it with <c>UNBOUND_VARIABLE</c>. Two values inside one cache lifetime are two
-/// owner plans (§3.5.6) and never answer for each other.
+/// owner plans and never answer for each other.
 /// </summary>
 [Trait("Category", "Integration")]
 public class JoinsRemoteVariablesTests

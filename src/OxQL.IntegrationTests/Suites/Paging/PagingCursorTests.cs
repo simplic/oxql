@@ -81,7 +81,7 @@ public class PagingCursorTests
 
     // ── P7 · P8 · P9 · P10 · P11 · P12 · P13 — the offset and the stage ─────────────────────
 
-    /// <summary>DG2 M4: contract 2 addresses a page by its cursor alone; every form of <c>offset</c> is a member the page does not have.</summary>
+    /// <summary>Contract 2 addresses a page by its cursor alone; every form of <c>offset</c> is a member the page does not have.</summary>
     [Theory]
     [InlineData("0")]
     [InlineData("3")]
@@ -300,7 +300,7 @@ public class PagingCursorTests
     }
 
     /// <summary>
-    /// DG2 M6: a cursor is bound to what decides the rows and their order, not to what the row shows.
+    /// A cursor is bound to what decides the rows and their order, not to what the row shows.
     /// A walk goes on through a changed projection and through a join nothing but the display reads;
     /// a join a filter reads, like any filter, is another query.
     /// </summary>
@@ -562,7 +562,7 @@ public class PagingCursorTests
     [Fact]
     public async Task P44_the_count_only_request_limit_0_with_the_count_answers_the_exact_total_and_no_rows()
     {
-        // A count() terminal writes { limit: 0, count: { budgetMs } } (DG2 M3): no page is read.
+        // A count() terminal writes { limit: 0, count: { budgetMs } }: no page is read.
         var client = await Transport();
 
         var dup = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 0, "count": true } }]""");

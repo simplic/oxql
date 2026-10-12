@@ -273,7 +273,8 @@ public sealed class ExplainTypes
         // The asking organisation's addon definitions are members of the type: such a type is built for this answer alone.
         var shared = !shape.Addons.TryGetValue(entity.Id, out var definitions) || definitions.Count == 0;
         var cache = shared ? Built.GetValue(model, _ => new ConcurrentDictionary<string, Template>(StringComparer.Ordinal)) : null;
-        var cacheKey = $"{key}|{depth}|{memberCap}|{(docs ? 1 : 0)}";
+        // A contract reads a member that is not stored its own way, so each has its own rows.
+        var cacheKey = $"{key}|{depth}|{memberCap}|{(docs ? 1 : 0)}|{(shape.Derives ? 2 : 1)}";
 
         if (cache is null || !cache.TryGetValue(cacheKey, out var template))
         {
@@ -425,7 +426,8 @@ public sealed class ExplainTypes
     {
         var project = shape.Resolve(path, PathUsage.Project);
         var match = shape.Resolve(path, PathUsage.Match);
-        var facts = project.Path ?? match.Path ?? shape.Resolve(path, PathUsage.Sort).Path;
+        // A member no usage resolves (not stored, and no row can carry it) is still a member of the type: its facts are read as contract 1 reads it.
+        var facts = project.Path ?? match.Path ?? shape.Resolve(path, PathUsage.Sort).Path ?? (shape.Derives ? shape.Deriving(false).Resolve(path, PathUsage.Project).Path : null);
         var member = facts is null ? null : MemberAt(facts, path);
         var kind = facts?.Kind ?? Kind.Unknown;
         var leafKind = facts?.Shape?.LeafKind ?? kind;
@@ -442,6 +444,10 @@ public sealed class ExplainTypes
 
         if (!(facts?.Path is { } pathDef ? pathDef.Stored : facts is not null))
             more["stored"] = false;
+
+        // The values a member read off the stored variant can hold: a closed list, as an enum's is.
+        if (facts?.Derived is { } derived)
+            more["values"] = new JsonArray(derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => (JsonNode)value).ToArray());
 
         // An array is a collection by its kind; a dictionary stored as one says so.
         if (kind == Kind.Dictionary && facts?.Path is { } collectionPath && facts.Addon is null && Shape.IsCollection(collectionPath))
@@ -548,7 +554,7 @@ public sealed class ExplainTypes
             group is { Succeeded: true, Path: { CollectionAncestors: 0 } key } && key.Kind != Kind.Array && Kinds.IsScalar(key.Kind),
             Unwindable(unwind),
             project.Succeeded,
-            matched is { Filterable: true, Root: not ShapeNode.Outcome } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched),
+            matched is { Filterable: true, Root: not ShapeNode.Outcome } && !matched.IsRemote && OperandCoercer.FoldsByDefault("eq", matched) || matched is { Derived: not null, IsRemote: false },
             project.Path?.CollectionAncestors ?? 0,
             facts?.References is not null && facts.Addon is null ? Followable(Crossed(shape, path)) : 0);
     }
@@ -1246,7 +1252,7 @@ public sealed class ExplainTypes
                 referencedBy[path] = new JsonArray(list.Select(each => (JsonNode)each).ToArray());
 
             head["referencedBy"] = referencedBy;
-            // Whether this host looks up another service's entities (DESIGN §3.4.4): the entities of
+            // Whether this host looks up another service's entities: the entities of
             // other services that reference this one, which only their schemas list, can then be
             // joined from here with a lookup.
             head["remoteLookup"] = context.Contract == 2 && context.RemoteService is not null;
@@ -1311,15 +1317,15 @@ public sealed class ExplainTypes
     private async ValueTask<Shape> EntryShapeAsync(EntityDef entity)
     {
         if (trace?.Entry is { } entry && entry.Addons.ContainsKey(entity.Id))
-            return Shape.ForEntity(entity, entry.Addons);
+            return Shape.ForEntity(entity, entry.Addons).Deriving(context.Contract == 2);
 
         if (trace?.Final is { } final && final.Addons.ContainsKey(entity.Id))
-            return Shape.ForEntity(entity, final.Addons);
+            return Shape.ForEntity(entity, final.Addons).Deriving(context.Contract == 2);
 
         if (entity.Extendable && context.Organisation is { } organisation && !loadedAddons.ContainsKey(entity.Id))
             loadedAddons[entity.Id] = await context.AddonSource.ForEntityAsync(entity.Id, organisation, cancellationToken).ConfigureAwait(false);
 
-        return Shape.ForEntity(entity, loadedAddons);
+        return Shape.ForEntity(entity, loadedAddons).Deriving(context.Contract == 2);
     }
 
     /// <summary>
@@ -1463,7 +1469,7 @@ public sealed class ExplainTypes
     }
 
     /// <summary>
-    /// The operators a condition on the path admits, as the binder admits them (DESIGN §4.5), one bit each
+    /// The operators a condition on the path admits, as the binder admits them, one bit each
     /// in <see cref="OperatorOrder"/>: the operator table's, <c>is</c> on a variant holder, <c>any</c> on a
     /// collection of objects.
     /// </summary>
@@ -1480,6 +1486,16 @@ public sealed class ExplainTypes
         {
             for (var bit = 0; bit < OperatorOrder.Count; bit++)
                 if (path.Filterable && OperatorOrder[bit] is "eq" or "neq" or "in" or "nin")
+                    admitted |= 1 << bit;
+
+            return admitted;
+        }
+
+        // A member whose value follows from the stored variant compares by the variants that hold a value.
+        if (path.Derived is not null && !path.IsRemote)
+        {
+            for (var bit = 0; bit < OperatorOrder.Count; bit++)
+                if (OperatorOrder[bit] is "eq" or "neq" or "in" or "nin")
                     admitted |= 1 << bit;
 
             return admitted;
@@ -1597,7 +1613,7 @@ public sealed class ExplainTypes
         _ => 3,
     };
 
-    /// <summary>The reference a path declares with every case (DESIGN §4.5); on a group's key, the reference of the member it was taken over.</summary>
+    /// <summary>The reference a path declares with every case; on a group's key, the reference of the member it was taken over.</summary>
     private static JsonObject? ReferenceOf(ResolvedPath? facts) =>
         facts?.References is not { } cases || facts.Addon is not null ? null : ReferenceOf(cases);
 

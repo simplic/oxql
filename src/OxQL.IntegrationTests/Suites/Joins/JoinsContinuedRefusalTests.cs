@@ -10,7 +10,7 @@ namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
 /// A stage continued under a union alias without <c>forTarget</c> binds on every target, so a path one
-/// target lacks refuses the request at that stage (R3 F2). The owning-row select paths the same target
+/// target lacks refuses the request at that stage. The owning-row select paths the same target
 /// lacks are dropped for it, as a run drops them, and are no part of the refusal: it carries only the
 /// continued stage's own errors, never a stray <c>UNKNOWN_PATH</c> without a stage.
 /// </summary>

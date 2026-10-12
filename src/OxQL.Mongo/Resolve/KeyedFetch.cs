@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -9,7 +11,7 @@ using OxQL.Model;
 namespace OxQL.Mongo.Resolve;
 
 /// <summary>What a resolve pass produced: the objects per row and alias, the diagnostics, and the counters for the log line.</summary>
-public sealed record ResolveResult
+internal sealed record ResolveResult
 {
     /// <summary>A refusal that aborts the request: the owner refused, or a semi-join could not be answered.</summary>
     public Refusal? Refusal { get; init; }
@@ -22,7 +24,7 @@ public sealed record ResolveResult
 
     /// <summary>
     /// Every row (or element, under <c>elements: "all"</c>) whose keyed resolve did not simply
-    /// resolve, with its outcome (DESIGN §3.6); an <c>ambiguous</c> one resolved to its first
+    /// resolve, with its outcome; an <c>ambiguous</c> one resolved to its first
     /// target. What the outcomes report or refuse is the caller's policy.
     /// </summary>
     public IReadOnlyList<KeyedRowOutcome> Outcomes { get; init; } = [];
@@ -32,7 +34,7 @@ public sealed record ResolveResult
 
     /// <summary>
     /// The paths under the alias and under the owning row that remote owners said one target of a union
-    /// lacks, dropped for that target (DESIGN §3.4.1 flat paths); what explain's
+    /// lacks, dropped for that target; what explain's
     /// <c>SELECT_PATH_NOT_ON_TARGET</c> note names for a remote target. A local target's are on its bound target.
     /// </summary>
     public IReadOnlyList<DroppedSelectPath> Dropped { get; init; } = [];
@@ -44,8 +46,8 @@ public sealed record ResolveResult
     public int CacheHits { get; init; }
 }
 
-/// <summary>What became of one reference value of a keyed resolve (DESIGN §3.6).</summary>
-public enum KeyedOutcome
+/// <summary>What became of one reference value of a keyed resolve.</summary>
+internal enum KeyedOutcome
 {
     /// <summary>The key selects a case and exactly one target record or element.</summary>
     Resolved,
@@ -77,14 +79,14 @@ public enum KeyedOutcome
 /// alias, the page row, the element index under <c>elements</c>, and the key (in the form sent to
 /// the owner) where there is one.
 /// </summary>
-public sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
+internal sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
 
 /// <summary>
 /// A path asked under the alias (<paramref name="Parent"/>: under the owning row) that one target of a union's keyed stage lacks, dropped for it.
 /// With <paramref name="Branch"/> the alias is a union join's (<c>byTarget</c>) and the path is one the branch of that target of the anchor
 /// does not reach: <paramref name="Stage"/> is the union join's stage and <paramref name="Target"/> the branch's target.
 /// </summary>
-public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent, bool Branch = false);
+internal sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent, bool Branch = false);
 
 /// <summary>
 /// One target's owner query of a keyed stage as explain shows it: the target (<c>entity</c> or
@@ -92,11 +94,11 @@ public sealed record DroppedSelectPath(int? Stage, string Alias, string Target, 
 /// per key, the query with its keys elided, the continued stages it carries and those that do not
 /// apply to its rows.
 /// </summary>
-public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Service, bool Grouped, QueryRequest Query, IReadOnlyList<ContinuedStage> Continued, IReadOnlyList<ContinuedStage> NotApplicable);
+internal sealed record ExplainedOwnerQuery(string Target, bool Remote, string Service, bool Grouped, QueryRequest Query, IReadOnlyList<ContinuedStage> Continued, IReadOnlyList<ContinuedStage> NotApplicable);
 
 /// <summary>
-/// One owner query of a keyed stage checked at its owner's internal explain (DESIGN §4.3 remote
-/// check): the target (<c>entity</c> or <c>entity#item</c>), the owner's service, the query with the
+/// One owner query of a keyed stage checked at its owner's internal explain:
+/// the target (<c>entity</c> or <c>entity#item</c>), the owner's service, the query with the
 /// check key, the caller index of its first continued stage, and the mapping of an owner error back
 /// to the caller (null for an error at the owner query's own stages).
 /// <para>
@@ -107,7 +109,7 @@ public sealed record ExplainedOwnerQuery(string Target, bool Remote, string Serv
 /// <see cref="Stage"/> is the resolve's caller index, <see cref="ProjectStage"/> the projection's.
 /// </para>
 /// </summary>
-public sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
+internal sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
 {
     /// <summary>The resolve this target belongs to.</summary>
     public BoundStage.Resolve? Resolve { get; init; }
@@ -141,7 +143,7 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
 
     /// <summary>
     /// The check query asked again after an owner's answer to the query it was sent, as a run asks a
-    /// remote union target again (DESIGN §3.4.1 flat paths): when the answer refuses only paths the
+    /// remote union target again: when the answer refuses only paths the
     /// target lacks at the projection, the query without them, which binds its continued stages as
     /// the run's does; null when a run would not ask again.
     /// </summary>
@@ -172,20 +174,20 @@ public sealed record OwnerCheck(string Target, string Service, QueryRequest Quer
 /// condition: the caller's stage, or the label of the entry of the request's <c>filter</c> (its id, or
 /// its index), which has no stage.
 /// </summary>
-public sealed record ConditionCheck(string Path, string Alias, string Service, string Target, QueryRequest Query, int? Stage, object? Filter);
+internal sealed record ConditionCheck(string Path, string Alias, string Service, string Target, QueryRequest Query, int? Stage, object? Filter);
 
 /// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
-public sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
+internal sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
 
 /// <summary>What the outcomes of a page's resolves say: the diagnostics, and those of them the request refuses on.</summary>
-public sealed record OutcomeReport(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<Diagnostic> Refusing)
+internal sealed record OutcomeReport(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<Diagnostic> Refusing)
 {
     /// <summary>A report with nothing to say.</summary>
     public static readonly OutcomeReport Empty = new([], []);
 }
 
 /// <summary>
-/// The policy over per-row join outcomes (DESIGN §3.6, §3.4.3): the outcomes of a resolve, keyed
+/// The policy over per-row join outcomes: the outcomes of a resolve, keyed
 /// or inline, become at most one diagnostic per stage and kind, and the diagnostics that lose
 /// data refuse the request under <c>strict</c> or <c>onMissing: "refuse"</c>.
 /// <list type="bullet">
@@ -197,9 +199,9 @@ public sealed record OutcomeReport(IReadOnlyList<Diagnostic> Diagnostics, IReadO
 /// </list>
 /// The rows a diagnostic lists are capped at <c>MaxReportedRows</c>; <c>count</c> is every one.
 /// </summary>
-public static class OutcomePolicy
+internal static class OutcomePolicy
 {
-    /// <summary>The diagnostics a strict request refuses on (DESIGN §3.4.3); <c>RESOLVE_MISSING</c> refuses by its stage's effective <c>onMissing</c>.</summary>
+    /// <summary>The diagnostics a strict request refuses on; <c>RESOLVE_MISSING</c> refuses by its stage's effective <c>onMissing</c>.</summary>
     public static readonly IReadOnlySet<string> StrictCodes = new HashSet<string>(StringComparer.Ordinal)
     {
         Codes.ResolveAmbiguous, Codes.ResolveTimeout, Codes.ResolveUnreachable, Codes.ResolvePartial,
@@ -363,7 +365,7 @@ public static class OutcomePolicy
 }
 
 /// <summary>
-/// The one cross-record fetch through an owner (DESIGN §3.5.8), in two modes that share the
+/// The one cross-record fetch through an owner, in two modes that share the
 /// owner query builder (<see cref="OwnerQueryBuilder"/>), the owner client, batching at
 /// <c>MaxBatchQueries</c>, budgeting, error mapping and the cache (<see cref="OwnerFetchCache"/>):
 /// <list type="bullet">
@@ -371,36 +373,32 @@ public static class OutcomePolicy
 ///   service carrying one query per target and key chunk — plain for an entity keyed by its own
 ///   key, grouped per key (<c>keyedBy</c>) otherwise — and this host's own targets answered by its
 ///   <see cref="SelfOwner"/>; cached per key for a TTL;</item>
-///   <item><b>by condition</b> (<see cref="ByConditionAsync"/>): before the page runs, the semi-join
+///   <item><b>by condition</b> (<see cref="ByConditionCountedAsync"/>): before the page runs, the semi-join
 ///   that asks an owner for the ids a condition on its rows selects, refusing above the cap rather
 ///   than truncating.</item>
 /// </list>
 /// </summary>
-public sealed class KeyedFetch
+internal sealed class KeyedFetch
 {
     private readonly IRemoteQueryClient? client;
-    private readonly IQueryEngine? self;
+    private readonly IQueryEngine self;
     private readonly OwnerFetchCache cache;
     private readonly OxQLOptions options;
-
-    /// <summary>A keyed fetch through <paramref name="client"/>, caching owner answers in <paramref name="cache"/>.</summary>
-    public KeyedFetch(IRemoteQueryClient client, OwnerFetchCache cache, OxQLOptions options)
-        : this(client ?? throw new ArgumentNullException(nameof(client)), null, cache, options)
-    {
-    }
+    private readonly ILogger logger;
 
     /// <summary>
     /// A keyed fetch whose remote targets go through <paramref name="client"/> (none when null: the
     /// engine refuses such a request before it gets here) and whose local targets this host's own
     /// <paramref name="self"/> answers through a <see cref="SelfOwner"/>, caching owner answers in
-    /// <paramref name="cache"/>.
+    /// <paramref name="cache"/>. A call that faults is written to <paramref name="logger"/>.
     /// </summary>
-    public KeyedFetch(IRemoteQueryClient? client, IQueryEngine? self, OwnerFetchCache cache, OxQLOptions options)
+    public KeyedFetch(IRemoteQueryClient? client, IQueryEngine self, OwnerFetchCache cache, OxQLOptions options, ILogger? logger = null)
     {
         this.client = client;
-        this.self = self;
+        this.self = self ?? throw new ArgumentNullException(nameof(self));
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>The service key a target entity is owned by: its namespace, the host's <c>InternalHosts</c> key.</summary>
@@ -420,13 +418,10 @@ public sealed class KeyedFetch
     /// executes something else instead.
     /// </para>
     /// </summary>
-    public async Task<Refusal?> ByConditionAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken) =>
-        (await ByConditionCountedAsync(compiled, context, remaining, cancellationToken).ConfigureAwait(false)).Refusal;
-
-    /// <summary>
-    /// <see cref="ByConditionAsync"/>, with how many batches went to owners for it (none for slots
-    /// the cache answers, a split batch counted per part), for the log line.
-    /// </summary>
+    /// <returns>
+    /// The refusal, if any, and how many batches went to owners (none for slots the cache answers, a
+    /// split batch counted per part), for the log line.
+    /// </returns>
     public async Task<(Refusal? Refusal, int Calls)> ByConditionCountedAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
     {
         var calls = new StrongBox(0);
@@ -459,7 +454,7 @@ public sealed class KeyedFetch
         await ReadOwnersAsync(slots.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))), remaining, cancellationToken).ConfigureAwait(false);
 
         // One page size for the phase: the smallest page any owner asked answers, so no owner
-        // refuses a page as too large (RE-13).
+        // refuses a page as too large.
         var pageSize = ConditionPage(slots, options, client);
         var lastOffset = (cap / pageSize) * pageSize;
 
@@ -483,7 +478,7 @@ public sealed class KeyedFetch
             var members = group.ToList();
             var queries = members.Select(slot => OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true)).ToList();
 
-            return (Service: group.Key, Members: members, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, cancellationToken).ConfigureAwait(false));
+            return (Service: group.Key, Members: members, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, context, cancellationToken).ConfigureAwait(false));
         }).ToList();
 
         await Task.WhenAll(firsts).ConfigureAwait(false);
@@ -554,7 +549,7 @@ public sealed class KeyedFetch
                 var entries = group.ToList();
                 var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
 
-                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, cancellationToken).ConfigureAwait(false));
+                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, context, cancellationToken).ConfigureAwait(false));
             }).ToList();
 
             await Task.WhenAll(waves).ConfigureAwait(false);
@@ -784,7 +779,7 @@ public sealed class KeyedFetch
                 return null;
 
             if (row[field] is { } value)
-                values.Add(value is JsonValue scalar ? scalar.ToString() : value.ToJsonString());
+                values.Add(WireEncoder.KeyText(value)!);
         }
 
         return values;
@@ -793,7 +788,7 @@ public sealed class KeyedFetch
     // ---- by keys: the resolve, after the page -----------------------------------------------
 
     /// <summary>
-    /// Resolves every keyed stage over the trimmed page rows (DESIGN §3.5.2): per row the keys of
+    /// Resolves every keyed stage over the trimmed page rows: per row the keys of
     /// the selected cases (one per row, or one per element under <c>elements</c>), converted per
     /// <c>KeyAs</c>; at most <c>MaxResolveKeys</c> keys asked of owners for the whole request, the
     /// rest <c>RESOLVE_PARTIAL</c>; one owner query per target and key chunk, a remote target's
@@ -807,7 +802,7 @@ public sealed class KeyedFetch
     /// under an effective <c>onMissing</c> other than <c>null</c> asks the keys its filtered query did
     /// not return once more without the filter (the existence probe): found there is
     /// <c>excluded</c>, found nowhere <c>not_found</c>. A <paramref name="strict"/> request reads no
-    /// negative cache entry (DESIGN §3.5.6).
+    /// negative cache entry.
     /// </summary>
     public async Task<ResolveResult> ByKeysAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, bool strict, CancellationToken cancellationToken)
     {
@@ -825,16 +820,6 @@ public sealed class KeyedFetch
         var targets = stages.SelectMany(stage => stage.Targets).ToList();
         var cacheHits = targets.Sum(target => target.CacheHits);
         var calls = 0;
-
-        // This host answers its own targets through its engine; a fetch built without one (the
-        // obsolete RemoteResolver forwarder) cannot resolve a local target.
-        if (self is null && targets.FirstOrDefault(target => target.Service == SelfService && target.Chunks.Count > 0) is { } local)
-            return new ResolveResult
-            {
-                Refusal = Refusal.NotExecutable(Codes.ResolveUnavailable,
-                    $"'{local.Stage.As}' resolves a target of this host, which this keyed fetch has no engine to ask; build it with the host's engine.", StageIndexOf(compiled.Bound, local.Stage)),
-                CacheHits = cacheHits,
-            };
 
         // Round one: the filtered owner queries of every chunk. A remote target of a union whose
         // owner refuses only paths it lacks is asked again without them (the paths of a union are flat).
@@ -991,14 +976,14 @@ public sealed class KeyedFetch
     /// <summary>
     /// Sends a round's queries, batched per owner, owners in parallel; a local target's to this host's
     /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a target
-    /// form) under the chain ceiling, any other under the per-resolve one (DESIGN §3.5.4).
+    /// form) under the chain ceiling, any other under the per-resolve one.
     /// </summary>
     private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, DateTime deadline, CancellationToken cancellationToken)
     {
         var tasks = sends.GroupBy(sent => sent.Target.Service, StringComparer.Ordinal).Select(async group =>
         {
             var sent = group.ToList();
-            var owner = group.Key == SelfService ? new SelfOwner(self!, context) : client!;
+            var owner = group.Key == SelfService ? new SelfOwner(self, context) : client!;
 
             var isRemote = group.Key != SelfService;
 
@@ -1067,7 +1052,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// An owner answer with a next page (DESIGN §3.5.2 step 3): the owner cut rows, so the chunk's
+    /// An owner answer with a next page: the owner cut rows, so the chunk's
     /// <paramref name="open"/> keys are <c>owner_unanswered</c>, never <c>not_found</c>, and none of
     /// the chunk's <paramref name="keys"/> is cached; <c>RESOLVE_PARTIAL</c> names the alias.
     /// </summary>
@@ -1100,7 +1085,7 @@ public sealed class KeyedFetch
     private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, IList<JsonNode?> Items);
 
     /// <summary>
-    /// A path asked under the alias that no target of a union has (DESIGN §3.4.1): refused. A local target lacks
+    /// A path asked under the alias that no target of a union has: refused. A local target lacks
     /// what it dropped at bind time, a remote one what its owner refused; a remote target not asked
     /// on this page is taken to have every path.
     /// </summary>
@@ -1132,7 +1117,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// A path asked under a union join's alias that no branch reaches (improvement plan §3.S): refused,
+    /// A path asked under a union join's alias that no branch reaches: refused,
     /// as a path no target of a union has is. A branch drops what its owner said its join lacks; a
     /// branch not asked on this page is taken to reach every path.
     /// </summary>
@@ -1160,7 +1145,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// The owners' diagnostics about continued stages as this host's (DESIGN §3.5.3): each at the
+    /// The owners' diagnostics about continued stages as this host's: each at the
     /// caller's stage and path with <c>params.owner</c> saying where the owner saw it, its rows moved
     /// from the owner's answer rows to the page rows that took them, one diagnostic per code, stage and
     /// alias however many owners and chunks reported it, its rows capped at <c>MaxReportedRows</c>. A
@@ -1285,12 +1270,12 @@ public sealed class KeyedFetch
     /// <summary>The rows a grouped owner query returns per key at most: two tell a resolved key from an ambiguous one.</summary>
     public const int PerKey = 2;
 
-    /// <summary>The placeholder an explained owner query carries where the page's keys would be (DESIGN §4.3 "keys elided").</summary>
+    /// <summary>The placeholder an explained owner query carries where the page's keys would be.</summary>
     public const string ElidedKey = "…";
 
     /// <summary>
     /// The owner queries a keyed stage would send, one per distinct target, as explain shows them
-    /// (DESIGN §4.3 <c>owner</c>): built by the very plan a run builds, the page's keys elided to
+    /// (<c>owner</c> in the explain answer): built by the very plan a run builds, the page's keys elided to
     /// <see cref="ElidedKey"/>, with the continued stages that target's owner runs and those it does
     /// not (<c>not_applicable</c> for its rows). Nothing is sent and nothing is cached.
     /// </summary>
@@ -1318,7 +1303,7 @@ public sealed class KeyedFetch
     public const string CheckKey = "00000000-0000-0000-0000-000000000000";
 
     /// <summary>
-    /// The owner queries of a keyed stage that a remote owner continues (DESIGN §4.3 remote check):
+    /// The owner queries of a keyed stage that a remote owner continues:
     /// per remote target with continued stages (and per local target with continued stages, service
     /// empty: this host checks them in process), its service, the query a run sends with one
     /// <see cref="CheckKey"/> in place of the page's keys, and how an owner error maps back — one at
@@ -1332,7 +1317,7 @@ public sealed class KeyedFetch
     /// <see cref="Checks(BoundPipeline, BoundStage.Resolve, bool)"/>, planned by the remote client's owner facts as a run plans.
     /// With <paramref name="everyRemoteTarget"/> every remote target is checked, also one the caller
     /// wrote nothing under: its owner's answer to the query the run sends is where explain reads the
-    /// target's type from (improvement plan §3.E), so there is nothing to check only when nothing is asked.
+    /// target's type from, so there is nothing to check only when nothing is asked.
     /// </summary>
     /// <param name="bound">The bound request.</param>
     /// <param name="stage">The keyed stage.</param>
@@ -1373,7 +1358,7 @@ public sealed class KeyedFetch
                 var learned = plan.Dropped();
 
                 // The query a run sends, with the check key: what explain says of an owner is what the
-                // owner answers to the run's own query (improvement plan P12).
+                // owner answers to the run's own query.
                 var query = plan.Query([CheckKey]);
                 var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
 
@@ -1451,7 +1436,7 @@ public sealed class KeyedFetch
     /// One target of a keyed stage: the keys it is asked for, what the cache and the owner answered
     /// per key (up to <see cref="PerKey"/> rows, first by record key), the keys the existence probe
     /// found although the filter left them out, and the keys the owner did not answer. The stages
-    /// continued under the keyed stage for this target ride in its owner query (DESIGN §3.5.3).
+    /// continued under the keyed stage for this target ride in its owner query.
     /// </summary>
     private sealed class TargetPlan
     {
@@ -1468,7 +1453,7 @@ public sealed class KeyedFetch
         /// <summary>
         /// The plan of one target. <paramref name="final"/> is the request's final shape: what the row
         /// shows under the stage's aliases and under those its continued stages add, which is what the
-        /// owner is asked for and what its answer is cut to (improvement plan §3.S).
+        /// owner is asked for and what its answer is cut to.
         /// </summary>
         public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict,
             bool union = false, Shape? final = null)
@@ -1487,7 +1472,7 @@ public sealed class KeyedFetch
             lifted = new HashSet<string>(Continued.Aliases, StringComparer.Ordinal);
 
             // An entity keyed by its own key has one row per key, which a plain key match serves;
-            // every other target is grouped per key (DESIGN §3.5.7, §3.5.8). A target onto a member that
+            // every other target is grouped per key. A target onto a member that
             // is not the key is grouped also where the stage itself needs no keyed fetch but the request
             // reads the outcomes (strict, an onMissing other than null, outcomeAs): a plain query sees a
             // second row under a key only when the owner's page happens to hold it, so the ambiguity
@@ -1499,14 +1484,14 @@ public sealed class KeyedFetch
             Service = target.IsRemote ? ServiceKeyOf(target.Declared.Entity) : SelfService;
 
             // The probe tells a key the filter left out from a missing one, which only a stage
-            // that reports or refuses missing references needs (DESIGN §3.5.2 step 3).
+            // that reports or refuses missing references needs.
             Probed = target.RemoteFilter is { ValueKind: JsonValueKind.Object } && stage.ReadsOutcomes;
 
             planHash = OwnerFetchCache.PlanHashOf(Query([]), Probed);
         }
 
         /// <summary>
-        /// The plan: the owner query as it is sent now, without its keys (DESIGN §3.5.6), so without the
+        /// The plan: the owner query as it is sent now, without its keys, so without the
         /// paths dropped for the target. An answer is kept under the query that produced it: once what
         /// was learned of the target is forgotten, the query asks those paths again and is another plan,
         /// so no row fetched without a path answers a request that no longer knows the path was dropped.
@@ -1530,7 +1515,6 @@ public sealed class KeyedFetch
         public int ContinuedAt { get; private set; }
 
         public bool Grouped { get; }
-
 
         /// <summary>Whether the keys the filtered query does not return are probed without the filter.</summary>
         public bool Probed { get; }
@@ -1589,7 +1573,7 @@ public sealed class KeyedFetch
         /// row shows: the paths the caller's projection names under it, as paths, or the alias itself
         /// where the row keeps it whole; the owner binds the stage and infers what its join loads. A
         /// query with continued stages carries <c>strict</c> when the request is strict, so the owner
-        /// refuses the chain's data loss as this host would (DESIGN §3.5.4); without them strict changes
+        /// refuses the chain's data loss as this host would; without them strict changes
         /// nothing the owner does.
         /// </summary>
         public QueryRequest Query(IReadOnlyList<string> keys)
@@ -1679,7 +1663,7 @@ public sealed class KeyedFetch
         public JsonNode? LiftedOf(JsonObject row, string alias) =>
             Emptied(alias) ? Shown(Lifted(row, alias), []) : Lifted(row, alias);
 
-        /// <summary>What a continued stage added to an owner row, lifted to the origin row (DESIGN §3.5.2 step 6).</summary>
+        /// <summary>What a continued stage added to an owner row, lifted to the origin row.</summary>
         public static JsonNode? Lifted(JsonObject row, string alias) =>
             row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
 
@@ -1689,7 +1673,7 @@ public sealed class KeyedFetch
         /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
         public bool Union { get; }
 
-        /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query (DESIGN §3.4.1 flat paths).</summary>
+        /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query.</summary>
         public HashSet<string> DroppedSelect { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The paths under the owning row the owner said this remote target's entity lacks.</summary>
@@ -1698,7 +1682,7 @@ public sealed class KeyedFetch
         /// <summary>
         /// The paths under a union join's alias (<c>alias.path</c>) that this target's branch does not
         /// reach, as its owner said: dropped from this target's query, so the alias carries them on the
-        /// rows of the other branches only (improvement plan §3.S).
+        /// rows of the other branches only.
         /// </summary>
         public HashSet<string> DroppedContinued { get; } = new(StringComparer.Ordinal);
 
@@ -1736,8 +1720,8 @@ public sealed class KeyedFetch
         }
 
         /// <summary>
-        /// The target as its owner query carries it: the paths the binder inferred for it (improvement
-        /// plan §3.S), less what the owner said this target lacks. A local target's are bound, and
+        /// The target as its owner query carries it: the paths the binder inferred for it,
+        /// less what the owner said this target lacks. A local target's are bound, and
         /// already without what it lacks.
         /// </summary>
         private BoundResolveTarget Sending() => Target.IsRemote
@@ -1756,7 +1740,7 @@ public sealed class KeyedFetch
         /// does not reach, said by the owner at its projection or, where the branch is a join the owner
         /// sends on, inside its refusal of that join. Anything else in the refusal is the refusal. True
         /// when the query as sent projected every refused path, so the query asked again does not: newly
-        /// learned, or learned from another chunk of the same round that was sent before the drop (RE-5).
+        /// learned, or learned from another chunk of the same round that was sent before the drop.
         /// </summary>
         public bool DropUnknown(JsonNode? result, QueryRequest sent)
         {
@@ -2142,12 +2126,8 @@ public sealed class KeyedFetch
                 at = next;
             }
 
-            var text = at switch
-            {
-                null => "",
-                JsonValue scalar => scalar.ToString(),
-                _ => at.ToJsonString(),
-            };
+            // The digits of a number and the text of a string: an owner of an earlier build wrote a long or a decimal as text.
+            var text = WireEncoder.KeyText(at) ?? "";
 
             return GuidKeys && Guid.TryParse(text, out var guid) ? guid.ToString("D") : text;
         }
@@ -2255,7 +2235,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// The keys one request may ask owners for (DESIGN §3.5.2 step 2): <c>MaxResolveKeys</c> over
+    /// The keys one request may ask owners for: <c>MaxResolveKeys</c> over
     /// every keyed stage, in stage order, a key counted once per stage however many targets of a
     /// union it is asked of; keys the cache answers cost nothing.
     /// </summary>
@@ -2279,7 +2259,7 @@ public sealed class KeyedFetch
     /// <summary>
     /// The keys one owner query of a target carries: the key chunk, and no more than the owner's page
     /// holds, at <see cref="PerKey"/> rows per key for a grouped query. The page is the smaller of this
-    /// host's <c>MaxPageSize</c> and the owner's own, when its shallow health said it (RE-13): an owner
+    /// host's <c>MaxPageSize</c> and the owner's own, when its shallow health said it: an owner
     /// configured smaller would refuse the page as too large.
     /// </summary>
     private int ChunkOf(TargetPlan target) =>
@@ -2330,7 +2310,7 @@ public sealed class KeyedFetch
                     plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, bound.FinalShape));
 
                     // What an owner said this union target lacks, an earlier request learned: not
-                    // asked again, and reported whether or not this page reaches the owner (RE-6).
+                    // asked again, and reported whether or not this page reaches the owner.
                     shared.Learn(cache);
                 }
 
@@ -2406,7 +2386,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// The slots of one row (DESIGN §3.5.2 step 1): the reference's value, or under
+    /// The slots of one row: the reference's value, or under
     /// <c>elements</c> each element's, with the first case its stored values select and its key
     /// converted per the case's <c>KeyAs</c>. A value that is null is <c>reference_null</c>, one no
     /// case selects <c>excluded</c>, one that does not convert <c>invalid_key</c>.
@@ -2450,13 +2430,7 @@ public sealed class KeyedFetch
                 ? new Slot(selected, guid.ToString("D"), null)
                 : new Slot(selected, value.ToString(), KeyedOutcome.InvalidKey);
 
-        var encoded = WireEncoder.EncodeScalar(value, stage.Reference.LeafKind, stage.Reference.Leaf);
-        var key = encoded switch
-        {
-            null => null,
-            JsonValue scalar => scalar.ToString(),
-            _ => encoded.ToJsonString(),
-        };
+        var key = WireEncoder.KeyText(value, stage.Reference.LeafKind, stage.Reference.Leaf);
 
         if (key is null)
             return new Slot(null, null, KeyedOutcome.ReferenceNull);
@@ -2483,7 +2457,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// Assigns one stage's answers to the rows (DESIGN §3.5.2 step 5, §3.6): per slot the hits of
+    /// Assigns one stage's answers to the rows: per slot the hits of
     /// its case's targets in target order, the first taken; <c>elements: first</c> takes the first
     /// slot that resolves, <c>all</c> every one up to <c>MaxLookupLimit</c>. The owning row of an
     /// item target goes under <c>parentAs</c>.
@@ -2556,7 +2530,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// Assigns a remote lookup's answers to the rows (DESIGN §3.4.4): per row the children its key
+    /// Assigns a remote lookup's answers to the rows: per row the children its key
     /// has at the owner, in the owner's order (the lookup's sort, then the child key). Under
     /// <c>first</c> the alias is the first child or null; otherwise the array of the first
     /// <c>limit</c> children, and a key that brought one more is a truncated parent
@@ -2614,8 +2588,8 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// The aliases the continued stages added, lifted from the owner row to the origin row (DESIGN
-    /// §3.5.2 step 6). A continued stage the target's owner did not run — its <c>forTarget</c> names
+    /// The aliases the continued stages added, lifted from the owner row to the origin row.
+    /// A continued stage the target's owner did not run — its <c>forTarget</c> names
     /// another target — leaves its aliases null with the outcome <c>not_applicable</c>, which loses
     /// nothing; a row the keyed stage did not resolve has nothing to continue from.
     /// </summary>
@@ -2686,7 +2660,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// <c>elements: first</c> (DESIGN §3.6): the first slot that resolves, ambiguous or not; else the
+    /// <c>elements: first</c>: the first slot that resolves, ambiguous or not; else the
     /// row folds to <c>owner_unanswered</c>, <c>not_found</c> or <c>invalid_key</c> when any slot had
     /// it, then <c>excluded</c>, then <c>reference_null</c>.
     /// </summary>
@@ -2765,7 +2739,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// What one call carrying a chain may take (DESIGN §3.5.4): the time left less 50 ms, so the
+    /// What one call carrying a chain may take: the time left less 50 ms, so the
     /// owner answers before this host's own ceiling, at most <c>Execution.ChainTimeoutMs</c>, never
     /// less than a millisecond. The owner applies it as its request ceiling and budgets its own
     /// owner calls from what is left of it, so time bounds the whole chain without a header.
@@ -2793,13 +2767,12 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// The queries for one owner, in batches no larger than the owner's batch cap (DESIGN §3.5.2
-    /// step 4), results concatenated in order. The batches go out one after another, each under what
-    /// is left before <paramref name="deadline"/> (the chain ceiling for a <paramref name="chain"/>,
-    /// else the per-resolve one; DESIGN §3.5.4), so split batches share one budget instead of each
+    /// The queries for one owner, in batches no larger than the owner's batch cap,
+    /// results concatenated in order. The batches go out one after another, each under what
+    /// is left before <paramref name="deadline"/> (the chain ceiling for a <paramref name="chain"/>, else the per-resolve one), so split batches share one budget instead of each
     /// taking the whole of it.
     /// </summary>
-    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, CancellationToken cancellationToken)
+    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, RequestContext context, CancellationToken cancellationToken)
     {
         var size = BatchCapOf(owner, service);
         var results = new List<JsonNode?>(queries.Count);
@@ -2812,7 +2785,7 @@ public sealed class KeyedFetch
             var left = deadline - DateTime.UtcNow;
             var budget = chain ? ChainBudget(left) : Budget(left);
             var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
-            var outcome = await CallAsync(owner, service, request, budget, cancellationToken).ConfigureAwait(false);
+            var outcome = await CallAsync(owner, service, request, budget, context, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
                 return outcome with { Budget = budget, Calls = calls };
@@ -2860,7 +2833,7 @@ public sealed class KeyedFetch
     private async Task<CallOutcome> CallSharedAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, RequestContext context, CancellationToken cancellationToken)
     {
         if (context.BatchShare is not { } flights || context.Organisation is not { } organisation)
-            return await CallInBatchesAsync(owner, service, queries, deadline, chain, cancellationToken).ConfigureAwait(false);
+            return await CallInBatchesAsync(owner, service, queries, deadline, chain, context, cancellationToken).ConfigureAwait(false);
 
         var entries = new (string Key, Flight Flight, bool Leads)[queries.Count];
 
@@ -2880,7 +2853,7 @@ public sealed class KeyedFetch
         {
             sent = leading.Count == 0
                 ? new CallOutcome([], null) { Calls = 0 }
-                : await CallInBatchesAsync(owner, service, leading.Select(index => queries[index]).ToList(), deadline, chain, cancellationToken).ConfigureAwait(false);
+                : await CallInBatchesAsync(owner, service, leading.Select(index => queries[index]).ToList(), deadline, chain, context, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -2969,9 +2942,11 @@ public sealed class KeyedFetch
     /// <summary>
     /// One call to one owner within the budget; a timeout or a transport fault is an outcome, never an
     /// exception. Once the caller has given up, whatever the call ends in (a connection the abort
-    /// reset, say) travels as the caller's cancellation, not as a fault of its own.
+    /// reset, say) travels as the caller's cancellation, not as a fault of its own. A fault is
+    /// logged with the service, the organisation and the correlation id, never with what was asked:
+    /// this host's own in full, another service's client's by its type alone.
     /// </summary>
-    private static async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, RequestContext context, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -2991,10 +2966,17 @@ public sealed class KeyedFetch
         {
             // The owner was reached and said no: a rejected key, a body over its cap, a fault of
             // its own. The status keeps that apart from a network that is down.
+            logger.LogWarning("OxQL owner call refused. service={Service} status={Status} org={OrganisationId} correlation={CorrelationId}", service, (int)status, context.Organisation, context.CorrelationId);
+
             return new CallOutcome([], Failure.Unreachable, (int)status);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
+            if (service == SelfService)
+                logger.LogError(exception, "OxQL keyed fetch on this host failed. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
+            else
+                logger.LogWarning("OxQL owner call failed. service={Service} fault={Fault} org={OrganisationId} correlation={CorrelationId}", service, exception.GetType().Name, context.Organisation, context.CorrelationId);
+
             return new CallOutcome([], Failure.Unreachable);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -3007,8 +2989,8 @@ public sealed class KeyedFetch
 
     /// <summary>
     /// The owner's refusal as this host's: 422 <c>RESOLVE_REFUSED</c> wrapping the owner's errors at
-    /// the resolve stage. An owner error at one of the continued stages is mapped back (DESIGN
-    /// §3.5.3): its <c>stage</c> and <c>path</c> become the caller's, <c>params.owner</c> carries
+    /// the resolve stage. An owner error at one of the continued stages is mapped back:
+    /// its <c>stage</c> and <c>path</c> become the caller's, <c>params.owner</c> carries
     /// where the owner saw it (<c>service</c>, <c>entity</c>, <c>target</c>, <c>stage</c>, <c>path</c>),
     /// and the head points at the first such stage. An owner that continued further maps its own
     /// owner's errors the same way first, so the mapping composes along the chain.
@@ -3016,7 +2998,7 @@ public sealed class KeyedFetch
     /// A remote union target's owner refuses the paths the target lacks at the projection beside the
     /// refusal that counts. A run drops those for the target and asks again (<c>DropUnknown</c>), so
     /// they are no error of this request: given the query <paramref name="sent"/>, the refusal
-    /// carries only the other errors (R3 F2).
+    /// carries only the other errors.
     /// </para>
     /// </summary>
     private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage, QueryRequest? sent = null, bool filter = false)
@@ -3106,7 +3088,7 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// An owner error at a remote lookup's own owner query (DESIGN §3.4.4): its key match, filter, sort
+    /// An owner error at a remote lookup's own owner query: its key match, filter, sort
     /// or <c>keyedBy</c>, all written by the caller in the lookup — the path, the filter, the sort, the
     /// limit against the owner's own cap — so the error is the lookup's, at its stage, with the path as
     /// the caller wrote it (relative to the child) and <c>params.owner</c> saying where the owner saw
@@ -3225,13 +3207,13 @@ public sealed class KeyedFetch
     }
 
     /// <summary>
-    /// Asks the client for each owner's facts before anything is sized or gated by them (RS-4): a
+    /// Asks the client for each owner's facts before anything is sized or gated by them: a
     /// client that has not read an owner's shallow health yet may read it now. Bounded by the time
     /// left; a client that does not answer in time leaves the facts unknown, as they were.
     /// </summary>
     // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
     // its facts unknown and this host's own caps apply, rather than the probe eating the time
-    // the owner's answer needs (D-ENG-2).
+    // the owner's answer needs.
     private Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken) =>
         ReadOwnersAsync(client, services, OwnerFactsSlice(remaining), cancellationToken);
 

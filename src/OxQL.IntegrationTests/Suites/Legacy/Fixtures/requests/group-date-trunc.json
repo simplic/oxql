@@ -1,0 +1,74 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {}
+    },
+    {
+      "group": {
+        "by": [
+          {
+            "dateTrunc": {
+              "path": "EndDateTime",
+              "unit": "day"
+            },
+            "as": "Day"
+          },
+          {
+            "path": "IsMirroredTour",
+            "as": "Mirrored"
+          }
+        ],
+        "fields": {
+          "Tours": {
+            "count": true
+          },
+          "First": {
+            "min": "Number"
+          },
+          "Sum": {
+            "sum": {
+              "add": [
+                "GeneratedTourNrCounter",
+                {
+                  "multiply": [
+                    "GeneratedTourNrCounter",
+                    {
+                      "literal": 10
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "Any": {
+            "first": {
+              "coalesce": [
+                "Missing",
+                {
+                  "literal": "none"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Day": "asc"
+        },
+        {
+          "Mirrored": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 3,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

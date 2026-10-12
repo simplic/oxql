@@ -1,0 +1,26 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "eq": "TR-2026-0101"
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "settings",
+        "localPath": "IsDeleted",
+        "foreignPath": "IsDeleted",
+        "as": "Settings"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Settings": 1
+      }
+    }
+  ]
+}

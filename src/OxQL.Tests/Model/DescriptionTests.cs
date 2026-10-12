@@ -9,7 +9,7 @@ using Undescribed = OxQL.Tests.Model.Fixtures.Undescribed;
 namespace OxQL.Tests.Model;
 
 /// <summary>
-/// Descriptions, deprecation and constraints (DESIGN §3.9): the source order, the XML
+/// Descriptions, deprecation and constraints: the source order, the XML
 /// documentation with <c>&lt;inheritdoc/&gt;</c>, every normalisation rule, and that none of it
 /// moves the model fingerprint.
 /// </summary>

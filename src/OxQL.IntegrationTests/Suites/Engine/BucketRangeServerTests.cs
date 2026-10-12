@@ -13,8 +13,8 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Engine;
 
 /// <summary>
-/// The buckets of a <c>dateTrunc</c> group key against the range a client sends for a group's rows
-/// (DG2), on rows laid around every change of the clock of 2025 and 2026, around both new years and
+/// The buckets of a <c>dateTrunc</c> group key against the range a client sends for a group's rows,
+/// on rows laid around every change of the clock of 2025 and 2026, around both new years and
 /// one a day in between, in a database of the test's own. The database computes the key; the range is
 /// the client's (<see cref="CalendarRange"/>). What holds:
 /// <list type="bullet">

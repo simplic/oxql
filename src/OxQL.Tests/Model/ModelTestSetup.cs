@@ -33,5 +33,6 @@ internal static class ModelTestSetup
         Fixtures.Variants.VariantRegistrations.Ensure();
         Bind.Fixtures.Resolve.ResolveModel.Register();
         Fixtures.VariantMerge.VariantMergeModel.Register();
+        VariantConstantRegistrations.Ensure();
     }
 }

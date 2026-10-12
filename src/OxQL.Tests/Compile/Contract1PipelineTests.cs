@@ -12,12 +12,16 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// The aggregates a contract 1 request sends are what they were before the engine began to place
-/// stages for cost: every stage in the order written, a projection before the sort it was written
-/// before, unwound rows and groups paged by offset, the keyset predicate without a leading range.
+/// The rewrite path of contract 1 (a host with <c>Compat:Legacy:Always</c> off, and every internal
+/// call): the aggregates a contract 1 request sends through the contract 2 engine are what they
+/// were before the engine began to place stages for cost: every stage in the order written, a
+/// projection before the sort it was written before, unwound rows and groups paged by offset, the
+/// keyset predicate without a leading range. (By default a contract 1 request never reaches this
+/// engine: the legacy pipeline answers it with the 1.1 engine's own aggregate, which
+/// <c>LegacyGoldenTests</c> holds by its answers.)
 /// <para>
-/// The recorded pipelines (<c>Fixtures/contract1/pipelines.json</c>) were captured by this test from
-/// the engine as it was before that work (commit <c>5bd091b</c>), through the whole engine: the page
+/// The recorded pipelines (<c>Fixtures/contract1/rewrite/pipelines.json</c>) were captured by this test from
+/// the engine as it was before that work, through the whole engine: the page
 /// and the count aggregate of each request, the cursor it mints, and the aggregate of the page that
 /// cursor continues. They are not re-recorded when contract 2 changes: a difference here is a
 /// contract 1 caller's database load or cursor changing. <c>OXQL_RECORD_CONTRACT1=1</c> rewrites the
@@ -59,7 +63,7 @@ public class Contract1PipelineTests
     private static bool Recording => Environment.GetEnvironmentVariable(RecordVariable) is "1" or "true";
 
     private static string FixturePath([System.Runtime.CompilerServices.CallerFilePath] string file = "") =>
-        Path.Combine(Path.GetDirectoryName(file)!, "..", "Fixtures", "contract1", "pipelines.json");
+        Path.Combine(Path.GetDirectoryName(file)!, "..", "Fixtures", "contract1", "rewrite", "pipelines.json");
 
     private static readonly object Gate = new();
 

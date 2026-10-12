@@ -12,7 +12,7 @@ using static OxQL.IntegrationTests.Suites.Values.ValuesKit;
 namespace OxQL.IntegrationTests.Suites.Values;
 
 /// <summary>
-/// The <c>values</c> stage on the fleet's rows (DG2 set filters): the distinct values of one path
+/// The <c>values</c> stage on the fleet's rows: the distinct values of one path
 /// among the rows that reach it, answered in the row envelope in place of a page. What a list holds
 /// is counted on the corpus, and it equals the group a caller could write by hand: the same values,
 /// the same counts, the same order. On top of that group the stage unwinds the collections above its

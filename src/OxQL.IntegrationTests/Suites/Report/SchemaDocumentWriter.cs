@@ -165,6 +165,10 @@ internal static class SchemaDocumentWriter
             ["deprecated"] = member.Deprecated is { } deprecated
                 ? new JsonObject { ["since"] = deprecated.Since, ["replacedBy"] = deprecated.ReplacedBy, ["note"] = deprecated.Note }
                 : null,
+            // The values a member that is a constant per variant can hold, as a closed list, and which variant holds which.
+            ["values"] = member.ByVariant is { } held
+                ? new JsonArray([.. held.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => (JsonNode?)new JsonObject { ["value"] = value })])
+                : null,
             ["onlyFor"] = member.OnlyFor is { Count: > 0 } onlyFor ? new JsonArray([.. onlyFor.Select(name => (JsonNode?)name)]) : null,
             ["referenceCases"] = member.References.Count == 0 || member.References is [{ IsSimple: true }]
                 ? null
@@ -182,6 +186,7 @@ internal static class SchemaDocumentWriter
             ["stored"] = member.Stored ? null : false,
             ["storedAs"] = shape["storedAs"]?.DeepClone(),
             ["relation"] = member.Relation is { } relation ? new JsonObject { ["name"] = relation.Name, ["member"] = relation.Member } : null,
+            ["byVariant"] = member.ByVariant is { } byVariant ? new JsonObject(byVariant.Select(pair => KeyValuePair.Create(pair.Key, (JsonNode?)pair.Value))) : null,
         };
     }
 

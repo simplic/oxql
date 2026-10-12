@@ -12,7 +12,7 @@ namespace OxQL.Tests.Bind;
 
 /// <summary>
 /// The number form of <c>page.includeTotalCount</c>: the request's own count cap, under the
-/// host's. Since DG2 M3 the public contract 2 route asks with <c>count</c> (<see cref="PageCountTests"/>);
+/// host's. The public contract 2 route asks with <c>count</c> (<see cref="PageCountTests"/>);
 /// <c>includeTotalCount</c> is what contract 1 and an internal call (a semi-join's owner query) keep,
 /// so the contract 2 cases here bind as an internal call.
 /// </summary>

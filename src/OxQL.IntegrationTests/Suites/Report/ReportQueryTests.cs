@@ -8,14 +8,14 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The report scenarios through <c>POST /oxql/query</c> on the fleet (DESIGN §2, §3.6), as the
+/// The report scenarios through <c>POST /oxql/query</c> on the fleet, as the
 /// studio sends them, over organisation R's report seeds. The mixed invoice has four billing-line
 /// items in document order, two of them inside groups: position 1 (the scenario shipment's
 /// freight line), 3 (the tractor tour's line; its references hold a tariff and the tour), 5 (the
 /// shipment's waiting-time line, two groups deep) and 6 (a line whose references hold only a
 /// tariff; its source line is on the second shipment). The strict refusals, <c>onMissing</c>
 /// outside strict and the contract-1 hint run A1 over the failure invoices. A2b's rows under strict
-/// are <c>Suites.Joins.JoinsContinuationTests</c>' (E11) and are not repeated here.
+/// are <c>Suites.Joins.JoinsContinuationTests</c>' and are not repeated here.
 /// </summary>
 [Trait("Category", "Integration")]
 public class ReportQueryTests
@@ -255,5 +255,106 @@ public class ReportQueryTests
         Text(byPosition[6], "sourceParent.id").Should().Be(Id(ReportSeed.ShipmentWithoutAttemptsId));
         byPosition[6]["lastAttempt"].Should().BeNull("the second shipment has no attempt");
         (byPosition[6]["lineShipment"], byPosition[6]["lineTour"]).Should().Be((null, null));
+    }
+
+    // ── the request's default for a missing join target ─────────────────────────────────────────
+
+    private static JsonObject MissingSource(string? onMissing)
+    {
+        var request = ReportScenarios.WithVariable(ReportScenarios.Request("A1"), "transactionId", ReportSeed.MissingSourceTransactionId);
+
+        if (onMissing is not null)
+            request["onMissing"] = onMissing;
+
+        return request;
+    }
+
+    [Fact]
+    public async Task Q12_a_strict_request_that_says_onMissing_report_answers_its_rows_and_lists_the_missing_target()
+    {
+        // The request as the report wrote it, strict and all, dies on one deleted source line (Q03) ...
+        (await QueryAsync(MissingSource(null))).ShouldRefuse(Codes.ResolveMissing, 422);
+
+        // ... and with one word at the top every resolve reports instead: no stage is touched.
+        var reported = await QueryAsync(MissingSource("report"));
+
+        reported.ShouldBeOk();
+        reported.Items.OfType<JsonObject>().Should().ContainSingle().Which["sourceLine"].Should().BeNull();
+
+        var diagnostic = reported.ShouldHaveDiagnostic(Codes.ResolveMissing);
+
+        diagnostic["stage"]!.GetValue<int>().Should().Be(ReportScenarios.IndexOf(MissingSource(null), "sourceLine"));
+        diagnostic["params"]!["rows"]!.AsArray().Single()!["outcome"]!.GetValue<string>().Should().Be("not_found");
+
+        var silent = await QueryAsync(MissingSource("null"));
+
+        silent.ShouldBeOk();
+        silent.Items.OfType<JsonObject>().Should().ContainSingle().Which["sourceLine"].Should().BeNull();
+        silent.DiagnosticCodes.Should().NotContain(Codes.ResolveMissing);
+    }
+
+    [Fact]
+    public async Task Q13_a_resolve_that_names_its_own_onMissing_keeps_it_over_the_requests()
+    {
+        var request = WithoutStrict(MissingSource("null"));
+
+        request["pipeline"]![ReportScenarios.IndexOf(request, "sourceLine")]!["resolve"]!["onMissing"] = "refuse";
+
+        (await QueryAsync(request)).ShouldRefuse(Codes.ResolveMissing, 422)["params"]!["alias"]!.GetValue<string>().Should().Be("sourceLine");
+
+        // And outside strict the request's word alone refuses, where the default would have read null.
+        var refusing = WithoutStrict(MissingSource("refuse"));
+
+        (await QueryAsync(refusing)).ShouldRefuse(Codes.ResolveMissing, 422);
+    }
+
+    [Fact]
+    public async Task Q14_onMissing_at_the_top_takes_one_of_three_words_and_contract_1_ignores_it()
+    {
+        foreach (var written in new JsonNode?[] { "fail", "Report", 1, true, new JsonObject() })
+        {
+            var request = MissingSource(null);
+
+            request["onMissing"] = written?.DeepClone();
+
+            var error = (await QueryAsync(request)).ShouldRefuse(Codes.InvalidOperand, 400, written?.ToJsonString() ?? "null");
+
+            error["params"]!["member"]!.GetValue<string>().Should().Be("onMissing");
+            error["params"]!["allowed"]!.AsArray().Select(word => word!.GetValue<string>()).Should().Equal("null", "report", "refuse");
+        }
+
+        var none = MissingSource(null);
+
+        none["onMissing"] = null;
+        (await QueryAsync(none)).ShouldRefuse(Codes.ResolveMissing, 422, "null is the member left out: strict's default stands");
+
+        // Contract 1 has no such member and reads past it, whatever it holds, as it reads past every member it does not know.
+        var legacy = await (await Lab.ClientAsync(OxQL.IntegrationTests.Fleet.LabService.Ledger, Org.R, contract: null))
+            .QueryAsync(JsonNode.Parse("""{ "entityType": "ledger.transaction", "onMissing": { "not": "a word" }, "pipeline": [ { "page": { "limit": 1 } } ] }""")!);
+
+        legacy.ShouldBeOk();
+    }
+
+    [Fact]
+    public async Task Q15_explain_says_the_effective_onMissing_of_every_join_and_whose_word_it_is()
+    {
+        var request = MissingSource("report");
+        var own = ReportScenarios.IndexOf(request, "erpLine");
+        var inherited = ReportScenarios.IndexOf(request, "sourceLine");
+
+        request["pipeline"]![own]!["resolve"]!["onMissing"] = "refuse";
+
+        var answer = await (await ReportScenarios.ClientAsync(request)).ExplainAsync(request);
+
+        answer.StatusCode.Should().Be(200, answer.ToString());
+        answer.Body!["valid"]!.GetValue<bool>().Should().BeTrue(answer.ToString());
+
+        var policies = answer.Body!["notes"]!.AsArray().OfType<JsonObject>().Where(note => Text(note, "code") == Notes.MissingPolicy).ToDictionary(note => note["stage"]!.GetValue<int>());
+
+        Text(policies[own], "params.onMissing").Should().Be("refuse");
+        policies[own]["params"]!.AsObject().ContainsKey("from").Should().BeFalse("the stage's own word");
+        Text(policies[inherited], "params.onMissing").Should().Be("report");
+        Text(policies[inherited], "params.from").Should().Be("request");
+        Text(policies[inherited], "message").Should().Contain("onMissing report, the request's default");
     }
 }

@@ -375,7 +375,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         // A page that holds every row proves the count by itself, whatever the cap.
         (await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 10, "count": true } } ]""")).ShouldCount("exact", RowCount).ShouldHaveNoDiagnostics();
 
-        // The count step stops at the host's cap and says so; no diagnostic repeats it (DG2 M3).
+        // The count step stops at the host's cap and says so; no diagnostic repeats it.
         var answer = await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 1, "count": true } } ]""");
 
         answer.ShouldCount("atLeast", 2, "cap").ShouldHaveNoDiagnostics();

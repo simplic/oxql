@@ -25,12 +25,19 @@ public sealed class OperandCoercer
     private readonly OxQLOptions options;
     private readonly QueryVariables? variables;
     private readonly List<Diagnostic>? diagnostics;
+    private readonly bool contract2;
 
-    public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null)
+    /// <summary>
+    /// The coercer of one request. Under <paramref name="contract2"/> an operand is read as written or
+    /// refused: a decimal is digits with one optional sign, point and exponent, and a member holding a
+    /// single character takes one character.
+    /// </summary>
+    public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null, bool contract2 = true)
     {
         this.options = options;
         this.variables = variables;
         this.diagnostics = diagnostics;
+        this.contract2 = contract2;
     }
 
     /// <summary>The operators, case-sensitive.</summary>
@@ -249,6 +256,10 @@ public sealed class OperandCoercer
         if (path is null || path.IsRemote)
             return null;
 
+        // The object a derived member is compared on, named by the member's own description of it.
+        if (path.Derived is { } derived && path.Path?.Derived is null)
+            return derived.Holder;
+
         if (path.Shape is { } shape)
             return shape.Leaf is { Kind: Kind.Object, Type: { IsEnum: false } type } ? type : null;
 
@@ -367,6 +378,9 @@ public sealed class OperandCoercer
         return new BoundOperand.Set(values);
     }
 
+    /// <summary>Whether <paramref name="candidate"/> derives from <paramref name="ancestor"/> (see the private rule <c>is</c> selects by).</summary>
+    public static bool Descends(VariantDef candidate, VariantDef ancestor) => IsDescendant(candidate, ancestor);
+
     /// <summary>Whether <paramref name="candidate"/> derives from <paramref name="ancestor"/>: by the CLR types, or by the ancestor's own variants when the model came from a document.</summary>
     private static bool IsDescendant(VariantDef candidate, VariantDef ancestor)
     {
@@ -393,8 +407,8 @@ public sealed class OperandCoercer
 
     /// <summary>
     /// A raw JSON value another binder receives — a remote resolve's filter, a continued stage —
-    /// with every variable wrapper <c>{ "$var": name }</c> in it replaced by the bound value
-    /// (DESIGN §3.5.5): the owner never receives <c>variables</c>, so what it is sent must hold
+    /// with every variable wrapper <c>{ "$var": name }</c> in it replaced by the bound value:
+    /// the owner never receives <c>variables</c>, so what it is sent must hold
     /// none. A value without a wrapper comes back as it is, so its render is unchanged. An unbound
     /// name is <c>UNBOUND_VARIABLE</c>, one holding an object <c>INVALID_VARIABLE</c>, both at
     /// <paramref name="stage"/> and <paramref name="path"/>; the wrapper then stays in place.
@@ -406,7 +420,8 @@ public sealed class OperandCoercer
         if (!HoldsVariable(raw))
             return raw;
 
-        return JsonSerializer.SerializeToElement(Substituted(raw, stage, path, errors));
+        // A filter nests as deep as a request may, which is deeper than the serializer's own default.
+        return JsonSerializer.SerializeToElement(Substituted(raw, stage, path, errors), OxQLJson.Wire);
     }
 
     /// <summary>Whether a raw JSON value holds a variable wrapper anywhere.</summary>
@@ -511,6 +526,12 @@ public sealed class OperandCoercer
                 if (representation.BsonType == BsonType.Int32 && text.Length == 1)
                     return [new BsonInt32(text[0])];
 
+                if (representation.BsonType == BsonType.Int32 && contract2)
+                {
+                    failure = "a single character";
+                    break;
+                }
+
                 return [new BsonString(text)];
 
             case Kind.Int:
@@ -529,7 +550,7 @@ public sealed class OperandCoercer
                 break;
 
             case Kind.Decimal:
-                if (TryDecimal(element, out var money))
+                if (TryDecimal(element, contract2, out var money))
                     return Decimal(money, path, op, representation, addon, stage, errors, label);
 
                 failure = "a decimal number";
@@ -832,14 +853,17 @@ public sealed class OperandCoercer
         };
     }
 
-    private static bool TryDecimal(JsonElement element, out decimal value)
+    /// <summary>A decimal as text under contract 2: no group separator, no white space, no trailing sign.</summary>
+    private const NumberStyles StrictDecimal = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent;
+
+    private static bool TryDecimal(JsonElement element, bool contract2, out decimal value)
     {
         value = 0;
 
         return element.ValueKind switch
         {
             JsonValueKind.Number => element.TryGetDecimal(out value),
-            JsonValueKind.String => decimal.TryParse(element.GetString(), NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out value),
+            JsonValueKind.String => decimal.TryParse(element.GetString(), contract2 ? StrictDecimal : NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out value),
             _ => false,
         };
     }

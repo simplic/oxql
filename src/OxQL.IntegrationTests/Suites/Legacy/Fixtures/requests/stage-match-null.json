@@ -1,0 +1,13 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": null
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

@@ -9,13 +9,13 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The failure modes of DESIGN §8's fleet list over the report seeds of organisation R, each
+/// The failure modes of joins across services over the report seeds of organisation R, each
 /// outside strict and under strict, where the report suites and <c>Suites.Joins</c> do not already
 /// hold them: a key two records hold in one chunk of a grouped owner answer beside keys that resolve
 /// (no false <c>not_found</c>); the clerk two employees share, through the plain owner query of a
 /// plain remote resolve onto a non-key member (its ambiguity is seen only when the owner page happens
 /// to hold both rows) and through the grouped query the same resolve sends once it reads its
-/// outcomes (PRE-2b: the same answer cold and warm); a target the filter excludes, told apart
+/// outcomes (the same answer cold and warm); a target the filter excludes, told apart
 /// from a missing one by the existence probe; a flatten cut at its depth outside strict; the key
 /// budget over an in-process chain; the 5 000-row report page and <c>PAGE_INCOMPLETE</c>;
 /// <c>MAX_CONTINUED_STAGES_EXCEEDED</c> under strict. Every case gives its resolve a select of its
@@ -72,7 +72,7 @@ public class ReportFailureModesTests
     {
         // A request that reads no outcome keeps the plain owner query, which asks with a page of
         // one row per key: the owner's second employee is a next page. A strict request reads the
-        // outcomes, so its query onto the non-key userId is grouped per key and sees both (PRE-2b).
+        // outcomes, so its query onto the non-key userId is grouped per key and sees both.
         var client = await LedgerClient();
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{Id(ReportSeed.AmbiguousClerkTransactionId)}}" } } },

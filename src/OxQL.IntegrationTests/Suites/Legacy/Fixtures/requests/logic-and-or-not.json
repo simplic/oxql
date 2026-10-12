@@ -1,0 +1,44 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "or": [
+              {
+                "Number": {
+                  "startsWith": "TR-M"
+                }
+              },
+              {
+                "GeneratedTourNrCounter": {
+                  "eq": 4
+                }
+              }
+            ]
+          },
+          {
+            "not": {
+              "IsDeleted": {
+                "eq": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

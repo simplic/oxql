@@ -1,0 +1,19 @@
+{
+  "entityType": "staff.employee",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000701"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Bank",
+        "as": "Bk",
+        "preserveNull": true
+      }
+    }
+  ]
+}

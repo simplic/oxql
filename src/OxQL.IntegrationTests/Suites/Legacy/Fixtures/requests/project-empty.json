@@ -1,0 +1,8 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {}
+    }
+  ]
+}

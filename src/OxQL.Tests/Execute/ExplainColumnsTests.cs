@@ -12,7 +12,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The result columns of a member that lies below an object (DG2): a projection that names members
+/// The result columns of a member that lies below an object: a projection that names members
 /// of an object makes each of them a column of its own, at any depth, with what that member can; an
 /// object the projection names, one no projection narrows and one an exclusion takes members out
 /// of stay one column. On the vendored logistics document, whose shipment holds a customer with an

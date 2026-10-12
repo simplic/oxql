@@ -7,7 +7,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// DG2 M10: the pattern <c>contains</c> and <c>endsWith</c> run as folds accents the way the
+/// The pattern <c>contains</c> and <c>endsWith</c> run as folds accents the way the
 /// request's collation does. Each letter is the class of the characters that share its primary
 /// weight, <c>ss</c> and <c>ß</c> stand for each other, everything else is escaped. At a strength
 /// that tells accents apart the pattern is the escaped text.

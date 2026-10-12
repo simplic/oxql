@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Options;
@@ -69,7 +70,7 @@ public sealed class DocumentModelBuilder
         new DocumentModelBuilder(options ?? new DocumentModelOptions()).BuildCore(document);
 
     /// <summary>The representation a kind is stored in when nothing pins another.</summary>
-    public static Representation DefaultRepresentation(Kind kind) => kind switch
+    private static Representation DefaultRepresentation(Kind kind) => kind switch
     {
         Kind.String => Representation.Of(BsonType.String),
         Kind.Int => Representation.Of(BsonType.Int32),
@@ -91,7 +92,7 @@ public sealed class DocumentModelBuilder
         if (document.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("A schema document is a JSON object.");
 
-        var version = document.TryGetProperty("schemaVersion", out var versionElement) ? versionElement.GetString() : null;
+        var version = ReadString(document, "schemaVersion");
 
         if (version is null || !version.StartsWith("1.", StringComparison.Ordinal))
             throw new InvalidDataException($"The schema document format '{version ?? "(none)"}' is not one this reader understands (1.x).");
@@ -136,7 +137,7 @@ public sealed class DocumentModelBuilder
             if (entry.Value.TryGetProperty("aliases", out var aliases) && aliases.ValueKind == JsonValueKind.Array)
                 retired[entry.Name] = aliases
                     .EnumerateArray()
-                    .Select(alias => alias.GetString())
+                    .Select(alias => alias.ValueKind == JsonValueKind.String ? alias.GetString() : null)
                     .Where(alias => !string.IsNullOrWhiteSpace(alias) && !alias.StartsWith('$'))
                     .Select(alias => alias!)
                     .ToList();
@@ -218,6 +219,19 @@ public sealed class DocumentModelBuilder
                     .Where(name => name.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(name.GetString()))
                     .Select(name => name.GetString()!)
                     .ToList();
+
+            // The value an unstored member holds per variant of its type (format 1.1, additive).
+            if (!member.Stored && member.Kind == Kind.String && descriptor.TryGetProperty("byVariant", out var byVariant) && byVariant.ValueKind == JsonValueKind.Object)
+            {
+                var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+                foreach (var held in byVariant.EnumerateObject())
+                    if (held.Value.ValueKind == JsonValueKind.String)
+                        values[held.Name] = held.Value.GetString()!;
+
+                if (values.Count > 0)
+                    member.ByVariant = values;
+            }
 
             if (member.Kind == Kind.Dictionary && options.DictionaryRepresentations is not null
                 && options.DictionaryRepresentations.TryGetValue(label, out var representation))
@@ -497,7 +511,7 @@ public sealed class DocumentModelBuilder
         return value.ValueKind switch
         {
             JsonValueKind.Number when value.TryGetInt64(out var number) => number,
-            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
             _ => 0,
         };
     }

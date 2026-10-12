@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Filters;
 
 /// <summary>
-/// The top-level <c>filter</c> on a real server (DG2 M1): a list of <c>{ id?, where }</c> the engine
+/// The top-level <c>filter</c> on a real server: a list of <c>{ id?, where }</c> the engine
 /// places, each condition at the earliest point of the pipeline where the paths it reads are in the
 /// row. The same conditions written as <c>match</c> stages at those points answer the same rows;
 /// explain says where each entry ran, and what it emits is what runs.

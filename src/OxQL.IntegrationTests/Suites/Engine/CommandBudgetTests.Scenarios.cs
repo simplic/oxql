@@ -51,7 +51,7 @@ public partial class CommandBudgetTests
         warm: 1);
 
     /// <summary>
-    /// A <c>resolve</c> after a <c>group</c> (DG2): the record a group's key names. Of this service it is
+    /// A <c>resolve</c> after a <c>group</c>: the record a group's key names. Of this service it is
     /// joined in the page's own aggregate, on the page's rows: no command more. Of another service it
     /// is one owner query for the page's keys, and none while that answer is kept.
     /// </summary>

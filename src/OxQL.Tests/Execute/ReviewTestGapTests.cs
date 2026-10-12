@@ -13,7 +13,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The test gaps of the engine review (RE-26): explain sends no owner batch for a keyed-local, a
+/// The test gaps of the engine review: explain sends no owner batch for a keyed-local, a
 /// keyed-remote or a remotely checked stage; one cache never answers one organisation from another's
 /// rows; keys the budget cut are not cached while cache hits cost nothing; a key both targets of a
 /// union hold is ambiguous.

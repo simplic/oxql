@@ -1,0 +1,28 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "unwind": {
+        "path": "Transits",
+        "as": "Transit",
+        "flatten": true,
+        "keepPath": true
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Transit": {
+          "Distance": 1
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

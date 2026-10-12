@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Values;
 
 /// <summary>
-/// Explain of a request that ends in <c>values</c>, on the fleet's hosts (DG2 set filters): what the
+/// Explain of a request that ends in <c>values</c>, on the fleet's hosts: what the
 /// stage answers and in which order, what it reads, where the request's filter runs, the aggregate a
 /// run sends, and every refusal with its <c>basis</c>. What explain says is what a run does: the
 /// order it names is the order of the rows a run answers.

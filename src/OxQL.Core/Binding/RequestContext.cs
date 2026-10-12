@@ -39,18 +39,18 @@ public sealed record RequestContext
     /// Whether this host can send a query to the owner of a service namespace (an
     /// <c>InternalHosts</c> entry, <see cref="Engine.IRemoteQueryClient.IsConfigured"/>); null when it
     /// has no remote query client. The engine sets it before binding: a <c>lookup</c> whose
-    /// <c>from</c> is another service's entity binds as a remote lookup only when its owner is one
-    /// (DESIGN §3.4.4), since, unlike a resolve's, its target is written by the caller and declared nowhere
+    /// <c>from</c> is another service's entity binds as a remote lookup only when its owner is one,
+    /// since, unlike a resolve's, its target is written by the caller and declared nowhere
     /// on this host.
     /// </summary>
     public Func<string, bool>? RemoteService { get; init; }
 
     /// <summary>
-    /// What the explains that belong together share of their owner calls and their time (the engine's own
-    /// types); null for a request that is none of them. The engine sets it: for the checks of one internal explain
-    /// batch, and for an explain it runs at this host for another. A host never sets it.
+    /// What the explains that belong together share of their owner calls and their time
+    /// (<see cref="Engine.IExplainShare"/>); null for a request that is none of them. The engine sets it: for
+    /// the checks of one internal explain batch, and for an explain it runs at this host for another. A host never sets it.
     /// </summary>
-    public object? ExplainOwners { get; init; }
+    public Engine.IExplainShare? ExplainOwners { get; init; }
 
     /// <summary>
     /// Asked once, when an explain is about to make its first call to an owner: whether its caller may

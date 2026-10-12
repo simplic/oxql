@@ -210,8 +210,21 @@ internal sealed class SchemaTypes
         var references = member.Property!["references"] is JsonObject || member.Property["referenceCases"] is JsonArray { Count: > 0 };
         var follow = !references ? 0 : crossed switch { 0 => 1, 1 => 2, _ => 3 };
 
+        // A member the service does not store. One that says its value per variant (byVariant) is read off
+        // the stored discriminator of the object holding it: projected, and compared by eq, neq, in and nin,
+        // folding case. Any other one no row can carry: nothing can be done with it, a projection included.
         if (!member.Stored)
-            return Under(Pack(0, false, false, false, false, above, follow), standing);
+        {
+            var derived = member.Property["byVariant"] is JsonObject && (member.Parent?.Stored ?? true) && member.Property["stored"]?.GetValue<bool>() == false;
+            var compared = 0;
+
+            if (derived)
+                for (var bit = 0; bit < Operators.Length; bit++)
+                    if (Operators[bit] is "eq" or "neq" or "in" or "nin")
+                        compared |= 1 << bit;
+
+            return Under(Pack(compared, false, false, false, derived, above, follow, projectable: derived), standing);
+        }
 
         var filterable = !Composite.Contains(leafKind) && leaf["storedAs"]?.GetValue<string>() != "document";
         var codePoint = leafKind == "string" && leaf["storedAs"]?.GetValue<string>() == "codePoint";
@@ -270,8 +283,8 @@ internal sealed class SchemaTypes
         }
     }
 
-    private static int Pack(int operators, bool sortable, bool groupable, bool unwindable, bool folds, int above, int follow) =>
-        operators | (sortable ? 1 << 15 : 0) | (groupable ? 1 << 16 : 0) | (unwindable ? 1 << 17 : 0) | (1 << 18) | (folds ? 1 << 19 : 0) | (follow << 20) | (Math.Min(above, 255) << 22);
+    private static int Pack(int operators, bool sortable, bool groupable, bool unwindable, bool folds, int above, int follow, bool projectable = true) =>
+        operators | (sortable ? 1 << 15 : 0) | (groupable ? 1 << 16 : 0) | (unwindable ? 1 << 17 : 0) | (projectable ? 1 << 18 : 0) | (folds ? 1 << 19 : 0) | (follow << 20) | (Math.Min(above, 255) << 22);
 
     private static string Id(int packed) => packed.ToString("x", CultureInfo.InvariantCulture);
 
@@ -529,6 +542,10 @@ internal sealed class SchemaTypes
 
         if (!member.Stored)
             more["stored"] = false;
+
+        // The values of a member that says its value per variant, where the object holding it is stored.
+        if (property["byVariant"] is JsonObject byVariant && property["stored"]?.GetValue<bool>() == false && (member.Parent?.Stored ?? true))
+            more["values"] = new JsonArray(byVariant.Select(held => held.Value!.GetValue<string>()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => (JsonNode)value).ToArray());
 
         if (kind == "dictionary" && IsCollection(member))
             more["collection"] = true;

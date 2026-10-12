@@ -12,7 +12,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// What explain says of distinct values (DG2 set filters): of a column, whether a <c>values</c> stage
+/// What explain says of distinct values: of a column, whether a <c>values</c> stage
 /// over it binds (<c>can.values</c>), which is the binder's own test and so holds for every path of a
 /// model; and of a request that ends in <c>values</c>, what the stage answers, in which order, what
 /// it reads, and every refusal with what would have to change for it to run (<c>basis</c>).

@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// What a request that ends in <c>values</c> sends the database (DG2 set filters): one aggregate that
+/// What a request that ends in <c>values</c> sends the database: one aggregate that
 /// reads at most <c>scan</c> of the rows that reach the stage, groups them by the path, and answers
 /// one document with the number of rows read and the list of values. The bound on the rows stands
 /// before everything the stage adds, so no value costs more than that many rows; the search runs on

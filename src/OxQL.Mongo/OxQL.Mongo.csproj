@@ -21,4 +21,9 @@
     <ProjectReference Include="..\OxQL.Core\OxQL.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OxQL.Tests" />
+    <InternalsVisibleTo Include="OxQL.IntegrationTests" />
+  </ItemGroup>
+
 </Project>

@@ -79,7 +79,7 @@ public class CaseInsensitiveTests
         (await Ids(staff, """{ "matchCode": { "startsWith": "MU" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("mu", StringComparison.Ordinal)));
         (await Ids(staff, """{ "matchCode": { "startsWith": "arr-" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("arr-", StringComparison.Ordinal)));
 
-        // contains and endsWith are patterns that fold accents as the collation does (DG2 M10): ÜLL finds Muller, ull finds MÜLLER.
+        // contains and endsWith are patterns that fold accents as the collation does: ÜLL finds Muller, ull finds MÜLLER.
         var ull = Codes(code => Order.FoldCi(code).Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
 
         ull.Should().Contain(Folded("Muller")).And.Contain(Folded("MÜLLER"));

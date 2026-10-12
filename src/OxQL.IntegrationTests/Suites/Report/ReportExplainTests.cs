@@ -8,8 +8,8 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The report scenarios through explain on the fleet (DESIGN §2, §4): each finished request binds
-/// (<c>valid: true</c>) with every stage <c>ok</c>, the executor, phase and owner DESIGN names for
+/// The report scenarios through explain on the fleet: each finished request binds
+/// (<c>valid: true</c>) with every stage <c>ok</c>, the executor, phase and owner expected for
 /// each join, and every part at an owner checked at its internal explain (the fleet's remote client
 /// answers it in process), so the answer is complete and every alias has its type; every prefix of
 /// every scenario, which is what the studio explains while the query is built, is answered the same

@@ -15,7 +15,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The rate and concurrency limits of explain (improvement plan §3.E protection): per organisation
+/// The rate and concurrency limits of explain: per organisation
 /// and user a token bucket and a bound on what is in flight, per host a bound on what is in flight,
 /// per calling service on the internal route; an explain over one is 429 with <c>Retry-After</c>
 /// before any work, and none of it touches the query route.
@@ -69,6 +69,29 @@ public class ExplainRateLimitTests
         time.Advance(TimeSpan.FromMinutes(5));
 
         Enumerable.Range(0, 6).Select(_ => limiter.Acquire("org|alice").Acquired).Should().Equal([true, true, true, true, true, false], "the bucket never holds more than the burst");
+    }
+
+    [Fact]
+    public void A_bucket_nobody_asks_is_idle_once_it_is_full_again_so_its_partition_is_dropped()
+    {
+        var time = new ManualTime();
+        using var bucket = new ExplainRateLimiter.ManualTokenBucket(burst: 2, TimeSpan.FromSeconds(3), time);
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        bucket.IdleDuration.Should().Be(TimeSpan.FromSeconds(30), "a bucket never asked is full");
+
+        bucket.AttemptAcquire().IsAcquired.Should().BeTrue();
+        bucket.AttemptAcquire().IsAcquired.Should().BeTrue();
+        bucket.IdleDuration.Should().BeNull("an empty bucket is state worth keeping");
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        bucket.IdleDuration.Should().BeNull("one token of two is back");
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        bucket.IdleDuration.Should().Be(TimeSpan.FromSeconds(6), "full again: a new bucket would answer the same");
+        bucket.AttemptAcquire().IsAcquired.Should().BeTrue();
+        bucket.AttemptAcquire().IsAcquired.Should().BeTrue();
+        bucket.AttemptAcquire().IsAcquired.Should().BeFalse("reading the idle time took and gave nothing");
     }
 
     [Fact]
@@ -140,7 +163,7 @@ public class ExplainRateLimitTests
         }
     }
 
-    // ---- M9: what costs is charged when it costs ----------------------------------------------------------
+    // ---- what costs is charged when it costs ----------------------------------------------------------
 
     [Fact]
     public void By_default_a_hundred_explains_a_minute_are_admitted_and_only_those_that_call_owners_meet_the_tight_bucket()

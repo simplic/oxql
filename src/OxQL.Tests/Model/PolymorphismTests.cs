@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.Tests.Model;
 
 /// <summary>
-/// Polymorphic members, interface-typed members and polymorphic entities (DESIGN §3.2): the
+/// Polymorphic members, interface-typed members and polymorphic entities: the
 /// variants come from the registered class maps, their members are merged into the base with
 /// <c>onlyFor</c>, and a model without polymorphism is described exactly as before.
 /// </summary>

@@ -6,7 +6,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// A condition option the wire form cannot carry is refused at the origin (RE-8): a misspelt option
+/// A condition option the wire form cannot carry is refused at the origin: a misspelt option
 /// or one written with a value that is not a boolean in a remote resolve's filter or in a continued
 /// stage's filter would reach the owner as no option at all, and the owner would fold silently.
 /// </summary>

@@ -13,8 +13,8 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The keyed fetch <i>by keys</i> on a real server, over the report fleet (DESIGN
-/// §3.5.2, §3.3.3, §3.3.4): a resolve through the invoice's items with <c>elements</c>, answered by
+/// The keyed fetch <i>by keys</i> on a real server, over the report fleet:
+/// a resolve through the invoice's items with <c>elements</c>, answered by
 /// the ledger itself (its SelfOwner); the ERP line's typed, converted references answered by the
 /// transport owner; and the grouped owner answer (<c>keyedBy</c>) on the owners' own engines as an
 /// internal call — a non-unique member with two rows for the shared user id, an item collection's

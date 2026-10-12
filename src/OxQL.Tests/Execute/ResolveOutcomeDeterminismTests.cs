@@ -13,8 +13,8 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// What strict and <c>onMissing</c> detect never depends on the page, the cache or the executor
-/// (PRE-2, PRE-2b, RE-4): an inline resolve onto a member that is not the target's key joins two
+/// What strict and <c>onMissing</c> detect never depends on the page, the cache or the executor:
+/// an inline resolve onto a member that is not the target's key joins two
 /// records and flags the second; a filtered inline resolve tells an excluded record from a missing
 /// one in the aggregate, so strict binds what a lenient request binds; a remote resolve onto a
 /// member that is not the key is grouped per key once it reads its outcomes, and the cache keeps
@@ -58,7 +58,7 @@ public class ResolveOutcomeDeterminismTests
         return (new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), runner, BindHost.Cursors, options, new FakeRemoteClient(), cache: new OwnerFetchCache(options)), runner);
     }
 
-    // ---- inline onto a member that is not the key (PRE-2) --------------------------------------
+    // ---- inline onto a member that is not the key --------------------------------------
 
     [Fact]
     public async Task An_inline_resolve_onto_a_non_key_member_reading_its_outcomes_joins_two_records_first_by_key_and_flags_the_second()
@@ -121,7 +121,7 @@ public class ResolveOutcomeDeterminismTests
         strict.Should().BeOfType<QueryOutcome.Refused>().Which.Refusal.Errors!.Select(error => error.Code).Should().Contain(Codes.ResolveAmbiguous);
     }
 
-    // ---- a filtered inline resolve under onMissing (RE-4) --------------------------------------
+    // ---- a filtered inline resolve under onMissing --------------------------------------
 
     private const string Filtered = """[{ "resolve": { "path": "customerId", "as": "c", "filter": { "name": { "eq": "Alice" } }, "onMissing": "report" } }, { "sort": [{ "c.name": "asc" }] }]""";
 
@@ -136,7 +136,7 @@ public class ResolveOutcomeDeterminismTests
         foreach (var bound in new[] { lenient, strict, reported })
             bound.Stages.OfType<BoundStage.Resolve>().Single().Executor.Should().Be(ResolveExecutor.Inline);
 
-        strict.Fingerprint.Should().Be(lenient.Fingerprint, "strict changes what refuses, never what binds (DESIGN §3.0)");
+        strict.Fingerprint.Should().Be(lenient.Fingerprint, "strict changes what refuses, never what binds");
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public class ResolveOutcomeDeterminismTests
         (result.Diagnostics?.Any(diagnostic => diagnostic.Code == Codes.ResolveMissing) ?? false).Should().Be(missing);
     }
 
-    // ---- remote onto a member that is not the key (PRE-2b) --------------------------------------
+    // ---- remote onto a member that is not the key -----------------------------------------------
 
     private static readonly Guid Order1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid Order2 = Guid.Parse("22222222-2222-2222-2222-222222222222");

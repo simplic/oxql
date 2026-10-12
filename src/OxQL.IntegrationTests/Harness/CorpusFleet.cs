@@ -46,12 +46,17 @@ public sealed class CorpusFleet : IAsyncDisposable
     /// A private fleet under its own databases, seeded with the corpus of <paramref name="seed"/>
     /// (every service when null, none when empty) and with a chaos owner of its own. Dispose it:
     /// its databases are dropped. <paramref name="extra"/> runs after the corpus is written, for the
-    /// rows a suite adds for itself.
+    /// rows a suite adds for itself. <paramref name="contract1AsShipped"/> leaves the hosts' answer to a
+    /// request without the contract header as a host that sets nothing gives it (the legacy pipeline);
+    /// otherwise the fleet's hosts answer contract 1 by the rewrite first, as every other fleet's do.
     /// </summary>
-    public static async Task<CorpusFleet> CreateAsync(string purpose, IReadOnlyList<LabService>? seed = null, Func<LabFleet, Task>? extra = null)
+    // LEGACY(compat.v1): the parameter contract1AsShipped goes with LabFleet.Contract1AsShipped; remove with the legacy pipeline.
+    public static async Task<CorpusFleet> CreateAsync(string purpose, IReadOnlyList<LabService>? seed = null, Func<LabFleet, Task>? extra = null, bool contract1AsShipped = false)
     {
         var fleet = LabFleet.Create(purpose);
         var owner = new ChaosOwner();
+
+        fleet.Contract1AsShipped = contract1AsShipped;
 
         try
         {

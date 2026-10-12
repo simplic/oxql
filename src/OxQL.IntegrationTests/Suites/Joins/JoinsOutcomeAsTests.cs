@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The per-row outcome on a real server (improvement plan §3.O): <c>outcomeAs</c> names a member that
+/// The per-row outcome on a real server: <c>outcomeAs</c> names a member that
 /// says on every row what became of the reference, <c>resolved</c> included. Every outcome per kind of
 /// join: an inline resolve (written by the aggregate, so a condition, a group and a count read it), a
 /// keyed one, an element-wise one, a remote one, a stage continued at an owner and a union join (written

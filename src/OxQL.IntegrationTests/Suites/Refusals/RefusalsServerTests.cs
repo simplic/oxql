@@ -53,7 +53,7 @@ public class RefusalsServerTests
     private static Case Template(string id, string code, string why, string pipeline) =>
         new(id, code, 400, "validation_error", why, LabService.Transport, Corpus.Template, pipeline);
 
-    /// <summary>The 75 provocations of the legacy table (76 less the cursor-with-offset case contract 2 lost with its offset, DG2 M4), in its order.</summary>
+    /// <summary>The 75 provocations of the legacy table (76 less the cursor-with-offset case contract 2 lost with its offset), in its order.</summary>
     public static readonly IReadOnlyList<Case> Table =
     [
         // entity
@@ -136,11 +136,11 @@ public class RefusalsServerTests
         Staff("V43", "MAX_CONDITIONS_EXCEEDED", "201 leaf conditions, one over maxConditions", $$"""[{ "match": { "and": [{{Repeat(201, i => $$"""{ "matchCode": { "neq": "x{{i}}" } }""")}}] } }, {{Page1}}]"""),
         Staff("V44", "MAX_VARIABLES_EXCEEDED", "65 variables, one over maxVariables", $$"""[{ "match": { "matchCode": { "eq": { "$var": "v0" } } } }, {{Page1}}]""", $"{{ {Repeat(65, i => $"\"v{i}\": \"x\"")} }}"),
         Staff("V45", "INVALID_PAGE_LIMIT", "limit: 0", """[{ "page": { "limit": 0 } }]"""),
-        Staff("V45.offset", "UNKNOWN_STAGE_MEMBER", "offset: 1, which a contract 2 page does not have (DG2 M4)", """[{ "page": { "limit": 1, "offset": 1 } }]"""),
+        Staff("V45.offset", "UNKNOWN_STAGE_MEMBER", "offset: 1, which a contract 2 page does not have", """[{ "page": { "limit": 1, "offset": 1 } }]"""),
         Staff("V46", "PAGE_SIZE_EXCEEDED", "limit: 501, one over maxPageSize", """[{ "page": { "limit": 501 } }]"""),
         new("V47", "LOOKUP_LIMIT_EXCEEDED", 400, "validation_error", "lookup.limit 101, one over maxLookupLimit, on a declared backward reference",
             LabService.Fleet, Corpus.Vehicle, $$"""[{ "lookup": { "path": "vehicle.id", "from": "fleet.equipment", "as": "eq", "limit": 101 } }, {{Page1}}]"""),
-        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset, under contract 1 (a contract 2 page has no offset, DG2 M4)", """[{ "page": { "limit": 1, "offset": 5001 } }]""") with { ContractOne = true },
+        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset, under contract 1 (a contract 2 page has no offset)", """[{ "page": { "limit": 1, "offset": 5001 } }]""") with { ContractOne = true },
         new("V50", "REQUEST_TOO_LARGE", 413, "validation_error", "a body above maxRequestBytes (262 144)", LabService.Staff, Corpus.Employee,
             $$"""[{ "match": { "or": [{{Repeat(4000, i => $$"""{ "matchCode": { "eq": "{{new string('x', 60)}}{{i}}" } }""")}}] } }, {{Page1}}]"""),
 
@@ -233,7 +233,7 @@ public class RefusalsServerTests
         // that name, so no semi-join can express the condition. The binder refuses it with
         // RESOLVE_NOT_FILTERABLE, with the path and the stage, and nothing is sent to the owner
         // (it used to send the owner a match on the alias and answer its 422 refusal).
-        await using var fleet = await CorpusFleet.CreateAsync("b5-d4", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-d4", seed: [LabService.Conformance]);
         var client = fleet.Client(LabService.Conformance);
         var mark = fleet.Owner.Mark();
 

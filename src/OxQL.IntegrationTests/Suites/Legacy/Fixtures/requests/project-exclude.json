@@ -1,0 +1,23 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Actions": 0,
+        "AttachedResources": 0,
+        "AttachedEntities": 0,
+        "Transits": 0,
+        "StartAddress": 0,
+        "EndAddress": 0,
+        "Resource": 0
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

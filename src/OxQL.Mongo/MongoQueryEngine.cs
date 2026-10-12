@@ -34,8 +34,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
+    private readonly TimeProvider time;
 
-    /// <summary>The engine over <paramref name="models"/> and <paramref name="runner"/>; a remote client lets it resolve targets of other services.</summary>
+    /// <summary>
+    /// The engine over <paramref name="models"/> and <paramref name="runner"/>; a remote client lets it resolve targets of other services.
+    /// <paramref name="time"/> is the clock a count measures its steps by (the system's when null).
+    /// </summary>
     public MongoQueryEngine(
         IEntityModelProvider models,
         IAggregateRunner runner,
@@ -46,7 +50,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         bool includeErrorDetails = false,
         IIndexSource? indexes = null,
         OwnerFetchCache? cache = null,
-        ExplainForwardCache? explainCache = null)
+        ExplainForwardCache? explainCache = null,
+        TimeProvider? time = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)));
@@ -55,13 +60,14 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
         // remote target needs the remote client.
         ownerCache = cache ?? new OwnerFetchCache(this.options);
-        fetch = new KeyedFetch(remote, this, ownerCache, this.options);
+        this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
+        fetch = new KeyedFetch(remote, this, ownerCache, this.options, this.logger);
         remoteClient = remote is not null;
         this.remote = remote;
         this.explainCache = explainCache ?? new ExplainForwardCache();
         this.indexes = indexes;
-        this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
         this.includeErrorDetails = includeErrorDetails;
+        this.time = time ?? TimeProvider.System;
     }
 
     /// <summary>What this engine keeps of its owners' explain answers: read by a host that reports or bounds what it holds.</summary>
@@ -168,7 +174,6 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         IReadOnlyList<BsonDocument> rows;
         IReadOnlyList<BsonDocument>? countRows = null;
-        var timedOut = false;
         var strict = context.Contract == 2 && request.IsStrict;
 
         // The page, the count and a strict request's truncation probes run together and end
@@ -180,7 +185,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         Task<IReadOnlyList<BsonDocument>>? pageTask = null;
         Task<IReadOnlyList<BsonDocument>>? countTask = null;
 
-        // The count step of a contract 2 page (DG2 M3) runs beside the page under its own time and
+        // The count step of a contract 2 page runs beside the page under its own time and
         // its own cancellation: it never fails the rows, and however this request ends it is stopped.
         var step = compiled.CountStages is null ? null : compiled.Count;
         using var counting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -262,10 +267,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         {
             Abandon();
 
-            var refusal = MapDriverError(exception);
+            var refusal = MapDriverError(exception, context);
 
-            timedOut = refusal.Status == 504;
-            Log(compiled, timer, 0, timedOut, false, context, refusal, resolveCalls, 0);
+            Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
             return QueryOutcome.Of(refusal);
         }
@@ -297,7 +301,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // A lookup marks the rows with a parent over its limit; the marks leave the rows here.
         diagnostics.AddRange(MongoCompiler.LookupTruncations(compiled, page));
 
-        // An inline resolve that reports its missing rows reads them off the page (DESIGN §3.6).
+        // An inline resolve that reports its missing rows reads them off the page.
         var inline = OutcomePolicy.Report(bound, MongoCompiler.InlineOutcomes(compiled, page), [], strict, options);
 
         diagnostics.AddRange(inline.Diagnostics);
@@ -305,7 +309,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         losses.AddRange(inline.Refusing);
 
         // A truncated row a later match filtered out is not on the page, but the answer may depend
-        // on what was cut: a strict request checks the rows up to the truncation (DESIGN §3.4.3).
+        // on what was cut: a strict request checks the rows up to the truncation.
         if (strict)
         {
             try
@@ -328,7 +332,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
 
         // A strict request that neither continues nor jumps reads every matching row in its one
-        // page, or refuses (DESIGN §3.4.3).
+        // page, or refuses.
         if (strict && hasNextPage && IsReportPage(request))
         {
             var max = Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize);
@@ -371,7 +375,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             diagnostics.AddRange(resolution.Diagnostics);
 
             // A path under a union's alias that an owner said its target lacks was dropped for that target; only
-            // the run learns it, so the run says it (DESIGN §3.4.1; explain notes the local ones).
+            // the run learns it, so the run says it (explain notes the local ones).
             diagnostics.AddRange(resolution.Dropped.Select(drop => drop.Branch
                 ? Notes.BranchPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path)
                 : Notes.SelectPathDropped(drop.Stage, drop.Alias, drop.Target, drop.Path, drop.Parent)));
@@ -389,7 +393,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         long? totalCount = null;
         bool? capped = null;
 
-        // What a contract 2 answer knows of the count (DG2 M3): for free off the page, and by the
+        // What a contract 2 answer knows of the count: for free off the page, and by the
         // count step when one was asked. The cursor carries the rows served so far.
         var served = context.Contract == 2 ? (bound.Page.Cursor?.Served ?? 0) + page.Count : 0;
         var countInfo = context.Contract == 2
@@ -454,7 +458,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             Diagnostics = diagnostics.Count > 0 ? diagnostics : null,
         };
 
-        Log(compiled, timer, page.Count, timedOut, capped == true || countInfo is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, cacheHits);
+        Log(compiled, timer, page.Count, false, capped == true || countInfo is { State: CountInfo.AtLeast, StoppedBy: CountInfo.ByCap }, context, null, resolveCalls, cacheHits);
 
         return QueryOutcome.Of(Timed(result, timing));
     }
@@ -480,7 +484,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            var refusal = MapDriverError(exception);
+            var refusal = MapDriverError(exception, context);
 
             Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
@@ -569,7 +573,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private const double LadderFill = 0.5;
 
     /// <summary>
-    /// The count of a count-only request (DG2 M3): a first step of <c>Count:StepRows</c> rows, then as
+    /// The count of a count-only request: a first step of <c>Count:StepRows</c> rows, then as
     /// far as the time allows. A step counts up to its bound (<c>$limit bound + 1</c>, <c>$count</c>);
     /// one that finds no more rows than its bound is exact and ends the count. The first step is cheap
     /// where matches are dense and proves a lower bound whatever follows. From what it took, the next
@@ -587,7 +591,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// </summary>
     private async Task<CountInfo> CountLadderAsync(BoundPipeline bound, IReadOnlyList<BsonDocument> counted, int? parentsAt, bool filterIsTheBounds, BoundCount ladder, AggregateRunOptions runOptions, RequestContext context, CancellationToken cancellationToken)
     {
-        var timer = Stopwatch.StartNew();
+        var start = time.GetTimestamp();
         var budget = Math.Min(ladder.BudgetMs, runOptions.MaxTimeMs);
         var stages = counted.Take(counted.Count - 2).ToList();
         long proven = 0;
@@ -595,8 +599,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         while (true)
         {
-            var left = budget - (long)timer.Elapsed.TotalMilliseconds;
-            var started = timer.Elapsed;
+            var started = time.GetElapsedTime(start);
+            var left = budget - (long)started.TotalMilliseconds;
 
             try
             {
@@ -612,7 +616,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
                 var rows = await runner.AggregateAsync(QueryTiming.CountRung, context.Timing, bound.Entity, [.. step, new BsonDocument("$limit", rung + 1), new BsonDocument("$count", "n")], runOptions with { MaxTimeMs = (int)left }, cancellationToken).ConfigureAwait(false);
                 var found = rows is { Count: > 0 } && rows[0].TryGetValue("n", out var n) ? n.ToInt64() : 0;
-                var ms = (long)timer.Elapsed.TotalMilliseconds;
+                var ms = (long)time.GetElapsedTime(start).TotalMilliseconds;
 
                 if (found <= rung)
                     return new CountInfo { State = CountInfo.Exact, Value = found, Ms = ms };
@@ -623,8 +627,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                     return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByCap, Ms = ms };
 
                 // How many times the step just taken fits what is left of the budget.
-                var took = Math.Max((timer.Elapsed - started).TotalMilliseconds, 0.01);
-                var fits = (budget - timer.Elapsed.TotalMilliseconds) / took;
+                var ended = time.GetElapsedTime(start);
+                var took = Math.Max((ended - started).TotalMilliseconds, 0.01);
+                var fits = (budget - ended.TotalMilliseconds) / took;
 
                 if (fits < LadderFactor)
                     return new CountInfo { State = CountInfo.AtLeast, Value = proven, StoppedBy = CountInfo.ByBudget, Ms = ms };
@@ -640,7 +645,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             catch (Exception exception)
             {
                 var timeout = exception is TimeoutException or OperationCanceledException or MongoExecutionTimeoutException or MongoCommandException { Code: 50 };
-                var ms = (long)timer.Elapsed.TotalMilliseconds;
+                var ms = (long)time.GetElapsedTime(start).TotalMilliseconds;
 
                 // The first step failing for what the request asks is the request's refusal, as with a page; a
                 // fault of the database or the network leaves the count unknown, and a later step leaves its bound.
@@ -671,7 +676,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     }
 
     /// <summary>
-    /// What a contract 2 answer knows of how many rows match (DG2 M3).
+    /// What a contract 2 answer knows of how many rows match.
     /// <list type="bullet">
     /// <item>A page without a next one ends the list: the rows served are the exact count, and a count
     /// step still running is not waited for.</item>
@@ -779,7 +784,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         return hidden;
     }
 
-    /// <summary>The 422 of a request that would lose data (DESIGN §3.4.3, §3.6), logged like any refusal.</summary>
+    /// <summary>The 422 of a request that would lose data, logged like any refusal.</summary>
     private QueryOutcome Refuse(CompiledQuery compiled, Stopwatch timer, RequestContext context, IReadOnlyList<Diagnostic> losses, int resolveCalls, int cacheHits)
     {
         var refusal = Refusal.DataLoss(losses);
@@ -803,7 +808,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
     /// <summary>
     /// The context with the owners this host can reach (<see cref="RequestContext.RemoteService"/>), which a
-    /// lookup of another service's entity binds by (DESIGN §3.4.4); a host without a remote client reaches none.
+    /// lookup of another service's entity binds by; a host without a remote client reaches none.
     /// </summary>
     private RequestContext Reaching(RequestContext context) =>
         remote is null || context.RemoteService is not null ? context : context with { RemoteService = remote.IsConfigured };
@@ -823,8 +828,8 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     }
 
     /// <summary>The cursor for the page after <paramref name="last"/>.</summary>
-    /// <remarks><paramref name="served"/> is how many rows the pages up to this one served; a contract 2 cursor carries it (DG2 M3).</remarks>
-    public static CursorPayload NextCursor(CompiledQuery compiled, BsonDocument last, long served = 0)
+    /// <remarks><paramref name="served"/> is how many rows the pages up to this one served; a contract 2 cursor carries it.</remarks>
+    internal static CursorPayload NextCursor(CompiledQuery compiled, BsonDocument last, long served = 0)
     {
         if (compiled.PagingMode == PagingMode.Offset)
             return new CursorPayload(compiled.Bound.Fingerprint, PagingMode.Offset, [], compiled.Offset + compiled.Limit) { Served = served };
@@ -868,7 +873,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             RemoveAt(nested, storage[(cut + 1)..]);
     }
 
-    private Refusal MapDriverError(Exception exception)
+    private Refusal MapDriverError(Exception exception, RequestContext context)
     {
         switch (exception)
         {
@@ -882,7 +887,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 return refusal;
 
             default:
-                logger.LogError(exception, "OxQL engine fault");
+                logger.LogError(exception, "OxQL engine fault. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
                 return Refusal.Internal(includeErrorDetails ? exception.Message : null);
         }
     }

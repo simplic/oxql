@@ -1,0 +1,35 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "IsDeleted": {
+          "eq": false
+        }
+      },
+      "bogus": {
+        "x": 1
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 2,
+        "skip": 1,
+        "count": true,
+        "upTo": 1
+      }
+    }
+  ]
+}

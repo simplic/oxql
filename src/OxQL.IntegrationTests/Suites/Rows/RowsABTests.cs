@@ -39,6 +39,10 @@ public partial class RowsABTests
     [GeneratedRegex(@"^-?\d+$")]
     private static partial Regex Digits();
 
+    /// <summary>A decimal as the engine writes it: plain digits, no exponent, no trailing fractional zero.</summary>
+    [GeneratedRegex(@"^-?\d+(\.\d*[1-9])?$")]
+    private static partial Regex CanonicalDecimal();
+
     /// <summary>Every entity's rows as the engine renders them, walked in id order; the volume entity a 60-row slice.</summary>
     private static async Task<IReadOnlyList<JsonObject>> RowsOf(string entityId)
     {
@@ -96,22 +100,24 @@ public partial class RowsABTests
 
         var json = value.GetValueKind();
         var text = json == JsonValueKind.String ? value.GetValue<string>() : null;
+        // A number as the body spells it: its digits, read as text so none passes through a double.
+        var number = json == JsonValueKind.Number ? value.ToJsonString() : null;
 
         return kind switch
         {
             Kind.String => json == JsonValueKind.String ? null : "declared string",
             Kind.Int => json == JsonValueKind.Number && value.GetValue<decimal>() % 1 == 0 ? null : "declared int",
             Kind.Double => json == JsonValueKind.Number ? null : "declared double",
-            Kind.Long => text is not null && Digits().IsMatch(text) ? null : "declared long, wants a string of digits",
-            Kind.Decimal => json == JsonValueKind.String ? null : "declared decimal, wants a string",
+            Kind.Long => number is not null && Digits().IsMatch(number) ? null : "declared long, wants a number of digits only",
+            Kind.Decimal => number is not null && CanonicalDecimal().IsMatch(number) ? null : "declared decimal, wants a number in canonical digits",
             Kind.Bool => json is JsonValueKind.True or JsonValueKind.False ? null : "declared bool",
             Kind.Guid => text is not null && GuidText().IsMatch(text) ? null : "declared guid, wants a canonical uuid",
             Kind.Date => text is not null && DateOnlyText().IsMatch(text) ? null : "declared date, wants YYYY-MM-DD",
             Kind.DateTime => text is not null && IsoInstant().IsMatch(text) ? null : "declared dateTime, wants an ISO instant with Z",
             Kind.TimeSpan => text is not null && IsoDuration().IsMatch(text) ? null : "declared timeSpan, wants an ISO duration",
             Kind.Binary => json == JsonValueKind.String ? null : "declared binary, wants base64",
-            // An enum travels as its number; above the Int32 range as a string of digits.
-            Kind.Enum => json == JsonValueKind.Number || (text is not null && Digits().IsMatch(text) && !int.TryParse(text, out _)) ? null : "declared enum, wants a number",
+            // An enum travels as its number, whatever backs it: above the Int32 range too.
+            Kind.Enum => number is not null && Digits().IsMatch(number) ? null : "declared enum, wants a number",
             Kind.Object => json == JsonValueKind.Object ? null : "declared object",
             Kind.Array => json == JsonValueKind.Array ? null : "declared array",
             _ => null,
@@ -215,23 +221,32 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB05_a_decimal_travels_as_a_string_on_both_halves_of_the_decimal_duality_keeping_every_digit()
+    public async Task AB05_a_decimal_travels_as_a_number_on_both_halves_of_the_decimal_duality_keeping_every_digit()
     {
         var rows = await RowsOf(Corpus.Vehicle);
 
-        rows.Should().OnlyContain(row => row["mileage"]!.GetValueKind() == JsonValueKind.String && row["operatingHours"]!.GetValueKind() == JsonValueKind.String);
+        rows.Should().OnlyContain(row => row["mileage"]!.GetValueKind() == JsonValueKind.Number && row["operatingHours"]!.GetValueKind() == JsonValueKind.Number);
 
-        // The stored text rows come back as strings too.
-        var stringRows = Corpus.IdsOf(Corpus.VehiclesWithStringMileage());
+        // The stored text rows come back as numbers too, in the digits their Decimal128 twin has.
+        var stringRows = Corpus.VehiclesWithStringMileage();
         stringRows.Should().HaveCount(2);
+
+        foreach (var stringRow in stringRows)
+        {
+            var text = Corpus.Text(stringRow, "mileage")!;
+            var canonical = text.Contains('.', StringComparison.Ordinal) ? text.TrimEnd('0').TrimEnd('.') : text;
+
+            rows.Single(row => row["id"]!.GetValue<string>() == stringRow.WireId)["mileage"]!.ToJsonString().Should().Be(canonical, $"{stringRow.Key}: stored as the text {text}");
+        }
 
         // The many-places row survives verbatim: 25 fractional digits, which no double holds.
         var wide = Corpus.Row(Corpus.Vehicle, "dec-many-places");
         var stored = Corpus.Number(wide, "mileage")!;
         stored.Split('.')[1].Should().HaveLength(25);
-        var onWire = rows.Single(row => row["id"]!.GetValue<string>() == wide.WireId)["mileage"]!.GetValue<string>();
+        // The number's own text in the body: every digit is on the wire, whatever a reader then parses it into.
+        var onWire = rows.Single(row => row["id"]!.GetValue<string>() == wide.WireId)["mileage"]!.ToJsonString();
         onWire.Should().Be(stored);
-        double.Parse(onWire, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture).Should().NotBe(onWire, "a number JavaScript cannot round-trip");
+        double.Parse(onWire, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture).Should().NotBe(onWire, "a number a double does not hold: a reader that parses into one keeps 15 to 17 digits of it");
     }
 
     [Fact]
@@ -329,7 +344,7 @@ public partial class RowsABTests
 
         var plain = await (await Lab.ClientAsync(LabService.Transport)).SendAsync(Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "item.orderNumber": 1 } }, { "page": { "limit": 500 } } ]""");
         plain.ShouldHaveIds(expected.Select(entry => entry.Id));
-        plain.Items.Should().OnlyContain(row => row!["item"] is JsonObject && !row.AsObject().ContainsKey("items"), "the element is under the alias and the array has left the row (DG2 M2)");
+        plain.Items.Should().OnlyContain(row => row!["item"] is JsonObject && !row.AsObject().ContainsKey("items"), "the element is under the alias and the array has left the row");
     }
 
     [Fact]
@@ -345,7 +360,7 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB19_aggregate_outputs_are_typed_by_the_source_kind_counts_as_numbers_and_decimal_sums_as_strings()
+    public async Task AB19_aggregate_outputs_are_typed_by_the_source_kind_counts_and_decimal_sums_as_numbers()
     {
         var buckets = Corpus.Rows(Corpus.Vehicle).GroupBy(row => Corpus.ValueAt(row, "isDeleted")!.AsBoolean).OrderBy(group => group.Key).ToList();
         buckets.Should().HaveCount(2);
@@ -372,25 +387,28 @@ public partial class RowsABTests
             bucket["cd"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number, "and so does a count of distinct values");
             bucket["cd"]!.GetValue<long>().Should().Be(rows.Count());
 
-            // sum and avg over a decimal are decimal strings; over an int, JSON numbers.
-            bucket["sumDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
-            bucket["avgDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
+            // sum and avg are JSON numbers: over a decimal in the canonical digits a decimal member has, over an int as an int's.
+            bucket["sumDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+            bucket["sumDecimal"]!.ToJsonString().Should().MatchRegex(CanonicalDecimal().ToString());
+            bucket["avgDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+            bucket["avgDecimal"]!.ToJsonString().Should().MatchRegex(CanonicalDecimal().ToString());
             bucket["sumInt"]!.GetValueKind().Should().Be(JsonValueKind.Number);
             bucket["sumInt"]!.GetValue<long>().Should().Be(rows.Sum(row => Corpus.ValueAt(row, "fuelTankCapacity")!.ToInt64()));
             bucket["avgInt"]!.GetValueKind().Should().Be(JsonValueKind.Number);
-            bucket["minDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
+            bucket["minDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+            bucket["minDecimal"]!.ToJsonString().Should().MatchRegex(CanonicalDecimal().ToString());
             bucket["minDate"]!.GetValue<string>().Should().Be(rows.Min(row => Corpus.Date(row, "createDateTime"))!.Value.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture));
             bucket["firstGuid"]!.GetValue<string>().Should().MatchRegex(GuidText().ToString());
             bucket["pushString"]!.AsArray().Select(value => value?.GetValue<string>()).Should().BeEquivalentTo(rows.Select(row => Corpus.Text(row, "matchCode")));
         }
 
-        // The cost, stated: the decimal sum of the live rows is a value no double holds.
-        var live = answer.Items.Single(bucket => !bucket!["k"]!.GetValue<bool>())!["sumDecimal"]!.GetValue<string>();
+        // The digits are all on the wire: the decimal sum of the live rows is a value no double holds.
+        var live = answer.Items.Single(bucket => !bucket!["k"]!.GetValue<bool>())!["sumDecimal"]!.ToJsonString();
         double.Parse(live, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture).Should().NotBe(live);
     }
 
     [Fact]
-    public async Task AB04_a_long_addon_value_is_written_as_a_string_and_the_value_read_back_finds_its_row()
+    public async Task AB04_a_long_addon_value_is_written_as_a_number_with_every_digit_and_the_value_read_back_finds_its_row()
     {
         var rich = Corpus.IdOf(Corpus.Employee, "addon-rich");
         Corpus.ValueAt(Corpus.Row(Corpus.Employee, "addon-rich"), "addon.tourCount").Should().Be(new BsonInt64(9007199254740993L));
@@ -400,11 +418,14 @@ public partial class RowsABTests
 
         answer.ShouldHaveIds([rich]);
         var bag = answer.Items[0]!["addon"]!;
-        bag["tourCount"]!.GetValueKind().Should().Be(JsonValueKind.String, "a defined long travels as a string, like every other long");
-        bag["tourCount"]!.GetValue<string>().Should().Be("9007199254740993");
+        bag["tourCount"]!.GetValueKind().Should().Be(JsonValueKind.Number, "a defined long travels as a number, like every other long");
+        var read = bag["tourCount"]!.ToJsonString();
+        read.Should().Be("9007199254740993", "every digit is written: above 2^53 a double would say …992");
 
-        // The round trip closes: the value read back selects the row it came from.
-        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.tourCount": { "eq": "{{bag["tourCount"]!.GetValue<string>()}}" } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveTotal(1);
+        // The round trip closes: the value read back, sent as it was read, selects the row it came from.
+        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.tourCount": { "eq": {{read}} } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveIds([rich]).ShouldHaveTotal(1);
+        // So do its digits as a string, the operand a client that keeps a long as text sends.
+        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.tourCount": { "eq": "{{read}}" } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveIds([rich]).ShouldHaveTotal(1);
 
         // A key with no definition has no kind to encode by: it stays what the bag holds.
         bag["plainCount"]!.GetValueKind().Should().Be(JsonValueKind.Number);
@@ -477,8 +498,9 @@ public partial class RowsABTests
         bag.ContainsKey("nullKey").Should().BeTrue();
         bag["nullKey"].Should().BeNull("a null inside a bag");
         stored["weight"]["_t"].AsString.Should().Be(Addons.DecimalDiscriminator, "the bag holds the driver's decimal wrapper");
-        bag["weight"]!.GetValueKind().Should().Be(JsonValueKind.String, "which never reaches the wire: the decimal it holds travels as decimal text");
-        decimal.Parse(bag["weight"]!.GetValue<string>(), CultureInfo.InvariantCulture).Should().Be(Decimal128.ToDecimal(stored["weight"]["_v"].AsDecimal128));
+        bag["weight"]!.GetValueKind().Should().Be(JsonValueKind.Number, "which never reaches the wire: the decimal it holds travels as the number every decimal is");
+        bag["weight"]!.ToJsonString().Should().MatchRegex(CanonicalDecimal().ToString(), "in canonical digits");
+        decimal.Parse(bag["weight"]!.ToJsonString(), CultureInfo.InvariantCulture).Should().Be(Decimal128.ToDecimal(stored["weight"]["_v"].AsDecimal128));
         stored["vincario"]["_t"].AsString.Should().Be(Addons.DictionaryDiscriminator);
         bag["vincario"]!.AsObject().Select(member => member.Key).Should().Equal(stored["vincario"]["_v"].AsBsonDocument.Names, "a wrapped dictionary is the dictionary");
         bag["undefinedKey"]!.GetValue<string>().Should().Be("opaque", "a key with no definition is still projected");

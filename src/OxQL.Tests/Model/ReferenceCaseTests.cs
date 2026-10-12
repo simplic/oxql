@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.Tests.Model;
 
 /// <summary>
-/// Reference cases and their declarations (DESIGN §3.3): <c>[OxQLReference]</c> with <c>Item</c>
+/// Reference cases and their declarations: <c>[OxQLReference]</c> with <c>Item</c>
 /// and <c>KeyAs</c>, the repeatable <c>[OxQLReferenceWhen]</c>, host-side declarations on a
 /// pooled type's wire member, and what the build refuses.
 /// </summary>

@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The static index advisory (DG2): for a request as bound and compiled, the index that serves it as
+/// The static index advisory: for a request as bound and compiled, the index that serves it as
 /// a definition to copy (collection, key document in the order equality, sort, range, collation),
 /// what of the request it serves by the paths and filter entries the caller wrote, whether an index
 /// the collection has serves it, and what the request does while none does. Nothing here reaches a

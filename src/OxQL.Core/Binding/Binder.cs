@@ -21,10 +21,16 @@ public sealed class Binder
     /// The deepest nesting of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> a condition may have
     /// (<c>MAX_CONDITIONS_EXCEEDED</c> beyond it). Every level is one or two more nested documents in
     /// the compiled pipeline, whose serializer stops at 100; the bound keeps a margin for the stages
-    /// a filter is nested in (a lookup or resolve sub-pipeline). No request a host read before the cap
-    /// (JSON depth 32) nests deeper.
+    /// a filter is nested in (a lookup or resolve sub-pipeline).
     /// </summary>
     public const int MaxConditionDepth = 32;
+
+    /// <summary>
+    /// The deepest nesting of arithmetic an aggregate's argument may have
+    /// (<c>INVALID_AGGREGATE_ARGUMENT</c> beyond it). Every level is two more nested values in the
+    /// compiled pipeline, as a level of a condition is.
+    /// </summary>
+    public const int MaxExpressionDepth = 32;
 
     private static readonly IReadOnlySet<string> Units = new HashSet<string>(StringComparer.Ordinal) { "year", "quarter", "month", "week", "day", "hour", "minute", "second" };
     private static readonly IReadOnlySet<string> WeekDays = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
@@ -33,7 +39,7 @@ public sealed class Binder
 
     /// <summary>
     /// The sentence that ends every refusal a contract 1 request receives for a contract 2
-    /// construct (DESIGN §3.12): a request without the contract header is read as contract 1
+    /// construct: a request without the contract header is read as contract 1
     /// while compatibility is on, which is the likeliest mistake when a query is pasted into a
     /// report data source. It begins with a space, so it is appended to a finished sentence.
     /// </summary>
@@ -43,7 +49,7 @@ public sealed class Binder
     /// The top-level members a request carries. An internal call may also carry <c>keyedBy</c>
     /// (<see cref="InternalRequestMembers"/>); the public route never names it.
     /// </summary>
-    public const string RequestMembers = "entityType, variables, filter, pipeline, strict, timing, maxTimeMs";
+    public const string RequestMembers = "entityType, variables, filter, pipeline, strict, onMissing, timing, maxTimeMs";
 
     /// <summary>What an owner says of a request on the internal route that carries a member it does not know: another build of the engine wrote it.</summary>
     public const string OtherBuildHint = "The request came over the internal route, where the calling service's engine writes it: that engine and this one are different builds. The engine and the base package are deployed together on every service that calls or is called.";
@@ -65,8 +71,7 @@ public sealed class Binder
         BindAsync(request, context, explain: false, cancellationToken);
 
     /// <summary>
-    /// Binds one request. With <paramref name="explain"/> the page's cursor is not decoded (explain
-    /// ignores it, DESIGN §4.2), so a request binds the same with or without one.
+    /// Binds one request. With <paramref name="explain"/> the page's cursor is not decoded (explain ignores it), so a request binds the same with or without one.
     /// </summary>
     public async ValueTask<BindOutcome> BindAsync(QueryRequest request, RequestContext context, bool explain, CancellationToken cancellationToken)
     {
@@ -132,13 +137,53 @@ public sealed class Binder
     private static QueryValidationError Error(string code, string message, int? stage, string? path) =>
         new() { Code = code, Message = message, Stage = stage, Path = path };
 
+    /// <summary>The most members a refusal lists as joinable; the rest are counted.</summary>
+    public const int MaxJoinableListed = 12;
+
+    /// <summary>
+    /// A refusal of a join over a member that declares no reference, with what the caller can do
+    /// about it: the members of <paramref name="entity"/> that do declare one (to
+    /// <paramref name="toward"/>, when the join names its target), and that a reference which is
+    /// missing is declared in the service's model. The members travel in <c>params.joinable</c>
+    /// (path and targets) for a client that offers them.
+    /// </summary>
+    internal static QueryValidationError Joinable(QueryValidationError error, EntityDef? entity, string? toward)
+    {
+        const string Model = " A join follows a reference the service's model declares on the member; one that is missing is declared there.";
+
+        if (entity is null)
+            return error with { Message = error.Message + Model };
+
+        var joinable = entity.Paths
+            .Where(path => path.References.Count > 0)
+            .Select(path => (path.Wire, Targets: path.References.SelectMany(reference => reference.Targets).Select(target => target.ToString()).Distinct(StringComparer.Ordinal).ToList()))
+            .Where(member => toward is null || member.Targets.Any(target => target == toward || target.StartsWith(toward + "#", StringComparison.Ordinal)))
+            .ToList();
+        var listed = joinable.Take(MaxJoinableListed).Select(member => toward is null ? $"{member.Wire} ({string.Join(", ", member.Targets)})" : member.Wire).ToList();
+        var reference = toward is null ? "a reference" : $"a reference to '{toward}'";
+        var sentence = joinable.Count == 0
+            ? $" No member of '{entity.Id}' declares {reference}."
+            : $" The members of '{entity.Id}' that declare {reference} are: {string.Join(", ", listed)}{(joinable.Count > listed.Count ? $" and {joinable.Count - listed.Count} more" : "")}.";
+
+        return error with
+        {
+            Message = error.Message + sentence + Model,
+            Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>())
+            {
+                ["entity"] = entity.Id,
+                ["joinable"] = joinable.Take(MaxJoinableListed).Select(member => new Dictionary<string, object?> { ["path"] = member.Wire, ["targets"] = member.Targets }).ToList(),
+                ["joinableCount"] = joinable.Count,
+            },
+        };
+    }
+
     /// <summary>One binding run: the stage loop and everything it accumulates.</summary>
     private sealed class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
     {
         private readonly OxQLOptions options = context.Options;
         private const string DefaultSelectKey = "$default";
 
-        private readonly OperandCoercer coercer = new(context.Options, request.Variables, diagnostics);
+        private readonly OperandCoercer coercer = new(context.Options, request.Variables, diagnostics, context.Contract != 1);
         private readonly List<BoundStage> stages = [];
 
         /// <summary>The caller's stage index of each bound stage, by position; null for a stage the binder supplied.</summary>
@@ -156,7 +201,7 @@ public sealed class Binder
         private bool conditionDepthReported;
         private bool hasSemiJoin;
 
-        /// <summary>The shape the pipeline entered with, and each caller stage's kind and shapes around it (DESIGN §4.6).</summary>
+        /// <summary>The shape the pipeline entered with, and each caller stage's kind and shapes around it.</summary>
         private Shape entry = null!;
         private readonly List<(int Index, string? Kind, Shape Before, Shape After)> traced = [];
 
@@ -164,11 +209,14 @@ public sealed class Binder
         private readonly HashSet<int> poisonedStages = [];
 
         /// <summary>
-        /// The aliases a stage continues under (DESIGN §3.5.3): every keyed or remote resolve's alias and
+        /// The aliases a stage continues under: every keyed or remote resolve's alias and
         /// owning row, and every alias a continued stage added, each with the keyed stage whose owner
         /// query carries the continuation.
         /// </summary>
         private readonly Dictionary<string, ContinuationAnchor> anchors = new(StringComparer.Ordinal);
+
+        /// <summary>The stages whose resolve took the request's <c>onMissing</c> because it named none of its own.</summary>
+        private readonly HashSet<int> inheritedOnMissing = [];
 
         /// <summary>How many stages continue under each keyed stage, by its alias.</summary>
         private readonly Dictionary<string, int> continuedPerAnchor = new(StringComparer.Ordinal);
@@ -200,7 +248,7 @@ public sealed class Binder
         private readonly List<(int Stage, string Path, string Op)> exactTexts = [];
 
         /// <summary>
-        /// The read ledger (improvement plan §3.S): every path a stage reads off the row, with its use and
+        /// The read ledger: every path a stage reads off the row, with its use and
         /// the join it loads from. It is written at the binder's read sites only (<see cref="Read"/>,
         /// <see cref="Record"/>): a path bound against a join's own target (its hint, its filter, its sort),
         /// a probe and what explain asks of a shape never reach it.
@@ -249,7 +297,7 @@ public sealed class Binder
         public async Task RunAsync()
         {
             await LoadAddonsAsync(entity);
-            shape = Shape.ForEntity(entity, addons);
+            shape = Shape.ForEntity(entity, addons).Deriving(contract2);
             entry = shape;
 
             BindRequestMembers();
@@ -259,7 +307,7 @@ public sealed class Binder
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
                 errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
 
-            // A name that starts with '$' is the engine's to bind (DG2 M11): a request that supplies
+            // A name that starts with '$' is the engine's to bind: a request that supplies
             // one is refused, so a variable the engine binds later never changes what a request means.
             if (contract2)
                 foreach (var name in (request.Variables?.Values.Keys ?? Enumerable.Empty<string>()).Where(name => name.StartsWith('$')).Order(StringComparer.Ordinal))
@@ -280,7 +328,7 @@ public sealed class Binder
                 var stage = pipeline[index];
 
                 // The conditions of the request's filter run at the earliest point their paths are in
-                // the row (DG2 M1): each boundary between two stages is tried in order, the page's last.
+                // the row: each boundary between two stages is tried in order, the page's last.
                 if (page is null)
                     PlaceFilter(index, last: stage?.Kind == "page" || (contract2 && stage?.Kind == "values"));
 
@@ -341,7 +389,7 @@ public sealed class Binder
                 }
 
                 // A stage that failed leaves its aliases poisoned: a later path under one fails
-                // without an error of its own, so one mistake is reported once (DESIGN §3.8).
+                // without an error of its own, so one mistake is reported once.
                 if (errors.Count > errorsBefore)
                     PoisonAliases(stage);
 
@@ -400,7 +448,7 @@ public sealed class Binder
                 InferLoads();
         }
 
-        // ---- join loads (improvement plan §3.S) -------------------------------------------------
+        // ---- join loads -------------------------------------------------
 
         /// <summary>
         /// What each join loads, once every stage is bound: its key, what later stages read under its
@@ -426,7 +474,7 @@ public sealed class Binder
 
                         var loaded = LoadedBy(final, lookup.As, lookup.From.Key?.Wire, whole[lookup.As]);
 
-                        stages[position] = lookup with { Select = BindLoads(loaded, Shape.ForEntity(lookup.From, addons)) };
+                        stages[position] = lookup with { Select = BindLoads(loaded, Shape.ForEntity(lookup.From, addons).Deriving(contract2)) };
                         loads[lookup.As] = new JoinLoad(loaded, ShownUnder(final, lookup.As, whole[lookup.As]));
                         break;
                     }
@@ -436,7 +484,7 @@ public sealed class Binder
                         whole[resolve.As] = (target.Select ?? []).Select(path => path.Wire).ToList();
 
                         var loaded = LoadedBy(final, resolve.As, target.Entity!.Key?.Wire, whole[resolve.As]);
-                        var select = BindLoads(loaded, Shape.ForEntity(target.Entity, addons));
+                        var select = BindLoads(loaded, Shape.ForEntity(target.Entity, addons).Deriving(contract2));
 
                         stages[position] = resolve with { Select = select, Cases = [only with { Targets = [target with { Select = select }] }] };
                         loads[resolve.As] = new JoinLoad(loaded, ShownUnder(final, resolve.As, whole[resolve.As]));
@@ -575,7 +623,7 @@ public sealed class Binder
             if (target.IsRemote || target.Entity is not { } entity)
                 return target with { RemoteSelect = sent, RemoteParentSelect = withParent ? parentSent : null };
 
-            var entityShape = Shape.ForEntity(entity, addons);
+            var entityShape = Shape.ForEntity(entity, addons).Deriving(contract2);
             var at = entityShape;
 
             // not a read: the item collection of the join's own target
@@ -629,7 +677,7 @@ public sealed class Binder
         }
 
         /// <summary>
-        /// The top-level members (DESIGN §3.0, §3.12). Under contract 2 a member a request does
+        /// The top-level members. Under contract 2 a member a request does
         /// not have is refused, since an engine that dropped it would run the request without
         /// what it asked for. Contract 1 ignores unknown members as it always has, but refuses
         /// <c>strict</c>: dropping it would hand a report the rows strict exists to refuse.
@@ -658,6 +706,15 @@ public sealed class Binder
                     Params = new Dictionary<string, object?> { ["member"] = "timing", ["reason"] = "notABoolean" },
                 });
 
+            // The request's default for a missing join target: one of three words.
+            if (request.OnMissing is { ValueKind: not JsonValueKind.Null } && request.MissingDefault is null)
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidOperand,
+                    Message = "'onMissing' is \"null\", \"report\" or \"refuse\": what every resolve of the request that names none of its own does with a reference that resolves to nothing.",
+                    Params = new Dictionary<string, object?> { ["member"] = "onMissing", ["reason"] = "notAPolicy", ["allowed"] = QueryRequest.MissingPolicies },
+                });
+
             if (request.MaxTimeMs is { ValueKind: not JsonValueKind.Null } ceiling && (ceiling.ValueKind != JsonValueKind.Number || !QueryRequest.IsWhole(ceiling, out _)))
                 errors.Add(new QueryValidationError
                 {
@@ -681,7 +738,7 @@ public sealed class Binder
         };
 
         /// <summary>
-        /// The internal <c>keyedBy</c> (DESIGN §3.5.2 step 3): the owner's rows grouped per key, at most
+        /// The internal <c>keyedBy</c>: the owner's rows grouped per key, at most
         /// <c>perKey</c> per key. Only an internal call carries it; anywhere else it is a member a
         /// request does not have. The path is a stored member of the entity, or of one item
         /// collection's element, which then travels under <see cref="BoundKeyedBy.Element"/> and is
@@ -702,7 +759,7 @@ public sealed class Binder
             }
 
             // The roots the prologue adds, poisoned until it binds: a keyedBy that fails is one error,
-            // not one more per path of the projection under them (DESIGN §3.8).
+            // not one more per path of the projection under them.
             foreach (var root in new[] { BoundKeyedBy.Element, BoundKeyedBy.Key })
                 if (!shape.IsTaken(root))
                     shape = shape.WithRoot(root, new ShapeNode.Poisoned(root));
@@ -759,7 +816,7 @@ public sealed class Binder
 
             // The owner's own cap on rows per key, whatever the caller's is: a remote lookup asks one
             // row more than its limit to tell a truncated parent, so the cap is this host's lookup
-            // limit plus that one (DESIGN §3.4.4).
+            // limit plus that one.
             if (perKey < 1 || perKey > options.Limits.MaxLookupLimit + 1)
             {
                 errors.Add(Error(Codes.LookupLimitExceeded,
@@ -969,7 +1026,7 @@ public sealed class Binder
         public BoundPipeline Result(BoundStage.Scope scope, bool decodeCursor = true)
         {
             var mode = shape.IsRootShape || (contract2 && OrderIsTotal()) ? PagingMode.Keyset : PagingMode.Offset;
-            // A contract 2 cursor is bound to what decides the rows and their order (DG2 M6); contract 1
+            // A contract 2 cursor is bound to what decides the rows and their order; contract 1
             // fingerprints the whole bound form, as it always has.
             var fingerprint = contract2
                 ? BoundCanonical.RowsFingerprint(scope, stages, reads, mode, keyedByBound)
@@ -1014,7 +1071,7 @@ public sealed class Binder
             };
         }
 
-        // ---- filter (DG2 M1) -------------------------------------------------------------------
+        // ---- filter -------------------------------------------------------------------
 
         /// <summary>One entry of the request's <c>filter</c>: its place in the list, its id, and what became of it.</summary>
         private sealed class FilterEntry(int index)
@@ -1577,6 +1634,10 @@ public sealed class Binder
             if (op == "is" && !path.IsRemote)
                 return BindIs(condition, path, index);
 
+            // The model's own type member: compared by the variants that hold the value.
+            if (path.Derived is { } derived && !path.IsRemote)
+                return BindDerived(condition, path, derived, op, at, index, reading);
+
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
                 errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
@@ -1645,7 +1706,7 @@ public sealed class Binder
             // is bound, so it is checked then.
             var isPattern = op is "contains" or "startsWith" or "endsWith" || (ignoreCase && !contract2);
 
-            // A folding contains or endsWith is a pattern that folds accents too (DG2 M10): each letter
+            // A folding contains or endsWith is a pattern that folds accents too: each letter
             // is a class of its equivalents, and it is that pattern the server has to compile.
             var foldsAccents = contract2 && ignoreCase && op is "contains" or "endsWith" && AccentFold.Applies(options.Representation.Collation);
 
@@ -1716,6 +1777,122 @@ public sealed class Binder
             }
 
             return new BoundCondition.Leaf(path, op, operand, IgnoreCase: false, IsSemiJoin: false);
+        }
+
+        /// <summary>
+        /// A condition on a member whose value follows from the variant its object is stored as (the
+        /// model's own type member): <c>{ "resource.type": { "eq": "driver" } }</c>. Each variant holds
+        /// one value, so <c>eq</c> and <c>in</c> are the variant test over the variants that hold one of
+        /// the values, and <c>neq</c> and <c>nin</c> its negation; several variants may hold one value. A
+        /// value no variant holds selects no row (and every row, negated). Text folds case unless the
+        /// condition says <c>caseSensitive</c>, as every string comparison of contract 2 does. Under a
+        /// collection the test is of some element, and negated of none, as it is for a stored member.
+        /// </summary>
+        private BoundCondition? BindDerived(FilterCondition condition, ResolvedPath path, DerivedDef derived, string op, Shape at, int index, Reading? reading)
+        {
+            if (op is not ("eq" or "neq" or "in" or "nin"))
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.InvalidOperand,
+                    Message = $"'{op}' does not apply to '{condition.Path}', whose value follows from the variant its object is stored as; compare it with eq, neq, in or nin.",
+                    Stage = index,
+                    Path = condition.Path,
+                    Params = new Dictionary<string, object?> { ["reason"] = PathReasons.Derived, ["can"] = new List<string> { "eq", "neq", "in", "nin" } },
+                });
+                return null;
+            }
+
+            var caseSensitive = BindCaseOption(condition, path, op, index);
+            var operand = coercer.Coerce(condition.Value, path, op, index, errors);
+
+            if (operand is null)
+                return null;
+
+            var texts = operand switch
+            {
+                BoundOperand.Single { Value: BsonString one } => [one.Value],
+                BoundOperand.Set set when set.Values.All(value => value is BsonString) => set.Values.Select(value => value.AsString).ToList(),
+                _ => (List<string>?)null,
+            };
+
+            if (texts is null)
+            {
+                errors.Add(Error(Codes.InvalidOperand,
+                    $"'{condition.Path}' holds one of {string.Join(", ", derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => $"'{value}'"))} wherever its object is; compare it with one of them. Whether the object is there is a test of the object ('exists').",
+                    index, condition.Path));
+                return null;
+            }
+
+            var comparison = caseSensitive is true ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            var holder = derived.Holder;
+            var baseName = OperandCoercer.ConcreteBaseName(holder);
+            var selected = derived.Values.Where(held => texts.Any(text => string.Equals(text, held.Value, comparison))).Select(held => held.Key).ToHashSet(StringComparer.Ordinal);
+            var includeBase = baseName is not null && selected.Contains(baseName);
+            var values = new List<BsonValue>();
+
+            if (includeBase && holder.DiscriminatorForm == DiscriminatorForm.Hierarchical)
+                values.Add(new BsonString(holder.Discriminator ?? baseName!));
+
+            foreach (var variant in holder.Variants)
+                if (selected.Contains(variant.Name) && !values.Contains(new BsonString(variant.Discriminator)))
+                    values.Add(new BsonString(variant.Discriminator));
+
+            if (includeBase)
+                values.Add(BsonNull.Value);
+
+            // The object that holds the member: the path one segment up, or the row or the alias itself.
+            var dot = condition.Path!.LastIndexOf('.');
+            ResolvedPath holding;
+
+            if (dot < 0)
+            {
+                holding = new ResolvedPath
+                {
+                    Wire = "", Storage = null, Kind = Kind.Object, Entity = path.Entity, CollectionAncestors = 0, Filterable = false, Sortable = false, Root = path.Root,
+                    Derived = derived,
+                };
+            }
+            else
+            {
+                // not a read: the object holding the member, whose read is recorded; the discriminator lies beside it
+                var resolution = at.Resolve(condition.Path[..dot], PathUsage.Match);
+
+                if (!resolution.Succeeded)
+                {
+                    errors.Add(Unresolved(resolution, index, condition.Path));
+                    return null;
+                }
+
+                // The holder is named on the path, so the test reads the discriminator this type stores, whatever the place is.
+                holding = resolution.Path! with { Derived = derived };
+            }
+
+            // A hierarchical discriminator lists a row's ancestors too, so a variant's discriminator also
+            // finds the rows of the variants derived from it; where those hold another value they are taken
+            // out again, which one object can say and a collection's elements cannot say together. A
+            // concrete root class is above every variant: its own discriminator stands in every row, so
+            // where its value is asked for every variant that holds another value is taken out.
+            var hierarchical = holder.DiscriminatorForm == DiscriminatorForm.Hierarchical;
+            var inherited = hierarchical
+                ? holder.Variants.Where(variant => !selected.Contains(variant.Name) && (includeBase || holder.Variants.Any(above => selected.Contains(above.Name) && OperandCoercer.Descends(variant, above)))).ToList()
+                : [];
+            var throughCollection = holding.CollectionAncestors > 0 || holding.Kind == Kind.Array;
+
+            if (throughCollection && (inherited.Count > 0 || (includeBase && holding.CollectionAncestors > 0)))
+            {
+                errors.Add(Error(Codes.InvalidOperand,
+                    $"'{condition.Path}' lies under a collection that is not unwound, and which value an element holds cannot be told from its stored variant without looking at one element at a time; test the elements with 'any' on the collection, or unwind it first.",
+                    index, condition.Path));
+                return null;
+            }
+
+            BoundCondition test = new BoundCondition.Leaf(holding, "is", new BoundOperand.Set(values), IgnoreCase: false, IsSemiJoin: false);
+
+            if (inherited.Count > 0)
+                test = new BoundCondition.And([test, new BoundCondition.Not(new BoundCondition.Leaf(holding, "is", new BoundOperand.Set([.. inherited.Select(variant => (BsonValue)new BsonString(variant.Discriminator))]), IgnoreCase: false, IsSemiJoin: false))]);
+
+            return op is "eq" or "in" ? test : new BoundCondition.Not(test);
         }
 
         /// <summary>
@@ -1792,7 +1969,7 @@ public sealed class Binder
             if (conditionOptions.IgnoreCase is not { } ignore)
                 return caseSensitive;
 
-            // Contract 2 has the one option (DG2 M12): the alias with the opposite sense is contract 1's.
+            // Contract 2 has the one option: the alias with the opposite sense is contract 1's.
             if (contract2)
             {
                 errors.Add(new QueryValidationError
@@ -1806,25 +1983,18 @@ public sealed class Binder
                 return caseSensitive;
             }
 
-            // `ignoreCase: false` restates the contract 1 default, and on a member without text
-            // asks for the exact comparison it already makes; neither changes anything and
-            // neither is refused.
-            if (!ignore && (!contract2 || (path.LeafKind != Kind.String && !path.IsRemote)))
-                return caseSensitive;
+            // Contract 1 from here on, where 'caseSensitive' is no option. `ignoreCase: false` restates
+            // its default: it changes nothing and is not refused.
+            if (!ignore)
+                return null;
 
             if (!applies)
             {
                 errors.Add(Error(Codes.OptionNotApplicable, $"'ignoreCase' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
-                return caseSensitive;
+                return null;
             }
 
-            if (caseSensitive is { } declared && declared == ignore)
-            {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive: {(declared ? "true" : "false")}' and 'ignoreCase: {(ignore ? "true" : "false")}' contradict each other; ignoreCase is the alias of caseSensitive with the opposite sense.", index, condition.Path));
-                return caseSensitive;
-            }
-
-            return caseSensitive ?? !ignore;
+            return false;
         }
 
         /// <summary>
@@ -1955,6 +2125,9 @@ public sealed class Binder
             if (lookup.Select is not null && RefuseSelect("lookup", LookupMembers, lookup.As, index))
                 return;
 
+            if (contract2 && lookup.LimitInvalid && RefuseInvalidMembers(["limit"], "lookup", LookupMembers, "a whole number", index))
+                return;
+
             if (lookup.Malformed.Count > 0)
             {
                 foreach (var name in lookup.Malformed)
@@ -1967,7 +2140,7 @@ public sealed class Binder
                 return;
             }
 
-            // On a keyed or remote alias the lookup runs at that alias's owner (DESIGN §3.5.3);
+            // On a keyed or remote alias the lookup runs at that alias's owner;
             // it is not a lookup of this host and does not count towards its limit.
             if (lookup.On is { } continuedOn && anchors.TryGetValue(continuedOn, out var anchor))
             {
@@ -2015,8 +2188,8 @@ public sealed class Binder
 
             if (string.IsNullOrWhiteSpace(lookup.From) || !binder.model.TryResolve(lookup.From, out var child, out var retired))
             {
-                // Another service's entity: the lookup runs at its owner through the keyed fetch
-                // (DESIGN §3.4.4), when this host can reach that owner.
+                // Another service's entity: the lookup runs at its owner through the keyed fetch,
+                // when this host can reach that owner.
                 if (RemoteOwnerOf(lookup.From) is { } service)
                 {
                     BindRemoteLookup(lookup, index, parent, service);
@@ -2057,7 +2230,7 @@ public sealed class Binder
 
             await LoadAddonsAsync(child);
 
-            var childShape = Shape.ForEntity(child, addons);
+            var childShape = Shape.ForEntity(child, addons).Deriving(contract2);
             // not a read: the child's own reference member, matched inside the join
             var reference = childShape.Resolve(lookup.Path ?? "", PathUsage.Match);
 
@@ -2071,7 +2244,7 @@ public sealed class Binder
 
             if (childPath.Reference() is not { } declared || declared.TargetEntity != parent.Id)
             {
-                errors.Add(Error(Codes.LookupNotDeclared, $"'{child.Id}#{lookup.Path}' does not declare a reference to '{parent.Id}'.", index, lookup.Path));
+                errors.Add(Joinable(Error(Codes.LookupNotDeclared, $"'{child.Id}#{lookup.Path}' does not declare a reference to '{parent.Id}'.", index, lookup.Path), child, parent.Id));
                 return;
             }
 
@@ -2188,7 +2361,7 @@ public sealed class Binder
             }
         }
 
-        // ---- remote lookup (DESIGN §3.4.4) ------------------------------------------------------
+        // ---- remote lookup ------------------------------------------------------
 
         /// <summary>
         /// The service that owns <paramref name="from"/> when a lookup of it is a remote lookup: a
@@ -2215,7 +2388,7 @@ public sealed class Binder
             binder.model.Entities.Keys.Any(id => id.StartsWith(service + ".", StringComparison.Ordinal));
 
         /// <summary>
-        /// A lookup whose <c>from</c> is another service's entity (DESIGN §3.4.4). It runs as the keyed
+        /// A lookup whose <c>from</c> is another service's entity. It runs as the keyed
         /// fetch runs a remote resolve, and is bound as one: the key of every page row is the parent's
         /// key, the target member is the child's <c>path</c>, and the owner answers grouped per key
         /// (<c>keyedBy</c>, at most one row more than the limit per key, ranked by the lookup's
@@ -2275,7 +2448,7 @@ public sealed class Binder
             }
 
             // The keys are the parent's keys: the owner's reference names the parent entity, whose
-            // key it holds (a remote reference targets the key, DESIGN §3.3.2).
+            // key it holds (a remote reference targets the key).
             if (parent.Key is not { Stored: true } key)
             {
                 errors.Add(Error(Codes.LookupNotDeclared, $"'{parent.Id}' has no stored key; a lookup from another service joins on it.", index, lookup.Path));
@@ -2319,7 +2492,7 @@ public sealed class Binder
                     errors.Add(Error(Codes.InvalidPath, "A sort entry of a lookup names a path of the child.", index, null));
 
             // What the wire form cannot carry to the owner is refused here, not dropped on the way;
-            // every variable is bound here, since the owner never receives them (DESIGN §3.5.5).
+            // every variable is bound here, since the owner never receives them.
             if (RefuseUnknownOptions(lookup.Filter?.Condition, index))
                 return;
 
@@ -2390,7 +2563,7 @@ public sealed class Binder
         // ---- resolve -------------------------------------------------------------------------
 
         /// <summary>
-        /// A resolve (DESIGN §3.4.1): the members, the collection guard, the declared cases with
+        /// A resolve: the members, the collection guard, the declared cases with
         /// <c>target</c> and <c>parentAs</c>, the executor, and the shape of the alias. A resolve
         /// under a keyed or remote alias continues the chain at that alias's owner
         /// (<see cref="BindContinued"/>); a keyed or remote resolve's own alias and owning row
@@ -2434,6 +2607,14 @@ public sealed class Binder
                 return;
             }
 
+            // The request's default for a missing target: a resolve that names none takes it as
+            // if it had written it, so an owner a continued resolve runs at is sent it on the stage itself.
+            if (contract2 && resolve.OnMissing is null && request.MissingDefault is { } standing)
+            {
+                resolve = resolve with { OnMissing = standing };
+                inheritedOnMissing.Add(index);
+            }
+
             // A union join: one path per target of the alias it continues under, one alias.
             if (resolve.ByTarget is not null)
             {
@@ -2442,7 +2623,7 @@ public sealed class Binder
             }
 
             // Step 3: under a keyed or remote alias the stage is a continuation of it, run at its
-            // owner (DESIGN §3.5.3); it is not a resolve of this host and does not count towards
+            // owner; it is not a resolve of this host and does not count towards
             // MaxResolveStages.
             var path = resolve.Path ?? "";
             var head = path.Split('.')[0];
@@ -2500,7 +2681,7 @@ public sealed class Binder
             // Step 4: the declared cases. A group's key over a member that declares a reference follows that reference.
             if (reference.References is not { } declaredCases)
             {
-                errors.Add(Error(Codes.ResolveNotDeclared, $"'{resolve.Path}' declares no reference; it is {Kinds.WithArticle(reference.Kind)}.", index, resolve.Path));
+                errors.Add(Joinable(Error(Codes.ResolveNotDeclared, $"'{resolve.Path}' declares no reference; it is {Kinds.WithArticle(reference.Kind)}.", index, resolve.Path), reference.Entity, toward: null));
                 return;
             }
 
@@ -2590,7 +2771,7 @@ public sealed class Binder
                 "refuse" => ResolveOnMissing.Refuse,
                 _ => (ResolveOnMissing?)null,
             };
-            // A strict request refuses a missing reference unless the stage says otherwise (DESIGN §3.4.3).
+            // A strict request refuses a missing reference unless the stage says otherwise.
             var effectiveOnMissing = onMissing ?? (contract2 && request.IsStrict ? ResolveOnMissing.Refuse : ResolveOnMissing.Null);
 
             // The cases with their targets bound; every target is bound, whichever executor runs it.
@@ -2601,7 +2782,7 @@ public sealed class Binder
             reportedFilterError = false;
 
             // The filter as every owner is sent it, local SelfOwner included: variables bound here,
-            // since an owner never receives them (DESIGN §3.5.5). A local target's own binding of the
+            // since an owner never receives them. A local target's own binding of the
             // filter reports an unbound variable already; a remote-only one reports it below.
             var substitution = new List<QueryValidationError>();
 
@@ -2635,7 +2816,7 @@ public sealed class Binder
             // Step 5: the executor. The in-aggregate $lookup runs one unconditional case on one
             // local entity, without conversion. What strict or onMissing asks of it (a filter's
             // excluded record told from a missing one, a non-key target's second record) the
-            // aggregate detects itself, so neither changes the executor or what binds (DESIGN §3.0).
+            // aggregate detects itself, so neither changes the executor or what binds.
             var first = cases[0].Targets[0];
             var inline = cases is [{ Declared: { When: null, KeyAs: KeyAs.None }, Targets: [{ IsRemote: false, Declared.Item: null }] }]
                 && elements is null;
@@ -2647,6 +2828,7 @@ public sealed class Binder
                 inline ? ResolveExecutor.Inline : ResolveExecutor.Keyed, cases, elements, collectionStorage, narrowedTo, parentAs, onMissing, effectiveOnMissing, index)
             {
                 OutcomeAs = outcomeAs,
+                OnMissingInherited = inheritedOnMissing.Contains(index),
             };
 
             stages.Add(stage);
@@ -2686,7 +2868,7 @@ public sealed class Binder
         }
 
         /// <summary>
-        /// A resolve or lookup under a keyed or remote alias (DESIGN §3.4.1 step 3, §3.5.3): bound
+        /// A resolve or lookup under a keyed or remote alias: bound
         /// as a <see cref="ContinuedStage"/> of the keyed stage whose owner query carries it, which
         /// the owner binds with its own model. Checked here: contract 2, the alias still in the row,
         /// not under an <c>elements: "all"</c> alias (the per-element association would be lost),
@@ -2694,7 +2876,7 @@ public sealed class Binder
         /// stage added, it names a target of that alias, which only the owner knows: it travels there
         /// and the owner checks it; the target the stage goes to here is the one the alias inherited),
         /// at most <c>MaxContinuedStages</c> per keyed stage, the new aliases free at the origin — so no continued alias collides with an origin alias — and every
-        /// variable bound, since the owner never receives <c>variables</c> (DESIGN §3.5.5).
+        /// variable bound, since the owner never receives <c>variables</c>.
         /// </summary>
         private void BindContinued(PipelineStage raw, int index, string root, ContinuationAnchor anchor, string? forTarget, IReadOnlyList<string?> aliases, string? outcome = null)
         {
@@ -2732,7 +2914,7 @@ public sealed class Binder
             var effective = anchor.Targets;
 
             // Under an alias a continued stage added, forTarget names a target of that alias, whose join
-            // the owner binds with its own model (DESIGN §3.5.3): the stage carries it to the owner, which
+            // the owner binds with its own model: the stage carries it to the owner, which
             // checks it and applies it to its own keyed stage, and an owner's refusal maps back here.
             // This host sends the stage wherever the alias it continues under goes.
             if (forTarget is not null && !anchor.Nested)
@@ -2797,7 +2979,7 @@ public sealed class Binder
             var stage = OperandCoercer.HoldsVariable(written) ? JsonSerializer.Deserialize<PipelineStage>(sent.GetRawText(), OxQLJson.Wire)! : raw;
 
             continuedPerAnchor[anchor.Stage.As] = count;
-            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective is [var only] ? only : null, outcomeAs is null ? added : [.. added, outcomeAs]) { Targets = effective is { Count: > 1 } ? effective : null });
+            stages.Add(new ContinuedStage(anchor.Stage.As, stage, index, effective is [var only] ? only : null, outcomeAs is null ? added : [.. added, outcomeAs]) { Targets = effective is { Count: > 1 } ? effective : null, OnMissingInherited = inheritedOnMissing.Contains(index) });
 
             // What this host can see of the stage's reads: the path it roots at. Its owner binds it and
             // answers the rest (a case member, the parent's key), which explain takes from the owner.
@@ -2846,7 +3028,7 @@ public sealed class Binder
         }
 
         /// <summary>
-        /// A union join (improvement plan §3.U): <c>resolve { as, byTarget: { target: path | { path, elements } } }</c>,
+        /// A union join: <c>resolve { as, byTarget: { target: path | { path, elements } } }</c>,
         /// one stage continued under a keyed or remote alias with several targets, one branch per target,
         /// all filling the one alias. It binds as one <see cref="ContinuedStage"/>: the owner of each
         /// target named runs its branch as an ordinary resolve (<see cref="Continuation.BranchOf"/>), and
@@ -2901,7 +3083,7 @@ public sealed class Binder
                 return;
             }
 
-            // One branch is the plain form: a path for one target (K12).
+            // One branch is the plain form: a path for one target.
             if (branches.Count < 2)
             {
                 errors.Add(NotApplicable(branches is [var single]
@@ -3054,6 +3236,7 @@ public sealed class Binder
             {
                 Targets = applies is { Count: > 1 } ? applies : null,
                 Branches = direct ? stage.Resolve!.ByTarget : null,
+                OnMissingInherited = inheritedOnMissing.Contains(index),
             });
 
             // What this host can see of the stage's reads: the path each branch roots at.
@@ -3071,7 +3254,7 @@ public sealed class Binder
 
         /// <summary>
         /// Refuses every option of a condition the engine does not know, or wrote with a value that is
-        /// not a boolean, at <paramref name="index"/> (DESIGN §3.5.3): the wire form carries only the
+        /// not a boolean, at <paramref name="index"/>: the wire form carries only the
         /// options it knows, so an owner would otherwise compare without what the caller asked for.
         /// True when something was refused.
         /// </summary>
@@ -3117,7 +3300,7 @@ public sealed class Binder
 
         /// <summary>
         /// Whether a path lies under an alias whose rows come from an owner after the page, where
-        /// only a resolve or a lookup continues (DESIGN §3.5.3): an unwind or a group there is
+        /// only a resolve or a lookup continues: an unwind or a group there is
         /// <c>NOT_CONTINUABLE</c>. True when it was refused.
         /// </summary>
         private bool RefusedUnderAnchor(string? path, string kind, int index)
@@ -3219,8 +3402,9 @@ public sealed class Binder
                     return operand is null ? null : new BoundCaseCondition(probe, ElementRelative(storage, collectionStorage), ValuesOf(operand), IsVariant: true);
                 }
 
+                // No condition is an unconditional case, so a kind of condition this binder does not know is never read as none.
                 default:
-                    return null;
+                    throw new NotSupportedException($"The reference condition {condition.GetType().Name} on '{reference.Wire}' is of a kind the binder does not know.");
             }
         }
 
@@ -3259,7 +3443,7 @@ public sealed class Binder
 
             await LoadAddonsAsync(target);
 
-            var entityShape = Shape.ForEntity(target, addons);
+            var entityShape = Shape.ForEntity(target, addons).Deriving(contract2);
             var at = entityShape;
             string? itemStorage = null;
 
@@ -3392,7 +3576,7 @@ public sealed class Binder
                     continue;
 
                 var first = targets[0];
-                var at = Shape.ForEntity(first.Entity!, addons);
+                var at = Shape.ForEntity(first.Entity!, addons).Deriving(contract2);
 
                 // not a read: the item collection of the join's own target
                 if (first.Declared.Item is not null && at.Resolve(first.Declared.Item, PathUsage.Unwind) is { Succeeded: true } collection)
@@ -3405,7 +3589,7 @@ public sealed class Binder
             }
         }
 
-        // ---- select (DG2) ----------------------------------------------------------------------
+        // ---- select ----------------------------------------------------------------------
 
         /// <summary>The members of a contract 2 lookup: a join has no <c>select</c> there.</summary>
         private const string LookupMembers = "from, path, as, filter, limit, sort, first, on, forTarget, parentAs";
@@ -3453,7 +3637,10 @@ public sealed class Binder
             if (!CheckStageMembers(unknown, "unwind", contract2 ? UnwindMembers : "path, as, preserveNull, includeIndex", index, Hint(unwind.Flatten is not null || unwind.KeepPathWritten)))
                 return;
 
-            // Contract 2 has one unwind (DG2 M2): the element goes under 'as' and the collection leaves
+            if (contract2 && RefuseInvalidMembers(unwind.Invalid, "unwind", UnwindMembers, "true or false", index))
+                return;
+
+            // Contract 2 has one unwind: the element goes under 'as' and the collection leaves
             // the row, so a path names one thing along the whole pipeline. There is nothing to choose.
             if (contract2 && unwind.KeepPathWritten)
             {
@@ -3628,6 +3815,42 @@ public sealed class Binder
 
         // ---- group ---------------------------------------------------------------------------
 
+        /// <summary>
+        /// Refuses a group that reads as another one than the caller wrote: a stage that is no object, a key
+        /// that names a path and a dateTrunc, an aggregate of several functions. Each would be bound with
+        /// part of it dropped.
+        /// </summary>
+        private bool RefusedAsWritten(GroupStage group, int index)
+        {
+            if (RefuseInvalidMembers(group.Invalid ? ["group"] : [], "group", "by, fields", "", index))
+                return true;
+
+            var before = errors.Count;
+
+            foreach (var by in group.By)
+                if (by.Path is not null && by.DateTrunc is not null)
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.UnknownStageMember,
+                        Message = $"The key '{by.As}' names a path and a dateTrunc; a group key names one of them.",
+                        Stage = index,
+                        Path = by.Path,
+                        Params = new Dictionary<string, object?> { ["stage"] = "group", ["members"] = new[] { "path", "dateTrunc" }, ["reason"] = "exclusive" },
+                    });
+
+            foreach (var (alias, aggregate) in group.Fields)
+                if (aggregate.Others.Count > 0)
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.InvalidAggregateArgument,
+                        Message = $"The aggregate '{alias}' carries '{aggregate.Function}' and '{string.Join(", ", aggregate.Others)}'; an aggregate is an object of one function.",
+                        Stage = index,
+                        Params = new Dictionary<string, object?> { ["stage"] = "group", ["field"] = alias, ["reason"] = "exclusive" },
+                    });
+
+            return errors.Count > before;
+        }
+
         private void BindGroup(GroupStage group, int index)
         {
             if (!CheckStageMembers(group.Unknown, "group", "by, fields", index))
@@ -3642,6 +3865,9 @@ public sealed class Binder
             foreach (var by in group.By)
                 if (!CheckStageMembers(by.Unknown, "a group key", "path, dateTrunc, as", index))
                     return;
+
+            if (contract2 && RefusedAsWritten(group, index))
+                return;
 
             var keys = new List<GroupKey>();
             var fields = new List<Aggregate>();
@@ -3878,7 +4104,7 @@ public sealed class Binder
             return TimeZoneInfo.TryConvertIanaIdToWindowsId(iana, out _);
         }
 
-        private BoundExpression? BindExpression(QueryExpression expression, int index, string function, out Kind kind, out ShapeDef? shapeDef)
+        private BoundExpression? BindExpression(QueryExpression expression, int index, string function, out Kind kind, out ShapeDef? shapeDef, int depth = 1)
         {
             kind = Kind.Unknown;
             shapeDef = null;
@@ -3901,7 +4127,7 @@ public sealed class Binder
 
             if (expression.IsPath)
             {
-                // A group over a keyed or remote alias's data is the chain's, which only a report aggregates (DESIGN §3.5.3).
+                // A group over a keyed or remote alias's data is the chain's, which only a report aggregates.
                 if (RefusedUnderAnchor(expression.Path, "group", index))
                     return null;
 
@@ -3948,12 +4174,18 @@ public sealed class Binder
 
             if (expression.IsArithmetic)
             {
+                if (depth > MaxExpressionDepth)
+                {
+                    errors.Add(Error(Codes.InvalidAggregateArgument, $"The argument of '{function}' nests more than {MaxExpressionDepth} levels of arithmetic.", index, null));
+                    return null;
+                }
+
                 var operands = new List<BoundExpression>();
                 var numeric = Kind.Long;
 
                 foreach (var operand in expression.Operands ?? [])
                 {
-                    var bound = BindExpression(operand, index, function, out var operandKind, out _);
+                    var bound = BindExpression(operand, index, function, out var operandKind, out _, depth + 1);
 
                     if (bound is null)
                         return null;
@@ -3995,6 +4227,23 @@ public sealed class Binder
 
         private void BindProject(ProjectStage rawProject, int index)
         {
+            if (!contract2)
+            {
+                rawProject = rawProject.AsContract1();
+            }
+            else if (rawProject.Invalid.Count > 0)
+            {
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.MixedProjection,
+                    Message = $"'{string.Join(", ", rawProject.Invalid)}' of project is neither 1 nor 0: a projection keeps a path with 1 or true and removes it with 0 or false.",
+                    Stage = index,
+                    Path = rawProject.Invalid[0],
+                    Params = new Dictionary<string, object?> { ["stage"] = "project", ["paths"] = rawProject.Invalid },
+                });
+                return;
+            }
+
             var project = ExpandDefault(rawProject, index);
 
             if (project is null)
@@ -4030,6 +4279,11 @@ public sealed class Binder
 
                 if (!resolution.Succeeded)
                 {
+                    // A member no row can carry (not stored, and nothing stored says its value) is refused
+                    // where a projection asks for it. An exclusion asks for nothing: the row is without it anyway.
+                    if (!inclusion && resolution.Code == Codes.NotStored)
+                        continue;
+
                     errors.Add(Unresolved(resolution, index, wire));
                     continue;
                 }
@@ -4079,7 +4333,7 @@ public sealed class Binder
                 if (wire is not null)
                     fields[wire] = 1;
 
-            return new ProjectStage { Fields = fields };
+            return project with { Fields = fields };
         }
 
         // ---- sort ----------------------------------------------------------------------------
@@ -4245,6 +4499,26 @@ public sealed class Binder
             return false;
         }
 
+        /// <summary>
+        /// Refuses a stage that carries a member of another JSON kind than the member takes (the stage's
+        /// own name for a stage that is no object): read as not written, it would be bound with the default.
+        /// </summary>
+        private bool RefuseInvalidMembers(IReadOnlyList<string> invalid, string stage, string members, string takes, int index)
+        {
+            foreach (var member in invalid)
+                errors.Add(new QueryValidationError
+                {
+                    Code = Codes.UnknownStageMember,
+                    Message = member == stage
+                        ? $"A {stage} stage is an object carrying {members}."
+                        : $"'{member}' of {stage} is {takes}.",
+                    Stage = index,
+                    Params = new Dictionary<string, object?> { ["stage"] = stage, ["member"] = member, ["reason"] = "kind" },
+                });
+
+            return invalid.Count > 0;
+        }
+
         // ---- page ----------------------------------------------------------------------------
 
         /// <summary>The members of a page stage on the public contract 2 route.</summary>
@@ -4252,7 +4526,7 @@ public sealed class Binder
 
         private void BindPage(PageStage stage, int index)
         {
-            // The public contract 2 page is addressed by a cursor alone (DG2 M4). Contract 1 keeps its
+            // The public contract 2 page is addressed by a cursor alone. Contract 1 keeps its
             // offset, and so does an internal call: a semi-join walks its owner's ids by offset.
             var cursorOnly = contract2 && !context.Internal;
 
@@ -4262,7 +4536,7 @@ public sealed class Binder
             if (!CheckStageMembers(unknown, "page", cursorOnly ? PublicPageMembers : contract2 ? "limit, offset, cursor, includeTotalCount, count" : "limit, offset, cursor, includeTotalCount", index))
                 return;
 
-            // The count is asked with 'count' and answered under 'pageInfo.count' (DG2 M3).
+            // The count is asked with 'count' and answered under 'pageInfo.count'.
             if (cursorOnly && stage.IncludeTotalCountWritten)
             {
                 errors.Add(new QueryValidationError
@@ -4284,6 +4558,24 @@ public sealed class Binder
                     Stage = index,
                     Params = new Dictionary<string, object?> { ["stage"] = "page", ["member"] = "offset", ["reason"] = "removed", ["use"] = "cursor" },
                 });
+                return;
+            }
+
+            if (contract2 && stage.Invalid.Count > 0)
+            {
+                foreach (var member in stage.Invalid)
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = member == "cursor" ? Codes.CursorInvalid : Codes.InvalidPageLimit,
+                        Message = member switch
+                        {
+                            "page" => $"A page stage is an object carrying {(cursorOnly ? PublicPageMembers : "limit, offset, cursor, includeTotalCount, count")}.",
+                            "cursor" => "'cursor' of page is a string: the 'nextCursor' of the page before it.",
+                            _ => $"'{member}' of page is a whole number.",
+                        },
+                        Stage = index,
+                        Params = new Dictionary<string, object?> { ["stage"] = "page", ["member"] = member, ["reason"] = "kind" },
+                    });
                 return;
             }
 
@@ -4310,12 +4602,12 @@ public sealed class Binder
 
             var limit = stage.Limit ?? options.Limits.DefaultPageSize;
 
-            // A report page (DESIGN §3.4.3): a strict request that neither continues nor jumps
+            // A report page: a strict request that neither continues nor jumps
             // reads its rows in one page, up to MaxReportPageSize, and refuses rather than cut them.
             var report = contract2 && request.IsStrict && stage.Cursor is null && stage.Offset is null;
             var maximum = report ? Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize) : options.Limits.MaxPageSize;
 
-            // A count-only request (DG2 M3): limit 0 with a count and without a cursor reads no page.
+            // A count-only request: limit 0 with a count and without a cursor reads no page.
             var countOnly = contract2 && limit == 0 && stage.Count is { Asked: true } && stage.Cursor is null;
 
             if (limit == 0 && contract2 && !countOnly)
@@ -4382,7 +4674,7 @@ public sealed class Binder
         }
 
         /// <summary>
-        /// The count step of a contract 2 page (DG2 M3): one step of <c>Count:StepRows</c> rows, lowered
+        /// The count step of a contract 2 page: one step of <c>Count:StepRows</c> rows, lowered
         /// by the request's <c>upTo</c> and by the host's <c>CountCap</c>, within the request's
         /// <c>budgetMs</c> under <c>Count:MaxBudgetMs</c>. Null when no count is asked.
         /// </summary>

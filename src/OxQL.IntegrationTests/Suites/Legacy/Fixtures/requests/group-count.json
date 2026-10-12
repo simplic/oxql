@@ -1,0 +1,27 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "group": {
+        "by": [
+          {
+            "path": "IsMirroredTour",
+            "as": "Mirrored"
+          }
+        ],
+        "fields": {
+          "Count": {
+            "count": true
+          }
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Mirrored": "asc"
+        }
+      ]
+    }
+  ]
+}

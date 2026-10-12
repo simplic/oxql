@@ -63,7 +63,7 @@ public class CountCapTests
         (await transport.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "count": 10 } } ]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
         (await transport.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "count": { "max": 10 } } } ]""")).ShouldRefuseExactly("UNKNOWN_STAGE_MEMBER");
 
-        // DG2 M3: contract 2 asks with 'count'; both forms of includeTotalCount are refused by name.
+        // Contract 2 asks with 'count'; both forms of includeTotalCount are refused by name.
         foreach (var form in new[] { "true", "false", "10" })
         {
             var refused = await transport.SendAsync(Corpus.Template, $$"""[ { "page": { "limit": 2, "includeTotalCount": {{form}} } } ]""");

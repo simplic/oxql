@@ -22,6 +22,7 @@ at once. The HTTP status follows from `type` and is not repeated in the body:
 | `access_denied` | 403 | the request carries no organisation, or the entity has no organisation member |
 | `not_executable` | 422 | well-formed, but this host cannot execute it now: a remote owner refused, is missing or runs an engine too old for the request, a semi-join is too large, the server ran out of memory; or a `strict` request lost data (its `errors` are the diagnostics that lost it) |
 | `timeout` | 504 | an aggregate exceeded its time ceiling |
+| `rate_limited` | 429 | more explains than the caller may send or have in flight (`EXPLAIN_LIMIT`, with `Retry-After`) |
 | `internal_error` | 500 | an engine fault; the message names the correlation id of the log line, and carries the detail only when the host sets `IncludeErrorDetails` |
 
 The engine turns every exception on the query path into an `INTERNAL_ERROR` envelope, so a 500
@@ -32,7 +33,7 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | the body cannot be read into the request model: not JSON; `entityType` or `pipeline` missing or `null`; a pipeline element that is a number, string or array; a condition that is not an object; `and`/`or` that is not an array; `not` that is not an object; an aggregate that is not an object; a `group.by` or `sort` of the wrong JSON type; a non-integral number where an integer is read; an explain envelope with a member other than `query`, `describe`, `remote`, `include`, a `remote` other than `check`/`skip`, or an `include` other than `indexes` |
+| 400 ProblemDetails | the body cannot be read into the request model: not JSON; `entityType` or `pipeline` missing or `null`; a pipeline element that is a number, string or array; a condition that is not an object; `and`/`or` that is not an array; `not` that is not an object; an aggregate that is not an object; a `group.by` or `sort` of the wrong JSON type; a non-integral number where an integer is read; an explain envelope with a member other than `query`, `include`, `shape`, `remote`, `catalog`, or one of the wrong JSON kind (an `include` or `remote` value the engine does not know is the 400 `EXPLAIN_LIMIT` envelope) |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
@@ -52,7 +53,7 @@ the listed status.
 | `UNKNOWN_ENTITY` | 400 | `entityType` or a lookup's `from` is not an entity id of this host (case-sensitive under contract 2) |
 | `INVALID_PATH` | 400 | an empty segment, a segment starting with `$`, more than 64 segments, a segment over 256 characters, a control character |
 | `UNKNOWN_PATH` | 400 | not a path of the shape at that stage: misspelled, removed by a projection, not an output of the group, a member of a group output, an alias written after an inclusion projection, `$default` after a group or unwind |
-| `NOT_STORED` | 400 | the member is in the wire view only; it may be projected, nothing else |
+| `NOT_STORED` | 400 | the member is in the wire view only: the service returns it and does not store it, so no row can carry it and no stage can read it, a projection included (`params.reason: "notStored"`, and `member` in a projection). Contract 1 accepts it in a projection and answers without it. A member whose value follows from the stored variant (the schema document's `byVariant`) is projected and compared with `eq`, `neq`, `in`, `nin`; every other use of it is this code with `params { reason: "derived", can }` |
 | `NOT_FILTERABLE` | 400 | a condition or group key on an object, collection, dictionary or `unknown` member, or on an addon key that is undefined, retired or of kind `object` |
 | `NOT_SORTABLE` | 400 | a sort on a path under a collection (a lookup alias included), or on a non-scalar or `unknown` member |
 | `NOT_A_COLLECTION` | 400 | `unwind` of a member that is not a collection, or after a group |
@@ -70,7 +71,7 @@ the listed status.
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason` |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason` |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
@@ -116,7 +117,7 @@ the listed status.
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
 | `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's |
 | `INTERNAL_ERROR` | 500 | any other fault |
-| `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a v1 `lookup` or `resolve`, an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
+| `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a `lookup` or `resolve` (in the v1 form only where the legacy pipeline is switched off or the request is an explain; in the contract 2 form always), an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
 
 Diagnostics travel in `diagnostics` of a successful answer. Those marked *loss* refuse a `strict`
 request instead (422 `not_executable`, the diagnostic as the error); `RESOLVE_MISSING` refuses by its
@@ -134,6 +135,7 @@ stage's effective `onMissing`:
 | `RESOLVE_TRUNCATED` (loss) | `alias`, `limit`, `rows` (a number) | an `elements: "all"` alias of some row held more than `MaxLookupLimit` targets |
 | `LOOKUP_TRUNCATED` (loss) | `alias`, `limit`, `rows` (a number) | a lookup had more children for some parent than its `limit` |
 | `UNWIND_DEPTH_TRUNCATED` (loss) | `path`, `depth`, `rows` | a `flatten` met items nested deeper than `MaxFlattenDepth` |
+| `FILTER_BINDS_EARLIER`, `SELECT_PATH_NOT_ON_TARGET` | as the explain note of the same code | two of explain's notes that a run carries too: a condition of the request's `filter` runs earlier than its entry was written for; a projected path no target of a union carries |
 | `VALUES_SCAN_CAPPED` | `scan` | a `values` stage read as many rows as its bound lets it: the list is of the values among those rows, a count is a count within them. No loss of rows: it stays a diagnostic under `strict` |
 | `SORT_ON_ADDON` | — | a sort on an addon key, whose values may be stored in several types |
 | `REGEX_UNANCHORED` | — | a `regex` that does not start with `^` or `\A` scans every value |
@@ -146,7 +148,7 @@ Every contract 2 `query` and `batch` answer carries `Server-Timing` (`total`, `d
 `remote`, `count`, `net` where they occurred), and a request that asks (`"timing": true`, or the header
 `X-OxQL-Timing`) the breakdown as the `timing` member; the members are listed in
 [`oxql-query-syntax.md`](oxql-query-syntax.md#where-the-time-went). A contract 1 answer carries
-neither ([below](#a-contract-1-answer-is-frozen)). What a host should know:
+neither ([below](#contract-1-answers)). What a host should know:
 
 - **A host can keep the breakdown to itself.** `Execution:TimingDetail` (default `true`) is whether
   a caller may ask for the `timing` member. It names the entities a request read, the documents and
@@ -158,8 +160,8 @@ neither ([below](#a-contract-1-answer-is-frozen)). What a host should know:
 
 - The split is always recorded (a timestamp pair per phase and per command); only the `bytes` of
   a command are measured on request, and that measuring is taken out of the request's total.
-- Every command the engine sends goes through a decorator of the host's `IAggregateRunner`
-  (`TimedAggregateRunner`), so a host that registers its own runner is measured too. The engine's
+- Every command the engine sends goes through a decorator of the host's `IAggregateRunner`,
+  so a host that registers its own runner is measured too. The engine's
   `MongoAggregateRunner` also says when the command's own reply arrived, how many `getMore`s
   followed and the driver's round-trip time; another runner leaves those out.
 - **A read the host makes at a database for the engine is database time.** The engine cannot see
@@ -213,35 +215,47 @@ neither ([below](#a-contract-1-answer-is-frozen)). What a host should know:
   one escapes it there. The schema document is the base package's and keeps its own spelling (its
   revision is the hash of its bytes).
 
-### A contract 1 answer is frozen
+### Contract 1 answers
 
-What a caller without the contract header receives from `query` and `batch` (while
-`Compat:Enabled`) is what the published engine sent it: the same status, the same headers, the same
-body bytes. Everything the engine has added to an answer on the wire since is a contract 2
-answer's alone:
+While `Compat:Enabled` is true, the header `X-OxQL-Contract` decides the contract: absent or
+empty is contract 1, `1` and `2` are themselves, any other value is 400 `UNKNOWN_REQUEST_MEMBER`
+(`params { reason: "contract", header, contracts: [1, 2] }`) on `query`, `batch` and `explain`.
 
-| added for contract 2 | a contract 1 answer |
+A contract 1 request is answered by the **legacy pipeline** by default (`Compat:Legacy:Enabled`
+and `Compat:Legacy:Always`, both `true`): a pipeline ported from the 1.1 query path, so that
+existing callers get the answers they got. It is temporary. [`LEGACY.md`](LEGACY.md) is its whole
+description: what it answers and guarantees, its switches and limits, its log line
+(`OxQL.Compat.Legacy`), health for its callers, how it is held and how it is removed. What an
+operator should know beside it: a `lookup` with `convert` runs JavaScript on the database server
+(`$function`), so a server with JavaScript disabled refuses it; a contract 1 request is not
+checked against an index and no explain describes its aggregate, so a slow report shows in the
+database's own slow-query log.
+
+With `Compat:Legacy:Always=false` the **compatibility rewrite** answers first: the request is
+rewritten to contract 2 (entity ids without regard to case, storage-spelled paths resolved against
+the model, the v1 type hints) and run on the contract 2 engine, with the rows in the v1 encoding;
+the legacy pipeline answers only what the rewrite cannot express. Each request the rewrite
+handles is logged under `OxQL.Compat` with the first legacy path, the user, the organisation and
+the correlation id. On that path a stage is never placed elsewhere than written and unwound rows
+and groups are paged by offset. Two recorded sets hold it on every test run and are not
+re-recorded for a contract 2 change: `OxQL.Tests/Fixtures/contract1/rewrite/pipelines.json` (what
+is sent to the database, and the cursor) and `OxQL.Tests/Fixtures/contract1/rewrite/http.json`
+(status, every header, the body bytes). The integration suites' contract 1 cases outside
+`Suites/Legacy` run on this path: their fleet sets `Compat:Legacy:Always=false`.
+
+What the wire of a contract 2 answer has is a contract 2 answer's alone, on either path:
+
+| contract 2 | a contract 1 answer |
 |---|---|
-| content coding (`Content-Encoding: br` / `gzip`), and with it `Vary: Accept-Encoding` and `Content-Length` | never coded, whatever `Accept-Encoding` says; no `Vary`, no length (the body is streamed by the framework's JSON formatter, as it was) |
+| content coding (`Content-Encoding: br` / `gzip`), and with it `Vary: Accept-Encoding` and `Content-Length` | never coded, whatever `Accept-Encoding` says; no `Vary`, no length |
 | `X-Content-Type-Options: nosniff` | not sent |
 | `Server-Timing`, and `Access-Control-Expose-Headers` for a request with `Origin` | not sent |
 | the `timing` member, asked by `"timing": true` or `X-OxQL-Timing` | never in the body; the member and the header are ignored |
-| the request members `timing`, `maxTimeMs`, `filter` | ignored whatever they hold, as every member contract 1 does not know (a value of another kind is no error) |
+| the request members `timing`, `maxTimeMs`, `filter` | ignored whatever they hold |
 | `pageInfo.count`, wrapped values written unwrapped, the row order of roots | not written; rows go through the contract 1 converter |
-| a stage placed elsewhere than written, paging by value after `unwind` and `group` | the stages run as written; the aggregates and the cursor are the recorded ones |
 
 The one place that decides it is the controller (`Contract1`), and whatever is added to an answer
-next goes behind it. Two recorded sets hold it on every test run, both captured from the engine
-before the work on contract 2 answers and never re-recorded for a contract 2 change:
-`OxQL.Tests/Fixtures/contract1/pipelines.json` (what is sent to the database, and the cursor) and
-`OxQL.Tests/Fixtures/contract1/http.json` (what is sent to the caller: status, every header, the body
-bytes; a request with `Accept-Encoding`, `Origin`, `X-OxQL-Timing` and the newer members in kinds
-contract 2 would refuse; recorded at the pushed base `99e646f` and identical at the published
-`master`). A difference there is a contract 1 caller's answer changing.
-
-Not frozen, and why: `GET /oxql/health` is read by name and only grows (below); `POST /oxql/explain`
-was rebuilt for 2.1 for both contracts before any of this, so no published engine ever sent the
-answer a contract 1 explain gets now; the schema document is the base package's.
+next goes behind it.
 
 ### Batch
 
@@ -258,14 +272,14 @@ order asked. A member the batch does not have (a batch-level `strict`, say) is a
 `UNKNOWN_REQUEST_MEMBER` under contract 2. On the internal route, where the calling service's engine
 writes the batch and each query, such a member (of the batch, of a query, of `keyedBy`) means the
 two services run different builds: the refusal says so and carries
-`params { reason: "engineBuild", members }` (see *Two builds in one fleet* in the README).
+`params { reason: "engineBuild", members }` (see *One build in a fleet* in the README).
 
 ## Limits
 
 Every limit is bound from the host's `OxQL` section and brought into range when the engine is
 registered: a value below 1 is raised to 1 (`MaxOffset` and `Cache:NegativeResolveTtlSeconds` to 0;
 a `MaxOffset` of 0 turns offset jumps off), `DefaultPageSize` and `ResolveKeyChunk` are clamped to
-`MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset`, `MaxContinuedStages` to `MaxPipelineStages`,
+`MaxPageSize`, `MaxSemiJoinIds` to `MaxOffset` (and at least 1), `MaxContinuedStages` to `MaxPipelineStages`,
 `MaxFlattenDepth` to 12, and each adjustment is logged as a warning when the engine is built. All
 twenty-five `Limits` values are published under `limits` on `GET /oxql/health`, with the effective
 `chainTimeoutMs`, `negativeResolveTtlSeconds`, the explain limits and the two `Values` bounds (48 entries). The fifteen
@@ -281,14 +295,14 @@ a caller checks a request against before sending it are also published in the sc
 | `Limits:MaxUnwindStages` | 5 | binder | `MAX_UNWIND_STAGES_EXCEEDED` | yes | — |
 | `Limits:MaxResolveStages` | 8 | binder: resolve stages bound on this host, local and remote | `MAX_RESOLVE_STAGES_EXCEEDED` | yes | continued stages are counted by the owner that binds them, not here |
 | `Limits:MaxContinuedStages` | 8, never above `MaxPipelineStages` | binder: stages continued under one keyed or remote alias | `MAX_CONTINUED_STAGES_EXCEEDED` | yes | the owner checks the forwarded stages against its own limits again |
-| `Limits:MaxGroupFields` | 40 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` (contract 2: `params { limit: "maxGroupFields", max, count }`) | yes | a grid derives one aggregate per column it totals; the value was 20 |
+| `Limits:MaxGroupFields` | 40 | binder, keys and aggregates together | `MAX_GROUP_FIELDS_EXCEEDED` (contract 2: `params { limit: "maxGroupFields", max, count }`) | yes | a grid derives one aggregate per column it totals |
 | `Limits:MaxProjectionFields` | 500 | binder | `MAX_PROJECTION_FIELDS_EXCEEDED` | yes | the paths a join after the page asks its owner for (the projection's under its alias) become the owner's projection and are checked against the owner's value |
 | `Limits:MaxConditions` | 200 | binder; leaf conditions, `any` members, lookup and local resolve filters, and semi-join conditions; a condition also nests at most 32 levels of `and`, `or`, `not` and `any` (fixed, `Binder.MaxConditionDepth`) | `MAX_CONDITIONS_EXCEEDED` | no | a remote resolve's `filter` is bound, and counted, by the owner |
 | `Limits:MaxFilterEntries` | 64 | binder, the entries of a contract 2 request's `filter`; checked before an entry is read. The conditions of all entries together are held to `MaxConditions` before any is placed or bound, so a filter over either bound costs its parse and one error | `MAX_FILTER_ENTRIES_EXCEEDED` (`params { limit: "maxFilterEntries", max, count }`); over the conditions `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry and `params { limit: "maxConditions", max }` | no (health only) | an owner query carries no `filter`: a condition for an owner travels as a `match` |
 | `Limits:MaxVariables` | 64 | binder | `MAX_VARIABLES_EXCEEDED` | no | — |
 | `Limits:MaxOffset` | 5 000 | binder, `page.offset` of contract 1 and of an internal call (a contract 2 page has none); not a cursor after `group` or `unwind` | `MAX_OFFSET_EXCEEDED` | yes | A semi-join reads the owner's matching ids page by page with `offset` up to this host's `MaxSemiJoinIds`; the owner's `MaxOffset` must be at least that, or the owner refuses (422 `RESOLVE_REFUSED`) |
 | `Limits:CountCap` | 100 000 | binder and compiler: the ceiling of every count. A contract 2 count never counts further (`pageInfo.count.stoppedBy: "cap"`); a contract 1 count stops at it | contract 1: diagnostic `TOTAL_COUNT_CAPPED` | no | a semi-join asks the owner for a count with its first page; a count the owner capped only makes the walk go page by page |
-| `Limits:MaxSemiJoinIds` | 5 000, never above `MaxOffset` | remote resolver | 422 `SEMI_JOIN_TOO_LARGE` | no | refused after the first owner page when the owner's count already exceeds it |
+| `Limits:MaxSemiJoinIds` | 5 000, never above `MaxOffset`, at least 1 | keyed fetch | 422 `SEMI_JOIN_TOO_LARGE` | no | refused after the first owner page when the owner's count already exceeds it |
 | `Limits:ResolveKeyChunk` | 500, never above `MaxPageSize` | keyed fetch: keys per owner query; a grouped query (`keyedBy`, two rows per key) carries at most `MaxPageSize / 2` keys | — | no | the owner's `MaxPageSize` and `MaxRequestBytes` bound it |
 | `Limits:MaxResolveKeys` | 10 000 | keyed fetch: keys asked of owners per request, over every keyed stage and target in stage order; keys the cache answers are free | diagnostic `RESOLVE_PARTIAL`; refused under `strict` | no | each owner applies its own to what it forwards further |
 | `Limits:MaxRequestBytes` | 262 144 | request-size filter, before the body is read | 413 `REQUEST_TOO_LARGE` | no | guards the owner's internal batch route too where the host puts the same filter on it (the Simplic base package does); an owner answering 413 is an unreachable owner to the caller |
@@ -355,7 +369,7 @@ Anonymous, always 200, and never waits for another service:
   "limits": {
     "maxPageSize": 500, "defaultPageSize": 100, "maxPipelineStages": 20, "maxLookupStages": 5,
     "maxUnwindStages": 5, "maxResolveStages": 8, "maxGroupFields": 40, "maxProjectionFields": 500,
-    "maxConditions": 200, "maxVariables": 64, "maxOffset": 5000, "countCap": 100000,
+    "maxConditions": 200, "maxFilterEntries": 64, "maxVariables": 64, "maxOffset": 5000, "countCap": 100000,
     "maxSemiJoinIds": 5000, "resolveKeyChunk": 500, "maxResolveKeys": 10000, "maxRequestBytes": 262144,
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
@@ -382,11 +396,20 @@ Anonymous, always 200, and never waits for another service:
   `resolve.remote`, `semiJoin`, `resolve.chain` and `lookup.remote` (a `lookup` whose `from` is another
   service's entity) when the host installed a remote query client;
   `explain` when `Explain:Enabled` (the default); `compat.v1` while `Compat:Enabled`.
-  **The list is read per caller.** A request without the contract header on a host that answers
-  contract 1 reads, ahead of those, the four names the published engine listed: `batch`,
-  `group.page`, `page.offset`, `any`. That host does all four for that caller, and a contract 1
-  client may gate on a name. (`unwind.keepPath`, which only an unpublished build listed, names a
-  member no engine takes any more and is listed for nobody.) Health is read by name: members and
+  **The list is read per caller and says what holds for that caller's requests.** A request without
+  the contract header is answered by the legacy pipeline by default (`Compat:Legacy:Always`), and
+  reads what that pipeline honours: `capabilities` is `["batch", "compat.v1"]` and `limits` has
+  `maxPageSize`, `defaultPageSize`, `maxPipelineStages`, `maxLookupStages`, `maxUnwindStages`,
+  `maxGroupFields`, `maxProjectionFields`, `maxRequestBytes`, `maxBatchQueries` and
+  `regexMaxLength`. There is no `page.offset` and no `maxOffset`: that caller pages by cursor only.
+  `status`, `service`, `engine` and `remote` are the same for every caller, so a host that reads
+  another's shallow health without the header finds the engine's version and contract and the two
+  limits it sizes its batches by.
+  On a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`, or the
+  legacy support off) a request without the header reads, ahead of the host's own names,
+  `batch`, `group.page`, `page.offset`, `any`, and every limit. That
+  host does all four for that caller, and a contract 1 client may gate on a name.
+  For a contract 2 caller health is read by name: members and
   limits are added, never removed or renamed.
 - `limits` are the values in force after registration adjusted them, not the configured ones;
   `chainTimeoutMs` is the effective value (clamped to `MaxTimeMs`).
@@ -395,8 +418,8 @@ Anonymous, always 200, and never waits for another service:
   reference, and is absent when the host has no remote query client or the request says
   `?shallow=true`. `reachable` is the last
   measurement, taken at most once per `Cache:HealthProbeTtlSeconds` in the background, and
-  `null` before the first one has finished or for a service that is not configured; a `null`
-  does not degrade `status`.
+  absent before the first one has finished or for a service that is not configured; an absent
+  `reachable` does not degrade `status`.
 - `?shallow=true` starts no measurement. It is the form one host uses to ask another, so a probe
   never sets off the probed service's own probes. The same answer tells the asking host the owner's
   `engine.version` and `limits.maxBatchQueries`.
@@ -628,7 +651,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   the collections above it (up to the entity) that are not unwound, and `crossed` the arrays its
   path crosses below the root, itself included; a collection is an `array`, or a `dictionary` whose
   `storedAs` is `arrayOfDocuments` or `arrayOfArrays`, and an unwound collection is its element.
-  A member that is not stored (`stored: false` on it or above it) is projectable and nothing else.
+  A member that is not stored (`stored: false` on it or above it) has no flag at all: no row can
+  carry it, so it is not projectable either. The exception is a member that publishes `byVariant`
+  and whose holding object is stored (nothing above it says `stored: false`): it is `projectable`,
+  admits `eq`, `neq`, `in` and `nin`, and `folds`; nothing else. Under an alias joined after the
+  page a member is read as its owner answers it, stored or not.
   Otherwise, with `leaf` the descriptor with arrays unwrapped: it is filterable when the leaf is a
   scalar or an enum not `storedAs: "document"`; then it admits `eq`, `neq`, `in`, `nin`, `exists`,
   the ordered operators on `int`, `long`, `double`, `decimal`, `date`, `dateTime`, `timeSpan`,
@@ -665,7 +692,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   sets its rows point to), `members` and `truncated`. A member row is
   `[path, kind, nullable, flags, more, onlyFor, reference, addon, description]` and ends at its last
   fact: `path` is dotted below the type, `nullable` is 0 or 1, `flags` the id of the member's own
-  flags, `more` the rarer facts (`leafKind`, `displayName`, `stored: false`, `collection` for a
+  flags, `more` the rarer facts (`leafKind`, `displayName`, `stored: false`, `values` of a member that holds one value per variant, `collection` for a
   dictionary stored as one, `enum`, `variants`, `flatten`, `flattenMembers`, `snapshotOf`,
   `deprecated`, `constraints`, and `children` when the member has members the rows do not list),
   `onlyFor` an index into the type's `onlyFor`, `reference` the declared reference (`simple`,
@@ -878,7 +905,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     `INVALID_PATH` (`request`) and `REGEX_TOO_LONG` (`limits`); one under the owner's addon bag is `organisation`
     and keeps the owner's `params.addon`. An error at a
     stage this host added to that query (the projection of the target field, the page) is said at
-    the condition too, since the run is refused for it all the same. A condition no owner was asked
+    the condition too, since the run is refused for it all the same.
     A run's refusal carries the same error under its `RESOLVE_REFUSED` head (contract 2), so the
     two answers differ in `basis` alone. The `filter` a remote `resolve` or `lookup` stage carries
     itself is checked the same way with the stage's own owner query: what the owner refuses of it is
@@ -1154,7 +1181,7 @@ through one mechanism, the **keyed fetch**, in two modes:
   assigns the answers per row by case and target order, lifting the aliases of continued stages
   back to the row. A remote target's owner is the other service, called through
   `IRemoteQueryClient.BatchAsync`; a local target's owner is this host, called in process with the
-  same context (`SelfOwner`), so a local typed, item, converted or element-wise resolve takes the same
+  same context, so a local typed, item, converted or element-wise resolve takes the same
   path.
 - **By condition**, before the page: the semi-join. A condition on a member of a plain remote alias
   asks the owner for the matching target keys page by page, refuses above `MaxSemiJoinIds`, and
@@ -1174,7 +1201,7 @@ owning service, owners in parallel:
 
 - `keyedBy` is accepted only on the internal route and in process (`IOxQLQueryService.BatchAsync(batch,
   internalCall: true, …)`, which marks the request context internal); on the public routes it is
-  `UNKNOWN_REQUEST_MEMBER`. It is the only new wire vocabulary; no header is added. A plain remote
+  `UNKNOWN_REQUEST_MEMBER`. No header is added. A plain remote
   resolve onto an entity's key sends the plain key match.
 - **Owner facts.** The keyed fetch splits each owner's batch at the owner's `maxBatchQueries`, sizes
   its key chunks by the owner's `maxPageSize`, both read from the owner's
@@ -1249,9 +1276,9 @@ of anything else (an owner that did not answer, a list the owner cut, a truncati
 counts rows) leaves the chunk unkept, and so do the keys of a cut answer. The semi-join's ids are
 keyed by organisation and the first-page owner query.
 
-**Contract header hint.** A request without `X-OxQL-Contract: 2` is contract 1 while
+**Contract header hint.** A request without the contract header is contract 1 while
 `Compat:Enabled` is on, which is the likeliest mistake when a query is pasted into a report data
-source. Every refusal such a request receives for a construct only contract 2 has ends its message
+source. On the rewrite path every refusal such a request receives for a construct only contract 2 has ends its message
 with "This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header." The
 codes are unchanged.
 
@@ -1293,9 +1320,9 @@ query request sends `X-OxQL-Contract: 2`.
 10. One internal batch call, as another service would make it: `POST` the host's internal batch
     route (for the Simplic base package `{api}/internal/oxql/batch`) with the cluster's internal
     api key and an organisation header, body `{ "queries": [ { "entityType": "{entity}", "pipeline": [ { "page": { "limit": 1 } } ] } ] }`
-    → 200 with one result; without the key → 401. The same body with a top-level `keyedBy` sent
-    to the public `{api}/oxql/batch` → the entry is refused with `UNKNOWN_REQUEST_MEMBER`.
-11. `POST {api}/oxql/explain` with the request of step 4 → 200, `valid: true`, `steps` and
+    → 200 with one result; without the key → 401. The same body with `keyedBy` added to the query, sent
+    to the public `{api}/oxql/batch` with `X-OxQL-Contract: 2` → the entry is refused with `UNKNOWN_REQUEST_MEMBER`.
+11. `POST {api}/oxql/explain` with the request of step 4 → 200, `valid: true`, `stages` and
     `result.columns` filled, no `advisory`; with the refusal of step 6 → 200, `valid: false`,
     `UNKNOWN_PATH` at stage 0. 404 only where explain was switched off on purpose.
 12. The service log: no OxQL startup error, no option-adjustment warning you did not expect, and

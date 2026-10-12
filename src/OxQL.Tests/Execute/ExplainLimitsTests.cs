@@ -18,7 +18,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// T5, the cheap refusals of an explain (improvement plan §3.E protection): each bound refuses
+/// The cheap refusals of an explain: each bound refuses
 /// before any model, binder or owner work. The binder reads the model first, so a model provider
 /// that counts its reads is the binder's call counter; a remote client that counts its calls is the
 /// owners'. Every refusal leaves both at 0; an explain within the bounds reads the model.

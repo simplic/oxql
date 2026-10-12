@@ -6,7 +6,7 @@ using Xunit;
 namespace OxQL.Tests.Cursor;
 
 /// <summary>
-/// DG2 M6: a contract 2 cursor is fingerprinted over what decides which rows there are and in which
+/// A contract 2 cursor is fingerprinted over what decides which rows there are and in which
 /// order. The trailing projection, a join nothing but the row's display reads and every join's
 /// <c>select</c> are outside it, so showing or hiding a column keeps a cursor valid; whatever a
 /// filter, a sort, an unwind or a group reads stays inside. Contract 1 fingerprints the whole form.
@@ -98,5 +98,65 @@ public class RowsFingerprintTests
         var read = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{{Join}}, { "sort": [{ "cust.name": "asc" }] }, { "project": { "number": 1 } }]""");
 
         BoundCanonical.DisplayOnly(read.Stages, read.Reads).Select(stage => stage.GetType().Name).Should().BeEquivalentTo(["Project"]);
+    }
+
+    /// <summary>A parcel names its depot, and a depot its region: two plain local references in a row.</summary>
+    private static readonly OxQL.Model.EntityModel Chain = OxQL.Model.Build.ClrModelBuilder.Build(
+    [
+        new OxQL.Model.Build.EntityDeclaration("fp.parcel", "fp.parcel", typeof(ParcelModel), "tmp_fp_parcels", null, false),
+        new OxQL.Model.Build.EntityDeclaration("fp.depot", "fp.depot", typeof(DepotModel), "tmp_fp_depots", null, false),
+        new OxQL.Model.Build.EntityDeclaration("fp.region", "fp.region", typeof(RegionModel), "tmp_fp_regions", null, false),
+    ]);
+
+    public sealed class ParcelModel
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        public string Number { get; set; } = "";
+
+        [OxQL.Model.Attributes.OxQLReference("fp.depot")]
+        public Guid DepotId { get; set; }
+    }
+
+    public sealed class DepotModel
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        public string Name { get; set; } = "";
+
+        [OxQL.Model.Attributes.OxQLReference("fp.region")]
+        public Guid RegionId { get; set; }
+    }
+
+    public sealed class RegionModel
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        public string Name { get; set; } = "";
+    }
+
+    [Fact]
+    public async Task A_chain_of_joins_nothing_but_the_display_reads_is_outside_the_fingerprint()
+    {
+        const string sort = """{ "sort": [{ "number": "asc" }] }""";
+        const string depot = """{ "resolve": { "path": "depotId", "as": "depot" } }""";
+        const string region = """{ "resolve": { "path": "depot.regionId", "as": "region" } }""";
+
+        async Task<string> Of(string pipeline) => (await BindHost.BoundAsync(Chain, "fp.parcel", pipeline)).Fingerprint;
+
+        var plain = await Of($"[{sort}]");
+
+        (await Of($"[{depot}, {sort}]")).Should().Be(plain);
+        (await Of($"[{depot}, {region}, {sort}]")).Should().Be(plain, "the second join reads its key off the first and decides no row either");
+        (await Of($$"""[{{depot}}, {{region}}, {{sort}}, { "project": { "number": 1, "region.name": 1 } }]""")).Should().Be(plain);
+        (await Of($$"""[{{depot}}, {{region}}, { "match": { "region.name": { "eq": "x" } } }, {{sort}}]""")).Should().NotBe(plain, "a match reads the second join, and that reads the first");
+        (await Of($$"""[{{depot}}, {{region}}, { "match": { "depot.name": { "eq": "x" } } }, {{sort}}]""")).Should().NotBe(plain, "a match reads the first join");
+        (await Of($$"""[{{depot}}, {{region}}, { "match": { "depot.name": { "eq": "x" } } }, {{sort}}]""")).Should().Be(await Of($$"""[{{depot}}, { "match": { "depot.name": { "eq": "x" } } }, {{sort}}]"""), "the second join still only fills the row");
     }
 }

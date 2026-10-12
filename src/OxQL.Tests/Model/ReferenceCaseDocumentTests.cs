@@ -6,7 +6,7 @@ using Xunit;
 namespace OxQL.Tests.Model;
 
 /// <summary>
-/// The document reader over <c>referenceCases</c> (DESIGN §5.4): the member order the schema
+/// The document reader over <c>referenceCases</c>: the member order the schema
 /// publishes (case <c>when</c>, <c>keyAs</c>, <c>targets</c>; target <c>entity</c>, <c>item</c>,
 /// <c>field</c>) reads into the same cases a CLR build declares.
 /// </summary>

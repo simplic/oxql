@@ -1,5 +1,5 @@
 {
-  "description": "Cursors over the fingerprints of the named golden renders (signing key BindHost.SigningKey). The contract 1 cursor was minted by OxQL 2.0 and must decode for ever; the contract 2 cursors were minted anew at the DG2 wire freeze of the unpublished contract 2 and carry the rows served. A cursor over unwound rows carries the sort values, the key and the position of each unwind; a cursor over groups the sort values, which end in the group keys (DG2 M5, S5).",
+  "description": "Cursors over the fingerprints of the named golden renders (signing key BindHost.SigningKey). The contract 1 cursor was minted by OxQL 2.0 and must decode for ever; the contract 2 cursors were minted anew at the wire freeze of contract 2 and carry the rows served. A cursor over unwound rows carries the sort values, the key and the position of each unwind; a cursor over groups the sort values, which end in the group keys (DG2 M5, S5).",
   "cursors": [
     {
       "case": "empty-default-page",

@@ -1,0 +1,26 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "lookup": {
+        "from": "tour",
+        "localPath": "Global$Id",
+        "foreignPath": "a..b",
+        "as": "X",
+        "convert": "nope"
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "up"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 0
+      }
+    }
+  ]
+}

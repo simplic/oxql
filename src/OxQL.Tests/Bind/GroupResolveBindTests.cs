@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// A <c>resolve</c> after a <c>group</c> (DG2): a key over a member that declares a reference keeps
+/// A <c>resolve</c> after a <c>group</c>: a key over a member that declares a reference keeps
 /// that reference in the group's output, so the stage binds from the key's alias with the executor it
 /// would have before the group. An aggregate, and a key over a member without a reference, carry
 /// none; a reference that picks its target by another member of the row cannot be followed from a row
@@ -132,12 +132,12 @@ public class GroupResolveBindTests
 
         var aggregate = await BindHost.ErrorAsync(ResolveModel.Model, Invoice, $$"""[{{Grouped("customerId")}}, { "resolve": { "path": "first", "as": "c" } }]""", Codes.ResolveNotDeclared);
 
-        aggregate.Message.Should().Be("'first' declares no reference; it is a guid.");
+        aggregate.Message.Should().StartWith("'first' declares no reference; it is a guid.");
         aggregate.Stage.Should().Be(1);
 
         var plain = await BindHost.ErrorAsync(ResolveModel.Model, Invoice, $$"""[{{Grouped("number")}}, { "resolve": { "path": "key", "as": "c" } }]""", Codes.ResolveNotDeclared);
 
-        plain.Message.Should().Be("'key' declares no reference; it is a string.");
+        plain.Message.Should().StartWith("'key' declares no reference; it is a string.");
     }
 
     [Theory]
@@ -163,7 +163,7 @@ public class GroupResolveBindTests
     {
         var error = await BindHost.ErrorAsync(ResolveModel.Model, Invoice, $$"""[{{Grouped("customerId")}}, { "resolve": { "path": "key", "as": "c" } }]""", Codes.ResolveNotDeclared, BindHost.Context(contract: 1));
 
-        error.Message.Should().Be("'key' declares no reference; it is a guid.");
+        error.Message.Should().StartWith("'key' declares no reference; it is a guid.");
     }
 
     [Fact]

@@ -562,8 +562,8 @@ public class JoinsResolveTests
     [Fact]
     public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_continues_the_chain_at_the_owner()
     {
-        // The owner of the vehicle runs the department's resolve for the vehicles it was sent
-        // (DESIGN §3.5.3): a local resolve there, lifted here beside 'veh'.
+        // The owner of the vehicle runs the department's resolve for the vehicles it was sent:
+        // a local resolve there, lifted here beside 'veh'.
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, """
             [ { "resolve": { "path": "createUserId", "as": "veh" } }, { "resolve": { "path": "veh.department.id", "as": "dep" } }, { "page": { "limit": 1 } } ]
             """);

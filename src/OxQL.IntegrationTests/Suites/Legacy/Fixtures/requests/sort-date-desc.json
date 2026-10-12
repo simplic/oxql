@@ -1,0 +1,18 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Number": 1,
+        "EndDateTime": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "EndDateTime": "desc"
+        }
+      ]
+    }
+  ]
+}

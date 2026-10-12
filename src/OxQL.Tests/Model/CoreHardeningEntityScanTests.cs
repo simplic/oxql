@@ -27,6 +27,23 @@ namespace OxQL.Tests.Model
         }
 
         [Fact]
+        public void An_assembly_named_twice_is_scanned_once()
+        {
+            var assembly = typeof(Lookalike.Decoy).Assembly;
+            var once = new List<BuildFinding>();
+            var twice = new List<BuildFinding>();
+
+            EntityScanner.Scan([assembly, assembly], twice).Select(declaration => declaration.Id)
+                .Should().Equal(EntityScanner.Scan([assembly], once).Select(declaration => declaration.Id));
+            twice.Select(finding => (finding.Code, finding.Target)).Should().Equal(once.Select(finding => (finding.Code, finding.Target)));
+
+            var model = ClrModelBuilder.Build([assembly, assembly]);
+
+            model.Entities.Keys.Should().Equal(ClrModelBuilder.Build([assembly]).Entities.Keys);
+            model.Entities.Should().ContainKey("probe.order");
+        }
+
+        [Fact]
         public void An_attribute_that_only_shares_the_name_declares_no_entity_and_breaks_no_scan()
         {
             var findings = new List<BuildFinding>();

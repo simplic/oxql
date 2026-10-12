@@ -16,7 +16,7 @@ using Xunit;
 namespace OxQL.Tests.Compile;
 
 /// <summary>
-/// The internal request member <c>keyedBy</c> (DESIGN §3.5.2 step 3): refused on the public route
+/// The internal request member <c>keyedBy</c>: refused on the public route
 /// as a member a request does not have, accepted on an internal call (the internal batch overload
 /// of the query service, and this host's own SelfOwner), and compiled to the grouped form — the
 /// keys matched first, an item's elements unwound under <c>oxEl</c>, the caller's leading matches,
@@ -58,7 +58,7 @@ public class KeyedByCompileTests
         var bound = await BoundAsync(Request("rc.customer", """{ "path": "code", "keys": ["A", "B"], "perKey": 2 }""",
             """[{ "match": { "name": { "eq": "x" } } }, { "project": { "name": 1, "code": 1 } }, { "page": { "limit": 4 } }]"""), Internal());
 
-        // The filter folds case, so the aggregate is collated and the string keys are compared again byte for byte (RE-12).
+        // The filter folds case, so the aggregate is collated and the string keys are compared again byte for byte.
         StagesOf(bound).Should().Equal("$match", "$match", "$match", "$match", "$setWindowFields", "$match", "$unset", "$project", "$sort", "$limit");
 
         var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)).PageStages;
@@ -81,7 +81,7 @@ public class KeyedByCompileTests
         var stages = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)).PageStages;
 
         stages[1]["$match"].AsBsonDocument.Names.Should().Equal("BillingLines._id");
-        stages[2]["$set"]["oxEl"]["$filter"]["input"].AsString.Should().Be("$BillingLines", "only the elements holding a key are unwound (RE-15)");
+        stages[2]["$set"]["oxEl"]["$filter"]["input"].AsString.Should().Be("$BillingLines", "only the elements holding a key are unwound");
         stages[3]["$unwind"]["path"].AsString.Should().Be("$oxEl");
         stages[3]["$unwind"]["includeArrayIndex"].AsString.Should().Be("__oxElIx");
         stages[4]["$match"].AsBsonDocument.Names.Should().Equal("oxEl._id");

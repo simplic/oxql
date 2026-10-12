@@ -224,7 +224,9 @@ public class GroupTests
               { "page": { "limit": 5 } } ]
             """);
         deleted.ShouldBeOk();
-        Kinds(deleted, "sum").Should().Equal(JsonValueKind.String);
+        Kinds(deleted, "sum").Should().Equal(JsonValueKind.Number);
+        Kinds(deleted, "mean").Should().Equal(JsonValueKind.Number);
+        deleted.Items[0]!["sum"]!.ToJsonString().Should().Be(ExactSum(deletedMileages), "the body carries the sum digit for digit");
         Number(deleted.Items[0]!["sum"]).Should().Be(decimal.Parse(ExactSum(deletedMileages), CultureInfo.InvariantCulture));
         Number(deleted.Items[0]!["mean"]).Should().Be(decimal.Parse(ExactSum(deletedMileages), CultureInfo.InvariantCulture) / deletedMileages.Count);
 
@@ -237,7 +239,9 @@ public class GroupTests
               { "page": { "limit": 5 } } ]
             """);
         live.ShouldBeOk();
-        var mean = live.Items[0]!["mean"]!.GetValue<string>();
+        // The number's own text in the body, so no digit is read through a double.
+        live.Items[0]!["mean"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+        var mean = live.Items[0]!["mean"]!.ToJsonString();
         Math.Abs(decimal.Parse(mean, CultureInfo.InvariantCulture) - exactMean).Should().BeLessThan(1e-20m, $"{mean} against {exactMean}");
         mean.Replace(".", "", StringComparison.Ordinal).TrimStart('-', '0').Length.Should().BeGreaterThan(17, "more significant digits than a double holds");
     }
@@ -393,18 +397,18 @@ public class GroupTests
     }
 
     [Fact]
-    public async Task N31_N32_a_variable_and_a_literal_argument_bind_and_both_come_back_as_decimal_strings()
+    public async Task N31_N32_a_variable_and_a_literal_argument_bind_and_both_come_back_as_decimal_numbers()
     {
         var client = await Transport();
         var counts = GroupKit.Counts(ShipmentStatuses());
 
         var literal = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "literal": 2 } } """));
         literal.ShouldBeOk();
-        literal.Values("s").Select(value => value!.GetValue<string>()).Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)));
+        literal.Values("s").Select(value => value!.ToJsonString()).Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)), "a sum over a literal is a decimal: a bare number in the body");
 
         var variable = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "$var": "w" } } """), new { w = 3 });
         variable.ShouldBeOk();
-        variable.Values("s").Select(value => value!.GetValue<string>()).Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)));
+        variable.Values("s").Select(value => value!.ToJsonString()).Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)), "and so is one over a variable");
 
         var unbound = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { "s": { "sum": { "$var": "nope" } } } } }, { "page": { "limit": 5 } }]""");
         ShouldRefuseOnly(unbound, "UNBOUND_VARIABLE");

@@ -59,6 +59,18 @@ public class CoreHardeningOptionsTests
             .And.Contain(line => line.Contains("MaxSemiJoinIds"));
     }
 
+    [Fact]
+    public void A_host_that_turns_offset_paging_off_keeps_a_semi_join_of_one_id()
+    {
+        var options = new OxQLOptions { Limits = { MaxOffset = 0 } };
+
+        var adjustments = options.Normalise();
+
+        options.Limits.MaxOffset.Should().Be(0);
+        options.Limits.MaxSemiJoinIds.Should().Be(1, "every limit but MaxOffset is at least 1");
+        adjustments.Should().ContainSingle().Which.Should().Contain("MaxSemiJoinIds").And.Contain("clamped to 1");
+    }
+
     public static TheoryData<string> Limits => new(typeof(LimitOptions).GetProperties().Select(property => property.Name));
 
     [Theory]

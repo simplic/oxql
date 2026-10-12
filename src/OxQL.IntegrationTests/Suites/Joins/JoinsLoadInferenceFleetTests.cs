@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// Load inference on the fleet (improvement plan §3.S): a join loads what later stages read, its
+/// Load inference on the fleet: a join loads what later stages read, its
 /// key and its output set, and the row shows the output set alone. A contract 2 join has no
 /// <c>select</c>: the member is refused by name, and the report scenarios and the EXAMPLE-CASE chain
 /// choose what an alias shows with their projection. A member a stage only reads is loaded and not

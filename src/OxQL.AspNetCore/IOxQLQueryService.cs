@@ -35,7 +35,7 @@ public interface IOxQLQueryService
             : BatchAsync(batch, cancellationToken);
 
     /// <summary>
-    /// Everything about one request without executing it (DESIGN §4): a plain query or the explain
+    /// Everything about one request without executing it: a plain query or the explain
     /// envelope. A request that does not bind is an answer with <c>valid: false</c>.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, CancellationToken cancellationToken = default);
@@ -45,7 +45,7 @@ public interface IOxQLQueryService
     /// <paramref name="internalCall"/> the request is explained as an internal call
     /// (<c>RequestContext.Internal</c>), so the owner queries an origin forwards for its remote check,
     /// which carry <c>keyedBy</c>, bind, and the request may carry what is left of its origin's explain (<c>budget</c>). The base package's internal explain route
-    /// (<c>POST internal/oxql/explain</c>, DESIGN §4.1) calls it with <c>true</c>; the public route never does.
+    /// (<c>POST internal/oxql/explain</c>) calls it with <c>true</c>; the public route never does.
     /// The default serves the public form and refuses an internal call.
     /// </summary>
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken = default) =>

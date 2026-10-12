@@ -13,7 +13,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// Remote continuation on the fleet (DESIGN §3.5.3, §3.5.4, scenarios A1/A2b/A5): the stages that
+/// Remote continuation on the fleet (scenarios A1/A2b/A5): the stages that
 /// continue from a record another service returned ride in the owner query the keyed fetch already
 /// sends over the internal batch route, and the owner runs them for the keys it was sent — the
 /// latest delivery attempt of each shipment line of the mixed invoice under <c>strict</c>, a chain
@@ -29,7 +29,7 @@ public class JoinsContinuationTests
     private static string Id(Guid id) => id.ToString("D");
 
     /// <summary>
-    /// A1 with A2b appended after the second resolve (DESIGN §2), the owning row's paths projected
+    /// A1 with A2b appended after the second resolve, the owning row's paths projected
     /// flat: each of the two remote targets gets only the paths its row has.
     /// </summary>
     private static string A1WithLatestAttempt => $$"""
@@ -173,7 +173,7 @@ public class JoinsContinuationTests
             """);
 
         refused.ShouldRefuse("RESOLVE_REFUSED", 422)["stage"]!.GetValue<int>().Should().Be(1, "the continued lookup the owner refused");
-        // The directory looks up the ledger's billing lines remotely (DESIGN §3.4.4), and the ledger refuses:
+        // The directory looks up the ledger's billing lines remotely, and the ledger refuses:
         // a billing line references a transaction, not a contact. The chain's error is said once, under this
         // host's one head, mapped back to the caller's stage (as explain says it).
         refused.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "LOOKUP_NOT_DECLARED");

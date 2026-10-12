@@ -6,8 +6,8 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The host's side of the request members of contract 2 (DESIGN §3.0, §3.12) and the published limits
-/// (§3.7): an unknown top-level member is refused, <c>strict</c> under contract 1 is refused
+/// The host's side of the request members of contract 2 and the published limits:
+/// an unknown top-level member is refused, <c>strict</c> under contract 1 is refused
 /// with the hint that the request was read as contract 1, and health publishes the report limits
 /// with the values the host runs under.
 /// </summary>
@@ -31,7 +31,7 @@ public class HostStrictRequestTests
     [Fact]
     public async Task Strict_without_the_contract_header_is_refused_with_the_contract_1_hint()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json("""{ "entityType": "probe.order", "strict": true, "pipeline": [] }"""));
         var body = await SampleHost.Body(response);
@@ -44,7 +44,7 @@ public class HostStrictRequestTests
     [Fact]
     public async Task A_join_stage_without_the_contract_header_is_refused_by_the_compat_binder_with_the_hint()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(
             """{ "entityType": "probe.customer", "pipeline": [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "first": true } }] }"""));
@@ -79,7 +79,7 @@ public class HostStrictRequestTests
             options.Cache.NegativeResolveTtlSeconds = 0;
         });
 
-        var body = await SampleHost.Body(await host.CreateClient().GetAsync("/OxQL/health"));
+        var body = await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health"));
         var limits = body!["limits"]!.AsObject();
 
         limits["maxReportPageSize"]!.GetValue<int>().Should().Be(2_000);

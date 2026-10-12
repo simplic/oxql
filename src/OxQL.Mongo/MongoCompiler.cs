@@ -10,44 +10,44 @@ using OxQL.Mongo.Resolve;
 namespace OxQL.Mongo;
 
 /// <summary>A slot in the page filter that a semi-join fills with the owner's ids before execution.</summary>
-public sealed record SemiJoinSlot(BoundCondition.Leaf Leaf, BsonArray Ids);
+internal sealed record SemiJoinSlot(BoundCondition.Leaf Leaf, BsonArray Ids);
 
 /// <summary>
 /// The field a flattening unwind writes into every row it produces: true when the collection the
 /// row came from had items nested deeper than <paramref name="Depth"/> levels, which are not in
 /// the rows. <paramref name="Stage"/> and <paramref name="Path"/> are the caller's, for the diagnostic.
 /// </summary>
-public sealed record FlattenProbe(string Field, int Stage, string Path, int Depth);
+internal sealed record FlattenProbe(string Field, int Stage, string Path, int Depth);
 
 /// <summary>
 /// The field a lookup writes into every row it joins: true when some parent had more children
 /// than <paramref name="Limit"/>, of which only the first <paramref name="Limit"/> are under the
 /// alias. <paramref name="Stage"/> and <paramref name="Alias"/> are the caller's, for the diagnostic.
 /// </summary>
-public sealed record LookupFlag(string Field, int Stage, string Alias, int Limit);
+internal sealed record LookupFlag(string Field, int Stage, string Alias, int Limit);
 
 /// <summary>
-/// An inline resolve whose outcomes the executor reads off the page rows (DESIGN §3.6): a row whose
+/// An inline resolve whose outcomes the executor reads off the page rows: a row whose
 /// reference at <paramref name="ReferenceStorage"/> holds a value and whose alias is null is
 /// <c>not_found</c>, or <c>excluded</c> when <paramref name="ExistsFlag"/> says the unfiltered
 /// target has the record (a filtered resolve); a row whose <paramref name="AmbiguityFlag"/> is set
 /// joined a key two records hold (a target onto a member that is not its key) and is
 /// <c>ambiguous</c>. The compiler keeps the reference and the flags in storage against projections.
 /// </summary>
-public sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage, string? AmbiguityFlag = null, string? ExistsFlag = null);
+internal sealed record InlineProbe(int Stage, BoundStage.Resolve Resolve, string ReferenceStorage, string? AmbiguityFlag = null, string? ExistsFlag = null);
 
 /// <summary>
 /// A strict request's check that no candidate row lost children to a truncation before a later
-/// match filtered it (DESIGN §3.4.3): <paramref name="Stages"/> run the pipeline up to the stage that
+/// match filtered it: <paramref name="Stages"/> run the pipeline up to the stage that
 /// sets the flag and keep one flagged row; any row means the page's answer may depend on what was
 /// cut. <paramref name="Code"/> is <c>LOOKUP_TRUNCATED</c> or <c>UNWIND_DEPTH_TRUNCATED</c>, and
 /// <paramref name="Stage"/>, <paramref name="Path"/> and <paramref name="Bound"/> (the limit or the
 /// depth) are the caller's, for the refusal.
 /// </summary>
-public sealed record TruncationProbe(string Code, int Stage, string Path, int Bound, IReadOnlyList<BsonDocument> Stages);
+internal sealed record TruncationProbe(string Code, int Stage, string Path, int Bound, IReadOnlyList<BsonDocument> Stages);
 
 /// <summary>What the compiler emits: the page and count pipelines, and what the executor still has to do.</summary>
-public sealed record CompiledQuery
+internal sealed record CompiledQuery
 {
     public required BoundPipeline Bound { get; init; }
 
@@ -61,7 +61,7 @@ public sealed record CompiledQuery
     /// parent that reaches it yields a row that is counted (the filter before it keeps exactly those),
     /// so as many parents as the count is bounded by rows hold at least that many rows, and the
     /// answer of the step is the same with it. The database then stops reading at that many parents,
-    /// also where it would otherwise fill a buffer of narrowed rows before the first is unwound. A
+    /// also where it would otherwise fill a buffer of narrowed rows before the first is unwound.
     /// The first step of a count alone keeps it; a later one, sized to read as much as the time
     /// allows, leaves it out (<c>MongoQueryEngine.CountLadderAsync</c>). Null where the count's stages
     /// bound the rows alone.
@@ -87,7 +87,7 @@ public sealed record CompiledQuery
     public required IReadOnlyList<BoundSortField> SortFields { get; init; }
 
     /// <summary>
-    /// The resolves the keyed fetch runs after the page (DESIGN §3.5.2), in stage order: every
+    /// The resolves the keyed fetch runs after the page, in stage order: every
     /// resolve on the keyed executor, remote or local, whose alias or owning row the row shows.
     /// </summary>
     public required IReadOnlyList<BoundStage.Resolve> KeyedResolves { get; init; }
@@ -171,21 +171,21 @@ public sealed record CompiledQuery
 /// unwind left it.</item>
 /// </list>
 /// </summary>
-public sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate)
+internal sealed record UnwindPlacement(int Position, bool ParentsFirst, IReadOnlyList<string> Prefiltered, bool RenameLate)
 {
     /// <summary>
     /// Set where the parents are cut first although the sort names the unwind's position
     /// (<c>includeIndex</c>) before the key: the direction of that position. The rows of parents that
     /// tie on the members before it then interleave by position, so the parents are ordered by those
     /// members, then by the first position each still has a row at, then by the key; the page's first
-    /// rows lie in the first parents of that order (<see cref="MongoCompiler.PlaceUnwind"/>). Null where
+    /// rows lie in the first parents of that order (<see cref="MongoCompiler.PlaceUnwind(BoundPipeline, bool)"/>). Null where
     /// the key stands before the position, and the order within a parent needs no such care.
     /// </summary>
     public bool? IndexAscending { get; init; }
 }
 
 /// <summary>Where a join that runs is emitted (<see cref="MongoCompiler.PhaseOf(BoundPipeline, int, string, bool)"/>).</summary>
-public enum JoinPhase
+internal enum JoinPhase
 {
     /// <summary>Where it was written, for every row that reaches it.</summary>
     BeforePage,
@@ -198,7 +198,7 @@ public enum JoinPhase
 }
 
 /// <summary>What the compiler needs from the host beside the bound pipeline; a null collation is the default one.</summary>
-public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null)
+internal sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int CountCap, CollationOptions? Collation = null)
 {
     /// <summary>
     /// Whether a projection or a join's select that keeps a member below a polymorphic object also
@@ -226,7 +226,7 @@ public sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Count
 /// them, null-aware keyset cursors merged into the leading scope match, offset paging after a
 /// group, and the count pipeline with its <c>$limit</c> after any <c>$group</c>.
 /// </summary>
-public static class MongoCompiler
+internal static class MongoCompiler
 {
     private const string KeyStorage = Aliases.KeyStorage;
 
@@ -300,7 +300,7 @@ public static class MongoCompiler
 
     /// <summary>
     /// The collation of the aggregate being compiled on this thread, which a folding
-    /// <c>contains</c> or <c>endsWith</c> builds its accent-folding pattern by (DG2 M10). A filter
+    /// <c>contains</c> or <c>endsWith</c> builds its accent-folding pattern by. A filter
     /// compiled outside <see cref="Compile"/> folds by the default collation.
     /// </summary>
     [ThreadStatic]
@@ -327,7 +327,6 @@ public static class MongoCompiler
 
     private static CompiledQuery CompileUnder(BoundPipeline bound, CompileOptions options)
     {
-
         var page = bound.Page;
         var stages = new List<BsonDocument>();
         var keyed = new List<BoundStage.Resolve>();
@@ -462,7 +461,7 @@ public static class MongoCompiler
         // does; the wire row follows the shape and leaves it out when it was not asked for.
         var lateJoinKeys = new List<string>();
 
-        // The reference of an inline resolve whose missing rows are reported (DESIGN §3.6) is read
+        // The reference of an inline resolve whose missing rows are reported is read
         // off the page rows as well, so it survives every projection in storage the same way.
         var inlineProbes = new List<InlineProbe>();
         var probeKeys = new List<string>();
@@ -1335,7 +1334,8 @@ public static class MongoCompiler
     /// A filter or sort document with every field path under <c>renamed.Alias</c> read under
     /// <c>renamed.Storage</c> instead (the element where the unwind left it; an empty storage reads it
     /// relative to the element, inside <c>$elemMatch</c>). The values are the document's own, so a
-    /// semi-join slot in it is still the slot the executor fills. Null leaves the document as it is.
+    /// semi-join slot in it is still the slot the executor fills; an expression (the exact comparison
+    /// of a semi-join's keys) reads its fields under the new name too. Null leaves the document as it is.
     /// </summary>
     private static BsonDocument Renamed(BsonDocument document, (string Alias, string Storage)? renamed)
     {
@@ -1348,6 +1348,8 @@ public static class MongoCompiler
         {
             if (element.Name is "$and" or "$or" or "$nor" && element.Value is BsonArray conditions)
                 result.Add(element.Name, new BsonArray(conditions.Select(condition => condition is BsonDocument inner ? Renamed(inner, renamed) : condition)));
+            else if (element.Name == "$expr" && rename.Storage.Length > 0)
+                result.Add(element.Name, RenamedIn(element.Value, rename));
             else if (element.Name.StartsWith(rename.Alias + ".", StringComparison.Ordinal))
                 result.Add(rename.Storage.Length == 0 ? element.Name[(rename.Alias.Length + 1)..] : rename.Storage + element.Name[rename.Alias.Length..], element.Value);
             else if (element.Name == rename.Alias && rename.Storage.Length > 0)
@@ -1358,6 +1360,16 @@ public static class MongoCompiler
 
         return result;
     }
+
+    /// <summary>An expression with every field under <c>rename.Alias</c> read under <c>rename.Storage</c>; a literal is kept as the instance it is.</summary>
+    private static BsonValue RenamedIn(BsonValue expression, (string Alias, string Storage) rename) => expression switch
+    {
+        BsonString { Value: var field } when field == "$" + rename.Alias => new BsonString("$" + rename.Storage),
+        BsonString { Value: var field } when field.StartsWith("$" + rename.Alias + ".", StringComparison.Ordinal) => new BsonString("$" + rename.Storage + field[(rename.Alias.Length + 1)..]),
+        BsonArray items => new BsonArray(items.Select(item => RenamedIn(item, rename))),
+        BsonDocument document => new BsonDocument(document.Select(element => new BsonElement(element.Name, element.Name == "$literal" ? element.Value : RenamedIn(element.Value, rename)))),
+        _ => expression,
+    };
 
     /// <summary>
     /// The legs of a page's total order with the values of the cursor's position: the sort fields,
@@ -1458,7 +1470,7 @@ public static class MongoCompiler
     }
 
     /// <summary>Whether a match after the stage at <paramref name="index"/> reads the alias: it may filter out a row the stage truncated.</summary>
-    /// <remarks>An unwind of the alias under another name (<c>as</c>) carries the cut rows on under that name too (D-ENG-1).</remarks>
+    /// <remarks>An unwind of the alias under another name (<c>as</c>) carries the cut rows on under that name too.</remarks>
     private static bool FilteredLater(IReadOnlyList<BoundStage> stages, int index, string alias)
     {
         var names = new List<string> { alias };
@@ -1475,11 +1487,15 @@ public static class MongoCompiler
         return false;
     }
 
-    /// <summary>The stages so far, the stage's own, then one row carrying the truncation flag.</summary>
+    /// <summary>
+    /// The stages so far, the stage's own, then one row carrying the truncation flag. The stages are
+    /// the page's own documents, not copies: a semi-join slot in them is the one the executor fills,
+    /// so the probe reads the rows the page reads.
+    /// </summary>
     private static List<BsonDocument> Probing(IEnumerable<BsonDocument> before, IEnumerable<BsonDocument> emitted, string flag) =>
     [
-        .. before.Select(stage => stage.DeepClone().AsBsonDocument),
-        .. emitted.Select(stage => stage.DeepClone().AsBsonDocument),
+        .. before,
+        .. emitted,
         new("$match", new BsonDocument(flag, true)),
         new("$limit", 1),
         new("$project", new BsonDocument(KeyStorage, 1)),
@@ -1526,7 +1542,7 @@ public static class MongoCompiler
         probes.SelectMany(probe => new[] { probe.AmbiguityFlag, probe.ExistsFlag }).OfType<string>();
 
     /// <summary>
-    /// The outcomes of the page's inline resolves (DESIGN §3.6): per probe, every row whose
+    /// The outcomes of the page's inline resolves: per probe, every row whose
     /// reference holds a value and whose alias is null or absent is <c>not_found</c>, or
     /// <c>excluded</c> when the unfiltered target has the record; one whose ambiguity flag is set
     /// is <c>ambiguous</c>; each keyed by the reference's wire value. A null reference is
@@ -1558,12 +1574,7 @@ public static class MongoCompiler
                 if (joined && !ambiguous)
                     continue;
 
-                var key = WireEncoder.EncodeScalar(value, reference.LeafKind, reference.Leaf) switch
-                {
-                    null => null,
-                    System.Text.Json.Nodes.JsonValue scalar => scalar.ToString(),
-                    var other => other.ToJsonString(),
-                };
+                var key = WireEncoder.KeyText(value, reference.LeafKind, reference.Leaf);
 
                 outcomes.Add(new KeyedRowOutcome(probe.Stage, probe.Resolve.As, row, null, key,
                     joined ? KeyedOutcome.Ambiguous : exists ? KeyedOutcome.Excluded : KeyedOutcome.NotFound));
@@ -1698,17 +1709,20 @@ public static class MongoCompiler
     // ---- filters ----------------------------------------------------------------------------
 
     /// <summary>Compiles a condition tree to a filter document; <paramref name="collated"/> when the aggregate carries the collation.</summary>
-    public static BsonDocument Filter(BoundCondition condition, List<SemiJoinSlot>? semiJoins = null, bool collated = false) => condition switch
+    public static BsonDocument Filter(BoundCondition condition, List<SemiJoinSlot>? semiJoins = null, bool collated = false) => Filter(condition, semiJoins, collated, element: false);
+
+    /// <summary><see cref="Filter(BoundCondition, List{SemiJoinSlot}?, bool)"/>; <paramref name="element"/> inside an <c>$elemMatch</c>, which takes no expression.</summary>
+    private static BsonDocument Filter(BoundCondition condition, List<SemiJoinSlot>? semiJoins, bool collated, bool element) => condition switch
     {
-        BoundCondition.And and => new BsonDocument("$and", new BsonArray(and.Conditions.Select(inner => Filter(inner, semiJoins, collated)))),
-        BoundCondition.Or or => new BsonDocument("$or", new BsonArray(or.Conditions.Select(inner => Filter(inner, semiJoins, collated)))),
-        BoundCondition.Not not => new BsonDocument("$nor", new BsonArray { Filter(not.Condition, semiJoins, collated) }),
-        BoundCondition.Any any => new BsonDocument(any.Path.Storage!, new BsonDocument("$elemMatch", Filter(any.Inner, semiJoins, collated))),
-        BoundCondition.Leaf leaf => Leaf(leaf, semiJoins, collated),
+        BoundCondition.And and => new BsonDocument("$and", new BsonArray(and.Conditions.Select(inner => Filter(inner, semiJoins, collated, element)))),
+        BoundCondition.Or or => new BsonDocument("$or", new BsonArray(or.Conditions.Select(inner => Filter(inner, semiJoins, collated, element)))),
+        BoundCondition.Not not => new BsonDocument("$nor", new BsonArray { Filter(not.Condition, semiJoins, collated, element) }),
+        BoundCondition.Any any => new BsonDocument(any.Path.Storage!, new BsonDocument("$elemMatch", Filter(any.Inner, semiJoins, collated, element: true))),
+        BoundCondition.Leaf leaf => Leaf(leaf, semiJoins, collated, element),
         _ => new BsonDocument(),
     };
 
-    private static BsonDocument Leaf(BoundCondition.Leaf leaf, List<SemiJoinSlot>? semiJoins, bool collated)
+    private static BsonDocument Leaf(BoundCondition.Leaf leaf, List<SemiJoinSlot>? semiJoins, bool collated, bool element)
     {
         if (leaf.IsSemiJoin)
         {
@@ -1717,7 +1731,13 @@ public static class MongoCompiler
 
             semiJoins?.Add(new SemiJoinSlot(leaf, ids));
 
-            return new BsonDocument(reference.Storage!, new BsonDocument("$in", ids));
+            var among = new BsonDocument(reference.Storage!, new BsonDocument("$in", ids));
+
+            // The collation folds the $in like any comparison, and the owner's keys are exact: a
+            // reference stored as text is compared again byte for byte, over the same slot.
+            return collated && !element && IsStringStored(reference)
+                ? new BsonDocument("$and", new BsonArray { among, ExactKeysMatch(reference.Storage!, ids)["$match"] })
+                : among;
         }
 
         if (leaf.Op == "is")
@@ -2022,7 +2042,7 @@ public static class MongoCompiler
     private static bool IsKeyed(BoundStage.Resolve resolve) => resolve.IsRemote || resolve.Executor == ResolveExecutor.Keyed;
 
     /// <summary>
-    /// The start of an internal owner query grouped per key (<c>keyedBy</c>, DESIGN §3.5.2 step 3):
+    /// The start of an internal owner query grouped per key (<c>keyedBy</c>):
     /// the rows holding a key, and for an item target each matching element under its alias, one
     /// row per element.
     /// </summary>
@@ -2036,7 +2056,7 @@ public static class MongoCompiler
 
         yield return new BsonDocument("$match", new BsonDocument(keyedBy.Path.Storage!, new BsonDocument("$in", keys)));
 
-        // Whole rows (a remote lookup of an entity, DESIGN §3.4.4): each row carries the key it
+        // Whole rows (a remote lookup of an entity): each row carries the key it
         // answers for. A path through a collection may hold several of the keys, one per element, so
         // the row is answered once per distinct key it holds.
         if (keyedBy.KeyAlias is { } keyAlias)
@@ -2081,7 +2101,7 @@ public static class MongoCompiler
 
         // Only the elements holding a key are unwound, so a row does not carry its whole collection
         // into every element it has; each keeps its position, which orders two elements of one row
-        // under one key (RE-15).
+        // under one key.
         yield return new BsonDocument("$set", new BsonDocument(keyedBy.ElementAlias!, new BsonDocument("$filter", new BsonDocument
         {
             ["input"] = "$" + keyedBy.ItemStorage,
@@ -2131,7 +2151,7 @@ public static class MongoCompiler
         var element = keyedBy.ItemStorage is not null && keyedBy.KeyAlias is null;
 
         // The rows of a key in the query's own order when it sorts right after its leading matches
-        // (a remote lookup's sort, DESIGN §3.4.4), completed by the record key; by record key otherwise.
+        // (a remote lookup's sort), completed by the record key; by record key otherwise.
         var sortBy = new BsonDocument();
 
         foreach (var field in sort ?? [])
@@ -2148,7 +2168,7 @@ public static class MongoCompiler
             new("$setWindowFields", new BsonDocument
             {
                 // Inside a collated aggregate a partition on a string key folds keys that differ only in
-                // case into one; its hash compares the bytes, so each key is ranked on its own (RE-12),
+                // case into one; its hash compares the bytes, so each key is ranked on its own,
                 // and the key beside the hash keeps two keys apart whose hashes collide.
                 ["partitionBy"] = collated && keyedBy.Keys.Count > 0 && keyedBy.Keys.All(key => key.IsString)
                     ? new BsonDocument { ["h"] = new BsonDocument("$toHashedIndexKey", "$" + keyedBy.PartitionStorage), ["k"] = "$" + keyedBy.PartitionStorage }
@@ -2223,7 +2243,7 @@ public static class MongoCompiler
     /// An inline resolve: the indexed <c>$lookup</c> with the scope inside, the target's filter, one
     /// record, then a <c>$set</c> that takes it out of the array. With an ambiguity flag the join takes
     /// two records and the flag says whether there were two; with an existence flag a second join
-    /// without the filter says whether the target has the record at all (DESIGN §3.6).
+    /// without the filter says whether the target has the record at all.
     /// </summary>
     private static IEnumerable<BsonDocument> LocalResolve(BoundStage.Resolve resolve, List<SemiJoinSlot> semiJoins, bool collated, InlineProbe? probe = null, bool keepDiscriminators = false)
     {
@@ -2289,7 +2309,7 @@ public static class MongoCompiler
     }
 
     /// <summary>
-    /// The outcome of an inline resolve as the aggregate writes it on every row (improvement plan §3.O),
+    /// The outcome of an inline resolve as the aggregate writes it on every row,
     /// in the keyed fetch's words: <c>reference_null</c> where the reference holds nothing; with a record
     /// joined, <c>ambiguous</c> where a second holds the key (<paramref name="two"/>) and else
     /// <c>resolved</c>; without one, <c>excluded</c> where the unfiltered target has the record
@@ -2660,6 +2680,12 @@ public static class MongoCompiler
             if (path.Storage is null)
                 continue;
 
+            // A member read off the discriminator: an inclusion keeps the discriminator, and an
+            // exclusion leaves it where it is, since the object's other members are read by it. The
+            // row follows the shape and does not show the member.
+            if (!project.Inclusion && path.Derived is not null)
+                continue;
+
             if (!project.Inclusion && kept.Any(storage => Covers(path.Storage, storage)))
                 continue;
 
@@ -2704,7 +2730,7 @@ public static class MongoCompiler
     }
 
     /// <summary>
-    /// The discriminators a projection of <paramref name="paths"/> has to keep (RE-16): for each path
+    /// The discriminators a projection of <paramref name="paths"/> has to keep: for each path
     /// below a polymorphic object (an object, or the element of a collection of objects, whose type has
     /// variants), that object's discriminator element, in storage; the path itself is not an ancestor.
     /// </summary>
@@ -2851,7 +2877,7 @@ public static class MongoCompiler
     /// </list>
     /// Contract 1 keeps its rule (after the page whenever only the display reads the alias), and so do
     /// the stages as written (<paramref name="asWritten"/>), which cut no parents. Explain reads it for
-    /// a join step's phase (DESIGN §4.3), so what it says is what runs.
+    /// a join step's phase, so what it says is what runs.
     /// </summary>
     public static JoinPhase PhaseOf(BoundPipeline bound, int index, string alias, bool asWritten = false)
     {

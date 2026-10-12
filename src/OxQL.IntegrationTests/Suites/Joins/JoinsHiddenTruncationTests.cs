@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// Strict refuses a truncation a later match hides (RE-3, DESIGN §3.4.3): a lookup cut at its limit,
+/// Strict refuses a truncation a later match hides: a lookup cut at its limit,
 /// or a flatten cut at its depth, whose truncated row a later match filters out, is not on the page,
 /// yet the answer depends on what was cut. Outside strict a page is what it is; under strict the rows
 /// up to the truncation are checked and the request is refused.

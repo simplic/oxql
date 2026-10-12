@@ -3,12 +3,12 @@ using OxQL.Core.Models;
 namespace OxQL.Core.Binding;
 
 /// <summary>
-/// A stage continued at the owner of a keyed or remote alias (DESIGN §3.4.1 step 3, §3.5.3): a
+/// A stage continued at the owner of a keyed or remote alias: a
 /// <c>resolve</c> whose path lies under the alias, or a <c>lookup</c> whose <c>on</c> names it. The
 /// origin cannot run it — it has neither the owner's rows nor its model — so the stage rides in the
 /// owner query the keyed fetch already sends for <paramref name="Anchor"/>, between the key match
 /// and the projection, and the owner binds and runs it as its own. <paramref name="Stage"/> is the
-/// stage as the caller wrote it, every variable substituted (DESIGN §3.5.5), its paths still the
+/// stage as the caller wrote it, every variable substituted, its paths still the
 /// origin's: <see cref="Continuation.For"/> rewrites them per target. <paramref name="OriginIndex"/>
 /// is the caller's stage index; <paramref name="ForTarget"/> the one target of the anchor it applies
 /// to, inherited from an alias it continues under (several: <see cref="Targets"/>); <paramref name="Aliases"/> the aliases it adds,
@@ -40,6 +40,9 @@ public sealed record ContinuedStage(string Anchor, PipelineStage Stage, int Orig
     /// </summary>
     public IReadOnlyList<ResolveBranch>? Branches { get; init; }
 
+    /// <summary>Whether the stage's <c>onMissing</c> is the request's default, which the resolve took because it named none; bound-only.</summary>
+    public bool OnMissingInherited { get; init; }
+
     /// <summary>Whether the owner of <paramref name="target"/> runs the stage.</summary>
     public bool AppliesTo(string target) =>
         (ForTarget is null || ForTarget == target) && (Targets is null || Targets.Contains(target, StringComparer.Ordinal));
@@ -63,13 +66,13 @@ public sealed record OwnerContinuation(IReadOnlyList<PipelineStage> Stages, IRea
 }
 
 /// <summary>
-/// The splitter of remote continuation (DESIGN §3.5.3): it collects a keyed stage's continued stages,
+/// The splitter of remote continuation: it collects a keyed stage's continued stages,
 /// keeps those that apply to one target (<c>forTarget</c>), and rewrites their roots onto the owner's
 /// row — <c>R.p</c> becomes <c>oxEl.p</c> for an item target and <c>p</c> for an entity target,
 /// <c>parentAs.p</c> becomes <c>p</c>, and an <c>on</c> naming the entity row itself is dropped (the
 /// owner's implicit root). A forwarded query so holds the key match and only the stages continued
 /// under R, never R's own resolve or anything before it: it carries strictly fewer join stages than
-/// the query it came from, and a chain of them ends by construction (DESIGN §3.5.4).
+/// the query it came from, and a chain of them ends by construction.
 /// </summary>
 public static class Continuation
 {

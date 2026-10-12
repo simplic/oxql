@@ -15,7 +15,7 @@ namespace OxQL.Tests.Execute;
 /// The engine's own share of a request with the database taken out: a runner that answers at once
 /// with a page of rows, so what is measured is binding, compiling, the cursor, converting the rows
 /// and writing the answer. It runs only when asked (<c>OXQL_PERF_ENGINE=1</c>; without it the test
-/// does nothing and passes) and prints microseconds per request and per phase. Run it in a Release
+/// is reported as skipped) and prints microseconds per request and per phase. Run it in a Release
 /// build: <c>dotnet test src/OxQL.Tests -c Release --filter FullyQualifiedName~EngineOverheadBench</c>
 /// with a console logger at detailed verbosity.
 /// </summary>
@@ -25,12 +25,21 @@ public class EngineOverheadBench(ITestOutputHelper output)
 
     private const string Columns = """ "number": 1, "state": 1, "flag": 1, "when": 1, "amount": 1, "count": 1, "ratio": 1, "qrCode": 1, "big": 1, "customerId": 1, "shipTo.city": 1, "shipTo.street": 1, "note": 1, "contactNumber": 1 """;
 
-    [Fact]
+    private const string Variable = "OXQL_PERF_ENGINE";
+
+    /// <summary>A fact that runs only when <see cref="Variable"/> is set.</summary>
+    private sealed class BenchFactAttribute : FactAttribute
+    {
+        public BenchFactAttribute()
+        {
+            if (Environment.GetEnvironmentVariable(Variable) is not ("1" or "true"))
+                Skip = $"Opt-in: set {Variable}=1 to measure the engine's own share of a request.";
+        }
+    }
+
+    [BenchFact]
     public async Task Measure_the_engines_own_share()
     {
-        if (Environment.GetEnvironmentVariable("OXQL_PERF_ENGINE") is not ("1" or "true"))
-            return;
-
         var rows = Enumerable.Range(1, 101).Select(index => new BsonDocument
         {
             ["_id"] = new BsonBinaryData(new Guid(index, 0, 0, new byte[8]), GuidRepresentation.Standard),

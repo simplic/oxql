@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The request's own time ceiling, <c>maxTimeMs</c> (DG2): under the host's
+/// The request's own time ceiling, <c>maxTimeMs</c>: under the host's
 /// (<c>Execution:MaxTimeMs</c>) and under what a batch leaves the request, it bounds the page and
 /// the count step. A grid's totals request carries one, so a total that is slow ends early instead
 /// of holding a connection for the host's ceiling. It decides no row and is no part of a cursor.
@@ -130,7 +130,7 @@ public class RequestCeilingTests
 
         bound.Fingerprint.Should().Be(without.Fingerprint, "a cursor continues under any ceiling");
         bound.Canonical.Should().Be(without.Canonical);
-        Binder.RequestMembers.Should().Be("entityType, variables, filter, pipeline, strict, timing, maxTimeMs");
+        Binder.RequestMembers.Should().Be("entityType, variables, filter, pipeline, strict, onMissing, timing, maxTimeMs");
     }
 
     [Fact]

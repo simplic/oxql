@@ -1,0 +1,10 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Number": "yes"
+      }
+    }
+  ]
+}

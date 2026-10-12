@@ -179,7 +179,7 @@ public class ShapeHCollectionsTests
     {
         Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "item": { "any": { "orderNumber": { "eq": 1 } } } } }, {{FullPage}} ]"""), "ANY_NOT_APPLICABLE", "item", 1);
 
-        // The collection itself is not in the row after the unwind: 'any' on it names nothing (DG2 M2).
+        // The collection itself is not in the row after the unwind: 'any' on it names nothing.
         Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "items": { "any": { "orderNumber": { "eq": 1 } } } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "items", 1);
     }
 

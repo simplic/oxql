@@ -1,0 +1,37 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "eq": "TR-2026-0101"
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "tour",
+        "localPath": "GlobalTourId",
+        "foreignPath": "GlobalTourId",
+        "as": "Mirrors",
+        "filter": {
+          "IsMirroredTour": {
+            "eq": true
+          }
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Mirrors": {
+          "Number": 1,
+          "IsDeleted": 1,
+          "Resource": {
+            "_t": 1
+          }
+        }
+      }
+    }
+  ]
+}

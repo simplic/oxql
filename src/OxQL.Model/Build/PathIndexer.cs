@@ -61,6 +61,10 @@ internal static class PathIndexer
 
                 path.IsAddonRoot = entity.Extendable && depth == 0 && member.Kind == Kind.Dictionary && wire == WireNames.AddonWire;
 
+                // A member that is a constant per variant is read off the discriminator stored beside it.
+                if (member.ByVariant is { } values && storagePrefix is not null && type.Variants.Count > 0)
+                    path.Derived = new DerivedDef(Join(storagePrefix, type.DiscriminatorElement ?? "_t"), type, values);
+
                 Descend(member, wire, storage, member, depth, ancestors, branch);
             }
         }

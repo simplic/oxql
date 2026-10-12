@@ -20,14 +20,12 @@ public sealed class EntityModel
         IReadOnlyDictionary<string, string> retiredIds,
         IReadOnlyDictionary<string, TypeDef> typePool,
         IReadOnlyList<BuildFinding> findings,
-        DateTimeOffset builtAt,
         string fingerprint)
     {
         Entities = entities;
         RetiredIds = retiredIds;
         TypePool = typePool;
         Findings = findings;
-        BuiltAt = builtAt;
         Fingerprint = fingerprint;
     }
 
@@ -45,9 +43,6 @@ public sealed class EntityModel
 
     /// <summary>What the build could not describe, in build order. Empty on a clean build.</summary>
     public IReadOnlyList<BuildFinding> Findings { get; }
-
-    /// <summary>When the build finished.</summary>
-    public DateTimeOffset BuiltAt { get; }
 
     /// <summary>A SHA-256 over the canonical form of every entity's path index and pool ids; equal models have equal fingerprints.</summary>
     public string Fingerprint { get; }
@@ -150,7 +145,7 @@ public sealed class EntityDef
     }
 
     /// <summary>
-    /// The per-entity children index (DESIGN §4.5): the paths one segment below each path, keyed by
+    /// The per-entity children index: the paths one segment below each path, keyed by
     /// the parent's wire spelling and <c>""</c> for the root members, in walk order. A dictionary's
     /// value is its <c>*</c> child. Built once from <see cref="Paths"/>, outside the fingerprint.
     /// </summary>
@@ -210,7 +205,8 @@ public sealed class EntityDef
         if (parent.Shape.Leaf is not { Kind: Kind.Object, Type: { IsEnum: false } type })
             return null;
 
-        var anchors = (described ??= new Lazy<IReadOnlyDictionary<TypeDef, PathDef?>>(Described, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        // One lazy is published whoever asks first; a second one built in a race is dropped unread.
+        var anchors = LazyInitializer.EnsureInitialized(ref described, () => new Lazy<IReadOnlyDictionary<TypeDef, PathDef?>>(Described, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
         if (!anchors.TryGetValue(type, out var anchor))
             return null;
@@ -229,6 +225,10 @@ public sealed class EntityDef
         var path = new PathDef(wire, storage, member.Member, member.Shape, parent.Depth + 1, ancestors)
         {
             Filterable = storage is not null && member.Filterable,
+            // The discriminator lies beside the member, in the object the parent path holds.
+            Derived = member.Derived is { } derived && parent.Storage is not null
+                ? derived with { Storage = parent.Storage + "." + (derived.Holder.DiscriminatorElement ?? "_t") }
+                : null,
         };
 
         path.Sortable = path.Filterable && ancestors == 0 && member.Shape.Kind != Kind.Array;
@@ -486,6 +486,18 @@ public sealed class MemberDef : ShapeDef
     /// </summary>
     public IReadOnlyList<string>? OnlyFor { get; internal set; }
 
+    /// <summary>
+    /// The value the member holds for each variant of the polymorphic type it is a member of, by
+    /// variant name (<see cref="VariantDef.Name"/>, and the type's own name where the type is concrete
+    /// and stored itself): the schema document's <c>byVariant</c>. Set on a member the service
+    /// returns and does not store (<see cref="Stored"/> false) whose value is a constant of the class,
+    /// the model's own type member (<c>type => "driver"</c>): which value a row holds follows from the
+    /// variant it is stored as, so the engine writes the member from the stored discriminator and
+    /// compares it by the variants that hold a value. Null on every other member. Ordinally sorted
+    /// by variant name.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ByVariant { get; internal set; }
+
     /// <summary>The normalised English description (see <see cref="Build.XmlDocs"/>); null when nothing describes it. Outside the fingerprint.</summary>
     public string? Description { get; internal set; }
 
@@ -570,6 +582,12 @@ public sealed class PathDef
     /// <summary>Whether the driver stores the path.</summary>
     public bool Stored => Storage is not null;
 
+    /// <summary>
+    /// Where the value of a path that is not stored comes from: set on a member with
+    /// <see cref="MemberDef.ByVariant"/> whose holding object is stored, null on every other path.
+    /// </summary>
+    public DerivedDef? Derived { get; internal set; }
+
     /// <summary>Whether a filter operand can be encoded for this path: stored, and a scalar or enum leaf.</summary>
     public bool Filterable { get; internal set; }
 
@@ -585,6 +603,14 @@ public sealed class PathDef
     /// <summary>Every declared reference case this path carries.</summary>
     public IReadOnlyList<ReferenceDef> References => Member.References;
 }
+
+/// <summary>
+/// A member whose value follows from the variant its object is stored as (<see cref="MemberDef.ByVariant"/>).
+/// </summary>
+/// <param name="Storage">The storage path of the discriminator of the object holding the member.</param>
+/// <param name="Holder">The polymorphic type the member is a member of: its variants and how its discriminator is stored.</param>
+/// <param name="Values">The member's value per variant name.</param>
+public sealed record DerivedDef(string Storage, TypeDef Holder, IReadOnlyDictionary<string, string> Values);
 
 /// <summary>
 /// One case of a declared foreign key: the targets a member's value names, the condition under
@@ -619,9 +645,6 @@ public sealed record ReferenceDef
     /// <see cref="MemberDef.Reference"/>; every other one goes under <c>referenceCases</c>.
     /// </summary>
     public bool IsSimple => When is null && KeyAs == KeyAs.None && Targets is [{ Item: null }];
-
-    /// <summary>The direction; every declaration in this version is forward, from the id member to the target.</summary>
-    public ReferenceDirection Direction => ReferenceDirection.Forward;
 
     /// <summary>The case as one line: condition, conversion and targets; what the fingerprint and messages print.</summary>
     public override string ToString()
@@ -668,7 +691,7 @@ public abstract record ReferenceCondition
 
     /// <summary>
     /// A stored string or enum sibling of the id member holds one of <paramref name="Values"/>,
-    /// compared exactly: the schema's <c>{ "path", "equals" }</c>. (DESIGN §3.3.1 names it
+    /// compared exactly: the schema's <c>{ "path", "equals" }</c>. (The schema names it
     /// <c>Equals</c>, which a record cannot nest beside its own <c>Equals</c> method.)
     /// </summary>
     /// <param name="Path">The sibling's wire name.</param>
@@ -707,13 +730,6 @@ public enum ReferenceSource
 
     /// <summary>A host-side declaration (<see cref="Build.ReferenceDeclarations"/>) on a pooled type's wire member.</summary>
     Declaration,
-}
-
-/// <summary>The direction of a reference.</summary>
-public enum ReferenceDirection
-{
-    /// <summary>From the member holding the key to the entity it names.</summary>
-    Forward,
 }
 
 /// <summary>The BSON representation a scalar is stored in.</summary>
@@ -819,8 +835,9 @@ public static class BuildCodes
     public const string ReferenceItemUnknown = "reference-item-unknown";
 
     /// <summary>
-    /// Reserved for the log-only hint that a guid member named <c>*Id</c> matches an entity but
-    /// declares no reference; never published. No builder of this version emits it.
+    /// A member that is a constant of the class in some variants of a polymorphic type and not in
+    /// others (its getter reads the instance, throws, answers null, or the variant does not define
+    /// it): the member has no value per variant, so it stays in the wire view only.
     /// </summary>
-    public const string ReferenceCandidateUndeclared = "reference-candidate-undeclared";
+    public const string VariantConstantUnresolved = "variant-constant-unresolved";
 }

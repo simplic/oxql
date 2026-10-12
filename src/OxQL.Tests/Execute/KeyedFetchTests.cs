@@ -13,7 +13,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// Remote resolve and the semi-join (design §11) against a fake owner: the batch per service,
+/// Remote resolve and the semi-join against a fake owner: the batch per service,
 /// the merge under the alias, the cache, chunking and the key cap, the owner's refusal, the
 /// owner's silence, and the ids substituted into the page and count filters.
 /// </summary>
@@ -497,7 +497,7 @@ public class KeyedFetchTests
         cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "id", BindHost.Organisation, "c1", "other"), strict: false, out _).Should().BeFalse("another plan is another entry");
         cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", "lines", "id", BindHost.Organisation, "c1", "p"), strict: false, out _).Should().BeFalse("an item target is another entry");
 
-        // F-ENT-002: two references onto one entity through different members of it are two
+        // Two references onto one entity through different members of it are two
         // sets of rows. Without the field in the key, whichever resolve ran first inside the
         // TTL answered for both and the other silently inherited its rows.
         cache.TryGet(OwnerFetchCache.KeyOf("crm.contact", null, "number", BindHost.Organisation, "c1", "p"), strict: false, out _)
@@ -506,31 +506,6 @@ public class KeyedFetchTests
         cache.Set("k2", answer);
         cache.Set("k3", answer);
         cache.Count.Should().BeLessThanOrEqualTo(2, "the entry count is bounded");
-    }
-
-    [Fact]
-    public async Task The_obsolete_resolver_and_cache_option_forward_to_the_keyed_fetch()
-    {
-#pragma warning disable CS0618 // the aliases under test are obsolete by design
-        var options = BindHost.Options(o => o.Cache.OwnerFetchCacheMaxEntries = 7);
-
-        options.Cache.OwnerFetchCacheMaxEntries.Should().Be(7);
-
-        var client = new FakeRemoteClient
-        {
-            Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1", ("name", "Alice"))),
-        };
-        using var cache = new OwnerFetchCache(options);
-        var resolver = new RemoteResolver(client, cache, options);
-        var compiled = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, ResolveContact), new CompileOptions(MaxTimeMs: 1000, AllowDiskUse: null, CountCap: 1000));
-
-        var resolved = await resolver.ResolveAsync(compiled, [Row(Id1, "a", "c1")], BindHost.Context(), TimeSpan.FromSeconds(1), CancellationToken.None);
-
-        RemoteResolver.ServiceKeyOf("crm.contact").Should().Be(KeyedFetch.ServiceKeyOf("crm.contact"));
-#pragma warning restore CS0618
-        resolved.Refusal.Should().BeNull();
-        resolved.Rows.Should().ContainSingle().Which["contact"]!["name"]!.GetValue<string>().Should().Be("Alice", "the forwarder runs the keyed fetch by keys");
-        client.Calls.Should().ContainSingle().Which.Service.Should().Be("crm");
     }
 
     [Fact]

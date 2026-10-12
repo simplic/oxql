@@ -178,7 +178,7 @@ namespace OxQL.Tests.Model
     using OxQL.Tests.Model.Fixtures.Relations;
 
     /// <summary>
-    /// The relation names the engine derives (improvement plan §3.N): one name per reference, by the
+    /// The relation names the engine derives: one name per reference, by the
     /// model alone, published as the schema document's <c>relation</c>. The cases of the first theory
     /// are the studio's own (<c>libs/util/oxql-schema/src/lib/relation-names.spec.ts</c>): the engine's
     /// rule answers every one of them alike.

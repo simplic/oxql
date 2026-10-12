@@ -1,5 +1,6 @@
 using System.Net;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -93,5 +94,54 @@ public class HostHardeningOwnerStatusTests
 
         refusal.Errors![0].Code.Should().Be(Codes.ResolveUnavailable);
         refusal.Errors[0].Message.Should().Contain("did not answer the semi-join");
+    }
+
+    /// <summary>An owner client that fails with a text nobody may read in a log.</summary>
+    private sealed class Faulting : IRemoteQueryClient
+    {
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("the answer of https://owner/?key=secret-token was no JSON");
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
+    }
+
+    private sealed class Recorder : ILogger<MongoQueryEngine>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (Entries)
+                Entries.Add((logLevel, formatter(state, exception), exception));
+        }
+    }
+
+    [Fact]
+    public async Task An_owner_call_that_faults_is_logged_by_service_and_kind_of_fault_and_never_by_its_text()
+    {
+        var options = BindHost.Options();
+        var log = new Recorder();
+        var runner = new FakeAggregateRunner
+        {
+            PageRows = [new BsonDocument { ["_id"] = new BsonBinaryData(Guid.NewGuid(), GuidRepresentation.Standard), ["Number"] = "a", ["ContactNumber"] = "c1" }],
+        };
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, new Faulting(), log, cache: new OwnerFetchCache(options));
+
+        var outcome = await engine.ExecuteAsync(BindHost.Request("probe.order", Resolve), BindHost.Context() with { CorrelationId = "corr-7" });
+
+        outcome.Should().BeOfType<QueryOutcome.Success>().Which.Result.Diagnostics.Should().ContainSingle().Which.Code.Should().Be(Codes.ResolveUnreachable);
+
+        var (level, message, exception) = log.Entries.Should().ContainSingle(entry => entry.Message.StartsWith("OxQL owner call failed")).Subject;
+
+        level.Should().Be(LogLevel.Warning);
+        message.Should().Contain("service=crm").And.Contain("fault=InvalidOperationException").And.Contain("correlation=corr-7").And.Contain(BindHost.Organisation.ToString());
+        message.Should().NotContain("secret-token").And.NotContain("c1", "neither the client's text nor a key is written");
+        exception.Should().BeNull("another service's client may carry what it sent in its exception");
     }
 }

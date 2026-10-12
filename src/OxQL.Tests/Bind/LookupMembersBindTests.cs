@@ -5,7 +5,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The lookup members of contract 2 (DESIGN §3.4.2): <c>sort</c> bound against the child, <c>first</c>
+/// The lookup members of contract 2: <c>sort</c> bound against the child, <c>first</c>
 /// as one entity row or null, <c>on</c> naming an entity alias of the row as the parent, and
 /// <c>forTarget</c>, which applies only to a stage continued under a remote union alias. A
 /// lookup without them binds and renders without them.
@@ -246,7 +246,7 @@ public class LookupMembersBindTests
         on.Canonical.Should().Contain("\"localField\":\"cust._id\"").And.Contain("\"on\":\"cust\"");
 
         // Nothing but the row's display reads these lookups, so how they sort or cut their children
-        // decides no row: one cursor fits all three (DG2 M6). Read by a match, each is its own query.
+        // decides no row: one cursor fits all three. Read by a match, each is its own query.
         new[] { plain.Fingerprint, sorted.Fingerprint, first.Fingerprint }.Distinct().Should().ContainSingle();
 
         const string Read = """, { "match": { "orders.number": { "eq": "x" } } }]""";

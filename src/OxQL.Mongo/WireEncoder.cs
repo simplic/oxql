@@ -17,8 +17,17 @@ namespace OxQL.Mongo;
 /// So does a stored value its kind cannot express — a <c>Decimal128</c> <c>NaN</c>, a date outside
 /// the calendar, a duration outside <see cref="TimeSpan"/>: one such value never costs the page
 /// it is on.
+/// <para>
+/// A <c>long</c>, a <c>decimal</c> and an enum backed by a long are JSON numbers, written with
+/// every digit they hold (<c>Number</c>): exact on the wire, as the services' REST API writes
+/// them. A reader that parses a JSON number into an IEEE double keeps 15 to 17 significant digits
+/// of it. Every number the encoder writes for those kinds goes through the two <c>Number</c>
+/// methods, so a choice of another spelling is made there and nowhere else. What is compared, not
+/// shown (the key of a reference against the key of an owner's row), is text and is read through
+/// <see cref="KeyText(BsonValue, Kind, ShapeDef?)"/>.
+/// </para>
 /// </summary>
-public static class WireEncoder
+internal static class WireEncoder
 {
     /// <summary>Encodes one row of the final shape.</summary>
     public static JsonObject Encode(BsonDocument row, BoundPipeline bound) => Encode(row, bound, null);
@@ -152,7 +161,12 @@ public static class WireEncoder
         var variant = VariantOf(document, type);
 
         foreach (var member in type.Members)
-            EncodeMember(document, variant?.Member(member.WireName) ?? member, into, wirePrefix, shape, root, unfit, entity);
+        {
+            if (member.ByVariant is { } values && !member.Stored && type.Variants.Count > 0 && shape.Derives)
+                EncodeDerived(document, type, member, values, into, wirePrefix, shape, root);
+            else
+                EncodeMember(document, variant?.Member(member.WireName) ?? member, into, wirePrefix, shape, root, unfit, entity);
+        }
 
         if (variant is null)
             return;
@@ -176,6 +190,53 @@ public static class WireEncoder
         return type.Variants.FirstOrDefault(candidate => string.Equals(candidate.Discriminator, name, StringComparison.Ordinal))?.Type;
     }
 
+    /// <summary>
+    /// The model's own type member (<see cref="MemberDef.ByVariant"/>): not stored, and written from
+    /// the discriminator the object is stored with, as the value its class answers for it. So a row
+    /// shows what the service's REST API shows for the member. An object without a discriminator is
+    /// the type's own (a concrete base); one whose discriminator names no variant this model knows
+    /// has no value to show, and the member is left out of it.
+    /// </summary>
+    private static void EncodeDerived(BsonDocument document, TypeDef type, MemberDef member, IReadOnlyDictionary<string, string> values, JsonObject into, string wirePrefix, Shape shape, string root)
+    {
+        var wire = wirePrefix.Length == 0 ? member.WireName : wirePrefix + member.WireName;
+
+        if (!Visible(wire, shape, root))
+            return;
+
+        string? variant = null;
+
+        if (type.DiscriminatorElement is { } element && document.TryGetValue(element, out var stored))
+        {
+            var discriminator = stored is BsonArray { Count: > 0 } hierarchy ? hierarchy[^1] : stored;
+
+            if (discriminator is not BsonString { Value: var named })
+                return;
+
+            variant = type.Variants.FirstOrDefault(candidate => string.Equals(candidate.Discriminator, named, StringComparison.Ordinal))?.Name
+                ?? (OperandCoercer.ConcreteBaseName(type) is { } own && string.Equals(type.Discriminator ?? own, named, StringComparison.Ordinal) ? own : null);
+        }
+        else
+        {
+            variant = OperandCoercer.ConcreteBaseName(type);
+        }
+
+        if (variant is not null && values.TryGetValue(variant, out var value))
+            into[member.WireName] = JsonValue.Create(value);
+    }
+
+    /// <summary>Whether the row shows the member at a wire path: the projection kept it, and under a join's alias the output set names it.</summary>
+    private static bool Visible(string wire, Shape shape, string root)
+    {
+        if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
+            return false;
+
+        // Under a join's alias the row shows the output set and nothing else: what the join loaded
+        // for a stage that only reads it, or the aggregate kept for a join after the page, is not in
+        // the row. The projection alone decides the row's shape.
+        return !(root != Shape.ImplicitRoot && Shown(shape, root) is { } shown && (shape.IsRemoved(wire) || !RootOutput.Shows(shown, wire[(root.Length + 1)..])));
+    }
+
     private static void EncodeMember(BsonDocument document, MemberDef member, JsonObject into, string wirePrefix, Shape shape, string root, ICollection<string>? unfit, EntityDef? entity)
     {
         if (!member.Stored || member.StorageName is null || !document.TryGetValue(member.StorageName, out var value))
@@ -184,13 +245,7 @@ public static class WireEncoder
         // A member of the row itself is its own wire path: nothing is concatenated for it.
         var wire = wirePrefix.Length == 0 ? member.WireName : wirePrefix + member.WireName;
 
-        if (root == Shape.ImplicitRoot && !shape.IsVisible(wire))
-            return;
-
-        // Under a join's alias the row shows the output set and nothing else: what the join loaded
-        // for a stage that only reads it, or the aggregate kept for a join after the page, is not in
-        // the row (improvement plan §3.S). The projection alone decides the row's shape.
-        if (root != Shape.ImplicitRoot && Shown(shape, root) is { } shown && (shape.IsRemoved(wire) || !RootOutput.Shows(shown, wire[(root.Length + 1)..])))
+        if (!Visible(wire, shape, root))
             return;
 
         // Only a shape that unwound something has a member to read as its element.
@@ -337,13 +392,91 @@ public static class WireEncoder
         {
             return EncodeInRange(value, kind, shape);
         }
-        catch (Exception exception) when (exception is OverflowException or ArgumentException)
+        catch (Exception exception) when (exception is OverflowException or ArgumentException or FormatException)
         {
-            // Every conversion above that leaves its range says so with one of these two.
+            // Every conversion above that leaves its range says so with one of these: a Decimal128
+            // no decimal holds (NaN, an infinity, more digits or a larger magnitude), a double no
+            // long or decimal holds, text stored under a decimal member that is no number.
             unfit?.Add(wire ?? Kinds.NameOf(kind));
 
             return Verbatim(value);
         }
+    }
+
+    /// <summary>
+    /// The text a scalar is compared by where a value of this host meets one another host wrote: the
+    /// key of a reference against the key of the owner's row. It is the digits of a number and the
+    /// text of everything else, the same for a number written as a JSON number and for one an
+    /// earlier build wrote as a string, so two builds find each other's rows. Null for a null.
+    /// </summary>
+    public static string? KeyText(BsonValue value, Kind kind, ShapeDef? shape) => KeyText(EncodeScalar(value, kind, shape));
+
+    /// <summary>The text a value of a row is compared by: of a JSON string its text, of a number its canonical digits.</summary>
+    public static string? KeyText(JsonNode? encoded) => encoded switch
+    {
+        null => null,
+        JsonValue scalar when scalar.GetValueKind() == System.Text.Json.JsonValueKind.Number && scalar.TryGetValue<decimal>(out var number) => DecimalText.Canonical(number),
+        JsonValue scalar => scalar.ToString(),
+        _ => encoded.ToJsonString(),
+    };
+
+    /// <summary>A 64-bit integer on the wire: a JSON number with every digit.</summary>
+    private static JsonNode Number(long value) => JsonValue.Create(value);
+
+    /// <summary>
+    /// A decimal on the wire: a JSON number in the canonical digits (<see cref="DecimalText.Canonical"/>:
+    /// no exponent, no trailing fractional zeros), every one of them. The scale a value was stored
+    /// with is not kept: 125000.00 and 125000 are one number.
+    /// </summary>
+    private static JsonNode Number(decimal value) => JsonValue.Create(decimal.Parse(DecimalText.Canonical(value), NumberStyles.Number, CultureInfo.InvariantCulture));
+
+    /// <summary>The most characters a number written from the database's own digits may have; past it the runtime's decimal is written.</summary>
+    private const int MaxExactDigits = 48;
+
+    /// <summary>
+    /// A stored <c>Decimal128</c> on the wire. The database computes in 34 significant digits and the
+    /// runtime's decimal holds 28 or 29: a sum or a mean can have more than the runtime keeps. Such a
+    /// value is written from the database's own digits, plain and without trailing fractional zeros,
+    /// so the wire is exact there too. NaN, an infinity and a magnitude no decimal holds leave their
+    /// range (<see cref="OverflowException"/>) and stay text.
+    /// </summary>
+    private static JsonNode Number(Decimal128 stored)
+    {
+        var held = Decimal128.ToDecimal(stored);
+
+        if (Decimal128.Compare(new Decimal128(held), stored) == 0)
+            return Number(held);
+
+        return Plain(stored.ToString()) is { Length: <= MaxExactDigits } digits && JsonNode.Parse(digits) is { } exact ? exact : Number(held);
+    }
+
+    /// <summary>The plain spelling of a decimal's text that may carry an exponent: no exponent, no trailing fractional zeros. Null when the text is no number.</summary>
+    private static string? Plain(string text)
+    {
+        var negative = text.StartsWith('-');
+        var body = negative ? text[1..] : text;
+        var at = body.IndexOfAny(['E', 'e']);
+        var exponent = 0;
+
+        if (at >= 0 && !int.TryParse(body[(at + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent))
+            return null;
+
+        var mantissa = at >= 0 ? body[..at] : body;
+        var point = mantissa.IndexOf('.', StringComparison.Ordinal);
+        var digits = point < 0 ? mantissa : mantissa.Remove(point, 1);
+        var whole = (point < 0 ? mantissa.Length : point) + exponent;
+
+        if (digits.Length == 0 || !digits.All(char.IsAsciiDigit) || Math.Abs(whole) > MaxExactDigits)
+            return null;
+
+        var integer = whole <= 0 ? "0" : whole >= digits.Length ? digits.PadRight(whole, '0') : digits[..whole];
+        var fraction = (whole >= digits.Length ? "" : whole <= 0 ? new string('0', -whole) + digits : digits[whole..]).TrimEnd('0');
+
+        integer = integer.TrimStart('0');
+
+        var plain = (integer.Length == 0 ? "0" : integer) + (fraction.Length == 0 ? "" : "." + fraction);
+
+        return negative && plain != "0" ? "-" + plain : plain;
     }
 
     private static JsonNode? EncodeInRange(BsonValue value, Kind kind, ShapeDef? shape)
@@ -364,7 +497,8 @@ public static class WireEncoder
                     BsonInt32 i => JsonValue.Create(i.Value),
                     BsonInt64 l when l.Value is >= int.MinValue and <= int.MaxValue => JsonValue.Create((int)l.Value),
                     BsonInt64 l => JsonValue.Create(l.Value),
-                    BsonDouble d => JsonValue.Create(d.Value),
+                    BsonDouble d when double.IsFinite(d.Value) => JsonValue.Create(d.Value),
+                    BsonDouble => throw new ArgumentException("A double that is no number is no integer."),
                     BsonDecimal128 m => JsonValue.Create((double)Decimal128.ToDecimal(m.Value)),
                     _ => Verbatim(value),
                 };
@@ -372,10 +506,10 @@ public static class WireEncoder
             case Kind.Long:
                 return value switch
                 {
-                    BsonInt32 i => JsonValue.Create(i.Value.ToString(CultureInfo.InvariantCulture)),
-                    BsonInt64 l => JsonValue.Create(l.Value.ToString(CultureInfo.InvariantCulture)),
-                    BsonDouble d => JsonValue.Create(((long)d.Value).ToString(CultureInfo.InvariantCulture)),
-                    BsonDecimal128 m => JsonValue.Create(Decimal128.ToDecimal(m.Value).ToString("G29", CultureInfo.InvariantCulture)),
+                    BsonInt32 i => Number((long)i.Value),
+                    BsonInt64 l => Number(l.Value),
+                    BsonDouble d => Number(checked((long)d.Value)),
+                    BsonDecimal128 m => Number(Decimal128.ToDecimal(m.Value)),
                     _ => Verbatim(value),
                 };
 
@@ -390,19 +524,18 @@ public static class WireEncoder
                 };
 
             case Kind.Decimal:
-                // The typed bracket and the text bracket read back in one canonical spelling,
-                // the one an operand is built with, so a value read out of a row finds the
-                // row it came from. Text that is not a decimal at all stays verbatim:
-                // normalising it would invent a number the row does not hold.
+                // The typed bracket and the text bracket read back as one number in one
+                // canonical spelling, the digits an operand is built with, so a value read out
+                // of a row finds the row it came from. Text that is not a decimal at all is no
+                // number: it stays the text the row holds, and is said like every value that
+                // does not fit its kind.
                 return value switch
                 {
-                    BsonDecimal128 m => JsonValue.Create(DecimalText.Canonical(Decimal128.ToDecimal(m.Value))),
-                    BsonString text => JsonValue.Create(decimal.TryParse(text.Value, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var parsedText)
-                        ? DecimalText.Canonical(parsedText)
-                        : text.Value),
-                    BsonInt32 i => JsonValue.Create(i.Value.ToString(CultureInfo.InvariantCulture)),
-                    BsonInt64 l => JsonValue.Create(l.Value.ToString(CultureInfo.InvariantCulture)),
-                    BsonDouble d => JsonValue.Create(DecimalText.Canonical((decimal)d.Value)),
+                    BsonDecimal128 m => Number(m.Value),
+                    BsonString text => Number(decimal.Parse(text.Value, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture)),
+                    BsonInt32 i => Number((decimal)i.Value),
+                    BsonInt64 l => Number((decimal)l.Value),
+                    BsonDouble d => Number((decimal)d.Value),
                     _ => Verbatim(value),
                 };
 
@@ -454,10 +587,7 @@ public static class WireEncoder
                 };
 
             case Kind.Enum:
-                // An enum backed by a long carries values JSON's number cannot hold: a
-                // JavaScript caller reads 9007199254740993 back as ...992, a value that
-                // matches nothing. A value inside Int32 stays a number; above it the value
-                // travels as a string, the way Kind.Long does and for the same reason.
+                // An enum's numeric value is a number whatever backs it, as a long is.
                 return value switch
                 {
                     BsonInt32 i => JsonValue.Create(i.Value),
@@ -478,14 +608,11 @@ public static class WireEncoder
         }
     }
 
-    /// <summary>An enum's numeric value: a JSON number while it is one a caller can read, a string above that.</summary>
+    /// <summary>An enum's numeric value: a JSON number, also where the enum is backed by a long.</summary>
     private static JsonNode? Enumeral(long value) =>
         value is >= int.MinValue and <= int.MaxValue
             ? JsonValue.Create((int)value)
-            : JsonValue.Create(value.ToString(CultureInfo.InvariantCulture));
-
-    /// <summary>Whether a 64-bit integer survives a JSON round trip through an IEEE-754 double.</summary>
-    private static bool SafeInteger(long value) => value is >= -9007199254740991 and <= 9007199254740991;
+            : Number(value);
 
     private static bool TryDecimal(Decimal128 stored, out decimal number)
     {
@@ -540,7 +667,7 @@ public static class WireEncoder
                 // own for (a decimal, a dictionary, a list in an addon bag): { _t: <type>, _v: <value> }.
                 // The row shows the value, never the wrapper; a decimal as every decimal travels.
                 if (Wrapped(value.AsBsonDocument, out var type, out var inner))
-                    return type == "System.Decimal" && DecimalOf(inner) is { } wrapped ? JsonValue.Create(DecimalText.Canonical(wrapped)) : Verbatim(inner);
+                    return type == "System.Decimal" && DecimalOf(inner) is { } wrapped ? Number(wrapped) : Verbatim(inner);
 
                 var result = new JsonObject();
 
@@ -563,24 +690,18 @@ public static class WireEncoder
 
             case BsonType.Int64:
                 // A member the shape does not describe — the addon bag's values above all —
-                // is rendered by its BSON type alone. As a JSON number a 64-bit integer loses
-                // precision in a JavaScript caller: 9007199254740993 arrives as ...992, a
-                // value that matches nothing. Kind.Long stringifies for exactly this reason;
-                // here the kind is not known, so the range decides: inside it the value is
-                // exact as a number and stays one.
-                return SafeInteger(value.AsInt64)
-                    ? JsonValue.Create(value.AsInt64)
-                    : JsonValue.Create(value.AsInt64.ToString(CultureInfo.InvariantCulture));
+                // is rendered by its BSON type alone: a 64-bit integer as the number a long is.
+                return Number(value.AsInt64);
 
             case BsonType.Double:
                 return double.IsFinite(value.AsDouble) ? JsonValue.Create(value.AsDouble) : null;
 
             case BsonType.Decimal128:
-                // NaN, the infinities and the magnitudes a decimal cannot hold keep the
-                // database's own spelling.
-                return JsonValue.Create(TryDecimal(value.AsDecimal128, out var number)
-                    ? number.ToString("G29", CultureInfo.InvariantCulture)
-                    : value.AsDecimal128.ToString());
+                // A number, as a decimal member's is. NaN, the infinities and what a decimal
+                // cannot hold are no JSON number: they keep the database's own spelling, as text.
+                return TryDecimal(value.AsDecimal128, out _)
+                    ? Number(value.AsDecimal128)
+                    : JsonValue.Create(value.AsDecimal128.ToString());
 
             case BsonType.DateTime:
                 // A date outside the calendar has no ISO form; its milliseconds since the epoch do.

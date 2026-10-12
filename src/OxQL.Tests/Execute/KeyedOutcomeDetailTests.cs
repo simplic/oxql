@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The outcome record of a row whose collection is absent or empty under <c>elements</c> (RE-18): it
+/// The outcome record of a row whose collection is absent or empty under <c>elements</c>: it
 /// is <c>reference_null</c> with no element to name, under <c>first</c> and under <c>all</c> alike.
 /// </summary>
 public class KeyedOutcomeDetailTests

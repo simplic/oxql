@@ -7,7 +7,7 @@ namespace OxQL.Tests.Bind;
 
 /// <summary>
 /// The read ledger is written at the binder's read sites, not inside <c>Shape.Resolve</c>, which also
-/// binds hints, probes sort keys, recurses and serves explain (improvement plan §3.S). So every call
+/// binds hints, probes sort keys, recurses and serves explain. So every call
 /// site of <c>Shape.Resolve</c> in the engine is classified here: a recorded read (it goes through
 /// the binder's <c>Read</c>, with an explicit use), or a non-read that says why. A new call site fails
 /// this test until it is one or the other.
@@ -96,8 +96,9 @@ public partial class ReadLedgerCallSiteTests
             "why a branch path is not one a union join continues from",
             "a probe of whether the path is in the row at this boundary",
             "the refusal of a path that was never in the row",
+            "the object holding the member, whose read is recorded; the discriminator lies beside it",
         ]);
-        direct.Should().HaveCount(21);
+        direct.Should().HaveCount(22);
     }
 
     [Fact]

@@ -76,16 +76,20 @@ public class BatchConcurrencyTests
     public async Task A_run_that_throws_travels_as_itself_and_nothing_further_starts()
     {
         var started = 0;
+        var beside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var run = () => BatchRun.RunAsync(Enumerable.Range(0, 10).ToList(), 2, async (item, token) =>
         {
             Interlocked.Increment(ref started);
 
+            // The first fails once the one beside it has its place, so what is counted does not depend on which is faster.
             if (item == 0)
             {
-                await Task.Yield();
+                await beside.Task;
                 throw new InvalidDataException("the first one failed");
             }
+
+            beside.TrySetResult();
 
             // The one beside the failure runs until it is stopped; nothing behind them gets a place.
             await Task.Delay(Timeout.InfiniteTimeSpan, token);

@@ -65,38 +65,60 @@ public class ContractATests
     }
 
     [Fact]
-    public async Task A04b_a_contract_1_request_still_does_not_resolve_a_name_the_model_never_had()
+    public async Task A04b_a_contract_1_request_does_not_resolve_a_name_the_model_never_had_it_matches_no_row_as_the_engine_before_and_is_refused_where_the_legacy_pipeline_is_off()
     {
         // The compat binder translates _id and the CLR and storage spellings; it is not a general
-        // resolver, so a name the entity never had is still an unknown path.
-        var answer = await (await Transport(contract: null)).SendAsync(Corpus.Shipment, $$"""[ { "match": { "Number": { "eq": "S-0001" } } }, {{Page1}} ]""");
+        // resolver, so a name the entity never had stays the stored name it was to the 1.1 engine.
+        // Nothing stores "Number" (the member is ShipmentNumber): no row, and no refusal.
+        var pipeline = $$"""[ { "match": { "Number": { "eq": "S-0001" } } }, {{Page1}} ]""";
+        Corpus.Rows(Corpus.Shipment).Should().Contain(row => Corpus.Text(row, "shipmentNumber") == "S-0001", "the value exists under the member's own name, so a resolved name would find a row");
 
-        answer.ShouldRefuse("UNKNOWN_PATH", 400);
-        answer.ErrorCodes.Should().Equal("UNKNOWN_PATH");
+        var answer = await (await Transport(contract: null)).SendAsync(Corpus.Shipment, pipeline);
+
+        answer.ShouldBeOk("LEGACY(compat.v1): the legacy pipeline answers an undeclared path in a match as the 1.1 engine did");
+        answer.StatusCode.Should().Be(200);
+        answer.Items.Should().BeEmpty("the name was not resolved to shipmentNumber");
+
+        // Where the legacy pipeline is off, the same bytes are the refusal the rewrite gives.
+        var off = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "legacy-off", new Dictionary<string, string?> { ["OxQL:Compat:Legacy:Enabled"] = "false" }, contract: null);
+        var refused = await off.SendAsync(Corpus.Shipment, pipeline);
+
+        refused.ShouldRefuse("UNKNOWN_PATH", 400);
+        refused.ErrorCodes.Should().Equal("UNKNOWN_PATH");
+
+        // And under contract 2 they are that refusal on every host.
+        var two = await (await Transport()).SendAsync(Corpus.Shipment, pipeline);
+
+        two.ShouldRefuse("UNKNOWN_PATH", 400)["path"]!.GetValue<string>().Should().Be("Number");
+        two.ErrorCodes.Should().Equal("UNKNOWN_PATH");
     }
 
     [Fact]
-    public async Task A06_a_non_numeric_contract_header_falls_back_to_contract_1()
+    public async Task A06_a_contract_header_that_is_no_number_is_refused_and_an_empty_one_is_contract_1()
     {
-        var client = (await Transport(contract: null)).WithHeader(LabIdentity.ContractHeader, "banana");
+        var pipeline = $$"""[ { "match": { "_id": { "eq": "{{FirstShipment}}" } } }, {{Page1}} ]""";
+        var refused = await (await Transport(contract: null)).WithHeader(LabIdentity.ContractHeader, "banana").SendAsync(Corpus.Shipment, pipeline);
 
-        var answer = await client.SendAsync(Corpus.Shipment, $$"""[ { "match": { "_id": { "eq": "{{FirstShipment}}" } } }, {{Page1}} ]""");
+        refused.ShouldRefuse("UNKNOWN_REQUEST_MEMBER", 400, "a request is never answered under a contract its caller did not name")["params"]!["reason"]!.GetValue<string>().Should().Be("contract");
 
-        answer.ShouldBeOk();
-        LegacyIds(answer).Should().Equal([FirstShipment]);
+        var empty = await (await Transport(contract: null)).WithHeader(LabIdentity.ContractHeader, "").SendAsync(Corpus.Shipment, pipeline);
+
+        empty.ShouldBeOk();
+        LegacyIds(empty).Should().Equal([FirstShipment]);
     }
 
     [Fact]
-    public async Task A07_a_contract_header_of_3_is_read_as_contract_2_not_refused()
+    public async Task A07_a_contract_header_of_3_is_refused_and_not_read_as_another_contract()
     {
         var three = await Transport(contract: 3);
 
-        var legacy = await three.SendAsync(Corpus.Shipment, $$"""[ { "match": { "_id": { "eq": "{{FirstShipment}}" } } }, {{Page1}} ]""");
-        legacy.ShouldRefuse("UNKNOWN_PATH", 400, "a future contract is clamped down to 2, so _id is unknown");
-        legacy.ErrorCodes.Should().Equal("UNKNOWN_PATH");
+        foreach (var member in new[] { "_id", "id" })
+        {
+            var answer = await three.SendAsync(Corpus.Shipment, $$"""[ { "match": { "{{member}}": { "eq": "{{FirstShipment}}" } } }, {{Page1}} ]""");
 
-        var wire = await three.SendAsync(Corpus.Shipment, $$"""[ { "match": { "id": { "eq": "{{FirstShipment}}" } } }, {{Page1}} ]""");
-        wire.ShouldHaveIds([FirstShipment]);
+            answer.ShouldRefuse("UNKNOWN_REQUEST_MEMBER", 400, "this host answers contract 1 and 2");
+            answer.ErrorCodes.Should().Equal("UNKNOWN_REQUEST_MEMBER");
+        }
     }
 
     [Fact]
@@ -157,12 +179,38 @@ public class ContractATests
     [InlineData("v1 lookup", """{ "lookup": { "localPath": "a", "foreignPath": "b", "as": "x" } }""")]
     [InlineData("v1 resolve", """{ "resolve": { "source": "a", "as": "x" } }""")]
     [InlineData("v2-shaped lookup under contract 1", """{ "lookup": { "from": "transport.shipment", "path": "id", "as": "x" } }""")]
-    public async Task A32_A33_under_contract_1_every_lookup_and_resolve_is_refused_as_a_legacy_stage(string label, string stage)
+    public async Task A32_A33_under_contract_1_every_lookup_and_resolve_is_refused_as_a_legacy_stage_where_the_legacy_pipeline_is_off(string label, string stage)
     {
-        var answer = await (await Transport(contract: null)).SendAsync(Corpus.Shipment, $"[ {stage}, {Page1} ]");
+        // LEGACY(compat.v1): with the legacy pipeline on (the default) the two v1 forms are its to answer, see A32c.
+        var host = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "legacy-off", new Dictionary<string, string?> { ["OxQL:Compat:Legacy:Enabled"] = "false" }, contract: null);
+        var answer = await host.SendAsync(Corpus.Shipment, $"[ {stage}, {Page1} ]");
 
         answer.ShouldRefuse("LEGACY_STAGE_UNSUPPORTED", 400, label)["message"]!.GetValue<string>().Should().Contain("X-OxQL-Contract: 2", label);
         answer.ErrorCodes.Should().Equal(["LEGACY_STAGE_UNSUPPORTED"], label);
+    }
+
+    /// <summary>
+    /// LEGACY(compat.v1): while the legacy pipeline is on, a join in its v1 form is answered as the engine
+    /// before contract 2 answered it (here: its refusal of a join that lacks a member), and a join in the
+    /// contract 2 form without the header stays the refusal that asks for the header.
+    /// </summary>
+    [Fact]
+    public async Task A32c_under_contract_1_a_v1_join_is_the_legacy_pipelines_and_a_contract_2_join_asks_for_the_header()
+    {
+        var legacy = await Transport(contract: null);
+
+        var lookup = await legacy.SendAsync(Corpus.Shipment, $$"""[ { "lookup": { "localPath": "a", "foreignPath": "b", "as": "x" } }, {{Page1}} ]""");
+
+        lookup.ShouldRefuse("INVALID_LOOKUP_SOURCE", 400)["message"]!.GetValue<string>().Should().Be("Lookup 'from' is required.");
+
+        var resolve = await legacy.SendAsync(Corpus.Shipment, $$"""[ { "resolve": { "source": "a", "as": "x" } }, {{Page1}} ]""");
+
+        resolve.ShouldRefuse("EMPTY_PATH", 400)["message"]!.GetValue<string>().Should().Be("Path is required in resolve.localPath.");
+
+        var contract2 = await legacy.SendAsync(Corpus.Shipment, $$"""[ { "lookup": { "from": "transport.shipment", "path": "id", "as": "x" } }, {{Page1}} ]""");
+
+        contract2.ShouldRefuse("LEGACY_STAGE_UNSUPPORTED", 400)["message"]!.GetValue<string>().Should().Contain("needs the header 'X-OxQL-Contract: 2'");
+        contract2.ErrorCodes.Should().Equal(["LEGACY_STAGE_UNSUPPORTED"]);
     }
 
     /// <summary>

@@ -12,16 +12,16 @@ using Xunit.Abstractions;
 namespace OxQL.Tests.Cursor;
 
 /// <summary>
-/// The cursor-stability rule (DESIGN §3.0): a cursor is bound to its query by a fingerprint over the
+/// The cursor-stability rule: a cursor is bound to its query by a fingerprint over the
 /// canonical render of the bound pipeline, so a request must render and fingerprint byte-identically
 /// under every later engine, and every cursor minted must still decode. The goldens under
 /// <c>Fixtures/golden/</c> pin both.
 /// <para>
 /// The contract 1 golden was captured on the 2.0 engine and is never regenerated: contract 1 keeps
 /// its render, its fingerprint and its cursors. The contract 2 goldens were re-recorded once, at the
-/// wire freeze of the unpublished contract 2 (DG2): its page lost <c>offset</c> and
-/// <c>includeTotalCount</c> (M4, M3), and its cursor is fingerprinted over what decides the rows and
-/// carries the rows served (M6, M3), so no cursor minted before it verifies, by intent. From here a
+/// wire freeze of the unpublished contract 2: its page lost <c>offset</c> and
+/// <c>includeTotalCount</c>, and its cursor is fingerprinted over what decides the rows and
+/// carries the rows served, so no cursor minted before it verifies, by intent. From here a
 /// change that alters one is a cursor break again. <c>OXQL_RECORD_GOLDEN=1</c> rewrites the contract 2
 /// goldens in the source tree; the diff is reviewed and explained.
 /// </para>
@@ -30,7 +30,7 @@ public class GoldenRenderTests(ITestOutputHelper output)
 {
     private const string CursorFile = "cursors-2.0.json";
 
-    /// <summary>The golden of the §3.0 exception: a remote resolve filter holding a <c>$var</c>, rendered substituted.</summary>
+    /// <summary>The golden of a remote resolve filter holding a <c>$var</c>, rendered substituted.</summary>
     private const string RemoteFilterVariable = "remote-filter-var";
 
     private static readonly string Directory = Path.Combine(AppContext.BaseDirectory, "Fixtures", "golden");
@@ -91,8 +91,8 @@ public class GoldenRenderTests(ITestOutputHelper output)
             Record(name, golden);
         }
 
-        bound.Canonical.Should().Be(golden["canonical"]!.GetValue<string>(), $"the canonical render of '{name}' is the 2.0 cursor fingerprint input");
-        bound.Fingerprint.Should().Be(golden["fingerprint"]!.GetValue<string>(), $"a 2.0 cursor over '{name}' must keep verifying");
+        bound.Canonical.Should().Be(golden["canonical"]!.GetValue<string>(), $"the canonical render of '{name}' is the recorded fingerprint input");
+        bound.Fingerprint.Should().Be(golden["fingerprint"]!.GetValue<string>(), $"a cursor over '{name}' must keep verifying");
     }
 
     [Theory]
@@ -161,13 +161,13 @@ public class GoldenRenderTests(ITestOutputHelper output)
             semiJoin |= bound.HasSemiJoin;
             defaultedLookupLimit |= golden["pipeline"]!.AsArray().Any(stage => stage!["lookup"] is JsonObject lookup && lookup["limit"] is null);
 
-            // The one documented exception (DESIGN §3.0): a remote filter with a $var renders
+            // The one documented exception: a remote filter with a $var renders
             // substituted, which its own golden pins; every other golden is a 2.0 render.
             if (name == RemoteFilterVariable)
                 continue;
 
             foreach (var resolve in golden["pipeline"]!.AsArray().Select(stage => stage!["resolve"]).OfType<JsonObject>())
-                resolve["filter"]?.ToJsonString().Should().NotContain("$var", "only remote-filter-var.json renders a remote filter with a variable (DESIGN §3.0 exception)");
+                resolve["filter"]?.ToJsonString().Should().NotContain("$var", "only remote-filter-var.json renders a remote filter with a variable");
         }
 
         output.WriteLine($"golden corpus: {names.Count} renders, {CursorEntries().Count} cursors");

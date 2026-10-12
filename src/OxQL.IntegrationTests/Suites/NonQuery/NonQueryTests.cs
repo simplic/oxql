@@ -25,7 +25,7 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    /// <summary>What every host lists whatever it can do: nothing, since DG2 M12; the contract number says what every engine has.</summary>
+    /// <summary>What every host lists whatever it can do: nothing; the contract number says what every engine has.</summary>
     private static readonly string[] Universal = [];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
@@ -126,13 +126,14 @@ public class NonQueryTests
         }
 
         // Y6: compat.v1 is published exactly when the compat binder is on.
-        var noCompat = shared.Variant(LabService.Staff, "b5-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
+        var noCompat = shared.Variant(LabService.Staff, "case-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
         Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain"]));
 
         // Y4: resolve.remote, semiJoin, resolve.chain and lookup.remote need a remote query client.
         await using var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport));
         var bareHealth = await bare.GetAsync("OxQL/health");
-        Strings(bareHealth.Body!["capabilities"]).Should().Equal(OxQL.Core.Engine.EngineCapabilities.Contract1.Concat(["explain", "compat.v1"]), "asked without the contract header");
+        // This host sets nothing, so the legacy pipeline answers a caller without the header, and health lists what that pipeline honours.
+        Strings(bareHealth.Body!["capabilities"]).Should().Equal(["batch", "compat.v1"], "asked without the contract header: no remote name either way");
         bareHealth.Body!.AsObject().ContainsKey("remote").Should().BeFalse("a host with no remote client has no remote state to report");
     }
 
@@ -150,7 +151,7 @@ public class NonQueryTests
             ["maxSemiJoinIds"] = defaults.MaxSemiJoinIds, ["resolveKeyChunk"] = defaults.ResolveKeyChunk, ["maxResolveKeys"] = defaults.MaxResolveKeys,
             ["maxRequestBytes"] = defaults.MaxRequestBytes, ["maxBatchQueries"] = defaults.MaxBatchQueries, ["regexMaxLength"] = defaults.RegexMaxLength,
             ["maxLookupLimit"] = defaults.MaxLookupLimit,
-            // the report limits (DESIGN §3.7)
+            // the report limits
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
             ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
@@ -174,7 +175,7 @@ public class NonQueryTests
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();
         limits.ToDictionary(member => member.Key, member => member.Value!.GetValue<int>()).Should().BeEquivalentTo(expected);
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = "1000" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = "1000" });
         (await capped.HealthAsync()).Body!["limits"]!["countCap"]!.GetValue<int>().Should().Be(1000, "the body reports the host's configuration, not the defaults");
     }
 
@@ -210,7 +211,7 @@ public class NonQueryTests
     [Fact]
     public async Task Y12_an_owner_whose_health_is_down_makes_the_host_degraded_and_says_which_service()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-y12-degraded", seed: []);
+        await using var fleet = await CorpusFleet.CreateAsync("case-y12-degraded", seed: []);
         fleet.Owner.SetHealth(ChaosHealth.Down);
         var client = fleet.Client(LabService.Conformance);
         var host = await client.HostAsync();
@@ -227,7 +228,7 @@ public class NonQueryTests
     [Fact]
     public async Task Y11_reachability_is_measured_once_per_interval_however_often_health_is_asked()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-y11-cached", seed: []);
+        await using var fleet = await CorpusFleet.CreateAsync("case-y11-cached", seed: []);
         var client = fleet.Client(LabService.Conformance).Anonymous();
         var probe = (await client.HostAsync()).Services.GetRequiredService<RemoteHealthProbe>();
 

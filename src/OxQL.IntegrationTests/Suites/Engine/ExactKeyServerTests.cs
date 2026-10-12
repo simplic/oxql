@@ -9,8 +9,8 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Engine;
 
 /// <summary>
-/// A grouped owner query (<c>keyedBy</c>) keeps its string keys exact inside a collated aggregate
-/// (RE-12): a filter that folds case collates the whole aggregate, and the key <c>$in</c> would then
+/// A grouped owner query (<c>keyedBy</c>) keeps its string keys exact inside a collated aggregate:
+/// a filter that folds case collates the whole aggregate, and the key <c>$in</c> would then
 /// also take a record whose key differs only in case, which the caller would read as a second record
 /// of the key. The same holds through this host's own plain key match of a local string target.
 /// </summary>

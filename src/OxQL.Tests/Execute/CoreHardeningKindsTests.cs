@@ -52,10 +52,10 @@ public class CoreHardeningKindsTests
     /// <summary>
     /// A double cannot hold a 64-bit mean: above 2^53 its granularity is coarser than one, so
     /// the mean of exact integers comes back off by a fraction. The mean is taken in decimal,
-    /// which the wire spells as a string the way it spells a long.
+    /// which the wire writes as a number with every digit, the way it writes a long.
     /// </summary>
     [Fact]
-    public async Task An_average_over_a_long_is_taken_in_decimal_and_travels_as_a_string()
+    public async Task An_average_over_a_long_is_taken_in_decimal_and_travels_as_a_number_with_every_digit()
     {
         var pipeline = Group("""{ "mean": { "avg": "big" } }""");
 
@@ -65,9 +65,19 @@ public class CoreHardeningKindsTests
         var whole = await Row(pipeline, new BsonDocument("mean", new BsonDecimal128(Decimal128.Parse("3002399751580345"))));
         var half = await Row(pipeline, new BsonDocument("mean", new BsonDecimal128(Decimal128.Parse("4503599627370517.5"))));
 
-        whole["mean"]!.GetValueKind().Should().Be(JsonValueKind.String);
-        whole["mean"]!.ToString().Should().Be("3002399751580345");
-        half["mean"]!.ToString().Should().Be("4503599627370517.5");
+        whole["mean"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+        whole["mean"]!.ToJsonString().Should().Be("3002399751580345");
+        half["mean"]!.ToJsonString().Should().Be("4503599627370517.5", "seventeen digits: exact on the wire, more than a double holds");
+
+        // The database computes a mean in 34 digits; the runtime's decimal holds 28 or 29. The number
+        // on the wire is the database's own digits, every one, and never an exponent.
+        var third = await Row(pipeline, new BsonDocument("mean", new BsonDecimal128(Decimal128.Parse("0.3333333333333333333333333333333333"))));
+
+        third["mean"]!.ToJsonString().Should().Be("0.3333333333333333333333333333333333");
+
+        var sum = await Row(Group("""{ "mean": { "sum": "amount" } }"""), new BsonDocument("mean", new BsonDecimal128(Decimal128.Parse("1624965.1234567890123456789012345"))));
+
+        sum["mean"]!.ToJsonString().Should().Be("1624965.1234567890123456789012345", "thirty-two digits, three more than the runtime's decimal holds");
     }
 
     [Fact]
@@ -92,15 +102,15 @@ public class CoreHardeningKindsTests
 
     /// <summary>
     /// A pushed array carries the member's values, so each element is encoded the way the
-    /// row encodes the member: a long is a string whatever its size, a date is its calendar
+    /// row encodes the member: a long is a number whatever its size, a date is its calendar
     /// day, a char is its character. A null element stays null.
     /// </summary>
     [Fact]
-    public async Task A_pushed_long_is_a_string_in_every_element()
+    public async Task A_pushed_long_is_a_number_in_every_element()
     {
         var row = await Row(Group("""{ "all": { "push": "big" } }"""), new BsonDocument("all", new BsonArray { 9007199254740993L, 42L, 0L, BsonNull.Value }));
 
-        row["all"]!.AsArray().Select(item => item?.ToJsonString()).Should().Equal("\"9007199254740993\"", "\"42\"", "\"0\"", null);
+        row["all"]!.AsArray().Select(item => item?.ToJsonString()).Should().Equal("9007199254740993", "42", "0", null);
     }
 
     [Fact]
@@ -128,7 +138,7 @@ public class CoreHardeningKindsTests
     {
         var row = await Row(Group("""{ "all": { "push": { "add": ["big", 1] } } }"""), new BsonDocument("all", new BsonArray { 9007199254740994L, 43L }));
 
-        row["all"]!.AsArray().Select(item => item!.ToJsonString()).Should().Equal("\"9007199254740994\"", "\"43\"");
+        row["all"]!.AsArray().Select(item => item!.ToJsonString()).Should().Equal("9007199254740994", "43");
     }
 
     [Fact]

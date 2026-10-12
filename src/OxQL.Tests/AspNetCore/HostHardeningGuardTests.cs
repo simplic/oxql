@@ -9,6 +9,7 @@ using OxQL.AspNetCore.Batch;
 using OxQL.AspNetCore.Scope;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
+using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Model.Addon;
 using OxQL.Mongo;
@@ -245,6 +246,70 @@ public class HostHardeningGuardTests
         body!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InternalError);
         body["errors"]![0]!["message"]!.GetValue<string>().Should().NotContain("''", "the trace identifier stands in when the provider cannot name a correlation id");
         host.Logs.Entries.Should().ContainSingle(entry => entry.Category == FaultCategory && entry.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task A_scope_provider_that_fails_yields_the_envelope_on_the_explain_route_too()
+    {
+        using var host = new SampleHost(configure: services =>
+        {
+            services.RemoveAll<IOxQLScopeProvider>();
+            services.AddScoped<IOxQLScopeProvider, BrokenScope>();
+        });
+
+        var response = await host.Client().PostAsync("/OxQL/explain", SampleHost.Json(Plain));
+        var body = await SampleHost.Body(response);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        body!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InternalError);
+        (await response.Content.ReadAsStringAsync()).Should().NotContain(Secret);
+    }
+
+    [Theory]
+    [InlineData("v2")]
+    [InlineData("2.0")]
+    [InlineData("3")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("1, 2")]
+    public async Task A_contract_header_that_names_no_contract_is_refused_on_every_route_that_runs_a_request(string header)
+    {
+        using var host = new SampleHost();
+        var client = host.Client(contract: null);
+
+        client.DefaultRequestHeaders.TryAddWithoutValidation(OxQLQueryService.ContractHeader, header);
+
+        foreach (var (route, body) in new[] { ("query", Plain), ("explain", Plain), ("batch", $$"""{ "queries": [{{Plain}}] }""") })
+        {
+            var response = await client.PostAsync("/OxQL/" + route, SampleHost.Json(body));
+            var error = (await SampleHost.Body(response))!["errors"]![0]!;
+
+            response.StatusCode.Should().Be(HttpStatusCode.BadRequest, route);
+            error["code"]!.GetValue<string>().Should().Be(Codes.UnknownRequestMember);
+            error["params"]!["reason"]!.GetValue<string>().Should().Be("contract");
+            error["message"]!.GetValue<string>().Should().Contain("X-OxQL-Contract: 2");
+        }
+
+        host.Runner.Calls.Should().BeEmpty("nothing ran under a contract the caller did not name");
+        (await client.GetAsync("/OxQL/health")).StatusCode.Should().Be(HttpStatusCode.OK, "health answers whoever asks");
+    }
+
+    [Theory]
+    [InlineData("2", 2)]
+    [InlineData(" 2 ", 2)]
+    [InlineData("2, 2", 2)]
+    [InlineData("1", 1)]
+    [InlineData("", 1)]
+    [InlineData(null, 1)]
+    public void The_header_reads_as_the_contract_it_names_and_as_contract_1_when_it_names_none(string? header, int contract)
+    {
+        var http = new DefaultHttpContext();
+
+        if (header is not null)
+            http.Request.Headers[OxQLQueryService.ContractHeader] = header;
+
+        OxQLQueryService.ContractOf(new OxQLOptions(), http).Should().Be(contract);
+        OxQLQueryService.ContractRefusal(new OxQLOptions(), http).Should().BeNull();
     }
 
     private sealed class BrokenScope : IOxQLScopeProvider

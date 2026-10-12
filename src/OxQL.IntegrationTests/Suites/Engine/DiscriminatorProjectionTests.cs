@@ -9,7 +9,7 @@ namespace OxQL.IntegrationTests.Suites.Engine;
 
 /// <summary>
 /// A projection or a join's select of a member below a polymorphic object keeps the object's
-/// discriminator in a contract 2 query (RE-16), so the row is encoded by the variant it is stored as;
+/// discriminator in a contract 2 query, so the row is encoded by the variant it is stored as;
 /// the discriminator itself is not a member and never reaches the wire row.
 /// </summary>
 [Trait("Category", "Integration")]

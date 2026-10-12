@@ -11,7 +11,7 @@ using Xunit.Abstractions;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// T1, the fleet differential (improvement plan §3.T, P12 "explain ≡ execution"): over the fleet's real
+/// The fleet differential: over the fleet's real
 /// hosts, what explain says of a request is what running it does.
 /// <list type="bullet">
 ///   <item>The reference set (the report scenarios and the golden chains) and every route this suite

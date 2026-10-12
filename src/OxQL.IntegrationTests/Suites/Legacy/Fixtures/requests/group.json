@@ -1,0 +1,59 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "IsDeleted": {
+          "eq": false
+        }
+      }
+    },
+    {
+      "group": {
+        "by": [
+          {
+            "path": "Status.Name",
+            "as": "Status"
+          }
+        ],
+        "fields": {
+          "Count": {
+            "count": true
+          },
+          "Last": {
+            "max": "EndDateTime"
+          },
+          "Counter": {
+            "sum": "GeneratedTourNrCounter"
+          },
+          "Tours": {
+            "countDistinct": "GlobalTourId"
+          },
+          "Half": {
+            "avg": {
+              "divide": [
+                "GeneratedTourNrCounter",
+                {
+                  "literal": 2
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Status": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 10,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

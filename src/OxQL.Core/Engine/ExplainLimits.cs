@@ -13,7 +13,7 @@ public sealed record ExplainUnknownValue(string Member, string Value);
 public readonly record struct ExplainOwnerAdmission(bool Admitted, int Max, int RetryAfterSeconds);
 
 /// <summary>
-/// The cheap refusals of an explain (improvement plan §3.E protection): checked on the parsed body
+/// The cheap refusals of an explain: checked on the parsed body
 /// alone, before any model, binder or owner work, so an explain past its bounds costs a JSON parse
 /// and nothing else. More stages than <c>Explain.MaxStages</c>, more <c>catalog</c> entries than
 /// <c>Explain.MaxCatalogEntries</c>, a <c>shape.depth</c> above <c>Explain.MaxShapeDepth</c>, or an

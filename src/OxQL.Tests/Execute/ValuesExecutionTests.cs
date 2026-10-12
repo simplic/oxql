@@ -16,7 +16,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The answer of a request that ends in <c>values</c> (DG2 set filters), over the one document its
+/// The answer of a request that ends in <c>values</c>, over the one document its
 /// aggregate answers: each value written as a row writes the member, one more than the limit as
 /// <c>hasNextPage</c> without a cursor, the rows read against the bound as <c>VALUES_SCAN_CAPPED</c>,
 /// one command of kind <c>values</c> under the request's time ceiling.
@@ -87,8 +87,8 @@ public class ValuesExecutionTests
         Items(await Run(Host(Answer(5, (day, 5))).Engine, """ "path": "day" """)).Should().Be("""[{"value":"2026-03-01"}]""");
         Items(await Run(Host(Answer(5, (day.AddHours(8), 5))).Engine, """ "path": "when" """)).Should().Be("""[{"value":"2026-03-01T08:00:00Z"}]""");
         Items(await Run(Host(Answer(5, (new BsonBinaryData(id, GuidRepresentation.Standard), 5))).Engine, """ "path": "customerId" """)).Should().Be($$"""[{"value":"{{id}}"}]""");
-        Items(await Run(Host(Answer(5, (BsonDecimal128.Create(12.5m), 5))).Engine, """ "path": "amount" """)).Should().Be("""[{"value":"12.5"}]""", "a decimal is its canonical text");
-        Items(await Run(Host(Answer(5, (5_000_000_000L, 5))).Engine, """ "path": "big" """)).Should().Be("""[{"value":"5000000000"}]""", "a long is a string");
+        Items(await Run(Host(Answer(5, (BsonDecimal128.Create(12.5m), 5))).Engine, """ "path": "amount" """)).Should().Be("""[{"value":12.5}]""", "a decimal is a number in its canonical digits");
+        Items(await Run(Host(Answer(5, (5_000_000_000L, 5))).Engine, """ "path": "big" """)).Should().Be("""[{"value":5000000000}]""", "a long is a number");
         Items(await Run(Host(Answer(5, (true, 4), (false, 1))).Engine, """ "path": "flag", "counts": true """)).Should().Be("""[{"value":true,"count":4},{"value":false,"count":1}]""");
         Items(await Run(Host(Answer(7, (2, 4), (BsonNull.Value, 3))).Engine, """ "path": "items.quantity", "counts": true """)).Should().Be("""[{"value":2,"count":4},{"value":null,"count":3}]""");
     }

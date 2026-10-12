@@ -131,8 +131,8 @@ namespace OxQL.Tests.Model.Fixtures.VariantMerge
 namespace OxQL.Tests.Model
 {
     /// <summary>
-    /// A member some variants of a polymorphic type declare with different references (RE-1), and
-    /// variants whose names collide (RE-10): the merged member resolves each row by its own variant's
+    /// A member some variants of a polymorphic type declare with different references, and
+    /// variants whose names collide: the merged member resolves each row by its own variant's
     /// declaration, never by the first variant's for every row.
     /// </summary>
     public class VariantReferenceMergeTests

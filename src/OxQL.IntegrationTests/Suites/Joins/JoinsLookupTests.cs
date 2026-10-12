@@ -319,7 +319,7 @@ public class JoinsLookupTests
     [Fact]
     public async Task L26_a_lookup_of_another_services_entity_runs_at_its_owner_along_the_reference_the_owner_declares()
     {
-        // DESIGN §3.4.4: a template's createUserId names a fleet vehicle, so transport answers the
+        // A template's createUserId names a fleet vehicle, so transport answers the
         // templates of each vehicle grouped per key; it was UNKNOWN_ENTITY before the remote lookup.
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, """
             [ { "lookup": { "from": "transport.shipment_template", "path": "createUserId", "as": "templates", "limit": 2 } }, { "page": { "limit": 1 } } ]

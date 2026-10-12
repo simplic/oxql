@@ -8,12 +8,12 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The union join on the fleet (improvement plan §3.U): <c>resolve { as, byTarget }</c> under the
+/// The union join on the fleet: <c>resolve { as, byTarget }</c> under the
 /// source line of an invoice line, which is a shipment's or a tour's. One stage and one alias where
 /// two <c>forTarget</c> stages filled two; the rows equal theirs; branches that reach different
 /// entities drop per branch what one does not reach; an owner's refusal names the branch; a union
 /// join under an alias a continued stage added is split by that alias's owner; and explain says of
-/// each what the run does (improvement plan P12). The rows are the report seeds of organisation R.
+/// each what the run does. The rows are the report seeds of organisation R.
 /// </summary>
 [Trait("Category", "Integration")]
 public class JoinsUnionJoinTests

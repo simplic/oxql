@@ -12,8 +12,8 @@ namespace OxQL.Core.Binding;
 /// fingerprinted over (without the page). Storage paths and typed operands are inside it, so
 /// two requests that bind to the same storage work have the same fingerprint.
 /// <para>
-/// A contract 2 cursor is fingerprinted over what decides which rows there are and in which order
-/// (DG2 M6): the stages a filter, a sort, an unwind or a group reads. What only shapes the row is
+/// A contract 2 cursor is fingerprinted over what decides which rows there are and in which order:
+/// the stages a filter, a sort, an unwind or a group reads. What only shapes the row is
 /// left out (<see cref="DisplayOnly"/>): the trailing projection, a join nothing but the row's
 /// display reads, and every <c>select</c>. Showing or hiding a column keeps a cursor valid.
 /// Contract 1 fingerprints the whole form, as it always has.
@@ -126,7 +126,7 @@ public static class BoundCanonical
     }
 
     /// <summary>
-    /// The fingerprint of a contract 2 cursor (DG2 M6): SHA-256 over the canonical form without the
+    /// The fingerprint of a contract 2 cursor: SHA-256 over the canonical form without the
     /// page, without the stages that only shape the row (<see cref="DisplayOnly"/>) and without any
     /// join's <c>select</c>.
     /// </summary>
@@ -139,12 +139,13 @@ public static class BoundCanonical
     }
 
     /// <summary>
-    /// The stages that decide neither which rows there are nor their order (DG2 M6):
+    /// The stages that decide neither which rows there are nor their order:
     /// <list type="bullet">
     /// <item>a join (<c>lookup</c>, <c>resolve</c>) whose alias, owning row and outcome no stage reads
     /// but a projection: nothing matches, sorts, unwinds, groups or joins on it, so it only fills the
     /// row. The read ledger says so (<paramref name="reads"/>): a join read for anything but
-    /// <c>project</c> stays in;</item>
+    /// <c>project</c> stays in, unless the read is such a join's own (the key it follows, the
+    /// condition that picks its case), so a chain of them is outside as one;</item>
     /// <item>a projection that only such joins, sorts and the page follow: the row's last cut.</item>
     /// </list>
     /// A stage continued at an owner stays in: what it reads is the owner's to know.
@@ -155,32 +156,48 @@ public static class BoundCanonical
         ArgumentNullException.ThrowIfNull(reads);
 
         var shaping = new HashSet<BoundStage>(ReferenceEqualityComparer.Instance);
-        var read = new HashSet<string>(StringComparer.Ordinal);
+        var joins = stages.Where(stage => stage is BoundStage.Lookup or BoundStage.Resolve).ToList();
 
-        // What a stage other than a projection reads: the join it loads from, and the root it names.
-        foreach (var entry in reads.Where(entry => entry.Use != ReadUse.Project))
+        // A join that only fills the row reads its own key off another join without making that one
+        // decide a row, so the joins are found from the last of a chain back: until none is added.
+        while (true)
         {
-            if (entry.Alias is { } alias)
-                read.Add(alias);
+            var own = shaping.Select(stage => stage switch { BoundStage.Lookup lookup => lookup.Stage, BoundStage.Resolve resolve => resolve.Stage, _ => -1 }).Where(stage => stage >= 0).ToHashSet();
+            var read = new HashSet<string>(StringComparer.Ordinal);
 
-            read.Add(entry.Path.Split('.', 2)[0]);
-        }
-
-        // A continued stage names its anchor, and the aliases it adds are read like any other.
-        foreach (var continued in stages.OfType<ContinuedStage>())
-            read.Add(continued.Anchor);
-
-        foreach (var stage in stages)
-        {
-            IEnumerable<string?> aliases = stage switch
+            // What a stage other than a projection reads: the join it loads from, and the root it names.
+            foreach (var entry in reads)
             {
-                BoundStage.Lookup lookup => [lookup.As],
-                BoundStage.Resolve resolve => [resolve.As, resolve.ParentAs, resolve.OutcomeAs],
-                _ => [],
-            };
+                if (entry.Use == ReadUse.Project || (entry.Use is ReadUse.ResolveKey or ReadUse.LookupOn or ReadUse.CaseCondition && own.Contains(entry.Stage)))
+                    continue;
 
-            if (stage is (BoundStage.Lookup or BoundStage.Resolve) && !aliases.Any(alias => alias is not null && read.Contains(alias)))
-                shaping.Add(stage);
+                if (entry.Alias is { } alias)
+                    read.Add(alias);
+
+                read.Add(entry.Path.Split('.', 2)[0]);
+            }
+
+            // A continued stage names its anchor, and the aliases it adds are read like any other.
+            foreach (var continued in stages.OfType<ContinuedStage>())
+                read.Add(continued.Anchor);
+
+            var before = shaping.Count;
+
+            foreach (var stage in joins)
+            {
+                IEnumerable<string?> aliases = stage switch
+                {
+                    BoundStage.Lookup lookup => [lookup.As],
+                    BoundStage.Resolve resolve => [resolve.As, resolve.ParentAs, resolve.OutcomeAs],
+                    _ => [],
+                };
+
+                if (!aliases.Any(alias => alias is not null && read.Contains(alias)))
+                    shaping.Add(stage);
+            }
+
+            if (shaping.Count == before)
+                break;
         }
 
         for (var index = stages.Count - 1; index >= 0; index--)
@@ -231,7 +248,7 @@ public static class BoundCanonical
         BoundStage.Lookup lookup => new JsonObject { ["lookup"] = RenderLookup(lookup) },
         BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve => new JsonObject { ["lookup"] = RenderRemoteLookup(resolve, remoteLookup) },
         BoundStage.Resolve resolve => new JsonObject { ["resolve"] = RenderResolve(resolve) },
-        BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind, contract2) },
+        BoundStage.Unwind unwind => new JsonObject { ["unwind"] = RenderUnwind(unwind) },
         BoundStage.Group group => new JsonObject
         {
             ["group"] = new JsonObject
@@ -297,7 +314,7 @@ public static class BoundCanonical
     };
 
     /// <summary>
-    /// A stage continued at the owner of <c>anchor</c> (DESIGN §3.5.3): the anchor, the one target it
+    /// A stage continued at the owner of <c>anchor</c>: the anchor, the one target it
     /// applies to, the aliases it adds and the stage as the owner is sent it before the per-target
     /// rewrite, in wire form with every variable substituted. The owner binds it, so there is no
     /// storage form here; two requests continuing different stages never share a fingerprint. No
@@ -359,7 +376,7 @@ public static class BoundCanonical
     }
 
     /// <summary>
-    /// A lookup of another service's entity (DESIGN §3.4.4): the child as written, the parent key's
+    /// A lookup of another service's entity: the child as written, the parent key's
     /// storage it joins on, and the members the owner binds — path, select, filter (every variable
     /// substituted), sort, owning-row select — as written, since the owner binds them and this host
     /// has no storage form of them. A request without one renders none, so its cursors stay valid.
@@ -475,7 +492,7 @@ public static class BoundCanonical
     /// An unwind. <c>flatten</c> and its depth are written only when the unwind flattens, so an
     /// unwind without it renders without it and its cursors stay valid.
     /// </summary>
-    private static JsonObject RenderUnwind(BoundStage.Unwind unwind, bool contract2)
+    private static JsonObject RenderUnwind(BoundStage.Unwind unwind)
     {
         var node = new JsonObject
         {
@@ -490,11 +507,6 @@ public static class BoundCanonical
             node["flatten"] = flatten.Storage;
             node["flattenDepth"] = flatten.Depth;
         }
-
-        // A contract 2 unwind always takes its collection out of the row (DG2 M2), so it has nothing
-        // to say; the member is written for an unwind that had the choice and made it.
-        if (!unwind.KeepPath && !contract2)
-            node["keepPath"] = false;
 
         return node;
     }

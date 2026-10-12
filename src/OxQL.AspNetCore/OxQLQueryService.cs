@@ -42,6 +42,9 @@ public sealed class OxQLQueryService : IOxQLQueryService
     private readonly ILogger compatLog;
     private readonly ILogger faultLog;
 
+    // LEGACY(compat.v1): the legacy pipeline's route; remove with src/OxQL.AspNetCore/Legacy.
+    private readonly Legacy.LegacyRoute? legacy;
+
     /// <summary>Creates the service for one request; the optional collaborators default to none.</summary>
     public OxQLQueryService(
         IQueryEngine engine,
@@ -50,8 +53,11 @@ public sealed class OxQLQueryService : IOxQLQueryService
         IEntityModelProvider models,
         IAddonDefinitionSource? addons = null,
         IHttpContextAccessor? httpContextAccessor = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        // LEGACY(compat.v1): remove with src/OxQL.AspNetCore/Legacy.
+        Legacy.LegacyRoute? legacy = null)
     {
+        this.legacy = legacy;
         this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
         this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
@@ -87,18 +93,31 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "The request is empty; a query carries an entityType and a pipeline.",
             }]));
 
+        if (shared is null && ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
+            return QueryOutcome.Of(unknownContract);
+
         // The queries of a batch that run side by side share the context their batch read once;
         // each is measured on its own, from when it starts.
         var context = shared is null ? await ContextAsync(maxTimeMs, internalCall, cancellationToken) : shared with { MaxTimeMs = maxTimeMs, Timing = Measuring(httpContextAccessor?.HttpContext) };
 
         if (context.Contract == 1)
         {
-            var rewrite = Compat(request, context);
+            // LEGACY(compat.v1): what the rewrite cannot express and contract 1 answered runs on the
+            // legacy pipeline; without it this is `return await Rewritten();`. Remove with src/OxQL.AspNetCore/Legacy.
+            if (legacy is not null)
+                return await legacy.AnswerAsync(request, context, Rewritten, cancellationToken);
 
-            if (rewrite.Refusal is not null)
-                return QueryOutcome.Of(rewrite.Refusal);
+            return await Rewritten();
 
-            request = rewrite.Request;
+            async Task<QueryOutcome> Rewritten()
+            {
+                var rewrite = Compat(request, context);
+
+                if (rewrite.Refusal is not null)
+                    return QueryOutcome.Of(rewrite.Refusal);
+
+                return await engine.ExecuteAsync(rewrite.Request, context, cancellationToken);
+            }
         }
 
         return await engine.ExecuteAsync(request, context, cancellationToken);
@@ -120,6 +139,9 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Code = Codes.UnknownStage,
                 Message = "The batch is empty; a batch carries a queries array.",
             }]));
+
+        if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
+            return new BatchOutcome.Refused(unknownContract);
 
         // A member the batch does not have is refused rather than dropped: a batch-level strict
         // would otherwise run every query without it. Contract 1 ignores it, as it always has.
@@ -212,6 +234,9 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Message = "'budget' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.",
             }]));
 
+        if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
+            return new ExplainOutcome.Refused(unknownContract);
+
         var context = await ContextAsync(null, internalCall, cancellationToken);
 
         // The owner calls of a public explain are charged when the first is about to be made, once per
@@ -235,7 +260,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
         {
             var rewrite = Compat(request.Query, context);
 
-            // A contract 1 request that does not rewrite is an answer too (DESIGN §4.1): valid false with the errors.
+            // A contract 1 request that does not rewrite is an answer too: valid false with the errors.
             if (rewrite.Refusal is not null)
             {
                 if (rewrite.Refusal.Status != 400)
@@ -423,7 +448,11 @@ public sealed class OxQLQueryService : IOxQLQueryService
     /// </summary>
     public int ContractOf(HttpContext? httpContext) => ContractOf(options, httpContext);
 
-    /// <summary>The contract a request was written for under <paramref name="options"/>; the one rule every part of the host reads it by.</summary>
+    /// <summary>
+    /// The contract a request was written for under <paramref name="options"/>; the one rule every part of the host reads it by.
+    /// A header that names neither contract is contract 2 here, and a query, batch or explain that
+    /// carries it is refused before it runs (<see cref="ContractRefusal"/>).
+    /// </summary>
     public static int ContractOf(OxQLOptions options, HttpContext? httpContext)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -431,10 +460,56 @@ public sealed class OxQLQueryService : IOxQLQueryService
         if (!options.Compat.Enabled)
             return 2;
 
-        if (httpContext is not null && httpContext.Request.Headers.TryGetValue(ContractHeader, out var values) && int.TryParse(values.FirstOrDefault(), out var contract))
-            return contract == 1 ? 1 : 2;
+        return WrittenContract(httpContext) switch
+        {
+            null or 1 => 1,
+            _ => 2,
+        };
+    }
 
-        return 1;
+    /// <summary>
+    /// The refusal of a request whose contract header names no contract this host answers: 400, so a
+    /// request is never answered under a contract its caller did not write it for. Null for a request
+    /// without the header or with an empty one (contract 1), with <c>1</c> or <c>2</c>, and for every
+    /// request once <c>Compat:Enabled</c> is off, where the header is not read.
+    /// </summary>
+    public static Refusal? ContractRefusal(OxQLOptions options, HttpContext? httpContext)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!options.Compat.Enabled || WrittenContract(httpContext) is null or 1 or 2)
+            return null;
+
+        return Refusal.Validation([new QueryValidationError
+        {
+            Code = Codes.UnknownRequestMember,
+            Message = $"The header '{ContractHeader}' names no contract of this service; send '{ContractHeader}: 2', or leave the header out for contract 1.",
+            Params = new Dictionary<string, object?> { ["reason"] = "contract", ["header"] = ContractHeader, ["contracts"] = new[] { 1, 2 } },
+        }]);
+    }
+
+    /// <summary>
+    /// The contract the header says: null without the header or with nothing in it, the number where
+    /// every value written (several lines, or one a proxy folded with commas) is that whole number,
+    /// and 0 for anything else.
+    /// </summary>
+    private static int? WrittenContract(HttpContext? httpContext)
+    {
+        if (httpContext is null || !httpContext.Request.Headers.TryGetValue(ContractHeader, out var values))
+            return null;
+
+        int? written = null;
+
+        foreach (var value in values)
+            foreach (var part in (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!int.TryParse(part, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var contract) || (written is { } other && other != contract))
+                    return 0;
+
+                written = contract;
+            }
+
+        return written;
     }
 
     /// <summary>Rewrites a contract 1 request and writes the compat log line.</summary>

@@ -15,7 +15,7 @@ namespace OxQL.IntegrationTests.Suites.Seed;
 /// the ERP items, the logistics resources and tour actions; the reference cases the scenarios
 /// follow; the directory service), and the report rows of organisation R are in the shared fleet,
 /// readable through the engine, stored in the driver's polymorphic forms, and invisible to
-/// organisation A. The scenarios themselves (DESIGN §2) are the report suites' cases.
+/// organisation A. The scenarios themselves are the report suites' cases.
 /// </summary>
 [Trait("Category", "Integration")]
 public class ReportSeedTests

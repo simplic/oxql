@@ -173,21 +173,28 @@ public class ShapeJProjectionTests
         nested.Items[0]!["loadAddress"]!.AsObject().Select(member => member.Key).Should().Equal("city");
     }
 
+    [Fact]
+    public async Task J14_a_projection_leaf_reads_true_as_1_and_false_as_0()
+    {
+        var kept = await One("""{ "shipmentNumber": true }""");
+
+        kept.ShouldBeOk();
+        kept.Items.ToJsonString().Should().Be((await One("""{ "shipmentNumber": 1 }""")).Items.ToJsonString());
+        Members(kept).Should().Equal("id", "shipmentNumber");
+
+        var removed = await One("""{ "shipmentNumber": false }""");
+
+        removed.ShouldBeOk();
+        removed.Items.ToJsonString().Should().Be((await One("""{ "shipmentNumber": 0 }""")).Items.ToJsonString());
+        Members(removed).Should().NotContain("shipmentNumber");
+    }
+
     [Theory]
-    [InlineData("true")]
     [InlineData("\"yes\"")]
     [InlineData("[\"a\"]")]
-    [InlineData("false")]
-    public async Task J14_a_non_numeric_projection_leaf_means_include_false_included(string leaf)
-    {
-        var asOne = await One("""{ "shipmentNumber": 1 }""");
-
-        var answer = await One($$"""{ "shipmentNumber": {{leaf}} }""");
-
-        answer.ShouldBeOk(leaf);
-        answer.Items.ToJsonString().Should().Be(asOne.Items.ToJsonString(), leaf);
-        Members(answer).Should().Equal("id", "shipmentNumber");
-    }
+    [InlineData("null")]
+    public async Task J14_a_projection_leaf_that_is_neither_a_number_nor_a_boolean_is_refused(string leaf) =>
+        Refused(await One($$"""{ "shipmentNumber": {{leaf}} }"""), "MIXED_PROJECTION", "shipmentNumber", stage: 1);
 
     [Fact]
     public async Task J15_a_non_integral_projection_value_fails_before_binding_as_ProblemDetails_not_an_OxQL_envelope()
@@ -201,15 +208,19 @@ public class ShapeJProjectionTests
     }
 
     [Fact]
-    public async Task J16_an_unstored_member_is_projectable_and_NOT_STORED_is_not_raised_in_a_projection()
+    public async Task J16_an_unstored_member_is_NOT_STORED_in_a_projection_as_in_every_other_stage_and_an_exclusion_of_it_asks_for_nothing()
     {
         // The lab's unstored members are conformance.entity's scratch and computed (see C10).
         var target = Corpus.Rows(Corpus.Conformance)[0].Id;
 
-        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1, "computed": 1 } }, { "page": { "limit": 5 } } ]""", Corpus.Conformance);
+        // An inclusion asks for a member no row can carry: refused by name (it used to be dropped silently).
+        Refused(await Send($$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1 } }, { "page": { "limit": 5 } } ]""", Corpus.Conformance), "NOT_STORED", "scratch");
+
+        // An exclusion asks for nothing.
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "scratch": 0, "computed": 0 } }, { "page": { "limit": 5 } } ]""", Corpus.Conformance);
 
         answer.ShouldHaveIds([target]);
-        Members(answer).Should().Equal("id");
+        Members(answer).Should().NotContain(["scratch", "computed"]);
 
         // The same path in a match is refused, which is what unstored means.
         Refused(await Send("""[ { "match": { "scratch": { "eq": "x" } } }, { "page": { "limit": 5 } } ]""", Corpus.Conformance), "NOT_STORED", "scratch");

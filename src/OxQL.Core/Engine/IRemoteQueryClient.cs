@@ -10,6 +10,11 @@ namespace OxQL.Core.Engine;
 /// namespace (<c>vehicle</c> of <c>vehicle.vehicle</c>), which is the host's
 /// <c>InternalHosts</c> key. The base package implements it; the engine's resolver consumes
 /// it, the host's startup check and health read it.
+/// <para>
+/// A call carries no organisation of its own: the engine keeps what an owner answered under the
+/// organisation the host's scope provider read, so an implementation must forward that same
+/// identity and no other, or one organisation's rows would be kept under another's.
+/// </para>
 /// </summary>
 public interface IRemoteQueryClient
 {
@@ -28,7 +33,7 @@ public interface IRemoteQueryClient
 
     /// <summary>
     /// Explains <paramref name="request"/> at the service behind <paramref name="serviceKey"/>, over
-    /// its internal explain route (<c>POST internal/oxql/explain</c>, DESIGN §4.1: internal key,
+    /// its internal explain route (<c>POST internal/oxql/explain</c>: internal key,
     /// forwarded identity, the same body as <c>POST /oxql/explain</c>) within <paramref name="budget"/>,
     /// and answers the owner's explain answer as written (<c>{ valid, errors, stages, aliases, types, … }</c>). The
     /// origin forwards the owner queries a run would send (the remote check, which also answers the

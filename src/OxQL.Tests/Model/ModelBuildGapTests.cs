@@ -34,7 +34,7 @@ namespace OxQL.Tests.Model.Fixtures.BuildGaps
 
 namespace OxQL.Tests.Model
 {
-    /// <summary>The model build gaps of the engine review (RE-24).</summary>
+    /// <summary>The model build gaps of the engine review.</summary>
     public class ModelBuildGapTests
     {
         private static EntityModel Build() => ClrModelBuilder.Build(

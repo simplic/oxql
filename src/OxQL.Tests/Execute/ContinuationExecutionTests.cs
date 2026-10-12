@@ -17,7 +17,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// Remote continuation at run time (DESIGN §3.5.2 steps 3 and 6, §3.5.3, §3.5.4) against fakes: the
+/// Remote continuation at run time against fakes: the
 /// continued stages ride in the ordinary owner query between the filter and the projection, the
 /// aliases they add come back on the owner rows and are lifted to the origin row, <c>forTarget</c>
 /// leaves other targets' rows <c>not_applicable</c> without refusing a strict request, an owner's

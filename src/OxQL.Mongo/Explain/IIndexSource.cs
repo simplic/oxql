@@ -6,7 +6,7 @@ using OxQL.Model;
 namespace OxQL.Mongo.Explain;
 
 /// <summary>
-/// What the opt-in explain advisory reads from the server (DESIGN §4.1): a collection's index list,
+/// What the opt-in explain advisory reads from the server: a collection's index list,
 /// cached per collection. Nothing else: explain never runs the pipeline, not even under the
 /// server's own <c>explain</c> command. Tests replace it with fixtures; a host without one gets no
 /// advisory.

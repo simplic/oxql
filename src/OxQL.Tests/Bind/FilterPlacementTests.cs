@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The top-level <c>filter</c> of a contract 2 request (DG2 M1): a list of <c>{ id?, where }</c>, all
+/// The top-level <c>filter</c> of a contract 2 request: a list of <c>{ id?, where }</c>, all
 /// of which a row must meet, each condition placed by the engine at the earliest point of the
 /// pipeline where the paths it reads are in the row. A condition is about the thing its path names:
 /// an entity member at the entry, an unwind's alias after the unwind, a join's alias after the join,

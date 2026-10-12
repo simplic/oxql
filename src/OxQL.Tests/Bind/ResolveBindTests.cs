@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The resolve binding of contract 2 (DESIGN §3.4.1 steps 1–7 without continuation, §3.8, §3.10): the
+/// The resolve binding of contract 2: the
 /// new members, the collection guard (<c>RESOLVE_ON_COLLECTION</c>), the declared cases with
 /// <c>target</c> and <c>parentAs</c>, the inline or keyed executor, the shape of a keyed alias,
 /// poisoned aliases and the canonical render. How a keyed resolve executes is
@@ -357,7 +357,7 @@ public class ResolveBindTests
 
     // Step 3, a resolve or lookup under a keyed or remote alias, is ContinuationBindTests.
 
-    // ---- §3.8: poisoned aliases ------------------------------------------------------------------------
+    // ---- poisoned aliases ------------------------------------------------------------------------------
 
     [Fact]
     public async Task A_failed_resolve_poisons_its_alias_so_later_uses_add_no_errors()

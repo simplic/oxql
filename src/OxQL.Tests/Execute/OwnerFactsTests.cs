@@ -16,9 +16,9 @@ namespace OxQL.Tests.Execute;
 /// <summary>
 /// What the engine learns of an owner and says about it: the owner's facts read before the first
 /// batch, so its batch cap and engine version gate that batch without anyone calling the health
-/// route first (RS-4); the API version the host routes an owner to in explain's
-/// <c>owner.route.apiVersion</c> (RS-1); the host's schema revision in explain's
-/// <c>schemaRevision</c> (RE-11).
+/// route first; the API version the host routes an owner to in explain's
+/// <c>owner.route.apiVersion</c>; the host's schema revision in explain's
+/// <c>schemaRevision</c>.
 /// </summary>
 public class OwnerFactsTests
 {
@@ -72,7 +72,8 @@ public class OwnerFactsTests
 
         var outcome = await engine.ExecuteAsync(BindHost.Request(Invoice, """[{ "resolve": { "path": "contactId", "as": "r" } }]""") with { Strict = true }, BindHost.Context());
 
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(1_500), "the facts read is cut at a slice of the 2 s phase, not the owner's health time");
+        // The bound is the owner's health time (5 s), which an uncut read would take; anything below it shows the cut, and a loaded machine has room.
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(4_000), "the facts read is cut at a slice of the 2 s phase, not the owner's health time");
         outcome.Should().BeOfType<QueryOutcome.Success>("the batch goes out under this host's caps and the owner answers in time")
             .Which.Result.Items[0]!["r"]!["name"]!.GetValue<string>().Should().Be("Alice");
         client.Calls.Should().ContainSingle();

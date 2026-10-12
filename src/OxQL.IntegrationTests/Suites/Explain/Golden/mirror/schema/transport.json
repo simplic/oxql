@@ -5,7 +5,7 @@
     "name": "transport-api",
     "version": "v1"
   },
-  "revision": "sha256:cba2840146b7437c872f3522305641078f1b47a8e76acaec288e327a48436df0",
+  "revision": "sha256:2bcd2801885be347e0fc9ba5d3c12faebb4195692fb9017e78678ca038f91ac4",
   "limits": {
     "maxPageSize": 500,
     "defaultPageSize": 100,
@@ -47,6 +47,12 @@
     "t_attachResourceAction": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "address",
           "kind": "object",
@@ -109,6 +115,12 @@
     "t_attachShipmentAction": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "address",
           "kind": "object",
@@ -388,6 +400,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "matchCode",
           "kind": "string",
           "nullable": true
@@ -483,6 +501,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "matchCode",
           "kind": "string",
           "nullable": true
@@ -562,6 +586,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "id",
           "kind": "guid",
           "nullable": false
@@ -606,6 +636,12 @@
     "t_cleaningAction": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "address",
           "kind": "object",
@@ -756,6 +792,12 @@
     "t_containerResource": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "loadingSlots",
           "kind": "array",
@@ -937,6 +979,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "address",
           "kind": "object",
           "type": "#/types/t_contactAddress",
@@ -999,6 +1047,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "address",
           "kind": "object",
           "type": "#/types/t_contactAddress",
@@ -1054,6 +1108,12 @@
     "t_driverResource": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "matchCode",
           "kind": "string",
@@ -1150,6 +1210,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "matchCode",
           "kind": "string",
           "nullable": true
@@ -1244,6 +1310,45 @@
     "t_iTourAction": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": true,
+          "values": [
+            {
+              "value": "attach_resource"
+            },
+            {
+              "value": "attach_shipment"
+            },
+            {
+              "value": "check_vehicle"
+            },
+            {
+              "value": "cleaning"
+            },
+            {
+              "value": "detach_resource"
+            },
+            {
+              "value": "detach_shipment"
+            },
+            {
+              "value": "task"
+            }
+          ],
+          "onlyFor": ["AttachResourceAction","AttachShipmentAction","CheckVehicleAction","CleaningAction","DetachResourceAction","DetachShipmentAction","TaskAction"],
+          "stored": false,
+          "byVariant": {
+            "AttachResourceAction": "attach_resource",
+            "AttachShipmentAction": "attach_shipment",
+            "CheckVehicleAction": "check_vehicle",
+            "CleaningAction": "cleaning",
+            "DetachResourceAction": "detach_resource",
+            "DetachShipmentAction": "detach_shipment",
+            "TaskAction": "task"
+          }
+        },
         {
           "name": "address",
           "kind": "object",
@@ -1813,6 +1918,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "title",
           "kind": "string",
           "nullable": true
@@ -1914,6 +2025,12 @@
       "key": ["id"],
       "properties": [
         {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
+        {
           "name": "matchCode",
           "kind": "string",
           "nullable": true
@@ -2008,6 +2125,12 @@
     "t_trailerResource": {
       "key": ["id"],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "stored": false
+        },
         {
           "name": "loadingSlots",
           "kind": "array",
@@ -2206,7 +2329,7 @@
       "display": "matchCode",
       "extendable": true,
       "queryable": true,
-      "notFilterable": [],
+      "notFilterable": ["type"],
       "notSortable": [],
       "items": [
         {
@@ -2215,6 +2338,44 @@
         }
       ],
       "properties": [
+        {
+          "name": "type",
+          "kind": "string",
+          "nullable": false,
+          "values": [
+            {
+              "value": "car"
+            },
+            {
+              "value": "carrier"
+            },
+            {
+              "value": "container"
+            },
+            {
+              "value": "driver"
+            },
+            {
+              "value": "equipment"
+            },
+            {
+              "value": "tractor_unit"
+            },
+            {
+              "value": "trailer"
+            }
+          ],
+          "stored": false,
+          "byVariant": {
+            "CarResource": "car",
+            "CarrierResource": "carrier",
+            "ContainerResource": "container",
+            "DriverResource": "driver",
+            "EquipmentResource": "equipment",
+            "TractorUnitResource": "tractor_unit",
+            "TrailerResource": "trailer"
+          }
+        },
         {
           "name": "matchCode",
           "kind": "string",
@@ -2419,7 +2580,7 @@
       "key": ["id"],
       "extendable": true,
       "queryable": true,
-      "notFilterable": [],
+      "notFilterable": ["tours.resource.type"],
       "notSortable": [],
       "items": [
         {
@@ -3034,7 +3195,7 @@
       "display": "number",
       "extendable": false,
       "queryable": true,
-      "notFilterable": [],
+      "notFilterable": ["actions.resource.type","actions.type","attachedResources.attachAction.resource.type","attachedResources.attachAction.type","attachedResources.detachAction.resource.type","attachedResources.detachAction.type","attachedResources.resource.type","resource.type"],
       "notSortable": [],
       "items": [
         {

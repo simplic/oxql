@@ -12,8 +12,8 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The execution half of the conformance fixes: the cursor a projection used to poison (P3),
-/// the wire encodings a JavaScript caller could not read (F9, F-ENT-005), and the guard that
+/// The execution half of the conformance fixes: a cursor after a projection,
+/// the wire encodings of the addon bag and of an enum backed by a long, and the guard that
 /// turns an escaped exception into a coded refusal instead of a bare 500.
 /// </summary>
 public class ConformanceExecutionTests
@@ -139,16 +139,16 @@ public class ConformanceExecutionTests
         return ((BindOutcome.Bound)bound).Pipeline.Fingerprint;
     }
 
-    // ---- F9 / F-ENT-005 · values JSON cannot carry -------------------------------------------
+    // ---- values JSON cannot carry ------------------------------------------------------------
 
     /// <summary>
-    /// F9. The addon bag is a dictionary of <c>unknown</c>, encoded by BSON type alone, so an
-    /// addon <c>long</c> holding 9007199254740993 travelled as a JSON number and every
-    /// JavaScript caller read it back as ...992 — a value that then matches nothing. Filtering
-    /// on it worked, so the value could be found and could not be read.
+    /// The addon bag is a dictionary of <c>unknown</c>, encoded by BSON type alone: an addon
+    /// <c>long</c> is a JSON number with every digit, as a modelled long is (numbers as the REST
+    /// API writes them). The wire is exact; a caller that parses it into a double reads
+    /// 9007199254740993 as ...992, which is the caller's to handle.
     /// </summary>
     [Fact]
-    public async Task F9_an_addon_long_above_the_safe_range_travels_as_a_string()
+    public async Task F9_an_addon_long_above_the_safe_range_travels_as_a_number_with_every_digit()
     {
         var row = Row(Id1, "A");
 
@@ -162,25 +162,22 @@ public class ConformanceExecutionTests
         var (engine, _) = Host(runner => runner.PageRows = [row]);
         var addon = (await Success(engine, """[{ "project": { "id": 1, "addon": 1 } }]""")).Items[0]!["addon"]!.AsObject();
 
-        addon["tourCount"]!.ToString().Should().Be("9007199254740993");
-        addon["tourCount"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.String);
-        addon["negative"]!.ToString().Should().Be("-9007199254740993");
-
-        // Inside the range nothing changes, which leaves every addon integer in use today alone.
-        addon["small"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number);
+        addon["tourCount"]!.ToJsonString().Should().Be("9007199254740993");
+        addon["tourCount"]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number);
+        addon["negative"]!.ToJsonString().Should().Be("-9007199254740993");
+        addon["small"]!.ToJsonString().Should().Be("42");
     }
 
     /// <summary>
-    /// F-ENT-005. <c>Kind.Long</c> stringifies for exactly this reason and an enum did not, so
-    /// a <c>long</c>-backed enum member above 2^53 travelled as a number while its sibling
-    /// <c>long</c> in the same row travelled as a string.
+    /// A <c>long</c>-backed enum member and its sibling <c>long</c> in the same row
+    /// travel alike: both as a JSON number with every digit.
     /// </summary>
     [Fact]
-    public void F_ENT_005_an_enum_value_above_the_safe_range_travels_as_a_string()
+    public void F_ENT_005_an_enum_value_above_the_safe_range_travels_as_a_long_does()
     {
-        WireEncoder.EncodeScalar(new BsonInt64(9007199254740993), Kind.Enum, null)!.GetValueKind()
-            .Should().Be(System.Text.Json.JsonValueKind.String);
-        WireEncoder.EncodeScalar(new BsonInt64(9007199254740993), Kind.Enum, null)!.ToString()
+        WireEncoder.EncodeScalar(new BsonInt64(9007199254740993), Kind.Enum, null)!.ToJsonString()
+            .Should().Be("9007199254740993");
+        WireEncoder.EncodeScalar(new BsonInt64(9007199254740993), Kind.Long, null)!.ToJsonString()
             .Should().Be("9007199254740993");
 
         // Every enum the fleet declares is inside Int32 and is unchanged.

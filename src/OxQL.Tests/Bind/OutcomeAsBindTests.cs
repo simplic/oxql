@@ -11,7 +11,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The per-row outcome at bind and compile time (improvement plan §3.O): <c>outcomeAs</c> on a resolve
+/// The per-row outcome at bind and compile time: <c>outcomeAs</c> on a resolve
 /// names a root that carries what became of the reference on every row. It is an alias like any other;
 /// it follows its join (an inline resolve's is written by the aggregate and may be filtered, grouped by
 /// and counted; a keyed, remote or continued one is projected only); it never orders a page; a stage
@@ -193,7 +193,7 @@ public class OutcomeAsBindTests
         JsonNode.Parse(without.Canonical)!["stages"]![0]!["resolve"]!.AsObject().ContainsKey("outcomeAs").Should().BeFalse("a resolve without one renders as it did");
 
         // The outcome nothing reads is one more member of the row and decides none: a cursor of the
-        // request without it fits (DG2 M6). A condition on it makes it part of which rows there are.
+        // request without it fits. A condition on it makes it part of which rows there are.
         with.Fingerprint.Should().Be(without.Fingerprint);
 
         var filtered = await BoundAsync($$"""[{{Customer}}, { "match": { "customerOutcome": { "eq": "resolved" } } }]""");

@@ -29,7 +29,7 @@ public class RemoteHostTests
         await host.CreateClient().GetAsync("/OxQL/health");
         await host.Services.GetRequiredService<OxQL.AspNetCore.Health.RemoteHealthProbe>().Refreshing;
 
-        var response = await host.CreateClient().GetAsync("/OxQL/health");
+        var response = await host.Client(contract: 2).GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);

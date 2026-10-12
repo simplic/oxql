@@ -88,11 +88,11 @@ public class UnwindCutBench(ITestOutputHelper output)
         return new Compiled([.. compiled.PageStages], [.. compiled.CountStages!], compiled.Unwind is { } placed ? $"parentsFirst={placed.ParentsFirst}, prefiltered={placed.Prefiltered.Count}" : "as written", filterIsTheBounds);
     }
 
-    [Fact]
+    [OptInFact("OXQL_UNWIND_PLANS", "OXQL_UNWIND_LABEL")]
     public async Task Write_the_stages_this_build_compiles()
     {
-        if (Environment.GetEnvironmentVariable("OXQL_UNWIND_PLANS") is not { Length: > 0 } directory || Environment.GetEnvironmentVariable("OXQL_UNWIND_LABEL") is not { Length: > 0 } label)
-            return;
+        var directory = Environment.GetEnvironmentVariable("OXQL_UNWIND_PLANS")!;
+        var label = Environment.GetEnvironmentVariable("OXQL_UNWIND_LABEL")!;
 
         var plans = new BsonDocument();
 
@@ -107,11 +107,10 @@ public class UnwindCutBench(ITestOutputHelper output)
         await File.WriteAllTextAsync(Path.Combine(directory, label + ".json"), plans.ToJson(Canonical));
     }
 
-    [Fact]
+    [OptInFact("OXQL_UNWIND_BENCH")]
     public async Task Measure_the_plans_of_an_unwound_block()
     {
-        if (Environment.GetEnvironmentVariable("OXQL_UNWIND_BENCH") is not { Length: > 0 } file)
-            return;
+        var file = Environment.GetEnvironmentVariable("OXQL_UNWIND_BENCH")!;
 
         var parents = Number("OXQL_UNWIND_ROWS", 25_000);
         var runs = Number("OXQL_UNWIND_RUNS", 25);

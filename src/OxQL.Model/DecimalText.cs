@@ -3,25 +3,18 @@ using System.Globalization;
 namespace OxQL.Model;
 
 /// <summary>
-/// The one spelling of a decimal the engine uses, on the way in and on the way out.
+/// The spellings of a decimal the engine reads and writes.
 /// <para>
-/// A decimal member may be stored as <c>Decimal128</c> or — on rows written before the
-/// migration — as a string, which the driver writes with
+/// A decimal member may be stored as <c>Decimal128</c> or as a string, which the driver writes with
 /// <c>decimal.ToString(InvariantInfo)</c>: the scale is preserved, so one thousand is
 /// <c>"1000.00"</c> when the CLR value carried two decimal places and <c>"1000"</c> when it
-/// carried none. <c>ToString("G29")</c> is not that spelling: it drops trailing zeros
-/// (<c>125000.00m</c> becomes <c>"125000"</c>) and switches to exponential notation below
-/// 1e-5 (<c>0.0000001m</c> becomes <c>"1E-07"</c>), neither of which the driver ever writes.
-/// An operand built with <c>G29</c> therefore cannot match a string-stored row whose text
-/// carries a trailing zero, and a value read out of a row does not find the row it came from.
+/// carried none.
 /// </para>
 /// <para>
-/// <see cref="Canonical"/> is the exact plain representation with no trailing fractional
-/// zeros, and it is what both <c>OperandCoercer</c> and <c>WireEncoder</c> use, so a value
-/// the engine hands a caller is a value the engine accepts back.
-/// <see cref="ScalePattern"/> is the anchored regex that matches every scale the driver
-/// could have written the same value with, which is how equality reaches the string bracket
-/// without enumerating spellings.
+/// <see cref="Canonical"/> is the exact plain representation with no trailing fractional zeros,
+/// which the wire carries. <see cref="ScalePattern"/> is the anchored regex that matches every
+/// scale the driver could have written the same value with, which is how an equality reaches a
+/// row that stores the value as a string.
 /// </para>
 /// </summary>
 public static class DecimalText

@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// The index advisory on the fleet's hosts, over the wire (DG2): the requests a grid sends (its rows
+/// The index advisory on the fleet's hosts, over the wire: the requests a grid sends (its rows
 /// with the filter entries and the sort, the list of values of a column, a level of groups, rows with
 /// a join) each get the definition of the index that serves them, the part of the request it serves
 /// by the caller's own paths and filter entry ids, and one <c>INDEX_ADVICE</c> note per index with

@@ -13,8 +13,8 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// What the keyed fetch asks owners and keeps of their answers (DESIGN §3.5.2 steps 2–4, §3.5.5,
-/// §3.5.6): the existence probe that tells <c>excluded</c> from <c>not_found</c>, an owner answer
+/// What the keyed fetch asks owners and keeps of their answers:
+/// the existence probe that tells <c>excluded</c> from <c>not_found</c>, an owner answer
 /// with a next page as <c>RESOLVE_PARTIAL</c>, the request's key budget, the plan-hash cache key with
 /// substituted variables, the negative TTL and its strict bypass, and the owner's own batch cap.
 /// </summary>

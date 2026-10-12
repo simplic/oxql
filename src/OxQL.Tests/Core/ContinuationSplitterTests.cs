@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Core;
 
 /// <summary>
-/// The splitter of remote continuation (DESIGN §3.5.3, §3.5.4): the continued stages per target in
+/// The splitter of remote continuation: the continued stages per target in
 /// pipeline order, the root rewrites onto the owner's row, the owner-to-origin index map, and the
 /// property that ends every chain — a forwarded query carries strictly fewer join stages than the
 /// query it came from.
@@ -32,7 +32,7 @@ public class ContinuationSplitterTests
             """);
         var anchor = Anchor(bound, "line");
 
-        // A lookup on 'line' itself, the element, is refused at the origin (RE-20); the owning row is the entity row.
+        // A lookup on 'line' itself, the element, is refused at the origin; the owning row is the entity row.
         var owner = Continuation.For(anchor, "rc.shipment", itemTarget: true, Continuation.Of(bound, anchor));
 
         owner.Stages.Select(stage => stage.Resolve?.Path ?? $"on:{stage.Lookup!.On ?? "(root)"}").Should().Equal("oxEl.code", "on:(root)", "number");
@@ -118,7 +118,7 @@ public class ContinuationSplitterTests
     };
 
     /// <summary>
-    /// The property that ends a chain (DESIGN §3.5.4): the query forwarded for any keyed stage and any
+    /// The property that ends a chain: the query forwarded for any keyed stage and any
     /// of its targets holds only the stages continued under that stage, never the stage itself or any
     /// before it, so it carries strictly fewer join stages than the query it came from. The owner binds
     /// it as an ordinary query and splits it the same way, so every level of a chain — across services

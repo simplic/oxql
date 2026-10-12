@@ -14,7 +14,7 @@ using Transport = OxQL.IntegrationTests.Fleet.Models.Transport;
 namespace OxQL.IntegrationTests.Suites.Joins;
 
 /// <summary>
-/// The remote lookup on the fleet (DESIGN §3.4.4): a <c>lookup</c> at the ledger whose <c>from</c> is a
+/// The remote lookup on the fleet: a <c>lookup</c> at the ledger whose <c>from</c> is a
 /// transport entity, run by the keyed fetch as a remote resolve is — one grouped owner query per key
 /// chunk over the internal batch route — with the reference held on the other side: transport billing
 /// lines, inside the shipment's <c>billingLines</c>, name the ledger transaction they were billed on.

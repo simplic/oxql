@@ -1,0 +1,20 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "lookup": {
+        "from": "transport.tour",
+        "path": "GlobalTourId",
+        "as": "Other",
+        "select": [
+          "Number"
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

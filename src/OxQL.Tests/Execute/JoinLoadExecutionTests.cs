@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// Load inference at run time and in explain (improvement plan §3.S) against fakes: the join in the
+/// Load inference at run time and in explain against fakes: the join in the
 /// aggregate projects its load set and the row is cut to the output set; a join after the page asks
 /// its owner for the output set and the row shows exactly it; a stage continued at an owner travels
 /// as written, without a select, and the paths projected under its alias travel as paths; the plan hash

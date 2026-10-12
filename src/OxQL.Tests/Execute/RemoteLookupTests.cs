@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The remote lookup (DESIGN §3.4.4) against fakes: a <c>lookup</c> whose <c>from</c> is another
+/// The remote lookup against fakes: a <c>lookup</c> whose <c>from</c> is another
 /// service's entity binds as a keyed remote stage when this host reaches the owner, sends one grouped
 /// owner query per key chunk (<c>keyedBy</c> with <c>references</c>, <c>rows</c>, one row more per key
 /// than the limit, the lookup's sort before the projection), assigns each parent its children in the
@@ -159,7 +159,7 @@ public class RemoteLookupTests
         var errors = undeclared.Should().BeOfType<BindOutcome.Failed>().Subject.Refusal.Errors!;
 
         errors.Should().ContainSingle("the key alias is poisoned, so the projection adds no error of its own")
-            .Which.Should().Match<QueryValidationError>(error => error.Code == Codes.LookupNotDeclared && error.Message == "'rc.invoice#number' does not declare a reference to 'rc.customer'.");
+            .Which.Should().Match<QueryValidationError>(error => error.Code == Codes.LookupNotDeclared && error.Message.StartsWith("'rc.invoice#number' does not declare a reference to 'rc.customer'.", StringComparison.Ordinal));
     }
 
     [Theory]

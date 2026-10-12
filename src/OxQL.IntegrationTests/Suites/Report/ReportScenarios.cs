@@ -7,10 +7,10 @@ using OxQL.IntegrationTests.Harness;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The report scenarios of DESIGN §2 (A1, A2a, A2b, A3, A4, A5) as the studio builds them: the
+/// The report scenarios (A1, A2a, A2b, A3, A4, A5) as the studio builds them: the
 /// request files its acceptance specs write (<c>Fixtures/scenarios/&lt;id&gt;.request.json</c>, a
 /// copy of the studio's <c>testing/fixtures/scenarios</c>). The scenario ids are the studio's:
-/// <c>A2</c> is DESIGN's A2a. A run of the fixture export reads them from the export directory
+/// <c>A2</c> is the reference A2a. A run of the fixture export reads them from the export directory
 /// instead, so a re-export follows the studio's current requests. Every scenario reads organisation R's report seeds.
 /// </summary>
 internal static class ReportScenarios
@@ -53,7 +53,7 @@ internal static class ReportScenarios
         request["pipeline"]!.AsArray().Select((stage, index) => (stage, index))
             .Single(entry => entry.stage!.AsObject().Single().Value is JsonObject body && body["as"]?.GetValue<string>() == alias).index;
 
-    // ── DESIGN §2, verbatim: what the studio's requests must equal ──────────────────────────
+    // ── The reference requests: what the studio's requests must equal ── ──────────────────────────
 
     public const string DesignA1 = """
         {
@@ -89,7 +89,7 @@ internal static class ReportScenarios
         }
         """;
 
-    /// <summary>A2b: the stage DESIGN appends to A1 after the second resolve.</summary>
+    /// <summary>A2b: the stage appended to A1 after the second resolve.</summary>
     public const string DesignA2bStage = """
         { "lookup": { "from": "transport.delivery_attempt", "path": "shipmentId", "on": "sourceParent",
                       "forTarget": "transport.shipment", "as": "lastAttempt",

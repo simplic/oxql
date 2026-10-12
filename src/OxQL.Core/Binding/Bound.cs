@@ -46,6 +46,16 @@ public sealed record ResolvedPath
     public AddonDefinition? Addon { get; init; }
 
     /// <summary>
+    /// Set on a member whose value follows from the variant its object is stored as (the model's own
+    /// type member, <see cref="MemberDef.ByVariant"/>), under contract 2: <see cref="Storage"/> is then
+    /// the discriminator's, which a projection keeps so the row can be written; a condition compares
+    /// the member by the variants that hold a value; nothing else can use it. A condition on such a
+    /// member is bound as a variant test on the object holding it, and that object's path carries the
+    /// same description, so the test reads the discriminator of the type the member belongs to.
+    /// </summary>
+    public DerivedDef? Derived { get; init; }
+
+    /// <summary>
     /// On a group's key: the member the key was taken over, when that member declares a reference. The
     /// key holds the member's value, so a <c>resolve</c> after the group follows the reference from it.
     /// </summary>
@@ -70,7 +80,7 @@ public abstract record ShapeNode(string StoragePrefix)
         /// <summary>
         /// The paths the row shows under a join's alias, relative to it; null for every member. While
         /// the stages bind it is null under contract 2, where every member of the target can be read
-        /// and the join loads what is read (improvement plan §3.S); the final shape carries the output
+        /// and the join loads what is read; the final shape carries the output
         /// set. Under contract 1 it is the join's select, key included, which is all the join fetches.
         /// </summary>
         public IReadOnlyList<string>? Select { get; init; }
@@ -104,20 +114,20 @@ public abstract record ShapeNode(string StoragePrefix)
     /// resolve continued under another alias without a <c>target</c>: the reference it follows lies
     /// in the model of the entities it continues on, which their owners hold, so
     /// <paramref name="TargetEntity"/> is the keyed stage's first target and not the alias's entity;
-    /// explain asks the owners for that (DESIGN §4.3).
+    /// explain asks the owners for that.
     /// </summary>
     public sealed record Remote(string TargetEntity, ResolvedPath Reference, string StoragePrefix, bool SemiJoinable = true, bool TargetOpen = false) : ShapeNode(StoragePrefix);
 
     /// <summary>
-    /// The rows a keyed fetch joins after the page is taken, from local targets (DESIGN §3.4.1
-    /// step 6): an entity, or an item of one, per target. Paths under it are checked against the
+    /// The rows a keyed fetch joins after the page is taken, from local targets:
+    /// an entity, or an item of one, per target. Paths under it are checked against the
     /// targets here; they can be projected, never filtered or sorted. <paramref name="Many"/> for
     /// <c>elements: "all"</c>, where the alias holds an array of them.
     /// </summary>
     public sealed record Keyed(IReadOnlyList<KeyedTarget> Targets, bool Many, string StoragePrefix) : ShapeNode(StoragePrefix);
 
     /// <summary>
-    /// The alias of a stage that failed to bind (DESIGN §3.8). A path under it fails without an
+    /// The alias of a stage that failed to bind. A path under it fails without an
     /// error of its own, so one mistake yields one error rather than one per later use.
     /// </summary>
     public sealed record Poisoned(string StoragePrefix) : ShapeNode(StoragePrefix);
@@ -126,8 +136,7 @@ public abstract record ShapeNode(string StoragePrefix)
     public sealed record Scalar(Kind Kind, string StoragePrefix) : ShapeNode(StoragePrefix);
 
     /// <summary>
-    /// The outcome of a join under the name its stage gave it (<c>outcomeAs</c>, improvement plan
-    /// §3.O): a string on every row saying what became of the reference. <paramref name="Join"/> is the
+    /// The outcome of a join under the name its stage gave it (<c>outcomeAs</c>): a string on every row saying what became of the reference. <paramref name="Join"/> is the
     /// alias of the join it is the outcome of. It follows its join: with <paramref name="InAggregate"/>
     /// (an inline resolve) the aggregate writes it, so a condition, a group key and an aggregate may
     /// read it before the page; otherwise it is written after the page with the join's rows and can
@@ -153,7 +162,7 @@ public abstract record ShapeNode(string StoragePrefix)
 /// <summary>One target a keyed alias may hold: the entity, or the element of <paramref name="Item"/> on it.</summary>
 public sealed record KeyedTarget(EntityDef Entity, PathDef? Item);
 
-/// <summary>Which executor runs a resolve (DESIGN §3.4.1 step 5).</summary>
+/// <summary>Which executor runs a resolve.</summary>
 public enum ResolveExecutor
 {
     /// <summary>The in-aggregate <c>$lookup</c>: one unconditional case, one local entity target, no item, no conversion.</summary>
@@ -173,7 +182,7 @@ public enum ResolveElements
     All,
 }
 
-/// <summary>What a resolve does with data loss (DESIGN §3.6).</summary>
+/// <summary>What a resolve does with data loss.</summary>
 public enum ResolveOnMissing
 {
     /// <summary>The alias is null; only owner failures are reported.</summary>
@@ -218,7 +227,7 @@ public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IRead
 /// (<paramref name="RemoteFilter"/>, <paramref name="RemoteParentSelect"/>): the keyed fetch sends
 /// them to this host's own <c>SelfOwner</c> as an ordinary owner query.
 /// <para>
-/// Under contract 2 the loads are inferred once every stage is bound (improvement plan §3.S): the
+/// Under contract 2 the loads are inferred once every stage is bound: the
 /// key and the output set of the alias, which is the paths the projection names under it, or kept
 /// whole the <c>select</c> hint, else the target's key and display (a null
 /// <paramref name="RemoteSelect"/>: the owner's own). Under contract 1 they are the select as written.
@@ -248,7 +257,7 @@ public sealed record BoundResolveTarget(
 }
 
 /// <summary>
-/// What makes a keyed stage a remote lookup (DESIGN §3.4.4): a <c>lookup</c> whose <c>from</c> is
+/// What makes a keyed stage a remote lookup: a <c>lookup</c> whose <c>from</c> is
 /// another service's entity, run by the keyed fetch like a remote resolve whose key is the parent
 /// row's key and whose target member is the child's <see cref="Path"/>. The owner groups its rows per
 /// key (<c>keyedBy</c>), at most <see cref="PerKey"/> per key, ranked by <see cref="Sort"/> and the
@@ -400,7 +409,7 @@ public abstract record BoundStage
         public string Kind => RemoteLookup is null ? "resolve" : "lookup";
 
         /// <summary>
-        /// Whether the resolve needs the keyed fetch (DESIGN §3.5): a keyed resolve other
+        /// Whether the resolve needs the keyed fetch: a keyed resolve other
         /// than a plain remote one, which is asked with a plain key match.
         /// </summary>
         public bool NeedsKeyedFetch => Executor == ResolveExecutor.Keyed && !(IsRemote && IsPlain);
@@ -412,6 +421,9 @@ public abstract record BoundStage
         /// (<c>excluded</c>), as under an <c>onMissing</c> other than <c>null</c>.
         /// </summary>
         public string? OutcomeAs { get; init; }
+
+        /// <summary>Whether <see cref="OnMissing"/> is the request's default, which the stage took because it named none; bound-only.</summary>
+        public bool OnMissingInherited { get; init; }
 
         /// <summary>Whether something reads the stage's outcomes: an effective <c>onMissing</c> other than <c>null</c>, or the outcome under a name.</summary>
         public bool ReadsOutcomes => EffectiveOnMissing != ResolveOnMissing.Null || OutcomeAs is not null;
@@ -490,7 +502,7 @@ public sealed record BoundSortField(ResolvedPath Path, bool Ascending, bool Igno
 public sealed record FilterPlacement(int Boundary, IReadOnlyList<string> Paths, bool Having);
 
 /// <summary>
-/// One entry of the request's top-level <c>filter</c> as bound (DG2 M1): where its conditions were
+/// One entry of the request's top-level <c>filter</c> as bound: where its conditions were
 /// placed, whether one of them failed, and the paths a later group gave to another thing
 /// (<paramref name="BindsEarlier"/>: the path, the group's alias, the group's caller stage).
 /// </summary>
@@ -525,7 +537,7 @@ public sealed record CursorPayload(string Fingerprint, PagingMode Mode, IReadOnl
 }
 
 /// <summary>
-/// The count step of a contract 2 page (DG2 M3): it counts up to <paramref name="Rows"/> rows within
+/// The count step of a contract 2 page: it counts up to <paramref name="Rows"/> rows within
 /// <paramref name="BudgetMs"/>. <paramref name="Ceiling"/> is the most this request could ever have
 /// counted (its <c>upTo</c> under the host's <c>CountCap</c>): a step that stops at it stopped at the
 /// cap, one that stops below it stopped because a page's count is one step.
@@ -587,13 +599,13 @@ public sealed record BoundPipeline
     /// </summary>
     public required Shape FinalShape { get; init; }
 
-    /// <summary>The read ledger: every path a stage reads, in the order the stages bound them (improvement plan §3.S).</summary>
+    /// <summary>The read ledger: every path a stage reads, in the order the stages bound them.</summary>
     public IReadOnlyList<PathRead> Reads { get; init; } = [];
 
     /// <summary>What each join loads and shows, by alias (a resolve's or lookup's <c>as</c> and <c>parentAs</c>); empty under contract 1.</summary>
     public IReadOnlyDictionary<string, JoinLoad> Loads { get; init; } = new Dictionary<string, JoinLoad>(StringComparer.Ordinal);
 
-    /// <summary>The sort, when the caller gave one.</summary>
+    /// <summary>The caller's sort, or the total order the binder supplies for a grouped or unwound shape the caller did not sort; null when there is neither.</summary>
     public BoundStage.Sort? Sort { get; init; }
 
     /// <summary>The page, given or defaulted.</summary>
@@ -610,7 +622,11 @@ public sealed record BoundPipeline
 
     public required IReadOnlyList<Diagnostic> Diagnostics { get; init; }
 
-    /// <summary>A SHA-256 over the canonical bound form without the page; the cursor is bound to it.</summary>
+    /// <summary>
+    /// What the cursor is bound to. Contract 2: a SHA-256 over what decides which rows there are and in
+    /// which order (<see cref="BoundCanonical.RowsFingerprint"/>). Contract 1: a SHA-256 over the
+    /// canonical bound form without the page (<see cref="BoundCanonical.Fingerprint"/>).
+    /// </summary>
     public required string Fingerprint { get; init; }
 
     /// <summary>The canonical bound form, for explain.</summary>
@@ -629,7 +645,7 @@ public sealed record BoundPipeline
     /// </summary>
     public bool UnwoundRows { get; init; }
 
-    /// <summary>The internal per-key owner answer the request asked for, or null (DESIGN §3.5.2 step 3).</summary>
+    /// <summary>The internal per-key owner answer the request asked for, or null.</summary>
     public BoundKeyedBy? KeyedBy { get; init; }
 
     /// <summary>
@@ -676,7 +692,7 @@ public sealed record BoundKeyedBy(ResolvedPath Path, IReadOnlyList<BsonValue> Ke
 
 /// <summary>
 /// The outcome of binding: a pipeline, or the errors. Either carries the <see cref="BindTrace"/> of
-/// the stage loop once the entity bound (DESIGN §4.6), so explain answers the shapes of the part
+/// the stage loop once the entity bound, so explain answers the shapes of the part
 /// that binds; a refusal before the stage loop (no organisation, unknown entity) carries none.
 /// </summary>
 public abstract record BindOutcome
@@ -697,7 +713,7 @@ public abstract record BindOutcome
     public sealed record Failed(Refusal Refusal) : BindOutcome;
 }
 
-/// <summary>How a caller stage bound (DESIGN §4.3 <c>steps[].status</c>).</summary>
+/// <summary>How a caller stage bound (the <c>status</c> of a stage in the explain answer).</summary>
 public enum StageStatus
 {
     /// <summary>It bound.</summary>
@@ -706,7 +722,7 @@ public enum StageStatus
     /// <summary>It carries an error of its own.</summary>
     Error,
 
-    /// <summary>It failed only under an alias an earlier stage failed to create (DESIGN §3.8).</summary>
+    /// <summary>It failed only under an alias an earlier stage failed to create.</summary>
     Skipped,
 }
 

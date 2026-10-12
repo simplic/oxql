@@ -10,13 +10,13 @@ using Xunit.Abstractions;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The fixture export the studio's acceptance specs replay (PLAN §2, the fixture contract): every
+/// The fixture export the studio's acceptance specs replay: every
 /// report scenario's request sent to the fleet as the studio sends it, and the answers written as
 /// the wire JSON the hosts answered. Opt-in: it runs only when <c>OXQL_EXPORT_FIXTURES</c> names
-/// the fixtures directory (<c>.api/deep/oxql-studio/fixtures</c>), and reads the scenario requests
+/// the studio's fixtures directory, and reads the scenario requests
 /// from there, so a re-export follows the studio's current requests.
 /// <code>
-/// OXQL_EXPORT_FIXTURES=&lt;abs&gt;/oxql-studio/fixtures dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report.ReportFixtureExportTests"
+/// OXQL_EXPORT_FIXTURES=&lt;the fixtures directory&gt; dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report.ReportFixtureExportTests"
 /// </code>
 /// </summary>
 [Trait("Category", "Integration")]

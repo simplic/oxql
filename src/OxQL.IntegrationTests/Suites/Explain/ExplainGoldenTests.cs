@@ -12,7 +12,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// T2, the golden explain answers (improvement plan §3.T): the reference set explained over the fleet
+/// The golden explain answers: the reference set explained over the fleet
 /// exactly as the studio calls explain, normalised (<see cref="ExplainGolden.Normalise"/>) and compared
 /// with the answer recorded in <c>Suites/Explain/Golden/&lt;id&gt;.json</c>. The reference set is the
 /// report scenarios A1–A5 (A2b included) and fleet queries shaped like EXAMPLE-CASE, one of them with a union join. The files are the
@@ -166,14 +166,14 @@ internal static class ExplainGolden
         ["EX1-source-chain"] = () => JsonNode.Parse(ExampleChain)!.AsObject(),
         ["EX2-continued-refused"] = () => JsonNode.Parse(ContinuedRefused)!.AsObject(),
         ["EX3-union-join"] = () => JsonNode.Parse(UnionJoin)!.AsObject(),
-        // Every kind of join naming its outcome (§3.O): inline, remote, continued for one target, a union join.
+        // Every kind of join naming its outcome: inline, remote, continued for one target, a union join.
         ["EX4-outcomes"] = () => JsonNode.Parse(Joins.JoinsOutcomeAsTests.Chain(ReportSeed.TransactionId))!.AsObject(),
-        // DG2: the request's filter, placed by the engine around an unwind, with a count beside the page.
+        // The request's filter, placed by the engine around an unwind, with a count beside the page.
         ["EX5-filter"] = () => JsonNode.Parse(FilterPlaced)!.AsObject(),
     }.AsReadOnly();
 
     /// <summary>
-    /// A grid's request (DG2 M1, M2, M3): three filter entries the engine places around an unwind, the
+    /// A grid's request: three filter entries the engine places around an unwind, the
     /// entity's own condition at the entry, the element's after the unwind, an <c>or</c> over both as one
     /// unit at the later point, and a page that asks for a count.
     /// </summary>
@@ -224,7 +224,7 @@ internal static class ExplainGolden
         """;
 
     /// <summary>
-    /// The example chain as the improvement plan writes it (§2, §3.U): no select, and the vehicle of a
+    /// The example chain: no select, and the vehicle of a
     /// line under one alias, a union join with a branch per target of the source line's owning row —
     /// the shipment's through its delivering tour, the tour's own. Neither branch names a target, so
     /// each reaches what the resource's reference declares: an employee or a vehicle.
@@ -250,7 +250,7 @@ internal static class ExplainGolden
         }
         """;
 
-    /// <summary>A stage continued under a union alias without forTarget that one target cannot bind (R3 F2): valid false, the stage's own error only.</summary>
+    /// <summary>A stage continued under a union alias without forTarget that one target cannot bind: valid false, the stage's own error only.</summary>
     private static string ContinuedRefused => $$"""
         {
           "entityType": "ledger.transaction",

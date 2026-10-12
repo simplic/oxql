@@ -1,0 +1,38 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "IsDeleted": {
+              "eq": false
+            }
+          },
+          {
+            "Reference": {
+              "contains": "ref-tr-m",
+              "options": {
+                "ignoreCase": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 500,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    }
+  ]
+}

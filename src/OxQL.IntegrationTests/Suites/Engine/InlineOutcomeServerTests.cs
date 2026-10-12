@@ -12,7 +12,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Engine;
 
 /// <summary>
-/// What an inline resolve detects on a real server (PRE-2, RE-4): onto a member that is not the
+/// What an inline resolve detects on a real server: onto a member that is not the
 /// target's key, a key two records hold is <c>ambiguous</c> and the first by record key is taken,
 /// whatever the page holds; with a filter under <c>onMissing</c>, a record the filter excluded is
 /// told apart from a missing one in the aggregate, so strict binds and joins what a lenient request

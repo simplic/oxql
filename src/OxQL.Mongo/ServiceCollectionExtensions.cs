@@ -72,6 +72,13 @@ public static class ServiceCollectionExtensions
             maxTime: TimeSpan.FromMilliseconds(Math.Max(1, provider.GetRequiredService<OxQLOptions>().Explain.TimeoutMs))));
         services.TryAddSingleton(provider => new OwnerFetchCache(provider.GetRequiredService<OxQLOptions>()));
 
+        // LEGACY(compat.v1): the legacy pipeline of contract 1 compatibility; remove with src/OxQL.Mongo/Legacy.
+        services.TryAddSingleton<Core.Legacy.ILegacyPipeline>(provider => new Legacy.LegacyPipeline(
+            provider.GetRequiredService<IEntityModelProvider>(),
+            provider.GetRequiredService<IAggregateRunner>(),
+            provider.GetRequiredService<OxQLOptions>(),
+            provider.GetService<ILogger<Legacy.LegacyPipeline>>()));
+
         services.AddSingleton<IQueryEngine>(provider =>
         {
             var logger = provider.GetService<ILogger<MongoQueryEngine>>();

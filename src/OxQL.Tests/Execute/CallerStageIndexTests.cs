@@ -13,7 +13,7 @@ namespace OxQL.Tests.Execute;
 
 /// <summary>
 /// A caller stage that binds to no bound stage (an empty <c>match</c>) does not shift the stage
-/// index that diagnostics, refusals and explain name (RE-2): every one of them names the caller's
+/// index that diagnostics, refusals and explain name: every one of them names the caller's
 /// stage, inline or keyed.
 /// </summary>
 public class CallerStageIndexTests

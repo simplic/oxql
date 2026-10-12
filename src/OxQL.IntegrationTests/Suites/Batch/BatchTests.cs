@@ -176,7 +176,7 @@ public class BatchTests
         answer.Results[0].ShouldHaveIds([all[0]]);
         answer.Results[0].Items[0]!.AsObject().Count.Should().BeGreaterThan(2, "the first entry carries the whole row");
         answer.Results[1].ShouldHaveIds([all[0]]).Items[0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "matchCode"]);
-        // Finding R7: the caller projects the displayed columns and sorts by the key; the key is
+        // The caller projects the displayed columns and sorts by the key; the key is
         // kept through the inclusion projection and the sort is served.
         answer.Results[2].ShouldHaveIds(all.Take(3));
     }

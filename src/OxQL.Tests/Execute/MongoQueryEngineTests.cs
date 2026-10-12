@@ -128,7 +128,7 @@ public class MongoQueryEngineTests
         var internalCall = BindHost.Context() with { Internal = true };
         var result = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", internalCall);
 
-        // includeTotalCount is contract 1's and an internal call's (DG2 M3); PageCountTests has the contract 2 count.
+        // includeTotalCount is contract 1's and an internal call's; PageCountTests has the contract 2 count.
         result.PageInfo.TotalCount.Should().Be(42);
         result.PageInfo.TotalCountCapped.Should().BeFalse();
         result.Diagnostics.Should().BeNull();
@@ -324,9 +324,9 @@ public class MongoQueryEngineTests
         item["id"]!.GetValue<string>().Should().Be(Id1.ToString());
         item["number"]!.GetValue<string>().Should().Be("N-1");
         item["count"]!.GetValue<int>().Should().Be(3);
-        item["big"]!.GetValue<string>().Should().Be("9007199254740993", "long is a string on the wire");
+        item["big"]!.ToJsonString().Should().Be("9007199254740993", "a long is a JSON number on the wire, with every digit");
         item["ratio"]!.GetValue<double>().Should().Be(0.5);
-        item["amount"]!.GetValue<string>().Should().Be("12.5", "decimal is a string on the wire");
+        item["amount"]!.ToJsonString().Should().Be("12.5", "a decimal is a JSON number on the wire, in its canonical digits");
         item["flag"]!.GetValue<bool>().Should().BeTrue();
         item["day"]!.GetValue<string>().Should().Be("2024-01-02");
         item["when"]!.GetValue<string>().Should().Be("2024-01-02T03:04:05Z");
@@ -334,19 +334,19 @@ public class MongoQueryEngineTests
         item["initial"]!.GetValue<string>().Should().Be("a", "a char is stored as its code point");
         item["state"]!.GetValue<int>().Should().Be(1, "enum as number");
         item["stateName"]!.GetValue<int>().Should().Be(1, "an enum stored as its name still travels as the number");
-        item["moneyText"]!.GetValue<string>().Should().Be("1.5");
+        item["moneyText"]!.ToJsonString().Should().Be("1.5", "a decimal stored as text is the number it spells");
         item["guidText"]!.GetValue<string>().Should().Be(Id2.ToString());
         item["blob"]!.GetValue<string>().Should().Be("AQID");
         item["shipTo"]!["city"]!.GetValue<string>().Should().Be("Bonn");
         item["items"]![0]!["id"]!.GetValue<string>().Should().Be(Id3.ToString());
-        item["items"]![0]!["price"]!["net"]!.GetValue<string>().Should().Be("3");
+        item["items"]![0]!["price"]!["net"]!.ToJsonString().Should().Be("3");
         item["items"]![0]!["notes"]![0]!.GetValue<string>().Should().Be("a");
         item["tags"]!.AsArray().Should().HaveCount(2);
-        item["prices"]!["eur"]!["net"]!.GetValue<string>().Should().Be("4.5", "a decimal stored as a string stays a string");
-        item["priceList"]!["usd"]!["net"]!.GetValue<string>().Should().Be("5", "the array-of-documents dictionary is an object on the wire");
+        item["prices"]!["eur"]!["net"]!.ToJsonString().Should().Be("4.5", "a decimal stored as a string is a number on the wire too");
+        item["priceList"]!["usd"]!["net"]!.ToJsonString().Should().Be("5", "the array-of-documents dictionary is an object on the wire");
         item["addon"]!["SoloplanNr"]!.GetValue<long>().Should().Be(7, "the bag is verbatim");
         item["addon"]!["When"]!.GetValue<string>().Should().Be("2024-05-06T00:00:00Z");
-        item["addon"]!["Dec"]!.ToJsonString().Should().Be("\"1\"", "the driver's { _t, _v } wrapper of a decimal is read as the decimal: canonical text");
+        item["addon"]!["Dec"]!.ToJsonString().Should().Be("1", "the driver's { _t, _v } wrapper of a decimal is read as the decimal: a number");
         item["renamed"]!.GetValue<string>().Should().Be("renamed", "the wire name, not the element name");
         item["qrCode"]!.GetValue<string>().Should().Be("qr");
         item["location"]!.AsArray().Should().HaveCount(2, "unknown members pass through verbatim");
@@ -391,7 +391,7 @@ public class MongoQueryEngineTests
 
         outputs["st"]!.GetValue<int>().Should().Be(1);
         outputs["n"]!.ToJsonString().Should().Be("4", "a count is an int: a JSON number on the wire, never a string");
-        outputs["total"]!.GetValue<string>().Should().Be("9.5");
+        outputs["total"]!.ToJsonString().Should().Be("9.5", "a decimal sum is a JSON number");
     }
 
     [Fact]

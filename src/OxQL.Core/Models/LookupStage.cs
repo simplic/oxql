@@ -61,6 +61,10 @@ public sealed record LookupStage
     [JsonIgnore]
     public IReadOnlyList<string> Malformed { get; init; } = [];
 
+    /// <summary>Whether <c>limit</c> was written as something other than a number; it then reads as not written, and contract 2 refuses it.</summary>
+    [JsonIgnore]
+    public bool LimitInvalid { get; init; }
+
     /// <summary>Member names the caller wrote that the stage does not have: the v1 <c>localPath</c>, <c>foreignPath</c>, <c>convert</c> among them.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
@@ -165,7 +169,9 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                         RawFilter = property.Value.Clone(),
                     };
                     break;
-                case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
+                case "limit":
+                    stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null, LimitInvalid = property.Value.ValueKind is not (JsonValueKind.Number or JsonValueKind.Null) };
+                    break;
                 case "sort":
                     if (property.Value.ValueKind == JsonValueKind.Array)
                         stage = stage with { Sort = JsonSerializer.Deserialize<IReadOnlyList<SortField>>(property.Value.GetRawText(), options) };

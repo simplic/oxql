@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// The result columns of a projected member below an object, on the fleet (DG2): a grid that shows
+/// The result columns of a projected member below an object, on the fleet: a grid that shows
 /// <c>customer.address.companyName</c> reads what that member can off its own column, and what the
 /// column says holds on a run: the values stage it allows answers, the sort it allows orders.
 /// </summary>

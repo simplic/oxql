@@ -55,6 +55,15 @@ public sealed class LabFleet : IAsyncDisposable
     public Dictionary<string, string?> Configuration { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Whether this fleet's hosts answer contract 1 as a host that sets nothing does: every request
+    /// without the contract header on the legacy pipeline. False for every fleet but the legacy
+    /// suites': the other suites' contract 1 cases hold the compatibility rewrite, so their hosts
+    /// answer contract 1 by the rewrite first (<c>OxQL:Compat:Legacy:Always=false</c>). Set before
+    /// the first host starts.
+    /// </summary>
+    public bool Contract1AsShipped { get; set; }
+
+    /// <summary>
     /// How long every aggregate of this fleet's hosts takes at least, as a database a network away
     /// would make it: with it, which aggregates run side by side and which one after another shows in
     /// <see cref="Aggregates"/>. Zero by default. Set before the first host starts.

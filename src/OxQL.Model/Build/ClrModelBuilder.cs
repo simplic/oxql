@@ -38,11 +38,19 @@ namespace OxQL.Model.Build;
 /// their members. A class map the build itself caused to be registered, by looking a type up,
 /// never counts: the answer must not depend on how often or in which order models are built.
 /// </para>
+/// <para>
+/// A member of a polymorphic type that the driver does not store and that is a constant of the
+/// class in every variant (<c>public override string Type => "driver";</c>, the model's own type
+/// member) carries that constant per variant (<see cref="MemberDef.ByVariant"/>): the engine
+/// answers it from the stored discriminator. The constant is read from the getter without
+/// running a constructor (<see cref="VariantConstants"/>); a member that is a constant in some
+/// variants only is a finding and stays in the wire view only.
+/// </para>
 /// </remarks>
 public sealed class ClrModelBuilder
 {
     /// <summary>The simple name of the base package's navigation-property attribute, read by name.</summary>
-    public const string ReferenceIdAttributeName = "ReferenceIdAttribute";
+    private const string ReferenceIdAttributeName = "ReferenceIdAttribute";
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> NoRetiredIds =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -92,7 +100,7 @@ public sealed class ClrModelBuilder
     {
         ArgumentNullException.ThrowIfNull(assemblies);
 
-        var list = assemblies.ToList();
+        var list = assemblies.Distinct().ToList();
 
         return new ClrModelBuilder(list, references).BuildCore(list, retiredIds ?? NoRetiredIds);
     }
@@ -149,8 +157,9 @@ public sealed class ClrModelBuilder
         for (var index = 0; index < pendingMerges.Count; index++)
             Merge(pendingMerges[index].Type, pendingMerges[index].Owner, pendingMerges[index].Label, pendingMerges[index].Variants);
 
-        ReportUnappliedDeclarations();
         StructuralIds.Assign(pool);
+        ReportUnappliedDeclarations();
+        Relabel();
 
         return ModelAssembler.Finish(entities, pool.Values, retiredIds, references, findings, navigations);
     }
@@ -160,7 +169,7 @@ public sealed class ClrModelBuilder
     /// the most derived type first, then each base type in turn, declaration order within a
     /// type, read off the metadata token.
     /// </summary>
-    public static IEnumerable<PropertyInfo> PublishedProperties(Type type)
+    private static IEnumerable<PropertyInfo> PublishedProperties(Type type)
     {
         for (var current = type; current is not null && current != typeof(object); current = current.BaseType)
         {
@@ -400,7 +409,7 @@ public sealed class ClrModelBuilder
 
             findings.Add(new BuildFinding(
                 BuildCodes.ReferenceDeclarationUnresolved,
-                $"{StructuralIds.ReadableId(group.Key.Type)}#{group.Key.WireMember}",
+                $"{(pool.TryGetValue(group.Key.Type, out var declared) ? declared.PoolId : StructuralIds.ReadableId(group.Key.Type))}#{group.Key.WireMember}",
                 pool.ContainsKey(group.Key.Type)
                     ? $"The host-side declaration names the member '{group.Key.WireMember}', which the type does not have, so no reference is emitted."
                     : "The host-side declaration names a type the model does not describe, so no reference is emitted.",
@@ -538,6 +547,64 @@ public sealed class ClrModelBuilder
         type.Variants = variantDefs;
         type.DiscriminatorElement = DiscriminatorElementOf(owner);
         type.DiscriminatorForm = variants.Any(IsHierarchical) ? DiscriminatorForm.Hierarchical : DiscriminatorForm.Scalar;
+
+        DescribeConstants(type, owner, label, variants, colliding, conflicts);
+    }
+
+    /// <summary>
+    /// Sets <see cref="MemberDef.ByVariant"/> on every member of a polymorphic type that the driver
+    /// does not store, is a string, has no setter and is a constant of the class in every variant
+    /// (and in the type itself where it is concrete, since its own values are stored too). A member
+    /// that is a constant in some of them and not in the others is the model's type member gone
+    /// wrong in one class: a finding names the classes and the reason, and the member stays as it
+    /// is. A member that is a constant in none is an ordinary computed member and no finding.
+    /// </summary>
+    private void DescribeConstants(TypeDef type, Type owner, string label, IReadOnlyList<Type> variants, HashSet<string> colliding, List<string> conflicts)
+    {
+        // A variant the type does not describe (two classes of one name) has rows no value could be published for.
+        if (colliding.Count > 0)
+            return;
+
+        var holders = variants.Select(variant => (Name: VariantName(variant), Type: variant)).ToList();
+
+        // A concrete type is stored under its own name without a discriminator: one more class to answer for.
+        if (owner is { IsAbstract: false, IsInterface: false })
+            holders.Add((VariantName(owner), owner));
+
+        foreach (var member in type.Members)
+        {
+            if (member.Stored || member.Kind != Kind.String || member.ClrName is null || conflicts.Contains(member.WireName))
+                continue;
+
+            // A member only some variants have is no member of every row.
+            if (member.OnlyFor is { } carriers && carriers.Count != variants.Count)
+                continue;
+
+            var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var failed = new List<string>();
+
+            foreach (var (name, holder) in holders)
+            {
+                if (VariantConstants.Read(holder, member.ClrName, out var value) is { } why)
+                    failed.Add($"{name}: {why}");
+                else
+                    values[name] = value!;
+            }
+
+            if (failed.Count == 0)
+            {
+                member.ByVariant = values;
+                continue;
+            }
+
+            if (values.Count > 0)
+                findings.Add(new BuildFinding(
+                    BuildCodes.VariantConstantUnresolved,
+                    $"{label}#{member.WireName}",
+                    $"The member is a constant of the class in {values.Count} of the type's {holders.Count} classes and not in {string.Join(", ", failed.Select(entry => entry.Split(':')[0]).Order(StringComparer.Ordinal))}, "
+                        + "so it has no value per variant and stays in the wire view only: a query cannot project or filter it. Make its getter return a constant in every class.",
+                    string.Join("; ", failed.Order(StringComparer.Ordinal))));
+        }
     }
 
     /// <summary>
@@ -886,10 +953,55 @@ public sealed class ClrModelBuilder
 
         var entry = new TypeDef($"working:{pool.Count}", type, isEntity: false);
 
+        // The type's id is settled when every type is pooled (two may share a simple name), so what
+        // is said about it meanwhile names it by a stand-in of its own; Relabel writes the id.
+        var standIn = $"{StandInMark}{pool.Count}{StandInMark}";
+
         pool[type] = entry;
-        DescribeMembers(entry, type, StructuralIds.ReadableId(type));
+        standIns[standIn] = entry;
+        DescribeMembers(entry, type, standIn);
 
         return entry;
+    }
+
+    /// <summary>Marks a stand-in for a pooled type's id in a label; no CLR or wire name holds it.</summary>
+    private const char StandInMark = '\u0001';
+
+    private readonly Dictionary<string, TypeDef> standIns = new(StringComparer.Ordinal);
+
+    /// <summary>Writes the final pool ids where findings and pending references name a pooled type by its stand-in.</summary>
+    private void Relabel()
+    {
+        if (standIns.Count == 0)
+            return;
+
+        for (var index = 0; index < findings.Count; index++)
+        {
+            var finding = findings[index];
+
+            findings[index] = finding with { Target = Final(finding.Target), Message = Final(finding.Message), Detail = finding.Detail is null ? null : Final(finding.Detail) };
+        }
+
+        for (var index = 0; index < references.Count; index++)
+            references[index] = references[index] with { OwnerLabel = Final(references[index].OwnerLabel) };
+
+        string Final(string text)
+        {
+            var start = text.IndexOf(StandInMark);
+
+            while (start >= 0)
+            {
+                var end = text.IndexOf(StandInMark, start + 1);
+
+                if (end < 0 || !standIns.TryGetValue(text[start..(end + 1)], out var type))
+                    break;
+
+                text = string.Concat(text.AsSpan(0, start), type.PoolId, text.AsSpan(end + 1));
+                start = text.IndexOf(StandInMark);
+            }
+
+            return text;
+        }
     }
 
     private TypeDef PoolEnum(Type type)
@@ -1143,7 +1255,8 @@ public sealed class ClrModelBuilder
                 continue;
             }
 
-            var idProperty = idPropertyName is null ? null : owner.GetProperty(idPropertyName, BindingFlags.Public | BindingFlags.Instance);
+            // By name among the published properties, the most derived first: a property a subclass redeclares is one match, not two.
+            var idProperty = idPropertyName is null ? null : PublishedProperties(owner).FirstOrDefault(candidate => candidate.Name == idPropertyName);
 
             if (idProperty is null)
             {

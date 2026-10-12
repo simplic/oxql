@@ -121,11 +121,11 @@ public class DiagnosticsTests
         var all = Corpus.AllIds(Corpus.Template);
         all.Count.Should().BeGreaterThan(cap);
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = $"{cap}" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = $"{cap}" });
 
         var answer = await capped.SendAsync(Corpus.Template, """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 5, "count": true } }]""");
 
-        // The bound and why counting stopped there are in the count itself; no diagnostic repeats them (DG2 M3).
+        // The bound and why counting stopped there are in the count itself; no diagnostic repeats them.
         answer.ShouldHaveIds(Corpus.PageOf(all, 5)).ShouldCount("atLeast", cap, "cap").ShouldHaveNoDiagnostics();
 
         // Under the cap the count is exact and says nothing.
@@ -151,7 +151,7 @@ public class DiagnosticsTests
         var rows = WidgetRows();
         rows.Should().NotBeEmpty().And.OnlyContain(row => row.Widget != null, "every row names a widget, so a null is the timeout's doing");
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-timeout", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-timeout", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Hang });
         var client = fleet.Variant(LabService.Conformance, "resolve-200", new Dictionary<string, string?> { ["OxQL:Execution:ResolveTimeoutMs"] = "200" });
 
@@ -169,7 +169,7 @@ public class DiagnosticsTests
     {
         var rows = WidgetRows();
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-unreachable", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-unreachable", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Status, Status = HttpStatusCode.InternalServerError });
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, WidgetPipeline);
@@ -188,7 +188,7 @@ public class DiagnosticsTests
         var keys = rows.Select(row => row.Widget).Distinct().ToList();
         keys.Should().HaveCountGreaterThan(1, "the page must need more keys than the cap of one");
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-partial", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-partial", seed: [LabService.Conformance]);
         var client = fleet.Variant(LabService.Conformance, "resolve-keys-1", new Dictionary<string, string?> { ["OxQL:Limits:MaxResolveKeys"] = "1" });
 
         var answer = await client.SendAsync(Corpus.Conformance, WidgetPipeline);

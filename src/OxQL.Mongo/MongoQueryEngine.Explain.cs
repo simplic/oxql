@@ -15,13 +15,13 @@ using OxQL.Mongo.Resolve;
 namespace OxQL.Mongo;
 
 /// <summary>
-/// Explain: the bind trace, normalised (improvement plan §3.E). One answer says everything a builder
+/// Explain: the bind trace, normalised. One answer says everything a builder
 /// shows beyond the schema documents it already holds: each stage with its placement and the shape
 /// after it, every alias, the types of the roots by reference with the rules that say where their
 /// members stand, the result columns, the owners asked. Nothing is derived a second way: the shapes are the
 /// binder's (<see cref="BindTrace"/>), the owner facts are the plan a run builds
 /// (<see cref="KeyedFetch.Explain(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?)"/>,
-/// <see cref="KeyedFetch.Checks(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?, bool)"/>),
+/// <see cref="KeyedFetch.Checks(BoundPipeline, BoundStage.Resolve, bool, IRemoteQueryClient?, bool, OwnerFetchCache?)"/>),
 /// and what lies at an owner is what that owner answered.
 /// </summary>
 public sealed partial class MongoQueryEngine
@@ -95,7 +95,7 @@ public sealed partial class MongoQueryEngine
         if (request.IncludesShape && binding.Trace is { } entered)
             await types.LocalAsync(entered.Entry.Entity, null).ConfigureAwait(false);
 
-        // The owners' answers share one budget of time and calls (DESIGN §4.3, plan §3.E protection).
+        // The owners' answers share one budget of time and calls.
         RemoteExplain? asking = null;
         // An explain this one runs at this host asks its owners through this explain's pool, on its time.
         var owners = asking = new RemoteExplain(remote, explainCache, context, request,
@@ -113,7 +113,7 @@ public sealed partial class MongoQueryEngine
         draft.Strict = strict;
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
-        // as a run does, within the explain budget (RL-3): those of the keyed stages' owners and of the
+        // as a run does, within the explain budget: those of the keyed stages' owners and of the
         // semi-joins', whose page they size. The cached tier asks no owner anything: it plans by the
         // facts already known.
         if (request.Remote != ExplainRequest.RemoteCached)
@@ -152,7 +152,7 @@ public sealed partial class MongoQueryEngine
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false,
                 [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }], cancellationToken).ConfigureAwait(false));
 
-        // The remote check (DESIGN §4.3): the owner queries of every keyed stage are bound by their
+        // The remote check: the owner queries of every keyed stage are bound by their
         // owners' internal explain; an owner error there is this request's, at the caller's stage. So
         // are the conditions a run asks owners before the page (the semi-joins): each owner binds the
         // query the run sends it first, in the same call.
@@ -276,7 +276,7 @@ public sealed partial class MongoQueryEngine
     // ---- placement ------------------------------------------------------------------------------
 
     /// <summary>
-    /// Where each join runs (DESIGN §4.3): its executor and phase, the service that runs it, the owner
+    /// Where each join runs: its executor and phase, the service that runs it, the owner
     /// queries of a keyed stage; and the join-placement note of each join run on this host.
     /// </summary>
     private void Place(Draft draft)
@@ -590,15 +590,7 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>
-    /// The answer an origin reads of an owner (improvement plan §3.E "owners answer slim"): whether the
-    /// query binds and its errors, the notes about the answer itself, each stage with its reads and
-    /// creates, the aliases, the types, the catalog, the owners it asked in turn, the revisions, the
-    /// engine and whether it is complete. The shapes, placements, rules, flag sets, result columns,
-    /// diagnostics, the other notes and the validator are this host's own to compute for its own
-    /// callers; an origin computes its own and would drop these.
-    /// </summary>
-    /// <summary>
-    /// The entries of the request's <c>filter</c> as the binder placed them (DG2 M1), one per entry in
+    /// The entries of the request's <c>filter</c> as the binder placed them, one per entry in
     /// order; null when the request carries none or was not read as contract 2.
     /// </summary>
     private static List<ExplainFilter>? FiltersOf(QueryRequest query, BindTrace? trace, HashSet<object> refused) =>
@@ -638,6 +630,13 @@ public sealed partial class MongoQueryEngine
         return said.Count == 0 ? null : said;
     }
 
+    /// <summary>
+    /// The answer an origin reads of an owner: whether the query binds and its errors, the notes
+    /// about the answer itself, each stage with its reads and creates, the aliases, the types, the catalog, the owners it asked in turn, the revisions, the
+    /// engine and whether it is complete. The shapes, placements, rules, flag sets, result columns,
+    /// diagnostics, the other notes and the validator are this host's own to compute for its own
+    /// callers; an origin computes its own and would drop these.
+    /// </summary>
     private static ExplainResult Slim(ExplainResult answer) => answer with
     {
         Executable = null,
@@ -1113,7 +1112,7 @@ public sealed partial class MongoQueryEngine
         return created;
     }
 
-    /// <summary>What the bound joins say of their aliases (DESIGN §4.3): the reference, the targets, the owners, the continuation.</summary>
+    /// <summary>What the bound joins say of their aliases: the reference, the targets, the owners, the continuation.</summary>
     private void Joins(Draft draft, BoundPipeline bound, OwnerList owners, JsonObject aliases, string host)
     {
         var outcomes = draft.Notes.Where(note => note.Code == Notes.MissingPolicy && note.Params?["alias"] is string)
@@ -1254,7 +1253,7 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>
-    /// The branches of a union join (<c>byTarget</c>, improvement plan §3.U), in the order written: the
+    /// The branches of a union join (<c>byTarget</c>), in the order written: the
     /// target of the anchor each belongs to, its path and <c>elements</c>, the service that runs it, what
     /// it reaches as that owner answered (<c>entities</c>, <c>types</c>; none when it did
     /// not answer) and its <c>status</c>: <c>ok</c>, <c>error</c> (its owner refused it) or
@@ -1314,7 +1313,7 @@ public sealed partial class MongoQueryEngine
     private static JsonArray Values(IEnumerable<string> values) => new(values.Select(value => (JsonNode)value).ToArray());
 
     /// <summary>
-    /// The type of an alias whose rows an owner holds, from the owners' answers (plan §3.E, K14): the
+    /// The type of an alias whose rows an owner holds, from the owners' answers: the
     /// targets of a remote resolve as the check of the run's owner query described them; what the
     /// owners bound a continued alias to; for a request that does not bind (no run plan to check), the
     /// owner's own description of the entity. Several targets are one union. An owner that did not
@@ -1424,7 +1423,7 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>
-    /// The reference a resolve follows as bound (DESIGN §4.3 <c>reference</c>): each selected case with
+    /// The reference a resolve follows as bound (<c>reference</c> in the explain answer): each selected case with
     /// its condition, conversion and targets after <c>target</c> narrowed them, the conversion shared by
     /// every case, and <c>elements</c>.
     /// </summary>
@@ -1489,7 +1488,7 @@ public sealed partial class MongoQueryEngine
     // ---- the result columns ---------------------------------------------------------------------
 
     /// <summary>
-    /// The final shape's visible members and roots (DESIGN §4.3 <c>result.columns</c>), in row order,
+    /// The final shape's visible members and roots (<c>result.columns</c> in the explain answer), in row order,
     /// grouped the way the row nests them: a member of the entity under root <c>""</c>, an object
     /// member one level down under its own name, and every alias under its name — a join's select, an
     /// element's members, a lookup's array — so the studio groups a join's columns under its hop.
@@ -1548,7 +1547,7 @@ public sealed partial class MongoQueryEngine
                     columns.Add(Column(name, Kind.Array, nullable: true, stage, name, ExplainColumn.Always));
                     break;
 
-                // The children of a remote lookup, or their owning rows, as an array per row (DESIGN §3.4.4).
+                // The children of a remote lookup, or their owning rows, as an array per row.
                 case ShapeNode.Remote when bound.Stages.OfType<BoundStage.Resolve>().Any(resolve => resolve.RemoteLookup is { First: false } && (resolve.As == name || resolve.ParentAs == name)):
                     columns.Add(Column(name, Kind.Array, nullable: true, stage, name, ExplainColumn.Always));
                     break;
@@ -1636,12 +1635,16 @@ public sealed partial class MongoQueryEngine
         {
             var wire = prefix + member.WireName;
 
-            if (!member.Stored || !shape.IsVisible(wire))
+            // The model's own type member is not stored and is in every row its object is in: the
+            // engine writes it from the discriminator (contract 2).
+            var derived = shape.Derives && !variant && !member.Stored && member.ByVariant is not null && type.Variants.Count > 0;
+
+            if ((!member.Stored && !derived) || !shape.IsVisible(wire))
                 continue;
 
             var memberShape = shape.Unwound.Contains(Shape.UnwoundKey(Shape.ImplicitRoot, wire)) && member.Of is { } element ? element : member;
-            var memberVariant = variantOnly || variant || member.OnlyFor is not null;
-            var memberNullable = nullable || memberVariant || member.Nullable;
+            var memberVariant = !derived && (variantOnly || variant || member.OnlyFor is not null);
+            var memberNullable = nullable || memberVariant || (!derived && member.Nullable);
             var present = joined ? ExplainColumn.IfJoined
                 : memberVariant ? ExplainColumn.IfVariant
                 : memberNullable ? ExplainColumn.IfStored

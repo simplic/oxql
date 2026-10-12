@@ -365,7 +365,7 @@ public class OrganisationTests
         // third organisation reaches neither.
         var third = Guid.Parse("77777777-7777-7777-7777-777777777777");
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-x17", seed: [LabService.Conformance], extra: async lab =>
+        await using var fleet = await CorpusFleet.CreateAsync("case-x17", seed: [LabService.Conformance], extra: async lab =>
         {
             var database = await lab.DatabaseAsync(LabService.Conformance);
             await database.GetCollection<BsonDocument>(TestAddonSource.Collection)

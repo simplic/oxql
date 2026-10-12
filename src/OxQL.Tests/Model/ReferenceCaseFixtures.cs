@@ -1,4 +1,4 @@
-// The graphs the reference-case tests build from (DESIGN §3.3). None carries [OxQLType]: the probe
+// The graphs the reference-case tests build from. None carries [OxQLType]: the probe
 // build scans this whole assembly, so the entities are declared by hand. The resource variants'
 // class maps are registered once, before any build looks them up, as a host registers its maps.
 
@@ -223,7 +223,7 @@ internal static class ReferenceModel
         new("refs.vehicle", "refs.vehicle", typeof(RefVehicle), "vehicles", null, false),
     ];
 
-    /// <summary>The resource declarations of DESIGN §3.3.2, one unconditional declaration, and three the build cannot apply.</summary>
+    /// <summary>The resource declarations, one unconditional declaration, and three the build cannot apply.</summary>
     public static ReferenceDeclarations Declarations()
     {
         var declarations = new ReferenceDeclarations();

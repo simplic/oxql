@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// Load inference at bind time (improvement plan §3.S): a join loads its key, what later stages
+/// Load inference at bind time: a join loads its key, what later stages
 /// read under its alias and its output set; the output set is what the projection names under the
 /// alias, or, kept whole, its key and display member. A contract 2 join has no <c>select</c>: the
 /// member is refused by name, and nothing but the projection chooses what an alias shows. The reads

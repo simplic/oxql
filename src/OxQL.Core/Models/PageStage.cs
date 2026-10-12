@@ -61,10 +61,18 @@ public sealed record PageStage
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
+
+    /// <summary>
+    /// The members the caller wrote with a value of another JSON kind than the member takes
+    /// (<c>page</c> for a stage that is no object). They read as not written, and contract 2 refuses
+    /// them: a cursor dropped would answer the first page again.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Invalid { get; init; } = [];
 }
 
 /// <summary>
-/// The count a contract 2 page asks for (DG2 M3): whether one is asked, and the bounds the caller
+/// The count a contract 2 page asks for: whether one is asked, and the bounds the caller
 /// put on it. <see cref="UpTo"/> is the most rows the caller needs counted; <see cref="BudgetMs"/>
 /// the time it gives the count. A member of the object form that is not a whole number is 0
 /// here, and the binder refuses it.
@@ -144,12 +152,17 @@ internal sealed class PageStageConverter : JsonConverter<PageStage>
         using var doc = JsonDocument.ParseValue(ref reader);
         var stage = new PageStage();
         var unknown = new List<string>();
+        var invalid = new List<string>();
 
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            return stage;
+            return stage with { Invalid = ["page"] };
 
         foreach (var property in doc.RootElement.EnumerateObject())
         {
+            if ((property.Name is "limit" or "offset" && property.Value.ValueKind is not (JsonValueKind.Number or JsonValueKind.Null))
+                || (property.Name == "cursor" && property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)))
+                invalid.Add(property.Name);
+
             switch (property.Name)
             {
                 case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
@@ -171,7 +184,7 @@ internal sealed class PageStageConverter : JsonConverter<PageStage>
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Invalid = invalid };
     }
 
     public override void Write(Utf8JsonWriter writer, PageStage value, JsonSerializerOptions options)

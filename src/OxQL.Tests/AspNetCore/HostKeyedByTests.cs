@@ -6,9 +6,9 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// <c>keyedBy</c> is internal only, on every public route (RE-26): query, batch and explain answer
+/// <c>keyedBy</c> is internal only, on every public route: query, batch and explain answer
 /// <c>UNKNOWN_REQUEST_MEMBER</c> without the contract 1 hint, which would suggest the header is what
-/// is missing (RE-22); and a member a batch does not have is refused rather than dropped.
+/// is missing; and a member a batch does not have is refused rather than dropped.
 /// </summary>
 public class HostKeyedByTests
 {

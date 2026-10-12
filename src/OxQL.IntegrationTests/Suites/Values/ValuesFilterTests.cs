@@ -10,7 +10,7 @@ using static OxQL.IntegrationTests.Suites.Values.ValuesKit;
 namespace OxQL.IntegrationTests.Suites.Values;
 
 /// <summary>
-/// A list of values and the request's <c>filter</c> (DG2 set filters). Every entry of the filter runs
+/// A list of values and the request's <c>filter</c>. Every entry of the filter runs
 /// before the <c>values</c> stage, so a list holds the values of the rows the entries leave. The list
 /// of a column's own set filter is asked with every entry but that column's: the engine has no member
 /// that excludes an entry, the caller leaves it out, and the list then still offers what the column's

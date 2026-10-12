@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The engine-behaviour notes of an explain (DESIGN §4.4), each provoked where it applies and absent
+/// The engine-behaviour notes of an explain, each provoked where it applies and absent
 /// where it does not: folding, element and absence semantics, variant-only and snapshot paths, join
 /// placement, what owners bind, dropped select paths, caps and limits, paging, the missing policy and
 /// the report page. <c>REMOTE_UNCHECKED</c> is E13's; <c>INDEX_ADVICE</c> is asserted with the advisory
@@ -36,7 +36,7 @@ public class ExplainNotesTests
         notes.Should().ContainSingle(note => note.Code == code, string.Join(", ", notes.Select(note => note.Code))).Subject;
 
     [Fact]
-    public void The_codes_are_the_list_of_DESIGN_4_4_in_its_order()
+    public void The_codes_are_the_published_list_in_its_order()
     {
         Notes.All.Should().Equal(
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
@@ -59,7 +59,7 @@ public class ExplainNotesTests
         folds.Params["locale"].Should().Be(BindHost.Options().Representation.Collation.Locale);
         folds.Params["strength"].Should().Be(BindHost.Options().Representation.Collation.Strength);
 
-        // contains and endsWith fold what the collation folds, as a pattern (DG2 M10).
+        // contains and endsWith fold what the collation folds, as a pattern.
         var pattern = Single(notes, Notes.PatternFolds);
 
         pattern.Message.Should().Be("'contains' on 'number' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.");
@@ -67,6 +67,21 @@ public class ExplainNotesTests
         notes.Should().NotContain(note => note.Code == Notes.PatternFoldsCaseOnly, "that is what a contract 1 pattern does");
 
         (await NotesAsync("""[{ "match": { "number": { "eq": "RE-1", "options": { "caseSensitive": true } } } }]""")).Should().NotContain(note => note.Code == Notes.TextFolds);
+    }
+
+    [Fact]
+    public async Task A_contract_1_comparison_that_ignores_case_says_that_its_pattern_folds_case_only()
+    {
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(), new FakeRemoteClient());
+        var request = BindHost.Request(Invoice, """[{ "match": { "and": [{ "number": { "eq": "re-1", "options": { "ignoreCase": true } } }, { "number": { "eq": "RE-2" } }] } }]""");
+        var notes = (await engine.ExplainAsync(request, BindHost.Context(contract: 1))).Should().BeOfType<ExplainOutcome.Success>().Subject.Result.Notes;
+
+        var pattern = Single(notes, Notes.PatternFoldsCaseOnly);
+
+        pattern.Stage.Should().Be(0);
+        pattern.Path.Should().Be("number");
+        pattern.Params!["op"].Should().Be("eq");
+        notes.Should().NotContain(note => note.Code == Notes.TextFolds || note.Code == Notes.PatternFolds);
     }
 
     [Fact]
@@ -265,7 +280,7 @@ public class ExplainNotesTests
     [Fact]
     public async Task The_caps_and_limits_are_said_where_they_bind()
     {
-        // The count says where it stopped in its own answer (pageInfo.count); no note repeats the cap (DG2 M3).
+        // The count says where it stopped in its own answer (pageInfo.count); no note repeats the cap.
         (await NotesAsync("""[{ "page": { "count": true } }]""")).Should().NotContain(note => note.Code == Notes.CountCap);
 
         Single(await NotesAsync("""[{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoices", "limit": 7 } }]""", "rc.customer"), Notes.LookupLimit)
@@ -279,7 +294,7 @@ public class ExplainNotesTests
     public async Task Contract_2_pages_by_its_cursor_and_says_nothing_of_an_offset()
     {
         (await NotesAsync("""[{ "match": { "number": { "exists": true } } }, { "unwind": { "path": "lines", "as": "line" } }]"""))
-            .Should().NotContain(note => note.Code == Notes.OffsetPaging, "the cursor is the only address of a contract 2 page (DG2 M4)");
+            .Should().NotContain(note => note.Code == Notes.OffsetPaging, "the cursor is the only address of a contract 2 page");
     }
 
     [Fact]

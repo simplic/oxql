@@ -1,0 +1,27 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Transits.Distance": {
+          "gt": 600
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Transits": {
+          "Distance": 1
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

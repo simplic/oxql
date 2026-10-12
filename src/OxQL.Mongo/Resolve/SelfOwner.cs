@@ -7,7 +7,7 @@ using OxQL.Core.Models;
 namespace OxQL.Mongo.Resolve;
 
 /// <summary>
-/// This host as the owner of its own entities (DESIGN §3.5.2 step 4, §3.5.8): the keyed fetch's
+/// This host as the owner of its own entities: the keyed fetch's
 /// owner client for a local target. It runs every owner query of a batch through the engine's own
 /// <see cref="IQueryEngine.ExecuteAsync"/> under the caller's request context, marked internal (so
 /// the query may carry <c>keyedBy</c>) and contract 2 (the owner query's vocabulary), with the
@@ -27,7 +27,7 @@ namespace OxQL.Mongo.Resolve;
 /// construction.
 /// </para>
 /// </summary>
-public sealed class SelfOwner(IQueryEngine engine, RequestContext context) : IRemoteQueryClient
+internal sealed class SelfOwner(IQueryEngine engine, RequestContext context) : IRemoteQueryClient
 {
     private readonly IQueryEngine engine = engine ?? throw new ArgumentNullException(nameof(engine));
     private readonly RequestContext context = context ?? throw new ArgumentNullException(nameof(context));

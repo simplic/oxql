@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The shape side of an explain answer (improvement plan §3.E): the shared <c>types</c> table with each
+/// The shape side of an explain answer: the shared <c>types</c> table with each
 /// member described once (variants, references, addons, the cut by depth and by the member cap), the
 /// union type of an alias with several targets, the flag sets and where a stage's row differs from a
 /// type's own flags, the types of another service as its owner answered them, and the <c>catalog</c>.
@@ -668,5 +668,21 @@ public class ExplainTypesTests
         ((IEnumerable<string>)smallest.Notes.Single(note => note.Code == Notes.ExplainTrimmed).Params!["dropped"]!).Should().Equal("types", "plan");
         whole.Notes.Should().NotContain(note => note.Code == Notes.ExplainTrimmed);
         whole.Cache.Complete.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task The_member_rows_of_an_entity_are_those_of_the_contract_that_asks_whichever_asked_first()
+    {
+        async Task<JsonObject> Computed(int contract)
+        {
+            var body = $$"""{ "query": { "entityType": "{{Order}}", "pipeline": [] } }""";
+            var outcome = await Engine(model: BindHost.Probe).ExplainAsync(ExplainAnswer.Envelope(body), BindHost.Context(contract: contract));
+
+            return outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result.OwnFlags("t:probe.order", "computed");
+        }
+
+        (await Computed(1))["projectable"]!.GetValue<bool>().Should().BeTrue("contract 1 accepts a projection of a member that is not stored");
+        (await Computed(2))["projectable"]!.GetValue<bool>().Should().BeFalse("contract 2 refuses it");
+        (await Computed(1))["projectable"]!.GetValue<bool>().Should().BeTrue();
     }
 }

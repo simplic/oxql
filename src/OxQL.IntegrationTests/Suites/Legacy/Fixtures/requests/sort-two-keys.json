@@ -1,0 +1,21 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Number": 1,
+        "IsMirroredTour": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "IsMirroredTour": "desc"
+        },
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

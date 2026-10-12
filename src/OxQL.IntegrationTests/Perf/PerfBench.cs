@@ -23,7 +23,7 @@ namespace OxQL.IntegrationTests.Perf;
 /// <item><c>OXQL_PERF_RUNS</c> is the number of measured runs per request (15, after 3 warm ones);</item>
 /// <item><c>OXQL_PERF_ONLY</c> keeps the requests whose name contains it.</item>
 /// </list>
-/// Without <c>OXQL_PERF</c> the test does nothing and passes. Run it in a Release build for the
+/// Without <c>OXQL_PERF</c> the test is reported as skipped. Run it in a Release build for the
 /// engine's own share: <c>dotnet test -c Release --filter Category=Perf</c>.
 /// <para>
 /// The wall time is the in-process host's (no network); the database time is the union of the
@@ -42,11 +42,10 @@ public class PerfBench(ITestOutputHelper output)
     /// <summary>One measured request: what it is called and how it is sent.</summary>
     private sealed record Case(string Name, Func<LabClient, Task<WireAnswer>> Send);
 
-    [Fact]
+    [OptInFact(Variable)]
     public async Task Measure_the_grid_requests()
     {
-        if (Environment.GetEnvironmentVariable(Variable) is not { Length: > 0 } file)
-            return;
+        var file = Environment.GetEnvironmentVariable(Variable)!;
 
         var rows = Number("OXQL_PERF_ROWS", 25_000);
         var runs = Number("OXQL_PERF_RUNS", 15);

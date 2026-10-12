@@ -15,11 +15,11 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// T1, explain ≡ run parity at the unit level (improvement plan P12): the check query explain builds
+/// Explain ≡ run parity at the unit level: the check query explain builds
 /// for an <see cref="OwnerCheck"/> is the owner query the run sends for the same target, modulo the
 /// keys (the check carries <see cref="KeyedFetch.CheckKey"/>, the run the page's keys, and the page
 /// limit follows their count). Since the run itself asks its owners for what the projection names
-/// under an alias (improvement plan §3.S), the check projects nothing beside it. One case per join kind: a remote resolve, a local keyed resolve with a stage
+/// under an alias, the check projects nothing beside it. One case per join kind: a remote resolve, a local keyed resolve with a stage
 /// continued under it, a stage continued under a remote alias, a remote lookup, unions narrowed
 /// with <c>forTarget</c> at a local and at a remote target, and a union join (<c>byTarget</c>) over
 /// local targets and over a local and a remote one. The run's queries are recorded where

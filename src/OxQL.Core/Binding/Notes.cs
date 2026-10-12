@@ -5,13 +5,14 @@ using OxQL.Model;
 namespace OxQL.Core.Binding;
 
 /// <summary>
-/// The engine-behaviour notes of an explain (DESIGN §4.4): what the engine does with a request that
+/// The engine-behaviour notes of an explain: what the engine does with a request that
 /// binds, said once where it applies, never an error and never a change to the rows. A note has the
 /// form of a diagnostic (<c>{ code, message, stage, path, params }</c>); the studio renders
 /// <c>oxqlStudio.note.&lt;CODE&gt;</c> when it has the key, else the message. The codes are not in
-/// <see cref="Codes"/>: a note is no refusal and no diagnostic of a run, with one exception, a
-/// path under a union's alias that an owner said its target lacks (<see cref="SelectPathNotOnTarget"/>), which only a
-/// run can learn and which the run's diagnostics carry.
+/// <see cref="Codes"/>: a note is no refusal and no diagnostic of a run, with two exceptions the
+/// diagnostics of a run carry as well: a path under a union's alias that an owner said its target lacks
+/// (<see cref="SelectPathNotOnTarget"/>), which only a run can learn, and a filter entry that ran before
+/// the group that reuses its name (<see cref="FilterBindsEarlier"/>).
 /// </summary>
 public static class Notes
 {
@@ -52,7 +53,7 @@ public static class Notes
     /// <summary>What lies under a remote or continued alias is bound by the owner, not here (params <c>alias</c>, <c>services</c>).</summary>
     public const string OwnerBinds = "OWNER_BINDS";
 
-    /// <summary>A continued part could not be checked at its owner (E13).</summary>
+    /// <summary>A continued part could not be checked at its owner.</summary>
     public const string RemoteUnchecked = "REMOTE_UNCHECKED";
 
     /// <summary>A path asked under a union's alias (its select hint, or what the projection names under it) that one target lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>, <c>target</c>, <c>parent</c>: a path of the owning row, <c>parentAs</c>).</summary>
@@ -82,8 +83,7 @@ public static class Notes
 
     /// <summary>
     /// A lookup of another service's entity runs at its owner after the page, grouped per key and
-    /// ranked there, within bounds the owner enforces (DESIGN §3.4.4; params <c>alias</c>,
-    /// <c>service</c>, <c>entity</c>, <c>perKey</c>, <c>keysPerQuery</c>, <c>sorted</c>).
+    /// ranked there, within bounds the owner enforces (params <c>alias</c>, <c>service</c>, <c>entity</c>, <c>perKey</c>, <c>keysPerQuery</c>, <c>sorted</c>).
     /// </summary>
     public const string RemoteLookup = "REMOTE_LOOKUP";
 
@@ -146,7 +146,7 @@ public static class Notes
     /// </summary>
     public const string ValuesScans = "VALUES_SCANS";
 
-    /// <summary>Every note code, in the order DESIGN §4.4 lists them; the studio's key list equals it.</summary>
+    /// <summary>Every note code, in a fixed order; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
         TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
@@ -155,10 +155,10 @@ public static class Notes
         PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans, ValuesScans,
     ];
 
-    /// <summary>The outcomes that lose data (DESIGN §3.6), in the table's order.</summary>
+    /// <summary>The outcomes that lose data, in the table's order.</summary>
     public static readonly IReadOnlyList<string> DataLossOutcomes = ["ambiguous", "not_found", "invalid_key", "owner_unanswered"];
 
-    /// <summary>Every outcome a join's row may have, as the wire spells it (DESIGN §3.6): what a member named by <c>outcomeAs</c> holds.</summary>
+    /// <summary>Every outcome a join's row may have, as the wire spells it: what a member named by <c>outcomeAs</c> holds.</summary>
     public static readonly IReadOnlyList<string> Outcomes = ["resolved", "ambiguous", "reference_null", "excluded", "not_applicable", "not_found", "invalid_key", "owner_unanswered"];
 
     /// <summary>
@@ -285,9 +285,9 @@ public static class Notes
                         : $"This {continued.Kind} continues under '{continued.Anchor}' at its owner, which binds and runs it{(continued.ForTarget is { } only ? $" for rows resolved to '{only}' only" : continued.Targets is { } some ? $" for rows resolved to {string.Join(", ", some.Select(target => $"'{target}'"))} only" : "")}.",
                         binds);
 
-                    // A continued resolve loses data at its owner as any resolve does (R3 F8).
+                    // A continued resolve loses data at its owner as any resolve does.
                     if (continued.Stage.Resolve is { } written)
-                        collector.Continued(written, continued.Root, stage, strict);
+                        collector.Continued(written, continued.Root, stage, strict, continued.OnMissingInherited);
                     break;
                 }
 
@@ -417,7 +417,7 @@ public static class Notes
         Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias, ["paths"] = paths },
     };
 
-    /// <summary>Where a join runs (DESIGN §4.3 <c>phase</c>): in the aggregate before the page, or after it.</summary>
+    /// <summary>Where a join runs (<c>phase</c> in the explain answer): in the aggregate before the page, or after it.</summary>
     public static Diagnostic Join(int? stage, string alias, string kind, bool afterPage) => new()
     {
         Code = afterPage ? JoinAfterPage : JoinBeforePage,
@@ -447,7 +447,7 @@ public static class Notes
     };
 
     /// <summary>
-    /// How a lookup of another service's entity runs (DESIGN §3.4.4): one owner query per
+    /// How a lookup of another service's entity runs: one owner query per
     /// <paramref name="keysPerQuery"/> parent keys of the page, at most <c>perKey</c> rows per key,
     /// ranked at the owner by the lookup's sort and the child key over every child of those keys that
     /// passes the filter. No index serves that per-key ranking, so what bounds it is said: the keys per
@@ -599,11 +599,11 @@ public static class Notes
 
             // An inline resolve joins one local entity in the aggregate: no owner, no conversion, so
             // no owner_unanswered or invalid_key; a second record exists only for a target field that
-            // is not the key, and is seen only when the outcomes are read (RE-25).
+            // is not the key, and is seen only when the outcomes are read.
             var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
             var nonKey = (resolve.Cases ?? []).SelectMany(bound => bound.Targets).Any(target => target.Declared.Item is not null || !target.Declared.FieldIsKey);
 
-            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey, resolve.OutcomeAs);
+            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey, resolve.OutcomeAs, resolve.OnMissingInherited);
         }
 
         /// <summary>
@@ -611,7 +611,7 @@ public static class Notes
         /// else the default the owner binds it with (refuse under strict, which the owner query
         /// carries; else null). The owner binds and runs it, so every data-loss outcome is possible.
         /// </summary>
-        public void Continued(ResolveStage resolve, string path, int? stage, bool strict)
+        public void Continued(ResolveStage resolve, string path, int? stage, bool strict, bool inherited = false)
         {
             var effective = resolve.OnMissing switch
             {
@@ -622,10 +622,10 @@ public static class Notes
             };
 
             // The binder checked the alias before it continued the stage.
-            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true, resolve.OutcomeAs);
+            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true, resolve.OutcomeAs, inherited);
         }
 
-        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey, string? outcomeAs = null)
+        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey, string? outcomeAs = null, bool inherited = false)
         {
             var onMissing = WireName(effective);
             var readsOutcomes = strict || effective != ResolveOnMissing.Null || outcomeAs is not null;
@@ -647,8 +647,12 @@ public static class Notes
             if (outcomeAs is not null)
                 parameters["outcomeAs"] = outcomeAs;
 
+            // Where the policy is the request's default and not the stage's own word, the note says whose it is.
+            if (inherited)
+                parameters["from"] = "request";
+
             Add(MissingPolicy, stage, path,
-                $"A reference of '{alias}' that resolves to nothing {what} (onMissing {onMissing}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
+                $"A reference of '{alias}' that resolves to nothing {what} (onMissing {onMissing}{(inherited ? ", the request's default" : "")}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
                 + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : "")
                 + (outcomeAs is null ? ""
                     : effective == ResolveOnMissing.Refuse || strict
@@ -708,14 +712,17 @@ public static class Notes
 
             Path(leaf.Path, stage);
 
+            // A contract 2 comparison that folds runs under the collation; a contract 1 one runs as a pattern.
             if (leaf.IgnoreCase == true && contract == 2)
             {
-                if (bound.Collated && leaf.Op is not ("contains" or "endsWith"))
+                if (leaf.Op is not ("contains" or "endsWith"))
                     Folds(stage, wire, leaf.Op);
-                else if (bound.Collated)
-                    PatternFolds(stage, wire, leaf.Op);
                 else
-                    Add(PatternFoldsCaseOnly, stage, wire, $"'{leaf.Op}' on '{wire}' runs as a pattern: it folds case but not accents.", new() { ["op"] = leaf.Op });
+                    PatternFolds(stage, wire, leaf.Op);
+            }
+            else if (leaf.IgnoreCase == true)
+            {
+                Add(PatternFoldsCaseOnly, stage, wire, $"'{leaf.Op}' on '{wire}' runs as a pattern: it folds case but not accents.", new() { ["op"] = leaf.Op });
             }
 
             if (leaf.Op != "is" && (leaf.Path.CollectionAncestors > 0 || leaf.Path.Kind == Kind.Array))

@@ -17,7 +17,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The remote check of an explain (DESIGN §4.3) and what bounds it (improvement plan §3.E protection):
+/// The remote check of an explain and what bounds it:
 /// the parts continued at an owner are bound by the owner's internal explain and its errors mapped back;
 /// <c>REMOTE_UNCHECKED</c> where no owner answered; the 30-second forwarding cache; and the cost limits
 /// of one explain — owner services, owner calls in all (transitive ones included, carried to the owner
@@ -924,14 +924,14 @@ public class ExplainRemoteCheckTests
 
         key.Should().StartWith(BindHost.Organisation.ToString("N") + "|").And.Contain("|crm|");
         ExplainForwardCache.KeyOf(BindHost.Organisation, "user-a", "crm", request).Should().NotBe(ExplainForwardCache.KeyOf(BindHost.Organisation, "user-b", "crm", request),
-            "an owner may refuse one user what it answers another (RE-11)");
+            "an owner may refuse one user what it answers another");
         ExplainForwardCache.KeyOf(Guid.NewGuid(), null, "crm", request).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, null, "hr", request).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, null, "crm", request with { ShapeDepth = 3 }).Should().NotBe(key);
         ExplainForwardCache.KeyOf(BindHost.Organisation, null, "crm", request with { Budget = new ExplainBudget(10, 1) }).Should().Be(key, "what is left of an origin's explain changes nothing a whole answer says");
     }
 
-    // ---- explain quality (RE-25) ------------------------------------------------------------------
+    // ---- explain quality ------------------------------------------------------------------
 
     [Fact]
     public async Task A_join_the_compiler_leaves_out_is_placed_nowhere()

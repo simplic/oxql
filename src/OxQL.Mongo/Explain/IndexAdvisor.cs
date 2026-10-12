@@ -28,7 +28,7 @@ namespace OxQL.Mongo.Explain;
 /// <c>existing: "unknown"</c> rather than that it is missing.
 /// </para>
 /// </summary>
-public static class IndexAdvisor
+internal static class IndexAdvisor
 {
     private const string KeyStorage = "_id";
 

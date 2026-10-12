@@ -122,7 +122,7 @@ public class FiltersEOptionsTests
     {
         IReadOnlyList<Guid> CaseOnly(Func<string, bool> test) => Codes(code => test(Order.FoldCi(code)));
 
-        // DG2 M10: the pattern of contains and endsWith folds accents as the collation does.
+        // The pattern of contains and endsWith folds accents as the collation does.
         var contains = CaseOnly(code => code.Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
         contains.Should().Contain(Keys(Corpus.Employee, MullerFolded), "Muller has no Ü, and the pattern folds the accent");
 

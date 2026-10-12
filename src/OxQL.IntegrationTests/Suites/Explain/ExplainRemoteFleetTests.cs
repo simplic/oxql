@@ -18,7 +18,7 @@ using Xunit.Abstractions;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// The remote side of explain over the fleet's real hosts (improvement plan §3.E "engine", §3.T T4, T5):
+/// The remote side of explain over the fleet's real hosts:
 /// a round asks each owner once, the owners answer slim, a warm explain and the cached tier ask nobody,
 /// the validator answers 304, and the limits hold under a flood. Each case explains from a ledger host
 /// of its own (a variant), so what the host keeps of its owners' answers is the case's alone; the owners
@@ -318,10 +318,10 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         gzip.Body.Length.Should().BeLessThan(first.Body.Length / 4);
     }
 
-    // ---- T5: the limits under a flood --------------------------------------------------------------------
+    // ---- the limits under a flood ------------------------------------------------------------------------
 
     /// <summary>
-    /// T5 (improvement plan §3.T), as far as one process can show it: clients of five users flood one
+    /// As far as one process can show it: clients of five users flood one
     /// host with valid explains near the largest body, oversized ones and ones past the stage bound,
     /// while queries run beside them.
     /// <para>

@@ -12,7 +12,7 @@ using static OxQL.IntegrationTests.Suites.Group.GroupKit;
 namespace OxQL.IntegrationTests.Suites.Group;
 
 /// <summary>
-/// The rows of a <c>dateTrunc</c> group on the fleet (DG2). The engine has no condition for a bucket:
+/// The rows of a <c>dateTrunc</c> group on the fleet. The engine has no condition for a bucket:
 /// a client asks for a group's rows with a half-open range on the member, <c>gte</c> the bucket's
 /// start and <c>lt</c> its end. These hold what such a range answers. For <c>day</c> and coarser the
 /// bucket is a calendar range in the zone, so the range a client computes from the calendar

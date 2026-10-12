@@ -127,6 +127,11 @@ public sealed class FleetHost : IAsyncDisposable
     private static IEnumerable<KeyValuePair<string, string?>> Defaults(LabFleet fleet) =>
     [
         new("OxQL:Cursor:SigningKey", fleet.SigningKey),
+        // LEGACY(compat.v1): the suites' contract 1 cases hold the compatibility rewrite (the published 2.0 behaviour of
+        // contract 1), so a fleet's hosts answer contract 1 by the rewrite first. What a host that sets nothing answers,
+        // every contract 1 request on the legacy pipeline, is held by Suites/Legacy, whose fleet leaves the key unset.
+        // Remove the entry with the legacy pipeline: the rewrite is then the only path.
+        .. fleet.Contract1AsShipped ? Array.Empty<KeyValuePair<string, string?>>() : [new KeyValuePair<string, string?>("OxQL:Compat:Legacy:Always", "false")],
         // The suites explain in bursts as one user; the limits of explain have tests of their own.
         new("OxQL:Explain:RatePerMinute", "600000"),
         new("OxQL:Explain:RateBurst", "100000"),

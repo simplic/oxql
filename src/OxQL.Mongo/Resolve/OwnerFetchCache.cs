@@ -8,7 +8,7 @@ using OxQL.Core.Models;
 namespace OxQL.Mongo.Resolve;
 
 /// <summary>The two modes of the keyed fetch; the first segment of every <see cref="OwnerFetchCache"/> key.</summary>
-public enum OwnerFetchMode
+internal enum OwnerFetchMode
 {
     /// <summary>After the page: the owner's rows for the keys the page references.</summary>
     ByKeys,
@@ -18,12 +18,12 @@ public enum OwnerFetchMode
 }
 
 /// <summary>
-/// What an owner answered for one key of a by-keys fetch (DESIGN §3.5.2, §3.6): its rows (one for
+/// What an owner answered for one key of a by-keys fetch: its rows (one for
 /// an entity keyed by its own key, up to <see cref="KeyedFetch.PerKey"/> for a grouped query), or
 /// none. <see cref="Excluded"/> marks a key the target's filter left out while the existence probe
 /// found it: present, not missing.
 /// </summary>
-public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded = false)
+internal sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded = false)
 {
     /// <summary>The owner holds no record for the key (<c>not_found</c>): a negative entry, kept for <c>Cache:NegativeResolveTtlSeconds</c>.</summary>
     public bool IsNegative => Rows.Count == 0 && !Excluded;
@@ -48,7 +48,7 @@ public sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded =
 /// The one in-process cache of what owners answered a keyed fetch, per organisation. Every key
 /// starts with the <see cref="OwnerFetchMode"/>, so the two modes never read each other's entries.
 /// <list type="bullet">
-///   <item><b>by keys</b> (DESIGN §3.5.6): one <see cref="OwnerAnswer"/> per target entity, item,
+/// <item><b>by keys</b>: one <see cref="OwnerAnswer"/> per target entity, item,
 ///   target field, organisation, key and <b>plan hash</b>: the hash of the owner query as sent,
 ///   keys left out, so the select, the filter with its variables substituted, the owning row's
 ///   select, the query form and (later) the continued stages all take part. Two requests whose
@@ -113,11 +113,11 @@ public sealed class OwnerFetchCache : IDisposable
     }
 
     /// <summary>The key of one by-keys answer; <paramref name="item"/> is the item collection of an item target, null for an entity.</summary>
-    public static string KeyOf(string targetEntity, string? item, string targetField, Guid organisation, string key, string planHash) =>
+    internal static string KeyOf(string targetEntity, string? item, string targetField, Guid organisation, string key, string planHash) =>
         string.Join('|', nameof(OwnerFetchMode.ByKeys), targetEntity, item ?? "", targetField, organisation.ToString("D"), key, planHash);
 
     /// <summary>
-    /// The plan hash of a by-keys owner query: its wire form built for no keys (DESIGN §3.5.6), so
+    /// The plan hash of a by-keys owner query: its wire form built for no keys, so
     /// everything but the keys takes part, the variables already substituted by the binder.
     /// <paramref name="probed"/> marks a plan whose empty answers the existence probe told apart
     /// into <c>excluded</c> and <c>not_found</c>; without the probe every empty answer is
@@ -127,7 +127,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// The paths of a projection are a set: they are hashed in ordinal order, so two requests that
     /// name the same paths under an alias in another order share one plan and its cached answers.
     /// </remarks>
-    public static string PlanHashOf(QueryRequest template, bool probed)
+    internal static string PlanHashOf(QueryRequest template, bool probed)
     {
         ArgumentNullException.ThrowIfNull(template);
 
@@ -143,7 +143,7 @@ public sealed class OwnerFetchCache : IDisposable
     }
 
     /// <summary>The key of one by-condition answer: the organisation and the first-page query its owner is sent.</summary>
-    public static string KeyOf(Guid organisation, QueryRequest ownerQuery)
+    internal static string KeyOf(Guid organisation, QueryRequest ownerQuery)
     {
         ArgumentNullException.ThrowIfNull(ownerQuery);
 
@@ -155,9 +155,9 @@ public sealed class OwnerFetchCache : IDisposable
 
     /// <summary>
     /// The cached by-keys answer, or false. A <paramref name="strict"/> read skips a negative
-    /// entry (DESIGN §3.5.6). The rows are clones: a node cannot have two parents.
+    /// entry. The rows are clones: a node cannot have two parents.
     /// </summary>
-    public bool TryGet(string key, bool strict, out OwnerAnswer? answer)
+    internal bool TryGet(string key, bool strict, out OwnerAnswer? answer)
     {
         if (rows.TryGetValue(key, out Entry? cached) && cached is not null && time.GetUtcNow() < cached.Expires && !(strict && cached.Answer.IsProvisional))
         {
@@ -173,7 +173,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// Stores one by-keys answer: a positive one for <c>Cache:ResolveTtlSeconds</c>, a negative one
     /// (and one that carries a report) for <c>Cache:NegativeResolveTtlSeconds</c>, and such a one not at all when that is 0.
     /// </summary>
-    public void Set(string key, OwnerAnswer answer)
+    internal void Set(string key, OwnerAnswer answer)
     {
         ArgumentNullException.ThrowIfNull(answer);
 
@@ -186,7 +186,7 @@ public sealed class OwnerFetchCache : IDisposable
     }
 
     /// <summary>The cached by-condition wire values, or false. The list is shared and read-only; a caller encodes it for its own reference member.</summary>
-    public bool TryGetKeys(string key, out IReadOnlyList<string> values)
+    internal bool TryGetKeys(string key, out IReadOnlyList<string> values)
     {
         if (keys.TryGetValue(key, out string[]? cached) && cached is not null)
         {
@@ -203,7 +203,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// negative TTL (not at all when that is 0), since a row created a moment ago must not stay
     /// unselected for a minute.
     /// </summary>
-    public void SetKeys(string key, IReadOnlyList<string> values)
+    internal void SetKeys(string key, IReadOnlyList<string> values)
     {
         var lifetime = values.Count == 0 ? negativeTtl : ttl;
 
@@ -218,7 +218,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// (<c>entity</c> or <c>entity#item</c>): what a target lacks is a fact about the target, whatever
     /// query asked it.
     /// </summary>
-    public static string DropsKeyOf(Guid organisation, string service, string target) =>
+    internal static string DropsKeyOf(Guid organisation, string service, string target) =>
         string.Join('|', "Drops", organisation.ToString("D"), service, target);
 
     /// <summary>
@@ -226,7 +226,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// target lacks, or false: those whose time has not run out, learned of the revision of the owner's
     /// schema that is known now.
     /// </summary>
-    public bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
+    internal bool TryGetDrops(string key, out IReadOnlyList<string> select, out IReadOnlyList<string> parent)
     {
         if (drops.TryGetValue(key, out Drops? cached) && cached is not null && Current(key, cached))
         {
@@ -253,7 +253,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// the time it has left: only an owner saying it again after that time starts a new one, so a
     /// caller passes what an owner said to it, not what it read here.
     /// </remarks>
-    public void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent)
+    internal void SetDrops(string key, IEnumerable<string> select, IEnumerable<string> parent)
     {
         ArgumentNullException.ThrowIfNull(select);
         ArgumentNullException.ThrowIfNull(parent);
@@ -280,7 +280,7 @@ public sealed class OwnerFetchCache : IDisposable
     /// What was learned a target of the service lacks under another revision, or before any was known,
     /// is not read any more: the next request asks the owner for those paths again.
     /// </summary>
-    public void Revise(string service, string revision)
+    internal void Revise(string service, string revision)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(revision);

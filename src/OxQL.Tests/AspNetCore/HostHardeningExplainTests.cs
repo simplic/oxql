@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// <c>POST /oxql/explain</c> (DESIGN §4.1, §4.2): on by default, never executing, a plain query or
+/// <c>POST /oxql/explain</c>: on by default, never executing, a plain query or
 /// the envelope, a binding failure answered 200 with <c>valid: false</c>, the index advisory opt-in
 /// and static.
 /// </summary>
@@ -183,7 +183,7 @@ public class HostHardeningExplainTests
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
-    // ---- the validator and the content coding (improvement plan §3.E) ---------------------------------
+    // ---- the validator and the content coding ---------------------------------
 
     private static HttpRequestMessage ExplainMessage(string body, string? ifNoneMatch = null, string? acceptEncoding = null)
     {

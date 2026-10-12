@@ -15,6 +15,8 @@ namespace OxQL.AspNetCore.Controllers;
 [ApiController]
 [Route("[controller]")]
 [TypeFilter(typeof(RequestSizeFilter))]
+// LEGACY(compat.v1): keeps a contract 1 body readable for the legacy pipeline; remove with src/OxQL.AspNetCore/Legacy.
+[TypeFilter(typeof(Legacy.LegacyBodyFilter))]
 public class OxQLController : ControllerBase
 {
     private readonly IOxQLQueryService queryService;
@@ -91,10 +93,12 @@ public class OxQLController : ControllerBase
     /// starts no measurement; that is the form one host asks of another, so a probe never sets off
     /// the probed service's own probes.
     /// <para>
-    /// <c>capabilities</c> is read per caller: a request without the contract header on a host that
-    /// answers contract 1 gets the names the published engine listed before contract 2 (batches, paging
-    /// after a group and by offset, <c>any</c>) ahead of the host's own, since that host does all of them
-    /// for that caller. Members and limits are only ever added.
+    /// <c>capabilities</c> and <c>limits</c> are read per caller and say what holds for that caller's
+    /// requests. A request without the contract header on a host that answers contract 1 by the
+    /// compatibility rewrite gets the names the published engine listed before contract 2 (batches,
+    /// paging after a group and by offset, <c>any</c>) ahead of the host's own, since that host does all
+    /// of them for that caller. Where the legacy pipeline answers such a caller (the default), the two
+    /// members list what that pipeline honours: no paging by offset, and its limits only.
     /// </para>
     /// </summary>
     [HttpGet("health")]
@@ -111,6 +115,9 @@ public class OxQLController : ControllerBase
         var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
         var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
+        // LEGACY(compat.v1): a caller the legacy pipeline answers reads what that pipeline honours; remove with src/OxQL.AspNetCore/Legacy.
+        var legacy = Legacy.LegacyHealth.For(options, HttpContext);
+
         return Ok(new
         {
             status = degraded ? "degraded" : "healthy",
@@ -120,8 +127,8 @@ public class OxQLController : ControllerBase
                 version = EngineCapabilities.Version,
                 contract = EngineCapabilities.Contract,
             },
-            capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
-            limits = Limits(options),
+            capabilities = legacy?.Capabilities ?? EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
+            limits = legacy?.Limits ?? Limits(options),
             remote = services,
         });
     }
@@ -129,7 +136,7 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// Every limit the engine enforces. The schema document publishes the ones a caller checks a
     /// request against before sending it; this is the whole set, for diagnosis, the chain
-    /// budget and the negative cache lifetime among them (DESIGN §3.7).
+    /// budget and the negative cache lifetime among them.
     /// </summary>
     private static object Limits(Core.Models.OxQLOptions options)
     {
@@ -201,7 +208,7 @@ public class OxQLController : ControllerBase
     }
 
     /// <summary>
-    /// Everything about a query without running it (DESIGN §4): the body is a plain query or the
+    /// Everything about a query without running it: the body is a plain query or the
     /// envelope <c>{ query, include?, shape?, remote?, catalog? }</c>. A query that does not bind is 200
     /// with <c>valid: false</c> and every error; the plan (the bound form and the emitted stages) comes
     /// with a valid one that asks for it. Explain never executes the query; the index advisory reads only

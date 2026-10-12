@@ -72,11 +72,11 @@ public sealed class EngineDirect(EntityModel model)
     }
 
     /// <summary>Binds and compiles to the stages the engine would run.</summary>
-    public async Task<CompiledQuery> CompileAsync(string entity, string pipeline, CompileOptions? options = null) =>
+    internal async Task<CompiledQuery> CompileAsync(string entity, string pipeline, CompileOptions? options = null) =>
         MongoCompiler.Compile(await BindAsync(entity, pipeline), options ?? new CompileOptions(10_000, null, 100_000));
 
     /// <summary>Runs compiled page (or count) stages over a collection, under the collation the compiler chose.</summary>
-    public static async Task<List<BsonDocument>> RunAsync(IMongoDatabase database, string collection, CompiledQuery compiled, bool count = false)
+    internal static async Task<List<BsonDocument>> RunAsync(IMongoDatabase database, string collection, CompiledQuery compiled, bool count = false)
     {
         var options = new AggregateOptions();
 

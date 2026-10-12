@@ -18,6 +18,10 @@ public sealed record GroupStage
     /// <summary>Member names the caller wrote that the stage does not have.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
+
+    /// <summary>Whether the stage was written as something other than an object; it then reads as a group of nothing, and contract 2 refuses it.</summary>
+    [JsonIgnore]
+    public bool Invalid { get; init; }
 }
 
 internal sealed class GroupStageConverter : JsonConverter<GroupStage>
@@ -29,7 +33,7 @@ internal sealed class GroupStageConverter : JsonConverter<GroupStage>
         var unknown = new List<string>();
 
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            return stage;
+            return stage with { Invalid = true };
 
         foreach (var property in doc.RootElement.EnumerateObject())
         {
@@ -149,6 +153,13 @@ public sealed record AggregationExpression
 
     /// <summary>True for <c>count: true</c>.</summary>
     public bool IsCount { get; init; }
+
+    /// <summary>
+    /// The members the caller wrote after the function: an aggregate is an object of one. They are not
+    /// read, and contract 2 refuses them.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Others { get; init; } = [];
 }
 
 /// <summary>An expression: a path, a literal, a variable, or arithmetic over expressions.</summary>
@@ -194,14 +205,16 @@ internal sealed class AggregationExpressionConverter : JsonConverter<Aggregation
         if (root.ValueKind != JsonValueKind.Object)
             throw new JsonException("An aggregate is an object of one function.");
 
+        var others = root.EnumerateObject().Skip(1).Select(property => property.Name).ToList();
+
         foreach (var property in root.EnumerateObject())
         {
             if (property.Name == "count" && property.Value.ValueKind == JsonValueKind.True)
-                return new AggregationExpression { Function = "count", IsCount = true };
+                return new AggregationExpression { Function = "count", IsCount = true, Others = others };
 
             var argument = JsonSerializer.Deserialize<QueryExpression>(property.Value.GetRawText(), options);
 
-            return new AggregationExpression { Function = property.Name, Argument = argument };
+            return new AggregationExpression { Function = property.Name, Argument = argument, Others = others };
         }
 
         return new AggregationExpression();

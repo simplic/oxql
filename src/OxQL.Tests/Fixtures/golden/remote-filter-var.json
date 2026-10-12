@@ -1,5 +1,5 @@
 {
-  "description": "DESIGN §3.0 exception (E10b): a remote resolve filter holding a $var renders substituted, as the owner is sent it. 2.0 rendered the wrapper and sent it unbound, so the owner refused with UNBOUND_VARIABLE and no working 2.0 cursor exists for it. The render equals resolve-remote.json, the same query with the value written literally.",
+  "description": "A remote resolve filter holding a $var renders substituted, as the owner is sent it. 2.0 rendered the wrapper and sent it unbound, so the owner refused with UNBOUND_VARIABLE and no working 2.0 cursor exists for it. The render equals resolve-remote.json, the same query with the value written literally.",
   "entity": "probe.order",
   "variables": {
     "on": true

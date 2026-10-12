@@ -100,8 +100,8 @@ public class RefusalsCatalogueTests
         // UNWIND_DEPTH_TRUNCATED, then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
         // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
         // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
-        // MAX_CONTINUED_STAGES_EXCEEDED, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH, then (DG2 M1)
-        // INVALID_FILTER and FILTER_NOT_PLACEABLE, then (DG2 set filters) VALUES_LIMIT_EXCEEDED with the diagnostic VALUES_SCAN_CAPPED,
+        // MAX_CONTINUED_STAGES_EXCEEDED, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH, then
+        // INVALID_FILTER and FILTER_NOT_PLACEABLE, then VALUES_LIMIT_EXCEEDED with the diagnostic VALUES_SCAN_CAPPED,
         // then (the bound on the filter's entries) MAX_FILTER_ENTRIES_EXCEEDED.
         catalogue.Should().HaveCount(90);
         catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(76);
@@ -133,7 +133,7 @@ public class RefusalsCatalogueTests
         // no server finishes that in time. The legacy rig could not lower the budget at start-up.
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
-        var client = shared.Variant(LabService.Transport, "b5-maxtime-1", new Dictionary<string, string?> { ["OxQL:Execution:MaxTimeMs"] = "1" }, Org.C);
+        var client = shared.Variant(LabService.Transport, "case-maxtime-1", new Dictionary<string, string?> { ["OxQL:Execution:MaxTimeMs"] = "1" }, Org.C);
 
         var answer = await client.SendAsync(Corpus.Template, """[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
@@ -212,7 +212,7 @@ public class RefusalsCatalogueTests
     [Fact]
     public async Task V55_an_owner_that_does_not_answer_a_semi_join_refuses_the_query_rather_than_evaluating_something_else()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-semi-unanswered", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-semi-unanswered", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Status, Status = HttpStatusCode.InternalServerError });
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, """
@@ -236,7 +236,7 @@ public class RefusalsCatalogueTests
         two.Should().HaveCountLessThanOrEqualTo(2);
         var expected = Corpus.SortedIds(Corpus.Template, "id", filter: row => Corpus.GuidAt(row, "createUserId") is { } user && two.Contains(user));
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-semijoin-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxSemiJoinIds"] = "2" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-semijoin-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxSemiJoinIds"] = "2" });
 
         var over = await capped.SendAsync(Corpus.Template, """
             [ { "resolve": { "path": "createUserId", "as": "veh" } },
@@ -267,7 +267,7 @@ public class RefusalsCatalogueTests
         const int rows = 20;
         var big = new string('x', 1024 * 1024);
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-too-expensive", seed: [], extra: async lab =>
+        await using var fleet = await CorpusFleet.CreateAsync("case-too-expensive", seed: [], extra: async lab =>
         {
             var database = await lab.DatabaseAsync(LabService.Staff);
             await database.GetCollection<BsonDocument>("employee").InsertManyAsync(Enumerable.Range(1, rows).Select(n => new BsonDocument
@@ -305,7 +305,7 @@ public class RefusalsCatalogueTests
             answer.StatusCode.Should().Be(500, answer.ToString());
             answer.Type.Should().Be("internal_error");
             answer.ErrorCodes.Should().Equal(["INTERNAL_ERROR"]);
-            answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("b5-correlation", "the message points at the log line");
+            answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("case-correlation", "the message points at the log line");
             answer.Text.Should().NotContain("down").And.NotContain("did not answer", "the fault's own text stays in the log");
         }
     }

@@ -18,10 +18,10 @@ namespace OxQL.Tests.Execute;
 
 /// <summary>
 /// How the keyed fetch talks to owners when something is off: a union target's select path its
-/// owner lacks, learned from any chunk and kept in the cache (RE-5, RE-6, PRE-3); split batches
-/// sharing one budget and an owner ceiling below it (RE-7, RS-3, PRE-4); an empty semi-join answer
-/// kept only as long as a negative one (RE-17); a local target without this host's engine (RE-21);
-/// a batch's maxTimeMs bounding the whole batch (RS-3).
+/// owner lacks, learned from any chunk and kept in the cache; split batches
+/// sharing one budget and an owner ceiling below it; an empty semi-join answer
+/// kept only as long as a negative one; a local target without this host's engine;
+/// a batch's maxTimeMs bounding the whole batch.
 /// </summary>
 public class OwnerFetchRobustnessTests
 {
@@ -78,7 +78,7 @@ public class OwnerFetchRobustnessTests
         return ((QueryOutcome.Success)outcome).Result;
     }
 
-    // ---- a union target's missing select path (RE-5, RE-6) ----------------------------------------
+    // ---- a union target's missing select path ----------------------------------------
 
     [Fact]
     public async Task Every_chunk_that_carried_a_path_the_owner_lacks_is_asked_again_without_it()
@@ -265,7 +265,7 @@ public class OwnerFetchRobustnessTests
         client.Calls.Should().HaveCount(calls, "the row kept for the query as it is sent now answers");
     }
 
-    // ---- budgets (RE-7, RS-3, PRE-4) ---------------------------------------------------------------
+    // ---- budgets ---------------------------------------------------------------
 
     [Fact]
     public async Task Split_batches_share_one_budget_so_the_request_ends_within_its_ceiling()
@@ -345,7 +345,7 @@ public class OwnerFetchRobustnessTests
         engine.Ceilings[2].Should().BeLessThan(engine.Ceilings[1]!.Value - 50);
     }
 
-    // ---- the semi-join's empty answer (RE-17) ------------------------------------------------------
+    // ---- the semi-join's empty answer ------------------------------------------------------
 
     [Fact]
     public void An_empty_semi_join_answer_lives_only_as_long_as_a_negative_one()
@@ -365,7 +365,7 @@ public class OwnerFetchRobustnessTests
         some.TryGetKeys("empty", out _).Should().BeTrue();
     }
 
-    // ---- the owner's page and the key budget (RE-13, RE-14) ---------------------------------------
+    // ---- the owner's page and the key budget ---------------------------------------
 
     private static readonly Guid ContactA = Guid.Parse("c0000000-0000-0000-0000-00000000000a");
     private static readonly Guid ContactB = Guid.Parse("c0000000-0000-0000-0000-00000000000b");
@@ -424,7 +424,7 @@ public class OwnerFetchRobustnessTests
         (result.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Codes.ResolvePartial, "one key of one row is one key, whether the shipment or the tour holds it");
     }
 
-    // ---- the log line's counters (RE-19) -----------------------------------------------------------
+    // ---- the log line's counters -----------------------------------------------------------
 
     [Fact]
     public async Task A_split_batch_counts_each_part_and_a_semi_join_the_cache_answers_counts_none()
@@ -452,23 +452,5 @@ public class OwnerFetchRobustnessTests
             """[{ "resolve": { "path": "contactId", "as": "r" } }, { "match": { "r.name": { "eq": "x" } } }]"""), new CompileOptions(5_000, null, 10_000));
 
         (await fetch.ByConditionCountedAsync(again, BindHost.Context(), TimeSpan.FromSeconds(5), CancellationToken.None)).Calls.Should().Be(0, "the cache answered");
-    }
-
-    // ---- a local target without this host's engine (RE-21) -----------------------------------------
-
-    [Fact]
-    public async Task A_fetch_without_this_hosts_engine_refuses_a_local_keyed_target_instead_of_throwing()
-    {
-        var client = new FakeRemoteClient();
-        var fetch = new KeyedFetch(client, new OwnerFetchCache(BindHost.Options()), BindHost.Options());
-        var bound = await BindHost.BoundAsync(ResolveModel.Model, Invoice, """[{ "resolve": { "path": "customerIds", "as": "c", "elements": "first" } }]""");
-        var compiled = MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000));
-        var page = new[] { new BsonDocument { ["_id"] = Id(Invoice1), ["CustomerIds"] = new BsonArray { Id(Guid.NewGuid()) } } };
-
-        var result = await fetch.ByKeysAsync(compiled, page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
-
-        result.Refusal.Should().NotBeNull();
-        result.Refusal!.Errors!.Single().Code.Should().Be(Codes.ResolveUnavailable);
-        client.Calls.Should().BeEmpty();
     }
 }

@@ -12,7 +12,7 @@ using StoredShipment = OxQL.IntegrationTests.Fleet.Models.Transport.Shipment;
 namespace OxQL.IntegrationTests.Suites.Paging;
 
 /// <summary>
-/// Unwound rows and groups page by value (DG2 M5, S5): the next page starts after the last row's
+/// Unwound rows and groups page by value: the next page starts after the last row's
 /// sort values, its key and its position, so what is written or deleted before that position
 /// between two pages moves nothing. A page addressed by counting rows would repeat a row for
 /// every row inserted before it and skip one for every row deleted.

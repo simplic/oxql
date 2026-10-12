@@ -1,0 +1,49 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items"
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items.AssignedTransactionItems"
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items.AssignedTransactionItems.Pricing"
+      }
+    },
+    {
+      "project": {
+        "Items.SortNumber": 1,
+        "Items.ValueOperator": 1,
+        "Items.Amount": 1,
+        "IsGross": 1,
+        "Items.AssignedTransactionItems._id": 1,
+        "Items.AssignedTransactionItems.Text": 1,
+        "Items.AssignedTransactionItems.SortNumber": 1,
+        "Items.AssignedTransactionItems.SinglePriceNet": 1,
+        "Items.AssignedTransactionItems.TotalPriceNet": 1,
+        "Items.AssignedTransactionItems.SinglePriceGross": 1,
+        "Items.AssignedTransactionItems.TotalPriceGross": 1,
+        "Items.AssignedTransactionItems.Pricing.k": 1,
+        "Items.AssignedTransactionItems.Pricing.v": 1
+      }
+    },
+    {
+      "page": {
+        "limit": 500
+      }
+    }
+  ]
+}

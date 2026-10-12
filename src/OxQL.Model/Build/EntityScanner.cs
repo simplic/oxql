@@ -53,7 +53,8 @@ public static class EntityScanner
         // either can fail on one that is missing at run time.
         try
         {
-            allTypes = assemblies.SelectMany(assembly => assembly.GetTypes()).ToList();
+            // An assembly named twice is scanned once: its types would claim their own ids twice.
+            allTypes = assemblies.Distinct().SelectMany(assembly => assembly.GetTypes()).ToList();
 
             foreach (var type in allTypes)
             {

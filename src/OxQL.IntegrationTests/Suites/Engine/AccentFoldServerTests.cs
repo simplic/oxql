@@ -11,7 +11,7 @@ using Xunit.Abstractions;
 namespace OxQL.IntegrationTests.Suites.Engine;
 
 /// <summary>
-/// The pattern of <c>contains</c> and <c>endsWith</c> against the server's own collation (DG2 M10):
+/// The pattern of <c>contains</c> and <c>endsWith</c> against the server's own collation:
 /// for every pair of spellings, the pattern built from one, run by the server as the engine sends
 /// it, finds the other exactly when the server says the two are equal under the collation (<c>eq</c>). The server's answer is measured, not
 /// assumed: the letters that expand to two (<c>ß</c>, <c>æ</c>, <c>œ</c>, <c>þ</c>, <c>ĳ</c>, the

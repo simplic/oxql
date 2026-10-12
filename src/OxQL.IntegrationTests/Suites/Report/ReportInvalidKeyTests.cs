@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Report;
 
 /// <summary>
-/// The <c>invalid_key</c> outcome (DESIGN §3.3.4, §3.6) on the fleet: an ERP billing line whose
+/// The <c>invalid_key</c> outcome on the fleet: an ERP billing line whose
 /// shipment reference selects the <c>shipment</c> case, whose key converts as a guid, and holds
 /// <c>SHIP-12</c>. No shared seed holds such a line, so a private fleet with the ledger and
 /// transport report rows gets one more line, a copy of the scenario's freight line with the bad key.

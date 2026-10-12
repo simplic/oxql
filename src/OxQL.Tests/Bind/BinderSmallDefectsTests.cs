@@ -6,7 +6,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The binder's small defects of the engine review (RE-23): a union's different filter errors are both
+/// The binder's small defects of the engine review: a union's different filter errors are both
 /// reported, <c>"flatten": null</c> is the member left out, and a contract 1 resolve through a
 /// collection is told why <c>elements</c> is not there.
 /// </summary>

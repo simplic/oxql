@@ -11,7 +11,7 @@ using static OxQL.IntegrationTests.Suites.Group.GroupKit;
 namespace OxQL.IntegrationTests.Suites.Group;
 
 /// <summary>
-/// The requests a grid that groups sends (DG2 grouping), each on the fleet's real rows: a level of
+/// The requests a grid that groups sends, each on the fleet's real rows: a level of
 /// groups paged by value in any order, the rows of one group by its key sent back (a bucket of dates
 /// by the range of its calendar bounds, which the client computes), a second level
 /// under the first, the conditions of the request's <c>filter</c> run before or after the group by

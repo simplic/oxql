@@ -8,9 +8,11 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// A contract 1 caller may spell the entity id in any case: the compat rewrite folds it to the
-/// lower-case form the model holds, retired ids included, before anything resolves it. Under
-/// contract 2 the id is matched exactly, as the query syntax states.
+/// A contract 1 caller may spell the entity id in any case, as the 1.1 registry read it: the
+/// legacy pipeline and the compat rewrite both fold it to the lower-case form the model holds,
+/// retired ids included, before anything resolves it. The diagnostic that names a retired id's
+/// current one is the rewrite's (<c>Compat:Legacy:Always</c> off); the 1.1 envelope has no place
+/// for it. Under contract 2 the id is matched exactly, as the query syntax states.
 /// </summary>
 public class HostHardeningCompatEntityCaseTests
 {
@@ -55,7 +57,7 @@ public class HostHardeningCompatEntityCaseTests
     [Fact]
     public async Task A_mixed_case_retired_id_without_the_contract_header_answers_the_current_entity()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
         host.Runner.PageRows = [SampleHost.Row(Id1, "a")];
 
         var response = await host.Client(contract: null).PostAsync(Query, SampleHost.Json(RetiredMixedCase));

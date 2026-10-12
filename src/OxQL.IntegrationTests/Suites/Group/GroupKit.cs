@@ -24,7 +24,7 @@ internal static class GroupKit
 
     /// <summary>
     /// The counts under <paramref name="alias"/>, each as its digits: a count is a JSON number on the
-    /// wire (DG2: what the engine counts is an int, never a string), so anything else reads as null.
+    /// wire (what the engine counts is an int, never a string), so anything else reads as null.
     /// </summary>
     public static IReadOnlyList<string?> CountTexts(WireAnswer answer, string alias) =>
         answer.Values(alias).Select(value => value is JsonValue json && json.GetValueKind() == JsonValueKind.Number ? json.ToJsonString() : null).ToList();

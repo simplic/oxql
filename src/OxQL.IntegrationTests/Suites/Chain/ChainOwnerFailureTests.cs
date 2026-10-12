@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.IntegrationTests.Suites.Chain;
 
 /// <summary>
-/// The owner failure modes of the keyed fetch (DESIGN §3.5.2, §3.5.4, §3.5.6, §3.6), each outside
+/// The owner failure modes of the keyed fetch, each outside
 /// strict, under <c>onMissing: "report"</c> and under <c>strict</c>: an owner that cannot be reached
 /// or does not answer in time, an owner that cuts its answer (<c>hasNextPage</c>), the request's key
 /// budget, a negative cache entry a strict request does not read, an owner batch cap below this

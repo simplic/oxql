@@ -12,7 +12,7 @@ using OxQL.Mongo.Resolve;
 namespace OxQL.Mongo.Explain;
 
 /// <summary>
-/// What owners' internal explain answered (DESIGN §4.1): each answer kept 30 seconds by organisation,
+/// What owners' internal explain answered: each answer kept 30 seconds by organisation,
 /// user, owner service, the revision of that owner's schema document and the hash of the forwarded body
 /// with its variables substituted, so the studio's debounced explains of one query do not ask the owner
 /// again and no user is answered from another's call (an owner may refuse one user what it answers another).
@@ -74,7 +74,7 @@ public sealed class ExplainForwardCache : IDisposable
     /// explain changes nothing a whole answer says, and an answer an owner cut short for it is not kept.
     /// Neither is the tier (<c>remote</c>): the cached tier reads what a check kept.
     /// </summary>
-    public static string KeyOf(Guid organisation, string? user, string service, ExplainRequest request)
+    internal static string KeyOf(Guid organisation, string? user, string service, ExplainRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -85,20 +85,20 @@ public sealed class ExplainForwardCache : IDisposable
     }
 
     /// <summary>The revision of <paramref name="service"/>'s schema document as its last answer named it, or null while none did.</summary>
-    public string? RevisionOf(string service) => revisions.GetValueOrDefault(service);
+    internal string? RevisionOf(string service) => revisions.GetValueOrDefault(service);
 
     /// <summary>The owner this host reached <paramref name="service"/> through, or null when it never was reached through another.</summary>
-    public string? RouteOf(string service) => routes.GetValueOrDefault(service);
+    internal string? RouteOf(string service) => routes.GetValueOrDefault(service);
 
     /// <summary>Remembers that <paramref name="service"/> was reached through the owner <paramref name="via"/>.</summary>
-    public void Route(string service, string via)
+    internal void Route(string service, string via)
     {
         if (service != via)
             routes[service] = via;
     }
 
     /// <summary>A kept answer of <paramref name="service"/> for the key, as a copy of its own, or null.</summary>
-    public JsonObject? Get(string service, string key)
+    internal JsonObject? Get(string service, string key)
     {
         if (!answers.TryGetValue(Keyed(service, key), out Entry? kept) || kept is null || time.GetUtcNow() >= kept.Expires)
             return null;
@@ -117,7 +117,7 @@ public sealed class ExplainForwardCache : IDisposable
     /// a part, and the parts it does not touch are written on as they stand. It is charged its size in
     /// bytes; one that does not fit beside what is kept is not kept.
     /// </summary>
-    public void Set(string service, string key, JsonObject answer)
+    internal void Set(string service, string key, JsonObject answer)
     {
         ArgumentNullException.ThrowIfNull(answer);
 
@@ -150,7 +150,7 @@ public sealed class ExplainForwardCache : IDisposable
 /// it cost (one per round: the first ask, each ask-again), whether it answered, and what its answer
 /// says of itself.
 /// </summary>
-public sealed class ExplainOwnerUse(string service, string? via)
+internal sealed class ExplainOwnerUse(string service, string? via)
 {
     /// <summary>The owner's service key.</summary>
     public string Service { get; } = service;
@@ -180,13 +180,13 @@ public sealed class ExplainOwnerUse(string service, string? via)
 }
 
 /// <summary>
-/// One explain's calls to owners (DESIGN §4.1, §4.3): the check of the parts of the query continued at
+/// One explain's calls to owners: the check of the parts of the query continued at
 /// them, which also answers the types of their targets, the check of the conditions a run asks them
 /// before the page (the semi-joins), and the catalog lookups of their entities, over
 /// <see cref="IRemoteQueryClient.ExplainAsync"/>, answers read through the <see cref="ExplainForwardCache"/>.
 /// <para>
-/// The calls are bounded so that an explain is never a way to load a service (improvement plan §3.E
-/// protection): together within <c>Explain.RemoteTimeoutMs</c> and what is left of the explain's wall
+/// The calls are bounded so that an explain is never a way to load a service:
+/// together within <c>Explain.RemoteTimeoutMs</c> and what is left of the explain's wall
 /// time, at most <c>Explain.MaxOwnerServices</c> distinct services and <c>Explain.MaxOwnerCalls</c>
 /// calls in all, one per service and round. An internal explain carries what is left of both
 /// (<see cref="ExplainBudget"/>), so an owner nests its own owners' answers within its origin's budget
@@ -198,7 +198,7 @@ public sealed class ExplainOwnerUse(string service, string? via)
 /// error, and the answer is then not complete (<see cref="Complete"/>).
 /// </para>
 /// </summary>
-public sealed class RemoteExplain : IExplainOwners
+internal sealed class RemoteExplain : IExplainOwners, IExplainShare
 {
     private readonly IRemoteQueryClient? client;
     private readonly Func<ExplainRequest, CancellationToken, Task<JsonObject?>>? self;
@@ -279,7 +279,7 @@ public sealed class RemoteExplain : IExplainOwners
     /// <summary>
     /// What is left of the owners' time: an explain this one runs at this host (the check of a local
     /// keyed stage's continued stages) gets it for its own owners, so they cannot stretch the explain
-    /// past its budget, while this host's own binding is still checked (RL-8).
+    /// past its budget, while this host's own binding is still checked.
     /// </summary>
     public TimeSpan Remaining => spent ? TimeSpan.Zero : budget - clock.Elapsed is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
@@ -313,7 +313,7 @@ public sealed class RemoteExplain : IExplainOwners
 
     /// <summary>
     /// After <see cref="CheckAsync"/>: per alias a continued stage adds, the entities its owners' answers
-    /// say it creates (DESIGN §4.3), in the order of the checks; an alias no owner answered for is absent.
+    /// say it creates, in the order of the checks; an alias no owner answered for is absent.
     /// A resolve continued without a target follows a reference of the owner's model, so only the owner
     /// that binds it knows what it reaches.
     /// </summary>
@@ -474,13 +474,13 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>
-    /// The remote check of a bound request (DESIGN §4.3): every keyed stage's owner queries are explained
+    /// The remote check of a bound request: every keyed stage's owner queries are explained
     /// at their owners, as the run's plan builds them. An owner error at a continued stage is this
     /// request's error at the caller's stage, and an owner's own <c>REMOTE_UNCHECKED</c> notes are passed
     /// on at the first continued stage. The answers also say what the stages continued there create and
     /// describe the owners' types. What was not checked is noted.
     /// <para>
-    /// The checks go out in rounds (improvement plan §3.E): the first carries every owner query of every
+    /// The checks go out in rounds: the first carries every owner query of every
     /// keyed stage, one call per owner service, the services asked at once. A further round asks again
     /// what a run asks again (<see cref="KeyedFetch.MaxDropRounds"/>): a target whose owner refused only
     /// paths it lacks, without them. What an earlier request learned a target lacks is dropped before the
@@ -544,7 +544,7 @@ public sealed class RemoteExplain : IExplainOwners
         }
 
         // A remote union target whose owner refused only paths the target lacks is asked again
-        // without them, as a run asks it (DESIGN §3.4.1 flat paths): the owner then binds the
+        // without them, as a run asks it: the owner then binds the
         // stages continued at it, and checks theirs, exactly as the run's query has them bound.
         // What it lacked stays a miss; an answer that does not come leaves the first. A local target
         // is asked again as well: what a branch of a union join does not reach is its SelfOwner's to
@@ -899,7 +899,7 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>
-    /// What the owners' misses mean for one resolve (DESIGN §3.4.1 flat paths, §4.3): a path some
+    /// What the owners' misses mean for one resolve: a path some
     /// target has is dropped for those that lack it (<c>SELECT_PATH_NOT_ON_TARGET</c>, as a run drops
     /// it); a path no target has is this request's <c>UNKNOWN_PATH</c> where the caller wrote it (the
     /// projection after the resolve), with <c>params.owner</c> where the owner saw it.
@@ -1066,7 +1066,7 @@ public sealed class RemoteExplain : IExplainOwners
     }
 
     /// <summary>
-    /// One round of an explain (improvement plan §3.E): the requests this host explains itself, in order;
+    /// One round of an explain: the requests this host explains itself, in order;
     /// then, of the others, what is kept is read from the cache, and what is left goes out through the
     /// pool (<see cref="ExplainOwnerPool"/>) as one call per owner service
     /// (<see cref="IRemoteQueryClient.ExplainBatchAsync"/>), the services asked at once, each within
@@ -1190,7 +1190,8 @@ public sealed class RemoteExplain : IExplainOwners
             sending.Add((use ?? Use(service, null), indexes));
         }
 
-        if (sending.Count == 0)
+        // Without a client nothing was opened above, so nothing is left to send.
+        if (sending.Count == 0 || client is null)
             return results;
 
         // The asks go out through the pool: with those of the explains beside this one, one call per owner.

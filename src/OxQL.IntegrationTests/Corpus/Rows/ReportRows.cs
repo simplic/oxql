@@ -8,7 +8,7 @@ using T = OxQL.IntegrationTests.Fleet.Models.Transport;
 namespace OxQL.IntegrationTests.Fixtures.Rows;
 
 /// <summary>
-/// The rows of the report scenarios (DESIGN §2, A1–A5), all in organisation R: one invoice mixing
+/// The rows of the report scenarios (A1–A5), all in organisation R: one invoice mixing
 /// shipment and tour lines, the ERP billing lines those lines came from, the shipments and tours
 /// holding the source lines, delivery attempts, the resources the tours plan with, the vehicles
 /// and employees those resources are, the clerk, and the recipient contact; plus one invoice per

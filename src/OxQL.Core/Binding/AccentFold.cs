@@ -6,7 +6,7 @@ using OxQL.Core.Models;
 namespace OxQL.Core.Binding;
 
 /// <summary>
-/// The pattern of a text that folds accents the way the request's collation does (DG2 M10):
+/// The pattern of a text that folds accents the way the request's collation does:
 /// <c>contains</c> and <c>endsWith</c> run as patterns, and a pattern knows no collation, so each
 /// letter of the operand becomes the class of the characters that share its primary weight
 /// (<c>u</c> → <c>[uUùÙúÚûÛüÜ…]</c>), and a letter the collation gives the weight of two or three

@@ -1,0 +1,26 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "eq": "TR-2026-0101"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Actions",
+        "as": "Action"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Action": {
+          "OrderId": 1
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 /*
- * OxQL console: a slim developer console for one service (DESIGN §7).
+ * OxQL console: a slim developer console for one service.
  * Monaco editor on one scratch query, Run (/query, /batch), Explain (/explain, markers from
  * `errors`, `valid: false` as an answer, the index advisory only on request), the health panel,
  * and a credential kept in sessionStorage with its decoded claims and an expiry warning.

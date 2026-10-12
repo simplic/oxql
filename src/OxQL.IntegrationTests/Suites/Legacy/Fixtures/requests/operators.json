@@ -1,0 +1,100 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "Number": {
+              "startsWith": "TR-"
+            }
+          },
+          {
+            "Number": {
+              "endsWith": "1"
+            }
+          },
+          {
+            "Number": {
+              "regex": "^TR-(M|2026)"
+            }
+          },
+          {
+            "Number": {
+              "nin": [
+                "TR-M-2"
+              ]
+            }
+          },
+          {
+            "Number": {
+              "neq": "TR-2026-0199"
+            }
+          },
+          {
+            "GlobalTourId": {
+              "neq": "1e9ac700-0000-4000-8000-000000001101"
+            }
+          },
+          {
+            "Notes": {
+              "exists": true
+            }
+          },
+          {
+            "GeneratedTourNrCounter": {
+              "gte": {
+                "$long": "1"
+              }
+            }
+          },
+          {
+            "GeneratedTourNrCounter": {
+              "lt": 3
+            }
+          },
+          {
+            "Transits.Distance": {
+              "gt": 612.3
+            }
+          },
+          {
+            "or": [
+              {
+                "Notes": {
+                  "eq": {
+                    "$null": true
+                  }
+                }
+              },
+              {
+                "Notes": {
+                  "eq": "Rampe 4"
+                }
+              }
+            ]
+          },
+          {
+            "IsMirroredTour": false
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Notes": 1,
+        "Status": {
+          "Name": 1
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "desc"
+        }
+      ]
+    }
+  ]
+}

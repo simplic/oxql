@@ -14,7 +14,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// The contract 2 count (DG2 M3): <c>page.count</c> asks, <c>pageInfo.count</c> answers what the
+/// The contract 2 count: <c>page.count</c> asks, <c>pageInfo.count</c> answers what the
 /// engine knows: <c>exact</c>, <c>atLeast</c> with why counting stopped, or <c>unknown</c> with why.
 /// Every page knows something without counting; the count step beside a page is one bounded step
 /// that never fails or holds back the rows; a count-only request (<c>limit: 0</c>) climbs a ladder
@@ -24,9 +24,32 @@ public class PageCountTests
 {
     private const string Order = "probe.order";
 
+    /// <summary>The clock a count measures its steps by: it stands still until a test moves it, so a step takes exactly what the test says.</summary>
+    private sealed class ManualTime : TimeProvider
+    {
+        private long ticks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref ticks);
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
+    }
+
     /// <summary>Answers the page with fixture rows and each count by a script over the bound it was asked with (<c>$limit - 1</c>).</summary>
     private sealed class ScriptedRunner : IAggregateRunner
     {
+        /// <summary>The engine's clock.</summary>
+        public ManualTime Time { get; } = new();
+
+        /// <summary>A count step that takes <paramref name="milliseconds"/> by the engine's clock and none by the wall clock.</summary>
+        public Task Takes(int milliseconds)
+        {
+            Time.Advance(TimeSpan.FromMilliseconds(milliseconds));
+
+            return Task.CompletedTask;
+        }
+
         public List<BsonDocument> PageRows { get; set; } = [];
 
         /// <summary>How many rows match; a count answers this, stopped at its limit.</summary>
@@ -77,7 +100,7 @@ public class PageCountTests
             Matching = matching,
         };
 
-        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options(configure)), runner);
+        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options(configure), time: runner.Time), runner);
     }
 
     private static async Task<QueryResult> Run(MongoQueryEngine engine, string page, RequestContext? context = null)
@@ -502,13 +525,13 @@ public class PageCountTests
     {
         var (engine, runner) = Host(rows: 0, matching: 500_000);
 
-        // The first step takes about 25 ms of 2 000: what is left holds it some 80 times, and the step is sized to half of that.
-        runner.OnCount = bound => bound == 1_000 ? Task.Delay(25) : Task.CompletedTask;
+        // The first step takes 25 ms of 2 000: what is left holds it 79 times, and the step is sized to half of that.
+        runner.OnCount = bound => bound == 1_000 ? runner.Takes(25) : Task.CompletedTask;
 
         var result = await Run(engine, """{ "limit": 0, "count": { "budgetMs": 2000 } }""");
 
         runner.Calls.Should().HaveCountGreaterThanOrEqualTo(2);
-        runner.Calls[1].Bound.Should().BeInRange(10_000, 99_999, "a step is at least ten times the last and no further than the time is predicted to reach");
+        runner.Calls[1].Bound.Should().Be(39_500, "1 975 ms are left, 79 times the first step, and the step is sized to half of what that reaches");
         result.PageInfo.Count!.State.Should().Be(CountInfo.AtLeast);
         result.PageInfo.Count.Value.Should().BeGreaterThanOrEqualTo(runner.Calls[1].Bound);
     }
@@ -573,13 +596,13 @@ public class PageCountTests
         var (engine, runner) = Host(rows: 0, matching: 500_000);
 
         // The first step takes 60 ms: the next is predicted at 600 ms, which 300 ms cannot hold.
-        runner.OnCount = _ => Task.Delay(60);
+        runner.OnCount = _ => runner.Takes(60);
 
         var result = await Run(engine, """{ "limit": 0, "count": { "budgetMs": 300 } }""");
 
         Wire(result.PageInfo.Count).Should().Be("""{"state":"atLeast","value":1000,"stoppedBy":"budget"}""");
         runner.Calls.Select(call => call.Bound).Should().Equal(1_000L);
-        result.PageInfo.Count!.Ms.Should().BeGreaterThanOrEqualTo(50);
+        result.PageInfo.Count!.Ms.Should().Be(60);
     }
 
     [Fact]
@@ -587,12 +610,8 @@ public class PageCountTests
     {
         var (engine, runner) = Host(rows: 0, matching: 500_000);
 
-        // The first step is instant, so the second is predicted to fit, and then does not.
-        runner.OnCount = bound => bound == 1_000 ? Task.CompletedTask : Task.Delay(TimeSpan.FromSeconds(30));
-
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-
-        // The fake does not stop by itself at maxTimeMS as the database does; the engine's own budget does not either, so the fake is told to.
+        // The first step is instant, so the second is predicted to fit, and then does not. The fake does not stop
+        // by itself at maxTimeMS as the database does; the engine's own budget does not either, so the fake is told to.
         runner.OnCount = bound => bound == 1_000 ? Task.CompletedTask : Task.FromException(new TimeoutException());
 
         Wire((await Run(engine, """{ "limit": 0, "count": { "budgetMs": 200 } }""")).PageInfo.Count).Should().Be("""{"state":"atLeast","value":1000,"stoppedBy":"time"}""");
@@ -602,7 +621,6 @@ public class PageCountTests
 
         runner.OnCount = _ => Task.FromException(new InvalidOperationException("broken"));
         Wire((await Run(engine, """{ "limit": 0, "count": { "budgetMs": 200 } }""")).PageInfo.Count).Should().Be("""{"state":"unknown","reason":"failed"}""");
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

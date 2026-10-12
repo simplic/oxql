@@ -8,7 +8,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// Remote continuation at bind time (DESIGN §3.4.1 step 3, §3.4.2 <c>on</c>, §3.5.3–§3.5.5): a
+/// Remote continuation at bind time: a
 /// resolve under a keyed or remote alias, and a lookup on one, bind as a <see cref="ContinuedStage"/>
 /// of the keyed stage whose owner query carries them; <c>forTarget</c>, <c>MaxContinuedStages</c>, the
 /// variables, and what stays <c>NOT_CONTINUABLE</c>. How the owner query carries them is
@@ -313,7 +313,7 @@ public class ContinuationBindTests
     }
 
     /// <summary>
-    /// A continued stage reads the alias it continues under (improvement plan §3.S): a projection that
+    /// A continued stage reads the alias it continues under: a projection that
     /// names only the continued alias keeps the keyed stage running, asks its owner for the key alone,
     /// and the row shows neither the alias nor its owning row. One case per kind of anchor.
     /// </summary>

@@ -5,7 +5,7 @@ using OxQL.Core.Engine;
 namespace OxQL.Mongo.Explain;
 
 /// <summary>
-/// The owner calls of the explains that belong together (improvement plan §3.E): one explain a caller
+/// The owner calls of the explains that belong together: one explain a caller
 /// sent, or the checks of one internal explain batch, which are explained side by side. They share what
 /// one origin's explain may cause (the owner calls left), and what they ask their owners in a round goes
 /// out together: one call per owner service, whichever of them asked, the services asked at once. So an
@@ -16,7 +16,7 @@ namespace OxQL.Mongo.Explain;
 /// they go on, one at a time again. An explain alone is a pool of one: its asks go out as it makes them.
 /// </para>
 /// </summary>
-public sealed class ExplainOwnerPool
+internal sealed class ExplainOwnerPool : IExplainShare
 {
     private readonly object gate = new();
     private readonly SemaphoreSlim? turn;

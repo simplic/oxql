@@ -6,7 +6,7 @@ using OxQL.Model.Build;
 namespace OxQL.Core.Binding;
 
 /// <summary>
-/// What an explain answer says of the rows beside their shape (DG2 M7): what one row is and what
+/// What an explain answer says of the rows beside their shape: what one row is and what
 /// identifies it (<see cref="Identity"/>), the entities a row holds (<see cref="Subjects"/>), the total
 /// order the page is taken in (<see cref="Order"/>), and what may be done with one path at one
 /// boundary (<see cref="Can"/>). Nothing here binds a second way: the identity folds the binder's own

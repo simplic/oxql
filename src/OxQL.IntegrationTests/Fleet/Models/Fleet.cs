@@ -213,7 +213,7 @@ public class Equipment
 
     public VehicleSubset? Vehicle { get; set; }
 
-    /// <summary>The shipment the equipment travels with: a reference into transport, so a lookup continued there reaches this service (DESIGN §3.4.4).</summary>
+    /// <summary>The shipment the equipment travels with: a reference into transport, so a lookup continued there reaches this service.</summary>
     [OxQLReference("transport.shipment", "id")]
     public Guid? AssignedShipmentId { get; set; }
 

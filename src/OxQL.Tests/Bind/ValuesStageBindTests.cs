@@ -9,7 +9,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The <c>values</c> stage (DG2 set filters): the distinct values of one scalar path among the rows
+/// The <c>values</c> stage: the distinct values of one scalar path among the rows
 /// that reach it, in place of the page, under contract 2. It reads its path as a group key does,
 /// except that collections above it that are not unwound are unwound for the values alone. It
 /// replaces the row by <c>value</c> (and <c>count</c>), ends the pipeline, and is bounded twice: the

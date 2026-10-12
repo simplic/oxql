@@ -107,7 +107,7 @@ public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor ht
     }
 
     /// <summary>
-    /// The owner's internal explain (<c>POST internal/oxql/explain</c>, DESIGN §4.1): the owner's
+    /// The owner's internal explain (<c>POST internal/oxql/explain</c>): the owner's
     /// query service through its internal overload
     /// (<see cref="IOxQLQueryService.ExplainAsync(ExplainRequest, bool, CancellationToken)"/> with
     /// <c>internalCall: true</c>) in a request scope of the owner carrying the forwarded identity, the

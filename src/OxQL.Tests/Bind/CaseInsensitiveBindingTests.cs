@@ -80,7 +80,7 @@ public class CaseInsensitiveBindingTests
         Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": false } } } }]""")).IgnoreCase.Should().BeTrue();
         Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""")).IgnoreCase.Should().BeFalse();
 
-        // DG2 M12: the alias with the opposite sense is contract 1's; whatever it says, contract 2 refuses it.
+        // The alias with the opposite sense is contract 1's; whatever it says, contract 2 refuses it.
         foreach (var options in new[] { """{ "ignoreCase": true }""", """{ "ignoreCase": false }""", """{ "ignoreCase": false, "caseSensitive": true }""" })
         {
             var refused = await Error($$"""[{ "match": { "number": { "eq": "x", "options": {{options}} } } }]""", Codes.OptionNotApplicable);

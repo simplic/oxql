@@ -7,7 +7,7 @@ using Transport = OxQL.IntegrationTests.Fleet.Models.Transport;
 namespace OxQL.IntegrationTests.Fixtures;
 
 /// <summary>
-/// The report scenario data (DESIGN §2, A1–A5, and the failure modes of §3.6): rows in
+/// The report scenario data (A1–A5, and the failure modes): rows in
 /// organisation R only, in the collections of every entity the scenarios cross, written by
 /// <see cref="CorpusSeeder"/> alongside the corpus, so the shared fleet holds them and no case
 /// over organisations A and B sees them. The corpus entities (<see cref="Corpus.Entities"/>) are

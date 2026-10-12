@@ -140,10 +140,13 @@ public sealed class OxQLOptions
             Limits.MaxFlattenDepth = LimitOptions.MaxFlattenDepthCeiling;
         }
 
-        if (Limits.MaxSemiJoinIds > Limits.MaxOffset)
+        // A semi-join reads its first ids without an offset, so one id is in reach whatever MaxOffset is.
+        var reach = Math.Max(1, Limits.MaxOffset);
+
+        if (Limits.MaxSemiJoinIds > reach)
         {
-            adjustments.Add($"OxQL:Limits:MaxSemiJoinIds was {Limits.MaxSemiJoinIds}, above MaxOffset ({Limits.MaxOffset}); it is clamped to MaxOffset, because a semi-join reads the owner's ids by offset and cannot reach past it. Raise MaxOffset to raise it.");
-            Limits.MaxSemiJoinIds = Limits.MaxOffset;
+            adjustments.Add($"OxQL:Limits:MaxSemiJoinIds was {Limits.MaxSemiJoinIds}, above MaxOffset ({Limits.MaxOffset}); it is clamped to {reach}, because a semi-join reads the owner's ids by offset and cannot reach past it. Raise MaxOffset to raise it.");
+            Limits.MaxSemiJoinIds = reach;
         }
 
         if (Limits.ResolveKeyChunk > Limits.MaxPageSize)
@@ -205,20 +208,24 @@ public sealed class CompatOptions
 {
     /// <summary>Whether a request without the contract header is treated as contract 1. On for the compat release.</summary>
     public bool Enabled { get; set; } = true;
+
+    // LEGACY(compat.v1): the legacy pipeline's options; remove with src/OxQL.Core/Legacy.
+    /// <summary>The legacy pipeline: what contract 1 answered and contract 2 has no form for (<c>src/docs/LEGACY.md</c>).</summary>
+    public Legacy.LegacyOptions Legacy { get; set; } = new();
 }
 
 /// <summary>The explain endpoint.</summary>
 public sealed class ExplainOptions
 {
     /// <summary>
-    /// Whether <c>POST /oxql/explain</c> answers; 404 otherwise. On by default (DESIGN §4.1): explain
+    /// Whether <c>POST /oxql/explain</c> answers; 404 otherwise. On by default: explain
     /// never executes the query and reads the index list only when a request asks for it.
     /// </summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// How long, in milliseconds, one explain waits for the owners' internal explain in all (DESIGN
-    /// §4.3): the remote check of continued parts and the describes of remote entities. An owner
+    /// How long, in milliseconds, one explain waits for the owners' internal explain in all:
+    /// the remote check of continued parts and the describes of remote entities. An owner
     /// that does not answer in time leaves a <c>REMOTE_UNCHECKED</c> note, never an error.
     /// </summary>
     public int RemoteTimeoutMs { get; set; } = 1_500;

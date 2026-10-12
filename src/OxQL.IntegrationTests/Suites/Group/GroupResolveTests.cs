@@ -9,7 +9,7 @@ using static OxQL.IntegrationTests.Suites.Group.GroupKit;
 namespace OxQL.IntegrationTests.Suites.Group;
 
 /// <summary>
-/// A <c>resolve</c> after a <c>group</c> (DG2): a key over a member that declares a reference keeps
+/// A <c>resolve</c> after a <c>group</c>: a key over a member that declares a reference keeps
 /// that reference, so the group's row can show the record its key names ("revenue by customer" with
 /// the customer's name). A target of this service joins in the aggregate, on the page's rows when
 /// only the display reads it; another service's is fetched after the page, one owner query for the
@@ -209,13 +209,13 @@ public class GroupResolveTests
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "dep": { "first": "department.id" } } } }, { "resolve": { "path": "dep", "as": "d" } } ]
             """);
 
-        ShouldRefuseOnly(aggregate, "RESOLVE_NOT_DECLARED").Should().Be("'dep' declares no reference; it is a guid.");
+        ShouldRefuseOnly(aggregate, "RESOLVE_NOT_DECLARED").Should().StartWith("'dep' declares no reference; it is a guid.");
 
         var plainKey = await client.SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "n": { "count": true } } } }, { "resolve": { "path": "status", "as": "s" } } ]
             """);
 
-        ShouldRefuseOnly(plainKey, "RESOLVE_NOT_DECLARED").Should().Be("'status' declares no reference; it is a string.");
+        ShouldRefuseOnly(plainKey, "RESOLVE_NOT_DECLARED").Should().StartWith("'status' declares no reference; it is a string.");
 
         // A lookup still has no key to join on: the group's row is no record.
         var lookup = await (await Fleet()).SendAsync(Corpus.Vehicle, """

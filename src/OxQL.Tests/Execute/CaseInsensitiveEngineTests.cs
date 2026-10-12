@@ -6,6 +6,7 @@ using OxQL.Mongo;
 using OxQL.Mongo.Explain;
 using OxQL.Mongo.Resolve;
 using OxQL.Tests.Bind;
+using OxQL.Tests.Compile;
 using Xunit;
 
 namespace OxQL.Tests.Execute;
@@ -112,5 +113,29 @@ public class CaseInsensitiveEngineTests
         await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": true } } } }]""");
 
         client.Calls.Should().HaveCount(3, "that owner query is cached");
+    }
+
+    [Fact]
+    public async Task A_semi_join_over_a_reference_stored_as_text_takes_the_owners_keys_exactly_inside_a_collated_aggregate()
+    {
+        var (engine, runner, client) = Host();
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1"));
+
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "match": { "contact.name": { "eq": "Alice" } } }, { "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
+
+        runner.Calls.Should().HaveCount(2);
+        runner.Calls.Should().OnlyContain(call => call.Options.Collation != null, "the comparison on the number folds");
+
+        foreach (var call in runner.Calls)
+        {
+            var conditions = call.Stages[1]["$match"]["$and"].AsBsonArray;
+
+            conditions[0].ShouldBeBson(BsonDocument.Parse("""{ "ContactNumber": { "$in": ["c1"] } }"""), "the key set, which an index serves");
+
+            var exact = conditions[1].ToJson();
+
+            exact.Should().Contain("$indexOfBytes").And.Contain("$strLenBytes", "the collation folds the $in, so a key is compared again byte for byte");
+            exact.Should().Contain("""{ "$literal" : ["c1"] }""", "over the keys the owner answered").And.Contain("\"$ContactNumber\"");
+        }
     }
 }

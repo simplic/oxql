@@ -1,6 +1,6 @@
 namespace OxQL.Core.Binding;
 
-/// <summary>What a stage reads a path for (improvement plan §3.S): the explicit use the binder records at each read site.</summary>
+/// <summary>What a stage reads a path for: the explicit use the binder records at each read site.</summary>
 public enum ReadUse
 {
     /// <summary>A condition of a <c>match</c>, an <c>any</c>'s collection and its inner paths included.</summary>
@@ -111,7 +111,7 @@ public sealed record PathRead(int Stage, string Path, ReadUse Use, string? Alias
 }
 
 /// <summary>
-/// What a join loads and shows under one alias (improvement plan §3.S): <paramref name="Loads"/> the
+/// What a join loads and shows under one alias: <paramref name="Loads"/> the
 /// paths fetched, relative to the alias, in ordinal order (its key, what later stages read, its output
 /// set); <paramref name="Shows"/> the output set, the paths the row carries under the alias (what the
 /// projection names under it; kept whole, its key and display member). <see cref="Loads"/> and

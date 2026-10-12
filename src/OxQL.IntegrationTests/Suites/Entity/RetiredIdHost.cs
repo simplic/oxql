@@ -103,7 +103,13 @@ internal static class RetiredIdHost
 
         builder.WebHost.UseTestServer();
         builder.Configuration.Sources.Clear();
-        builder.Configuration.AddInMemoryCollection([new KeyValuePair<string, string?>("OxQL:Cursor:SigningKey", shared.Fleet.SigningKey)]);
+        builder.Configuration.AddInMemoryCollection(
+        [
+            new KeyValuePair<string, string?>("OxQL:Cursor:SigningKey", shared.Fleet.SigningKey),
+            // LEGACY(compat.v1): the diagnostic that names a retired id's current one is the compatibility rewrite's, so this
+            // host answers contract 1 by the rewrite first, as the fleet's hosts do (FleetHost.Defaults); remove with it.
+            new KeyValuePair<string, string?>("OxQL:Compat:Legacy:Always", "false"),
+        ]);
         builder.Logging.ClearProviders();
 
         var services = builder.Services;

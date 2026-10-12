@@ -371,7 +371,7 @@ public class BillingLine
 
     public Dictionary<string, object>? Addon { get; set; }
 
-    /// <summary>The invoice the line was billed on: a reference into the ledger, followed from there by a remote lookup (DESIGN §3.4.4).</summary>
+    /// <summary>The invoice the line was billed on: a reference into the ledger, followed from there by a remote lookup.</summary>
     [OxQLReference("ledger.transaction", "id")]
     public Guid? AssignedTransactionId { get; set; }
 }
@@ -619,6 +619,9 @@ public interface ITourAction
     string? Notes { get; set; }
 
     bool OutOfTour { get; set; }
+
+    /// <summary>The kind of action, a constant of the class (logistics <c>ITourAction.Type</c>): returned over REST, never stored.</summary>
+    string Type { get; }
 }
 
 public abstract class TourActionBase : ITourAction
@@ -638,11 +641,15 @@ public abstract class TourActionBase : ITourAction
     public string? Notes { get; set; }
 
     public bool OutOfTour { get; set; }
+
+    public abstract string Type { get; }
 }
 
 /// <summary>Loads a shipment.</summary>
 public class AttachShipmentAction : TourActionBase
 {
+    public override string Type => "attach_shipment";
+
     public ContactAddress? Address { get; set; }
 
     public Guid? ShipmentId { get; set; }
@@ -651,6 +658,8 @@ public class AttachShipmentAction : TourActionBase
 /// <summary>Unloads a shipment.</summary>
 public class DetachShipmentAction : TourActionBase
 {
+    public override string Type => "detach_shipment";
+
     public ContactAddress? Address { get; set; }
 
     public Guid? ShipmentId { get; set; }
@@ -658,6 +667,8 @@ public class DetachShipmentAction : TourActionBase
 
 public class AttachResourceAction : TourActionBase
 {
+    public override string Type => "attach_resource";
+
     public ContactAddress? Address { get; set; }
 
     public Resource? Resource { get; set; }
@@ -665,6 +676,8 @@ public class AttachResourceAction : TourActionBase
 
 public class DetachResourceAction : TourActionBase
 {
+    public override string Type => "detach_resource";
+
     public ContactAddress? Address { get; set; }
 
     public Resource? Resource { get; set; }
@@ -672,15 +685,20 @@ public class DetachResourceAction : TourActionBase
 
 public class CheckVehicleAction : TourActionBase
 {
+    public override string Type => "check_vehicle";
 }
 
 public class CleaningAction : TourActionBase
 {
+    public override string Type => "cleaning";
+
     public ContactAddress? Address { get; set; }
 }
 
 public class TaskAction : TourActionBase
 {
+    public override string Type => "task";
+
     public string? Title { get; set; }
 
     public string? Description { get; set; }
@@ -712,6 +730,9 @@ public abstract class OrganizationDocumentBase
 [OxQLType("transport.resource", "resource", Extendable = true)]
 public abstract class Resource : OrganizationDocumentBase
 {
+    /// <summary>The kind of resource, a constant of the class (logistics <c>Resource.Type</c>): returned over REST, never stored.</summary>
+    public abstract string Type { get; }
+
     public string? MatchCode { get; set; }
 
     public string? DisplayName { get; set; }
@@ -739,6 +760,7 @@ public abstract class HumanResource : Resource
 
 public class DriverResource : HumanResource
 {
+    public override string Type => "driver";
 }
 
 public abstract class VehicleResource : Resource
@@ -747,10 +769,13 @@ public abstract class VehicleResource : Resource
 
 public class TractorUnitResource : VehicleResource
 {
+    public override string Type => "tractor_unit";
 }
 
 public class TrailerResource : VehicleResource
 {
+    public override string Type => "trailer";
+
     public List<ResourceLoadingSlot> LoadingSlots { get; set; } = [];
 
     public bool IsLoadable { get; set; }
@@ -758,10 +783,13 @@ public class TrailerResource : VehicleResource
 
 public class CarResource : VehicleResource
 {
+    public override string Type => "car";
 }
 
 public class ContainerResource : Resource
 {
+    public override string Type => "container";
+
     public List<ResourceLoadingSlot> LoadingSlots { get; set; } = [];
 
     public bool IsLoadable { get; set; }
@@ -769,10 +797,12 @@ public class ContainerResource : Resource
 
 public class CarrierResource : Resource
 {
+    public override string Type => "carrier";
 }
 
 public class EquipmentResource : Resource
 {
+    public override string Type => "equipment";
 }
 
 public class ResourceLoadingSlot

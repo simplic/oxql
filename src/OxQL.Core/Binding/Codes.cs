@@ -3,6 +3,8 @@ namespace OxQL.Core.Binding;
 /// <summary>
 /// The closed list of error and diagnostic codes. Codes are the contract; messages may
 /// change. An error refuses the request; a diagnostic travels with a successful response.
+/// A successful response may also carry two of explain's notes as diagnostics
+/// (<see cref="Notes.SelectPathNotOnTarget"/>, <see cref="Notes.FilterBindsEarlier"/>); their codes are listed there.
 /// </summary>
 public static class Codes
 {
@@ -141,7 +143,13 @@ public static class Codes
     public const string BatchTooLarge = "BATCH_TOO_LARGE";
     public const string RequestTooLarge = "REQUEST_TOO_LARGE";
 
-    /// <summary>An explain body past one of the explain bounds (stages, catalog entries, shape depth) or naming an include or remote value the engine does not know; refused before anything is bound (400).</summary>
+    /// <summary>
+    /// A bound of explain. As an error: a body past one of the explain bounds (stages, catalog entries,
+    /// shape depth, checks of a batch) or naming an include or remote value the engine does not know,
+    /// refused before anything is bound (400); or more explains than the caller may send or have in
+    /// flight (429, type <c>rate_limited</c>, params <c>limit</c>, <c>max</c>, <c>retryAfter</c>). As a
+    /// note of an answer: a bound hit mid-way (<see cref="Notes.ExplainLimit"/>).
+    /// </summary>
     public const string ExplainLimit = "EXPLAIN_LIMIT";
 
     // cursor

@@ -6,7 +6,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// How many keys and aggregates one group may carry (DG2): 40 unless the host says otherwise, since a
+/// How many keys and aggregates one group may carry: 40 unless the host says otherwise, since a
 /// grid derives one aggregate per column it totals. One more is refused before anything runs, with
 /// the limit in <c>params</c>, and explain calls it a limit.
 /// </summary>

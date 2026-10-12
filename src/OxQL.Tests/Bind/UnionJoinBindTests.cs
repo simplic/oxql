@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.Bind;
 
 /// <summary>
-/// The union join at bind time (improvement plan §3.U): <c>resolve { as, byTarget: { target: path } }</c>
+/// The union join at bind time: <c>resolve { as, byTarget: { target: path } }</c>
 /// under a keyed or remote alias with several targets binds as one <see cref="ContinuedStage"/> with a
 /// branch per target; what is refused with which code and params; what a stage under its alias inherits;
 /// how the splitter sends each target its branch as an ordinary resolve; and the union join under an

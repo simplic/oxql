@@ -169,10 +169,20 @@ public class Contract1PlannerTests
             Ids(answer).Should().Equal(Corpus.PageOf(expected, 500), what);
         }
 
-        // Adapted: the lab template has no department, so the planner's department condition on it
-        // is a coded contract-1 refusal rather than the legacy host's empty page.
-        var department = await client.SendAsync(Corpus.Template, Pipeline(TemplateMatch(new Filters(Departments: [Department])), "TemplateName"));
-        department.ShouldRefuse("UNKNOWN_PATH", 400);
+        // Adapted: the lab template has no department. The planner's department condition on it names
+        // a member nothing stores, which the 1.1 engine matched no row on: the empty page, no refusal.
+        var pipeline = Pipeline(TemplateMatch(new Filters(Departments: [Department])), "TemplateName");
+        var department = await client.SendAsync(Corpus.Template, pipeline);
+
+        department.ShouldBeOk("LEGACY(compat.v1): the legacy pipeline answers an undeclared path in a match");
+        department.StatusCode.Should().Be(200);
+        department.Items.Should().BeEmpty();
+        department.HasNextPage.Should().BeFalse();
+
+        // Where the legacy pipeline is off, the same body is the coded refusal of the rewrite.
+        var off = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "legacy-off", new Dictionary<string, string?> { ["OxQL:Compat:Legacy:Enabled"] = "false" }, contract: null);
+
+        (await off.SendAsync(Corpus.Template, pipeline)).ShouldRefuse("UNKNOWN_PATH", 400)["path"]!.GetValue<string>().Should().Be("Department._id");
     }
 
     [Fact]
@@ -267,17 +277,39 @@ public class Contract1PlannerTests
                 && DateTimeOffset.TryParse(right, CultureInfo.InvariantCulture, DateTimeStyles.None, out var y) && x == y)
                 return "date-fraction";
 
-            if (a.GetValueKind() == JsonValueKind.Number && b.TryGetValue<string>(out var digits)
-                && decimal.TryParse(a.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
-                && decimal.TryParse(digits, NumberStyles.Float, CultureInfo.InvariantCulture, out var text) && number == text)
-                return "number-as-string";
+            // A decimal: a number in both. Contract 1 writes the scale it was stored with (60.00),
+            // contract 2 the canonical digits (60). The same value, and contract 2's spelling is the
+            // canonical one of contract 1's: another number, or another spelling of this one, is undeclared.
+            if (a.GetValueKind() == JsonValueKind.Number && b.GetValueKind() == JsonValueKind.Number
+                && decimal.TryParse(a.ToJsonString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var stored1)
+                && decimal.TryParse(b.ToJsonString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var canonical)
+                && stored1 == canonical && b.ToJsonString() == CanonicalDigits(a.ToJsonString()))
+                return "decimal-scale";
         }
 
         return "UNDECLARED";
     }
 
+    /// <summary>A plain decimal literal without its trailing fractional zeros: 60.00 is 60, 12.50 is 12.5.</summary>
+    private static string CanonicalDigits(string literal) =>
+        literal.Contains('.', StringComparison.Ordinal) ? literal.TrimEnd('0').TrimEnd('.') : literal;
+
+    [Theory]
+    [InlineData("60.00", "60", "decimal-scale")]
+    [InlineData("12.50", "12.5", "decimal-scale")]
+    [InlineData("60.00", "61", "UNDECLARED")]
+    [InlineData("60.00", "60.01", "UNDECLARED")]
+    [InlineData("60.00", "60.0", "UNDECLARED")]
+    [InlineData("60.00", "\"60\"", "UNDECLARED")]
+    [InlineData("9007199254740993", "9007199254740992", "UNDECLARED")]
+    [InlineData("9007199254740993", "\"9007199254740993\"", "UNDECLARED")]
+    public void W3_06a_the_declared_decimal_difference_is_the_scale_alone_another_number_or_a_string_is_undeclared(string contract1, string contract2, string category)
+    {
+        Classify(JsonNode.Parse(contract1), JsonNode.Parse(contract2)).Should().Be(category);
+    }
+
     [Fact]
-    public async Task W3_06_contract_1_and_contract_2_select_the_same_rows_and_differ_only_in_declared_encodings_including_the_long_by_design()
+    public async Task W3_06_contract_1_and_contract_2_select_the_same_rows_and_differ_only_in_declared_encodings_a_decimal_in_its_scale_and_a_long_in_nothing()
     {
         var expected = Corpus.AllIds(Corpus.Shipment);
         var transport = await Lab.ClientAsync(LabService.Transport);
@@ -333,20 +365,26 @@ public class Contract1PlannerTests
             Walk("", Normalise(row1), row2);
 
         differences.Where(difference => difference.Category is "UNDECLARED" or "MEMBER-SET").Should().BeEmpty("contract 1 adds, drops or changes nothing beyond the declared encodings");
-        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "number-as-string", "date-only", "unwrapped"]);
+        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "decimal-scale", "date-only", "unwrapped"]);
         differences.Where(difference => difference.Category == "unwrapped").Select(difference => difference.Path).Distinct().Should().BeSubsetOf(["addon.weight", "addon.vincario", "addon.vincario.ratio"],
             "only what the bag's serializer wrapped, at any depth: contract 1 passes { _t, _v } through, contract 2 answers the value it holds");
         differences.Where(difference => difference.Category == "date-only").Select(difference => difference.Path).Distinct().Should().Equal(["addon.probationEnd"], "only a defined date addon key; the v1 converter writes it as the stored instant");
 
-        // FC2, by design and documented: contract 1 renders an Int64 through the v1 converter as a
-        // JSON number, so a JavaScript reader rounds 2^53 + 1 to 2^53; contract 2 writes the digits.
+        // A decimal differs in its scale and nowhere else: the stored 60.00 is 60.00 under contract 1 and 60 under contract 2.
+        differences.Where(difference => difference.Category == "decimal-scale").Should().NotBeEmpty()
+            .And.OnlyContain(difference => difference.C2 == CanonicalDigits(difference.C1) && difference.C1.Contains('.', StringComparison.Ordinal));
+        differences.Should().Contain(difference => difference.Path == "billingLines.costCenters.percentage" && difference.C1 == "60.00" && difference.C2 == "60");
+
+        // FC2: a long is one number under both contracts, every digit in the body. Contract 1 renders
+        // the Int64 through the v1 converter, contract 2 writes it as the number a long is; a reader
+        // that parses either body into a double reads 2^53 + 1 as 2^53.
         var rich = Corpus.Row(Corpus.Shipment, "addon-rich");
         var tour = Corpus.ValueAt(rich, "addon.tourCount")!.AsInt64;
         tour.Should().BeGreaterThan(1L << 53);
         c1.Text.Should().Contain($"\"tourCount\":{tour}", "contract 1: a bare number, digits exact in the body");
-        c2.Text.Should().Contain($"\"tourCount\":\"{tour}\"", "contract 2: a string of digits");
-        ((long)double.Parse(tour.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture)).Should().Be(1L << 53, "what a JavaScript client reads from the contract-1 body");
-        differences.Should().Contain(difference => difference.Path == "addon.tourCount" && difference.Category == "number-as-string");
+        c2.Text.Should().Contain($"\"tourCount\":{tour}", "contract 2: the same bare number, digits exact in the body");
+        ((long)double.Parse(tour.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture)).Should().Be(1L << 53, "what a reader that parses the number into a double keeps of it");
+        differences.Should().NotContain(difference => difference.Path == "addon.tourCount", "a long is no longer an encoding the contracts differ in");
     }
 
     // ── step 6 · the guid operand and the v1 trap ───────────────────────────────────────────

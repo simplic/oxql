@@ -219,6 +219,51 @@ public class DocumentModelBuilderTests
     }
 
     [Fact]
+    public void A_document_whose_version_or_alias_is_no_string_is_refused_or_read_without_it()
+    {
+        ((Action)(() => DocumentModelBuilder.Build("""{ "schemaVersion": 1, "types": {} }"""))).Should().Throw<InvalidDataException>();
+
+        var model = DocumentModelBuilder.Build("""
+            { "schemaVersion": "1.0", "types": { "probe.thing": { "entity": true, "aliases": [7, "probe.old"], "properties": [
+                { "name": "id", "kind": "guid", "nullable": false } ] } } }
+            """);
+
+        model.RetiredIds.Should().ContainKey("probe.old").And.HaveCount(1);
+    }
+
+    [Fact]
+    public void An_enum_value_written_as_text_and_the_fingerprint_read_the_same_under_every_culture()
+    {
+        const string document = """
+            { "schemaVersion": "1.0", "types": {
+                "probe.thing": { "entity": true, "properties": [
+                    { "name": "id", "kind": "guid", "nullable": false },
+                    { "name": "level", "kind": "enum", "type": "#/types/t_level", "nullable": false } ] },
+                "t_level": { "kind": "enum", "values": [ { "name": "Below", "value": "-5" }, { "name": "Above", "value": 5 } ] } } }
+            """;
+
+        var invariant = DocumentModelBuilder.Build(document);
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        var other = (System.Globalization.CultureInfo)System.Globalization.CultureInfo.InvariantCulture.Clone();
+
+        other.NumberFormat.NegativeSign = "−";
+
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = other;
+
+            var model = DocumentModelBuilder.Build(document);
+
+            model.TypePool["t_level"].EnumValues.Select(value => value.Value).Should().Equal(-5, 5);
+            model.Fingerprint.Should().Be(invariant.Fingerprint);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = before;
+        }
+    }
+
+    [Fact]
     public void A_dangling_pointer_makes_the_member_unknown_with_a_finding()
     {
         var model = DocumentModelBuilder.Build("""

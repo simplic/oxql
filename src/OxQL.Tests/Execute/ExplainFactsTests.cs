@@ -13,7 +13,7 @@ using Xunit;
 namespace OxQL.Tests.Execute;
 
 /// <summary>
-/// What explain says for an editor and for a save rule (DG2 M7): the basis of every error, diagnostic
+/// What explain says for an editor and for a save rule: the basis of every error, diagnostic
 /// and note with the verdict derived from it, what a row is and what identifies it at every boundary,
 /// the entities a row holds, the total order of the page, and what may be done with a column.
 /// </summary>
@@ -43,7 +43,7 @@ public class ExplainFactsTests
         Basis.OfNote.Keys.Should().BeEquivalentTo(Notes.All, "every explain note says what would have to change");
         Basis.OfCode.Values.Concat(Basis.OfNote.Values).Should().OnlyContain(basis => Basis.All.Contains(basis));
 
-        // The table of DG2-ENG-2, by basis: a code that moves is a decision, written here.
+        // The table of codes, by basis: a code that moves is a decision, written here.
         string Of(string basis) => string.Join(" ", Basis.OfCode.Where(pair => pair.Value == basis).Select(pair => pair.Key).Order(StringComparer.Ordinal));
 
         Of(Basis.Request).Should().Be("EMPTY_LOGICAL_GROUP FILTER_NOT_PLACEABLE INVALID_ALIAS INVALID_DATE_TRUNC_UNIT INVALID_FILTER INVALID_PAGE_LIMIT INVALID_PATH INVALID_REGEX "

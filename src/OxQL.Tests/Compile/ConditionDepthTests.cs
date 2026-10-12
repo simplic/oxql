@@ -62,4 +62,53 @@ public class ConditionDepthTests
         refused.Errors![0].Message.Should().Be($"A condition nests more than {Binder.MaxConditionDepth} levels of and, or, not and any; flatten the groups.");
         refused.Errors[0].Stage.Should().Be(0);
     }
+
+    /// <summary>An aggregate argument of <paramref name="levels"/> levels of arithmetic around one path.</summary>
+    private static string Arithmetic(int levels)
+    {
+        var argument = "\"count\"";
+
+        for (var level = 0; level < levels; level++)
+            argument = $$"""{ "add": [{{argument}}, 1] }""";
+
+        return $$"""[{ "group": { "by": [], "fields": { "x": { "sum": {{argument}} } } } }]""";
+    }
+
+    /// <summary>A request read as a host reads it, as deep as the wire goes.</summary>
+    private static async Task<BindOutcome> BindAsWiredAsync(string pipeline, string? variables = null)
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<OxQL.Core.Models.QueryRequest>(
+            $$"""{ "entityType": "probe.order", {{(variables is null ? "" : $"\"variables\": {variables},")}} "pipeline": {{pipeline}} }""", OxQL.Core.Models.OxQLJson.Wire)!;
+
+        return await BindHost.BindAsync(BindHost.Probe, request);
+    }
+
+    [Fact]
+    public async Task An_aggregate_argument_at_the_bound_compiles_and_serializes()
+    {
+        var bound = (await BindAsWiredAsync(Arithmetic(Binder.MaxExpressionDepth))).Should().BeOfType<BindOutcome.Bound>().Subject.Pipeline;
+
+        SerializesAsSent(MongoCompiler.Compile(bound, Options));
+    }
+
+    [Fact]
+    public async Task An_aggregate_argument_one_level_deeper_is_refused_once()
+    {
+        var refused = (await BindAsWiredAsync(Arithmetic(Binder.MaxExpressionDepth + 30))).Should().BeOfType<BindOutcome.Failed>().Subject.Refusal;
+
+        refused.Status.Should().Be(400);
+        refused.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidAggregateArgument);
+        (await BindAsWiredAsync(Arithmetic(Binder.MaxExpressionDepth + 1))).Should().BeOfType<BindOutcome.Failed>().Which.Refusal.Errors.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_resolve_filter_at_the_bound_that_holds_a_variable_binds()
+    {
+        var filter = """{ "number": { "in": [{ "$var": "n" }, "y"] } }""";
+
+        for (var level = 1; level < Binder.MaxConditionDepth; level++)
+            filter = $$"""{ "and": [{{filter}}] }""";
+
+        (await BindAsWiredAsync($$"""[{ "resolve": { "path": "customerId", "as": "c", "filter": {{filter}} } }]""", """{ "n": "x" }""")).Should().BeOfType<BindOutcome.Bound>();
+    }
 }

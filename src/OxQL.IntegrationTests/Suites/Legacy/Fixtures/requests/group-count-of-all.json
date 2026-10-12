@@ -1,0 +1,33 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "IsDeleted": {
+          "eq": false
+        }
+      }
+    },
+    {
+      "group": {
+        "by": [
+          {
+            "path": "IsDeleted",
+            "as": "Deleted"
+          }
+        ],
+        "fields": {
+          "Count": {
+            "count": true
+          }
+        }
+      }
+    },
+    {
+      "page": {
+        "limit": 10,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

@@ -33,7 +33,7 @@ public sealed record QueryValidationError
 
     /// <summary>
     /// Machine-readable details, when the error is a diagnostic refused under <c>strict</c> or
-    /// <c>onMissing: "refuse"</c>: the diagnostic's own <c>params</c> (DESIGN §3.4.3, §3.6).
+    /// <c>onMissing: "refuse"</c>: the diagnostic's own <c>params</c>.
     /// </summary>
     [JsonPropertyName("params")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

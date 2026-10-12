@@ -70,7 +70,7 @@ public class ShapeRecursiveElementTests
         answer.Items.Should().ContainSingle();
         Text(answer.Items[0], "sub.text").Should().Be("Extras");
         Text(answer.Items[0], "deep.text").Should().Be("Billing line 6");
-        Text(answer.Items[0], "deep.totalPrice").Should().Be("120", "a decimal is a string under contract 2");
+        answer.Items[0]!["deep"]!["totalPrice"]!.ToJsonString().Should().Be("120", "a decimal is a number in canonical digits under contract 2");
         answer.Items[0]!["deep"]!["references"]!.AsArray().Select(reference => Text(reference, "dataType")).Should().Equal("shipment");
     }
 

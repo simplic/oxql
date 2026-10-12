@@ -69,7 +69,7 @@ public class ShapeKUnwindTests
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
 
-        // …and the alias is the element; the array has left the row (DG2 M2).
+        // …and the alias is the element; the array has left the row.
         var three = answer.Items.Where(row => Guid.Parse(row!["id"]!.GetValue<string>()) == Id("items-three")).ToList();
         three.Should().HaveCount(3);
         three.Should().OnlyContain(row => row!["item"] is JsonObject && !row.AsObject().ContainsKey("items"));

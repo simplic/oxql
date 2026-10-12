@@ -18,17 +18,17 @@ using Xunit.Abstractions;
 namespace OxQL.IntegrationTests.Suites.Explain;
 
 /// <summary>
-/// The explain shape on the fleet (improvement plan §3.E), with the fleet's engines explaining for one
+/// The explain shape on the fleet, with the fleet's engines explaining for one
 /// another in process as the internal explain route would. Every prefix of every report scenario — what
 /// a studio explains while a user builds A1–A5 stage by stage — binds, is complete, and gives every root
 /// of every stage a type, the owners' included; and the answer of the reference query stays within its
-/// budgets (T4). Nothing is read from a database: explain never executes.
+/// budgets. Nothing is read from a database: explain never executes.
 /// </summary>
 [Trait("Category", "Integration")]
 [Collection(TimedCollection.Name)]
 public class ExplainShapeFleetTests(ITestOutputHelper output)
 {
-    /// <summary>T4: the size budget of the reference query's answer, raw and gzipped, and its warm server time.</summary>
+    /// <summary>The size budget of the reference query's answer, raw and gzipped, and its warm server time.</summary>
     private const int MaxRawBytes = 60_000;
     private const int MaxGzipBytes = 10_000;
     private const double MaxWarmMs = 10;
@@ -230,7 +230,7 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         answer.Catalog[1]["type"]!.GetValue<string>().Should().Be("t:fleet.vehicle");
     }
 
-    // ---- M7: what a column can is what the binder accepts (DG2) -----------------------------------------
+    // ---- what a column can is what the binder accepts -----------------------------------------
 
     public static TheoryData<string> Reference => new(ExplainGolden.Cases.Keys);
 
@@ -295,7 +295,7 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         checkedColumns.Should().BePositive();
     }
 
-    // ---- T4: the budgets of the reference query ---------------------------------------------------------
+    // ---- the budgets of the reference query ---------------------------------------------------------
 
     [Theory]
     [InlineData("EX1-source-chain", 28_200, 3_950)]
@@ -346,7 +346,7 @@ public class ExplainShapeFleetTests(ITestOutputHelper output)
         median.Should().BeLessThanOrEqualTo(MaxWarmMs, "T4: warm, the server answers within 10 ms");
 
         // The answer names its types and says where their members stand; the members are the schema
-        // documents'. Measured (DG2: the requests project the paths their joins show, and the answer says
+        // documents'. Measured (the requests project the paths their joins show, and the answer says
         // what a row is, its order, its subjects and what each column can): the reference chain 27.4 KB raw
         // and 3.8 KB gzipped (86.7 and 11.2 with the member rows in it), A4 34.3 and 4.4 (84.2 and 10.8), A5
         // with 16 stages and 14 aliases 55.3 and 6.3 (124.9 and 14.9). The budget is 60 KB raw and 10 KB gzipped; the ceilings here are what was

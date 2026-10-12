@@ -9,6 +9,12 @@ across services. The grammar is in
 [`oxql-query-syntax.md`](oxql-query-syntax.md); status codes, limits and the operational
 endpoints are in [`oxql-operations.md`](oxql-operations.md).
 
+Where a rule below says what contract 1 does, it speaks of the compatibility rewrite: a request
+without the contract header on a host that answers contract 1 through the contract 2 engine
+(`Compat:Legacy:Always=false`). By default such a request never reaches this engine: the legacy
+pipeline answers it with the semantics of the engine before contract 2, which
+[`LEGACY.md`](LEGACY.md) describes.
+
 ## Null, absent and empty
 
 Storage distinguishes a member that holds `null` from a member that is absent from the
@@ -30,14 +36,15 @@ document. The operators do not, except `exists`:
 
 - The empty string is a value like any other: `eq ""` matches the empty string only. A blank
   test on a string is `or: [ { p: { eq: null } }, { p: { eq: "" } } ]`. An empty string on a
-  member of another kind (`int`, `date`, `decimal`, …) is `INVALID_OPERAND`, so on those
+  member of another kind (`int`, `date`, `decimal`, `guid`, `bool`, …) is `INVALID_OPERAND`
+  (`UNKNOWN_ENUM_MEMBER` on an enum), so on those
   members `eq null` alone is the blank test.
 - `eq null` on a member no document holds matches every row, and `exists: true` none. A
   misspelled member is refused (`UNKNOWN_PATH`); a declared member that nothing writes is not.
 - Ordered comparisons stay inside the value's type: a numeric bound never matches text, a text
   bound never matches a number, and neither matches `null`.
 - `exists` is accepted on every stored member, a collection, an object and an `unknown` member
-  included; every other operator needs a scalar (`NOT_FILTERABLE`).
+  included; every other operator but `is` needs a scalar (`NOT_FILTERABLE`).
 
 **Collections.** A path through a collection in `match` means "some element". On a collection
 of scalars, `eq null` matches a row whose collection is absent, not one whose collection is
@@ -47,7 +54,8 @@ matches it and always matches `not { any }`. `unwind` drops a row whose collecti
 `null` or empty unless `preserveNull` is `true`, which keeps it once with the element absent
 (or `null`).
 
-**Joins.** A `lookup` with no matching child yields `[]` (`first`: `null`). A `resolve` yields
+**Joins.** A `lookup` with no matching child yields `[]` (`first`: `null`; a remote `lookup` whose
+owner did not answer holds `null`, with the owner's diagnostic). A `resolve` yields
 `null` when the reference member is `null` or absent, when the target does not exist, when it fails
 the stage's `filter`, when no case of a typed reference matches, and, for a remote target, when
 the owner did not answer (with a `RESOLVE_TIMEOUT` or `RESOLVE_UNREACHABLE` diagnostic). Which of
@@ -55,7 +63,9 @@ these a `null` is, and which of them lose data, is the join's outcome
 ([Outcomes and data loss](#outcomes-and-data-loss)).
 
 **Rows.** A member stored as `null` is `null` in the row; a member absent from the document is
-absent from the row object. A `double` that is `NaN` or infinite is `null`.
+absent from the row object. A stored double that is `NaN` or infinite is `null`, under a `double`
+member and under an `int`, `long` or `decimal` member alike (there it is also logged among the
+values that do not fit their kind).
 
 **Group and sort.** `null` and absent fall into one group, whose key is `null`, for a single key
 and for every key of a composite one. They sort together, first in ascending and last in
@@ -72,33 +82,50 @@ that representation. Where a fleet's data is not uniform, the options under
 | kind | storage it expects | operand | row |
 |---|---|---|---|
 | `string` | string | JSON string | string |
-| `string` (a single character) | Int32 code point (the driver's default for `char`) | a one-character string; `eq neq in nin` match either case of the character unless `caseSensitive`, ordered comparisons order by code point; `contains`, `startsWith`, `endsWith` and `regex` are `INVALID_OPERAND`; an operand of another length binds and matches nothing | the character |
+| `string` (a single character) | Int32 code point (the driver's default for `char`) | a one-character string; `eq neq in nin` match either case of the character unless `caseSensitive`, ordered comparisons order by code point; `contains`, `startsWith`, `endsWith` and `regex` are `INVALID_OPERAND`; an operand that is not exactly one UTF-16 code unit is `INVALID_OPERAND` | the character |
 | `int` | Int32, Int64, Double, Decimal128 | integral JSON number or digit string | number |
-| `long` | Int64, Int32, Double | integral JSON number or digit string, exact to 64 bits | string of digits |
+| `long` | Int64, Int32, Double | integral JSON number or digit string, exact to 64 bits | JSON number, every digit |
 | `double` | Double and the other numeric types | JSON number or numeric string | number; `NaN` and infinities `null` |
-| `decimal` | Decimal128, or text written before a migration | JSON number or string | canonical plain text: no exponent, no trailing fractional zeros (`125000.00` reads back as `"125000"`) |
+| `decimal` | Decimal128, or text written before a migration | JSON number, or text of digits with an optional leading sign, one decimal point and an exponent (no group separator, no white space, no trailing sign; `INVALID_OPERAND` otherwise) | JSON number in canonical digits: no exponent, no trailing fractional zeros, every digit (`125000.00` reads back as `125000`) |
 | `bool` | boolean | `true`/`false` or `"true"`/`"false"` | boolean |
 | `guid` | binary subtype 4, or what the member declares (subtype 3, string) | GUID string | GUID string |
 | `date` | a BSON date at midnight UTC, or a string when the member declares one | `YYYY-MM-DD` | `YYYY-MM-DD` of the stored UTC day |
 | `dateTime` | a BSON date | ISO-8601 with `Z` or an offset; milliseconds optional | ISO-8601 UTC, trailing zero fractions dropped (`2026-06-15T23:30:00Z`) |
 | `timeSpan` | string in .NET's `c` format (`01:30:00`), or Int64 ticks, or Double milliseconds when the member declares one | ISO-8601 duration (`PT1H30M`, `-PT5M`) | ISO-8601 duration |
-| `enum` | Int32, Int64 or the member name as a string, as the member declares | member name or number | number; above the Int32 range a string of digits |
+| `enum` | Int32, Int64 or the member name as a string, as the member declares | member name or number | number, also where a long backs the enum |
 | `binary` | binary | base64 | base64 |
 
 - **Numeric types are one bracket.** Int32, Int64, Double and Decimal128 compare with each other
   by value, so a `long` member written as Int32 on older rows matches and orders correctly.
   Text never compares with a number.
-- **`long` above 2^53.** Contract 2 writes every `long` as a string, in rows, in `group` outputs
-  (`sum` and `avg` over a `long`, a `min`, `max`, `first` or `last` of one) and inside pushed
-  arrays, so no digit is lost in a JavaScript caller. **A count is not a `long`**: `count` and
-  `countDistinct` are an `int` and travel as a JSON number, as `pageInfo.count.value` and every
-  count in a diagnostic do (a number of rows is far inside what a JSON number holds exactly;
-  contract 1 keeps its `long`, written by its own row converter). An operand may be a JSON number or a digit string and
-  is read exactly either way; a JavaScript caller sends a string, since its own numbers are not
-  exact above 2^53. Cursor legs carry the value in extended JSON and are exact. Contract 1 rows
-  are rendered by the v1 converter, which writes an Int64 as a JSON number: a v1 client reads
-  `9007199254740993` as `…992`. A member the model does not describe (an undefined addon key,
-  an `unknown` member) is written as a number up to 2^53 − 1 and as a string above it.
+- **`long` and `decimal` are JSON numbers, exact on the wire.** Contract 2 writes a `long`, a
+  `decimal` and an enum backed by a long as a JSON number wherever it writes a value: in rows, in
+  `group` keys and outputs (`sum` and `avg`, a `min`, `max`, `first` or `last`), inside pushed
+  arrays and in the rows of `values`. It is what the services' REST API writes for the same
+  members. Every digit is in the body: `9007199254740993` is written `9007199254740993`, and a
+  decimal with twenty-five places is written with twenty-five. A decimal is written in canonical
+  digits (no exponent, no trailing fractional zeros: the scale a value was stored with is not
+  kept, `125000.00` and `125000` are one number), also where the row stores it as text. A sum or
+  a mean the database holds with more digits than the runtime's decimal (it computes in 34
+  significant digits) is written from the database's own digits, all of them.
+  **A reader that parses a JSON number into an IEEE double keeps 15 to 17 significant digits of
+  it**: a JavaScript `JSON.parse` reads `9007199254740993` as `…992` and `0.1234567890123456789`
+  as `0.12345678901234568`. That is the reader's rounding, as it is with REST; a caller that
+  needs every digit reads the number's text (a big-number parser, a reviver over the source
+  text). There is no option to get text instead.
+  What is no number stays text: a Decimal128 `NaN` or infinity, one whose magnitude no decimal
+  holds (`1E+6000`), and text stored under a `decimal` member that spells no number (`"n/a"`).
+  The row is answered with that text where the number would be, and the host logs once per
+  request which paths held such values, by path and never by value (`returned … stored values
+  verbatim because they do not fit their kind`); nothing is refused and no diagnostic is added.
+  **A count is an `int`**: `count` and `countDistinct` travel as a JSON number, as
+  `pageInfo.count.value` and every count in a diagnostic do. An operand may be a JSON number or
+  its digits as text and is read exactly either way; a JavaScript caller that holds a value above
+  2^53 as text sends the text. Cursor legs carry the value in extended JSON and are exact; the
+  key of a reference is compared as text, the digits of a number. Contract 1 rows are rendered by the
+  v1 converter (a number with the stored scale, `60.00`). A member the model does not
+  describe (an undefined addon key, an `unknown` member) is written by its stored type: an Int64
+  as a number of any size, a Decimal128 as a number in canonical digits.
 - **Addon bag values** are written by their BSON type, like any member the model does not
   describe, except a key the organisation defined as `date`: it is written as `YYYY-MM-DD`, as
   every `date` is, so the value read back is a valid operand for the key. A retired or undefined
@@ -130,8 +157,8 @@ that representation. Where a fleet's data is not uniform, the options under
   a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
   `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes
   a decimal as `{ _t: "System.Decimal", _v: <value> }`). A row never shows that wrapper: a value
-  the driver wrote as `{ _t, _v }` reads back as its `_v`, a decimal as canonical decimal text like
-  every `decimal` (`"261.8"`), whether the key is defined or not, also below a wrapped dictionary
+  the driver wrote as `{ _t, _v }` reads back as its `_v`, a decimal as the number every
+  `decimal` is (`261.8`), whether the key is defined or not, also below a wrapped dictionary
   or list. `sum`, `avg`, `min` and `max` over a defined `decimal` key read the wrapped value, so
   they aggregate what the rows show. A sort by such a key orders the wrapped values among
   themselves by number; rows that hold the plain number and rows that hold the wrapper are two
@@ -159,8 +186,7 @@ otherwise; a request that folds nothing runs without a collation, exactly as bef
 without the case or the diacritics of the stored value. Primary strength is the one level that
 folds both; strength 2 folds case only, 3 and above fold neither. A case-insensitive pattern
 cannot do the same by itself: its `i` flag folds case but not accents (the engine writes the
-accents into the pattern of `contains` and `endsWith`, letter by letter, from the collation's own
-data for the Latin-1 and Latin Extended-A letters), it cannot express an ordered
+accents into the pattern of `contains` and `endsWith`; see the table), it cannot express an ordered
 comparison or a sort, and it cannot be bounded by an index, so it walks every key of the index
 it uses. A collated comparison, sort and group key fold consistently in one aggregate and can be
 served by an index built with the same collation. `de` is the default because German is the
@@ -178,7 +204,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 | group key on a string | folds: `Open` and `OPEN` are one group, reported under the first value met |
 | `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored |
 | a single character (Int32 storage) | `eq neq in nin` match both cases of the character; never collated |
-| a join key (`lookup`, local `resolve`) | compared byte for byte even inside a collated request; ids never fold |
+| a join key (`lookup`, local `resolve`, the ids of a semi-join over a reference stored as text) | compared byte for byte even inside a collated request; ids never fold |
 | a condition under a remote alias | bound by the owner under its own default; `caseSensitive` travels as written |
 | `eq null`, `in []` | compare no text and add no collation |
 | every other kind | compares by value; unaffected |
@@ -242,12 +268,16 @@ with no index but `_id`. What changes with the collation is which indexes the se
 - A `lookup` returns at most `limit` children per parent (default and maximum
   `Limits:MaxLookupLimit`, 100) in the order of its `sort`, then the child's key (without `sort`,
   ascending by the child's key). Children beyond the limit are not returned, and the page carries
-  `LOOKUP_TRUNCATED` naming the alias and how many rows were cut; under `strict` it refuses. A
-  strict request also refuses a cut that a later match hides by filtering the cut parent out (a
-  second read of the rows up to the lookup, `params.filtered: true`); the same holds for a
-  `flatten` cut at its depth.
-- A join loads what is read under its alias (see *What a join loads*): every member of its target can
-  be filtered, sorted, grouped, projected or joined on; a contract 2 join has no `select`.
+  `LOOKUP_TRUNCATED` naming the alias, the limit and how many rows of the page are affected; under
+  `strict` it refuses. A strict request also refuses a cut that a later match hides by filtering
+  the cut parent out: a second read of the rows up to the lookup, the same rows the page reads,
+  those a semi-join selects included, answers 422 `LOOKUP_TRUNCATED` with `params.filtered: true`;
+  a `flatten` cut at its depth answers `UNWIND_DEPTH_TRUNCATED` the same way.
+- A join loads what is read under its alias (see *What a join loads*). Under the alias of a join
+  in the aggregate (a `lookup`, an inline `resolve`) every member of the target can be filtered,
+  grouped, projected or joined on, and under an inline `resolve` sorted on; under a keyed or
+  remote alias a member can be projected or continued from, and under a plain remote one filtered
+  as a semi-join. A contract 2 join has no `select`.
 - **Where a condition of the request's `filter` runs.** The binder places each condition at the
   earliest boundary between two stages at which every path it reads is in the row, as a `match`
   of its own there: an entity member at the entry, an unwind's alias after the unwind, a join's
@@ -272,7 +302,7 @@ decides which rows there are and in which order:
 | the entity and the organisation | the page stage: `limit`, `count`, the cursor itself |
 | the request's `filter` and every `match`, with storage paths and typed operands | the trailing `project`: every projection that only sorts, display-only joins and the page follow |
 | every `unwind` and `group`, and the sort (the default and the appended keys included) | a `lookup` or `resolve` whose alias, owning row and outcome no stage reads but a projection, with its `filter`, `limit`, `sort` and `outcomeAs` |
-| every join a condition, a sort, an unwind, a group or another join reads, with its `filter` | what a join loads; `onMissing`; `strict` |
+| every join a condition, a sort, an unwind, a group or another join reads, with its `filter` | what a join loads; `strict`; the `onMissing` of a resolve this host runs (a stage continued at an owner is fingerprinted as it is sent, its `onMissing` included) |
 | a projection a later `match`, `unwind`, `group` or read join follows; a stage continued at an owner | |
 
 So a follow-up page may ask for another `limit` or for a count, and showing or hiding a column,
@@ -291,9 +321,9 @@ included, as it always has; a cursor of one contract is never one of the other.
   the group's keys. The next page starts after them by value, at any depth, and a row or group
   written or deleted before the position between two pages moves nothing. Where the order of the
   groups is not total (a `project` dropped a key before the sort, the only sort stands before the
-  group, an `unwind` follows the group, or one group is all there is) the cursor counts rows
+  group, or one group is all there is) the cursor counts rows
   instead, and a row inserted or deleted before the position shifts the page; the cursor is opaque
-  either way. Contract 1 counts rows after `group` and `unwind`, as it always has.
+  either way. Contract 1 counts rows after `group` and `unwind`.
 - A page of groups ordered by a `sum` or an `avg` of floating-point values (kind `double`)
   continues from a value the database computes anew for the next page, in an order of addition
   that is its own, so the last group's value may come out a digit off the one its cursor carries
@@ -314,7 +344,8 @@ included, as it always has; a cursor of one contract is never one of the other.
   (`vehicle.matchCode`): the alias does not exist before the join, so the condition is evaluated
   after the join, right before the sort. Such a cursor continues the order like any other; the
   first stage no longer narrows the scan by the cursor. (A sort under a `lookup` alias is
-  `NOT_SORTABLE`; one under a remote alias is `RESOLVE_NOT_SORTABLE`.)
+  `NOT_SORTABLE`; one under a keyed or remote alias, or on a join's outcome, is
+  `RESOLVE_NOT_SORTABLE`.)
 
 **Counts.** Every contract 2 answer says what is known under `pageInfo.count`: `exact`, a proven
 lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
@@ -323,8 +354,8 @@ lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
   (the cursor's number plus this page's) are the exact count; any other page proves the rows
   served plus one (`stoppedBy: "page"`).
 - `count: true` beside a page sends one more aggregate at the same moment as the page: the same
-  stages up to the page, joins included only where a later `match`, `unwind`, `group` or
-  `resolve` reads their alias, sorts and display-only joins left out, then `$limit bound + 1`,
+  stages up to the page, joins included only where a later `match`, `unwind`, `group`, `values`,
+  `resolve` or `lookup` (`on`) reads their alias or the outcome the join names, sorts and display-only joins left out, then `$limit bound + 1`,
   `$count`. The bound is `Count:StepRows` (1 000) under the request's `upTo` and the host's
   `CountCap`. The step has its own time limit (`Count:BudgetMs`, or the request's `budgetMs`) and
   its own cancellation: the page never waits for it longer than that limit, counted from when
@@ -343,7 +374,9 @@ lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
   left is predicted to reach, from what the first took (a scan is linear in what it reads): for a
   count the database answers quickly that is the ceiling at once, two commands in all. A step
   that finds no more than its bound is exact. A further step is sent only when ten times the last
-  one is predicted to fit; otherwise the last bound is the answer (`stoppedBy: "budget"`).
+  one is predicted to fit; otherwise the last bound is the answer (`stoppedBy: "budget"`). A step
+  that runs out of time leaves the bound the step before it proved (`stoppedBy: "time"`), or
+  `unknown` when none had.
 - After `unwind` a count counts element rows, after `group` groups.
 - **A step over unwound rows also bounds the parents** (contract 2, one `unwind`, where nothing
   between the unwind and the page reshapes, groups or joins the rows and what filters after the
@@ -367,13 +400,16 @@ lower bound (`atLeast`) with why counting stopped there, or `unknown` with why.
   bounded step, and why a list asks for the count alone, in parallel, when it wants more.
 
 Contract 1 and an internal call keep `includeTotalCount`: a second aggregate the answer waits for,
-stopping at the cap in force (the host's `CountCap`, or the request's own below it), answered as
+stopping at the cap in force (the host's `CountCap`, or for an internal call the request's own
+below it), answered as
 `totalCount` and `totalCountCapped`.
 
 ## Projections
 
 - A path a projection removed is `UNKNOWN_PATH` ("was removed by the projection") in every later
-  stage. An inclusion keeps `id` unless it says `"id": 0`.
+  stage. An inclusion keeps `id` unless it says `"id": 0`. Projections narrow one another: an
+  inclusion after an inclusion keeps what both name, an exclusion takes its paths out of an
+  earlier inclusion, and what an exclusion removed stays removed (`params.reason: "projected"`).
 - **An inclusion projection hides every alias a later stage writes.** An alias is a new root the
   projection's list cannot name in advance: after `{ "project": { "items.orderNumber": 1 } }`, an
   `unwind` with `as: "item"` or `includeIndex: "at"` binds, but `item.orderNumber` and `at` are
@@ -382,7 +418,8 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
 - **A projection after a join decides whether the row carries its alias.** An inclusion that
   does not name the alias (nor a member below it), or an exclusion that names it, leaves the
   alias out of the row, for a `lookup`, a local and a remote `resolve` alike. A join whose alias
-  no later `match`, `unwind`, `group`, `resolve` or `lookup` reads and that a projection dropped is
+  (and outcome, where it names one) no later `match`, `sort`, `unwind`, `group`, `values`,
+  `resolve` or `lookup` reads and that a projection dropped is
   not run at all: a remote owner is not called for it. A keyed or remote join counts as read while
   the row shows an alias a stage continued under it adds. An alias a stage writes after the projection is
   in the row.
@@ -462,7 +499,7 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
       fails a comparison with a value, a pattern, `exists: true`, `is` and `any`. Where it passes,
       "the array holds such an element" is asked (`$elemMatch { $type: [every type but object and
       array] }`); where it fails, nothing; where the conditions do not say by themselves (a set
-      that holds null, a comparison with a null operand under `or` or `not`), the conditions are
+      that holds null), the conditions are
       also read at a member no row holds (`__oxAbsent`), and the database answers what an absent
       member passes;
     - *a value that is no array* (one object, or a scalar, where the array should be): the one
@@ -534,7 +571,8 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
     keyed fetch reads each element's reference (and what selects its cases); the rest of the
     collection is fetched only when the projection asks for it.
 - **Late joins.** A `lookup` or local `resolve` that no later `match`, `sort`, `unwind`, `group`
-  or `resolve` reads, that no `group` follows, and whose alias every later `project` passes on
+  or `resolve` reads (nor a `lookup` joined `on` it that is itself read, nor a stage reading the
+  outcome it names), that no `group` or `values` follows, and whose alias every later `project` passes on
   runs after the page is taken, on the page's rows alone. A projection passes the alias on when it
   keeps it whole (`"vehicle": 1`, or an exclusion that names nothing under it) or, under contract 2,
   names paths under it (`"vehicle.matchCode": 1`): the join then loads exactly those paths with its
@@ -561,8 +599,11 @@ stopping at the cap in force (the host's `CountCap`, or the request's own below 
   members, the pair a whole alias of a `resolve` shows; it is `UNKNOWN_PATH` after a
   `group` or an `unwind`. A remote `resolve` kept whole sends it to the owner, so a
   remote default is the same pair.
-- Every value in a projection that is not the number `0` includes the path; a nested object is
-  read as dotted paths (`{ "address": { "city": 1 } }` is `address.city`).
+- A projection keeps a path with `1` or `true` and removes it with `0` or `false` (any other
+  number keeps it); a nested object is read as dotted paths (`{ "address": { "city": 1 } }` is
+  `address.city`). A value that is neither a number nor a boolean (a string, `null`, an array) is
+  `MIXED_PROJECTION`, as are an inclusion mixed with an exclusion (other than `"id": 0`) and an
+  empty projection.
 
 ## What a join loads
 
@@ -604,7 +645,9 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   one is refused: `UNKNOWN_STAGE_MEMBER`, `params { stage, member: "select", reason: "removed",
   use: "project" }`. To show other members of a join than its default output, name them in a
   `project` stage (`"vehicle.matchCode": 1`); a path the target does not have is `UNKNOWN_PATH` at
-  that projection, also under a remote `lookup`'s alias.
+  that projection, also under a remote `lookup`'s alias. A member the target has but does not
+  store is `NOT_STORED` at that projection, under a keyed alias as on the entity itself; an
+  exclusion that names one is accepted.
 - **At an owner.** An owner query carries what the origin needs of an alias as its own `project`
   stage (the output set, or `$default`), never as a `select`; a stage continued at an owner travels
   as the caller wrote it, and the owner binds it and infers its join the same way, the case member
@@ -614,7 +657,9 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 - **Unions.** The paths under an alias with several targets are flat. Each target's owner is asked
   for them; a path a target lacks is dropped for it (`SELECT_PATH_NOT_ON_TARGET`; for a remote
   target after its owner said so, once, kept per target) and the member is absent on its rows. Only
-  a path every target lacks is `UNKNOWN_PATH`, at the stage that names it.
+  a path every target lacks is refused: `UNKNOWN_PATH` at the projection where every target is
+  local; where a remote owner has to say it, a run answers 422 `RESOLVE_REFUSED` at the join's
+  stage, carrying `UNKNOWN_PATH` for the path.
 - **Cost.** The paths asked of an owner count toward its `MaxProjectionFields`. Explain shows per
   alias what it `loads` and `shows`, and per stage what it reads.
 - **Contract 1** is frozen: a join fetches its `select` as written (or key and display), nothing is
@@ -674,11 +719,11 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 
 | output | kind | on the wire |
 |---|---|---|
-| key over a path | the member's kind | as the member (`long` as a string, `date` as `YYYY-MM-DD`, enum as its number) |
+| key over a path | the member's kind | as the member (`long` and `decimal` as a number, `date` as `YYYY-MM-DD`, enum as its number) |
 | key over `dateTrunc` | `dateTime` | ISO-8601 UTC instant |
 | `count`, `countDistinct` | `int` | a JSON number (`12`); a `sum`, `min` or `max` over such an alias in a later `group` is an `int` and a number too |
-| `sum` | the argument's kind | `int` and `double` a number, `long` and `decimal` a string (a `decimal` sums in Decimal128 and reads back exactly; a `double` sums in binary floating point, so `0.1 + 0.2` is `0.30000000000000004`: the engine rounds nothing, the member's kind says which it is); arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
-| `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal` | a number, or a decimal string |
+| `sum` | the argument's kind | a number: `int` and `double` as they are, `long` and `decimal` with every digit (a `decimal` sums in Decimal128 and reads back exactly; a `double` sums in binary floating point, so `0.1 + 0.2` is `0.30000000000000004`: the engine rounds nothing, the member's kind says which it is); arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
+| `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal` | a number; a decimal mean with every digit the database holds (up to 34) |
 | `min`, `max`, `first`, `last` | the argument's kind | as the member; an object by its members |
 | `push` | array of the argument's kind | each element in the member's encoding |
 | `coalesce` | unknown | the stored value verbatim |
@@ -798,8 +843,8 @@ as documents; bounded at 20 000 rows 8 ms and 12 ms). The bound is what keeps a 
 50 000 rows. A `group` before the stage is computed over every row that reaches it first, as
 always: the bound then limits the groups read, not the rows.
 
-**Not offered.** A list under another service's alias (`NOT_CONTINUABLE`: its values are its
-owner's to list); a `contains` search; a cursor; a count of rows rather than elements under a
+**Not offered.** A list under a keyed or remote alias (`NOT_CONTINUABLE`: its rows come from an
+owner after the page); a `contains` search; a cursor; a count of rows rather than elements under a
 collection; an answer kept between requests (every request reads the database).
 
 ## Polymorphic values
@@ -825,6 +870,30 @@ On a row of another variant a variant-only member is absent, so `eq null` and `n
 (explain notes `ONLY_FOR_VARIANTS`). `is` tests the variant itself: a name stands for that variant
 and every registered descendant; a concrete base name for all of them and for values stored without
 a discriminator. The discriminator is compared exactly.
+
+The stored discriminator itself is no member under contract 2: a path that ends in it (`items._t`)
+is `UNKNOWN_PATH` with `params.reason: "notAMember"` and `params.discriminator`, and the message
+says so. Which variant a row holds is what the model publishes for the member and what `is` tests.
+(A contract 1 request reads `_t` as the stored member it is: the legacy pipeline answers it; see
+[`LEGACY.md`](LEGACY.md).)
+
+## Members that hold their own kind
+
+A type may hold values of its own kind: a group item holds items, an operation item holds the
+items it was applied to. The model's path index walks a type once per branch and stops where it
+meets the type again, so it stays finite; the paths below that point are described from the place
+the index does describe the type, under the spelling and the storage of the path that was asked
+for. So every level is a path like any other:
+
+- after `unwind item.items as sub`, `sub.text` and `sub.items` are paths, and `sub.items` unwinds
+  again;
+- without an unwind, `items.items.text` is a path through two collections, with the rules of any
+  path through collections (a condition means "some element", a projection keeps the nesting);
+- a name the type does not have is `UNKNOWN_PATH` at every level; a path is described down to 32
+  segments, the depth the index itself stops at.
+
+Explain lists the members the index holds; a deeper level is typed by the same type, which the
+answer names once.
 
 ## Flattened trees
 
@@ -927,8 +996,13 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
   other than `null`, or an `outcomeAs`): then the keyed fetch asks the owner once more for the keys
   the filtered answer lacked, without the filter, and a key present there is `excluded`. An inline
   resolve with a `filter` does the same in the aggregate, with a second join without the filter.
-- `elements: "first"` takes the first `resolved` element; failing that the row is `not_found` or
-  `invalid_key` if any element was, else `excluded` if any was, else `reference_null`.
+- `elements: "first"` takes the first element that resolves (`resolved` or `ambiguous`); failing
+  that the row is `owner_unanswered` if any element was, else `not_found`, else `invalid_key`,
+  else `excluded`, else `reference_null`.
+- The `onMissing` of a stage is its own word; without one, the request's top-level `onMissing`;
+  without that, `refuse` under `strict` and `null` otherwise. The request's word is bound onto
+  each resolve as if the stage had written it, so a resolve continued at an owner carries it on
+  the stage and the owner binds it like any other.
 - `onMissing` decides what `not_found`, `invalid_key` and `owner_unanswered` do. `null` (the default
   outside `strict`): nothing but an owner failure's own `RESOLVE_TIMEOUT` / `RESOLVE_UNREACHABLE`
   (which name the aliases, not rows). `report`: one `RESOLVE_MISSING` per stage listing the rows.
@@ -954,22 +1028,25 @@ Every slot of a join (a row, or an element under `elements`) ends in one outcome
 the target is an item or a non-key field, so a second record is always seen. Two plain forms ask a
 single-record query and cannot always see it: a simple local reference onto a non-key field
 runs inline and takes the first match; a simple remote reference onto a non-key field sends the
-plain key match, so the second record is seen only when the owner's page happens to hold both, and
-not when the key is answered from the cache. Declare such a reference onto the target's key, or
+plain key match, so the second record is seen only when the owner's page happens to hold both (an
+answer kept in the cache repeats what the first answer saw). Declare such a reference onto the target's key, or
 expect `ambiguous` to be reported only by the keyed forms. Both plain forms look for the second
 record once the request is `strict`, the stage's `onMissing` is not `null` or the stage names its
 outcome (`outcomeAs`): the outcome is then read, so it is told.
 
 ## Strict requests
 
-`strict: true` says: these rows go into a document, so answer them all or refuse. Every data-loss
-outcome and truncation above refuses with 422, carrying the diagnostic it would have answered as its
+`strict: true` says: these rows go into a document, so answer them all or refuse. Every
+truncation, every `ambiguous`, every owner failure (`RESOLVE_TIMEOUT`, `RESOLVE_UNREACHABLE`,
+`RESOLVE_PARTIAL`) and, unless the stage's or the request's `onMissing` says `null` or `report`,
+every missing reference refuses with 422, carrying the diagnostic it would have answered as its
 error; the plain `null` of `reference_null`, `excluded` and `not_applicable` does not. A report page
 (no `cursor`) may hold up to `MaxReportPageSize` rows and refuses with
 `PAGE_INCOMPLETE` when more match. The request's `strict` is carried in the query sent to an owner
 that runs continued stages, and a strict request reads no cached "not found". Without `strict`
-nothing about the rows changes: `strict` and `onMissing` refuse or report, they never alter a row,
-and neither enters the cursor fingerprint.
+nothing about the rows changes: `strict` and `onMissing` refuse or report, they never alter a row.
+`strict` enters no cursor fingerprint; `onMissing` enters it only through a stage continued at an
+owner.
 
 ## Chains across services
 
@@ -1030,13 +1107,13 @@ Nothing else changes compared with a plain remote resolve:
   row shows under the alias is asked for the alias itself, so its owner still joins: the alias is an
   empty object where the record exists and `null` only where it does not. A union join under an alias a continued stage
   added is sent to that alias's owner as written, which splits it the same way.
-- **Owners.** Every owner an origin reaches runs this package: an owner needs the internal
-  routes (`internal/oxql/batch`, `internal/oxql/explain`), which only this package has. A service
-  still on the version 1 package has no internal route, is not listed in `InternalHosts` and cannot
-  be an owner; its entities stay unknown or unavailable to origins (`UNKNOWN_ENTITY`,
-  `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run refuses with
-  `RESOLVE_UNREACHABLE` and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
-  gate.
+- **Owners.** An owner is a service that runs this package (it needs the internal routes
+  `internal/oxql/batch` and `internal/oxql/explain`) and is listed in `InternalHosts`; any other
+  service's entities stay unknown or unavailable to origins (`UNKNOWN_ENTITY`,
+  `RESOLVE_UNAVAILABLE`). A service listed by mistake is not reached: a run answers the rows with
+  the alias `null` and `RESOLVE_UNREACHABLE` (a refusal under `strict`), a condition asked of it
+  (a semi-join) refuses with `RESOLVE_UNAVAILABLE`, and explain notes the part `REMOTE_UNCHECKED`.
+  There is no probe and no gate.
 
 Aggregation over chain data (`unwind`, `group` under a chain alias) is refused (`NOT_CONTINUABLE`);
 it belongs in the report that reads the rows.

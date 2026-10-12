@@ -32,6 +32,8 @@ public class CoreHardeningWireEncoderTests
         { NotANumber, Kind.Double, "NaN" },
         { Enormous, Kind.Double, "1E+6000" },
         { NotANumber, Kind.Int, "NaN" },
+        { new BsonDouble(double.NaN), Kind.Int, null },
+        { new BsonDouble(double.PositiveInfinity), Kind.Int, null },
         { Infinite, Kind.Long, "Infinity" },
         { new BsonDouble(double.NaN), Kind.Decimal, null },
         { new BsonDouble(1e300), Kind.Decimal, "1E+300" },
@@ -187,18 +189,18 @@ public class CoreHardeningWireEncoderTests
     }
 
     /// <summary>
-    /// DG2: what the driver writes for a value held as <c>System.Object</c> that BSON has no type of
+    /// What the driver writes for a value held as <c>System.Object</c> that BSON has no type of
     /// its own for is <c>{ _t, _v }</c> (a decimal, a dictionary or a list in an addon bag). A row
-    /// shows the value, a decimal as canonical decimal text, at any depth; a document that merely has
+    /// shows the value, a decimal as the number every decimal is, at any depth; a document that merely has
     /// such members among others is no wrapper and stays what it is.
     /// </summary>
     [Fact]
-    public void A_value_the_driver_wrapped_reads_back_as_the_value_and_a_wrapped_decimal_as_decimal_text()
+    public void A_value_the_driver_wrapped_reads_back_as_the_value_and_a_wrapped_decimal_as_a_number()
     {
         static string Shown(BsonValue value) => WireEncoder.Verbatim(value)?.ToJsonString() ?? "null";
 
-        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = new BsonDecimal128(new Decimal128(261.80m)) }).Should().Be("\"261.8\"", "a Decimal128, canonical: no trailing zeros");
-        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = "12.50" }).Should().Be("\"12.5\"", "the text an older serializer wrote, canonical too");
+        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = new BsonDecimal128(new Decimal128(261.80m)) }).Should().Be("261.8", "a Decimal128, canonical: no trailing zeros");
+        Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = "12.50" }).Should().Be("12.5", "the text an older serializer wrote, canonical too");
         Shown(new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = "n/a" }).Should().Be("\"n/a\"", "text that is no decimal stays the text");
         Shown(new BsonDocument { ["_t"] = "System.Guid", ["_v"] = "x" }).Should().Be("\"x\"", "any other wrapped scalar is its value");
 
@@ -208,8 +210,8 @@ public class CoreHardeningWireEncoderTests
             ["_v"] = new BsonDocument { ["make"] = "MAN", ["ratio"] = new BsonDocument { ["_t"] = "System.Decimal", ["_v"] = new BsonDecimal128(new Decimal128(0.5m)) } },
         };
 
-        Shown(dictionary).Should().Be("""{"make":"MAN","ratio":"0.5"}""", "a wrapped dictionary is the dictionary, and what it holds is unwrapped alike");
-        Shown(new BsonDocument { ["_t"] = "System.Collections.Generic.List`1[System.Object]", ["_v"] = new BsonArray { 1, dictionary } }).Should().Be("""[1,{"make":"MAN","ratio":"0.5"}]""");
+        Shown(dictionary).Should().Be("""{"make":"MAN","ratio":0.5}""", "a wrapped dictionary is the dictionary, and what it holds is unwrapped alike");
+        Shown(new BsonDocument { ["_t"] = "System.Collections.Generic.List`1[System.Object]", ["_v"] = new BsonArray { 1, dictionary } }).Should().Be("""[1,{"make":"MAN","ratio":0.5}]""");
 
         Shown(new BsonDocument { ["_t"] = "x", ["_v"] = 1, ["other"] = 2 }).Should().Be("""{"_t":"x","_v":1,"other":2}""", "three members: no wrapper");
         Shown(new BsonDocument { ["_t"] = 5, ["_v"] = 1 }).Should().Be("""{"_t":5,"_v":1}""", "a wrapper names its type");

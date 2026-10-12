@@ -1,5 +1,5 @@
 {
-  "description": "An unwind with alias, index and preserveNull, sorted on its element, then the page: the rows page by the sort, the key and the position (DG2 M2, M5).",
+  "description": "An unwind with alias, index and preserveNull, sorted on its element, then the page: the rows page by the sort, the key and the position.",
   "entity": "probe.order",
   "pipeline": [
     {

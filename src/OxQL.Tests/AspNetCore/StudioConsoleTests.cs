@@ -20,7 +20,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The console's routes (DESIGN §7): the shell and the assets sit at <c>RoutePath</c> relative to
+/// The console's routes: the shell and the assets sit at <c>RoutePath</c> relative to
 /// the path base, load without a credential, never shadow the API's own routes, and the console
 /// warns when its Explain switch and the engine's differ.
 /// </summary>

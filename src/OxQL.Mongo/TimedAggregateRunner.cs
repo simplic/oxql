@@ -11,7 +11,7 @@ namespace OxQL.Mongo;
 /// round-trip time the driver last measured to the server. A runner that knows fills in
 /// <see cref="Current"/>; one that does not (a test's) leaves it, and the timing says less.
 /// </summary>
-public sealed class AggregateRunStats
+internal sealed class AggregateRunStats
 {
     private static readonly AsyncLocal<AggregateRunStats?> Running = new();
 
@@ -36,7 +36,7 @@ public sealed class AggregateRunStats
 /// it (<see cref="AggregateRunStats"/>). It decorates whatever runner the host registered, so the
 /// database's share of a request is known for every command the engine sends, whoever runs it.
 /// </summary>
-public sealed class TimedAggregateRunner(IAggregateRunner inner) : IAggregateRunner
+internal sealed class TimedAggregateRunner(IAggregateRunner inner) : IAggregateRunner
 {
     private readonly IAggregateRunner inner = inner ?? throw new ArgumentNullException(nameof(inner));
 

@@ -17,7 +17,7 @@ namespace OxQL.Mongo.Resolve;
 ///   the target, the target field projected, paged by offset.</item>
 /// </list>
 /// </summary>
-public static class OwnerQueryBuilder
+internal static class OwnerQueryBuilder
 {
     /// <summary>The target entity a by-condition slot reaches through.</summary>
     public static string TargetOf(SemiJoinSlot slot) => RemoteOf(slot).TargetEntity;
@@ -36,9 +36,9 @@ public static class OwnerQueryBuilder
     /// filter and the select are rebased onto and beside which the owning row's members travel
     /// when the resolve names <c>parentAs</c>. The projection always travels and always carries
     /// the member the rows are keyed by. The filter travels as the binder left it: every variable
-    /// substituted (DESIGN §3.5.5), since an owner is never sent <c>variables</c>.
+    /// substituted, since an owner is never sent <c>variables</c>.
     /// <para>
-    /// A <paramref name="probe"/> is the existence probe (DESIGN §3.5.2 step 3): the same query
+    /// A <paramref name="probe"/> is the existence probe: the same query
     /// without the target's filter, projecting only the member the rows are keyed by, so a key the
     /// filtered query did not return tells <c>excluded</c> (the probe finds it) from
     /// <c>not_found</c> (it does not).
@@ -82,7 +82,7 @@ public static class OwnerQueryBuilder
             pipeline.Add(new PipelineStage { Match = element.Length == 0 ? match : match with { Condition = Rebased(match.Condition, element) }, Keys = ["match"] });
         }
 
-        // A remote lookup's order (DESIGN §3.4.4): right after the key match and the filter, where the
+        // A remote lookup's order: right after the key match and the filter, where the
         // owner's keyedBy window ranks each key's rows by it, so the rows it keeps per key are the first
         // in that order. Without a sort the children come by key, as a local lookup's do. A probe
         // never carries it.
@@ -98,7 +98,7 @@ public static class OwnerQueryBuilder
                 Keys = ["sort"],
             });
 
-        // The paths the binder inferred for the alias (improvement plan §3.S): what the caller's
+        // The paths the binder inferred for the alias: what the caller's
         // projection names under it, or, kept whole, its select hint (a local target's as bound, the
         // paths it has). An empty set is an alias the row does not show, kept alive for the stages
         // continued under it: the keyed member alone. Without a set, the reserved $default key, which the owner expands to its own
@@ -117,7 +117,7 @@ public static class OwnerQueryBuilder
         else if (!probe && select is null && lookup is not null)
             projection[BoundKeyedBy.Element] = 1;   // a looked-up element without a select is the whole element
 
-        // A whole row answered per key carries the key under its own member (DESIGN §3.4.4); every
+        // A whole row answered per key carries the key under its own member; every
         // other answer row carries it at the matched member.
         if (lookup is { Rows: true })
             projection[BoundKeyedBy.Key] = 1;

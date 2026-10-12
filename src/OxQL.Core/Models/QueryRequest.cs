@@ -21,7 +21,7 @@ public sealed record QueryRequest
     public QueryVariables? Variables { get; init; }
 
     /// <summary>
-    /// The conditions the engine places (contract 2, DG2 M1): a list of <c>{ id?, where }</c>, all of
+    /// The conditions the engine places (contract 2): a list of <c>{ id?, where }</c>, all of
     /// which a row must meet. Each condition runs at the earliest point of the pipeline where the
     /// paths it reads are in the row. Kept as written: the binder reads it under contract 2, and
     /// contract 1, which never had the member, ignores it as it ignores every member it does not know.
@@ -48,7 +48,25 @@ public sealed record QueryRequest
     public bool? Strict { get; init; }
 
     /// <summary>
-    /// The per-key owner answer a keyed fetch asks for (DESIGN §3.5.2 step 3): the rows whose
+    /// The request's default for a join target that is missing (contract 2): <c>"null"</c>,
+    /// <c>"report"</c> or <c>"refuse"</c>. Every <c>resolve</c> of the request that names no
+    /// <c>onMissing</c> of its own takes it, in place of the default <c>strict</c> gives it
+    /// (<c>refuse</c> under strict, else <c>null</c>). Read as written: contract 1 ignores it
+    /// whatever it holds, contract 2 refuses another kind or word.
+    /// </summary>
+    [JsonPropertyName("onMissing")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? OnMissing { get; init; }
+
+    /// <summary>The words <see cref="OnMissing"/> takes.</summary>
+    public static readonly IReadOnlyList<string> MissingPolicies = ["null", "report", "refuse"];
+
+    /// <summary>The request's default for a missing join target as one of <see cref="MissingPolicies"/>, or null when the request names none (or none that is one).</summary>
+    [JsonIgnore]
+    public string? MissingDefault => OnMissing is { ValueKind: JsonValueKind.String } written && written.GetString() is { } word && MissingPolicies.Contains(word) ? word : null;
+
+    /// <summary>
+    /// The per-key owner answer a keyed fetch asks for: the rows whose
     /// <c>path</c> holds one of <c>keys</c>, at most <c>perKey</c> per key. Accepted only on an
     /// internal call (<see cref="Binding.RequestContext.Internal"/>: the internal batch route and
     /// this host's own <c>SelfOwner</c>); on the public route it is <c>UNKNOWN_REQUEST_MEMBER</c>, so
@@ -139,7 +157,7 @@ public sealed record KeyedByMember
     /// <summary>
     /// The entity of the asking host whose key the keys are: <see cref="Path"/> must declare a
     /// reference to it, as a local lookup's path must (<c>LOOKUP_NOT_DECLARED</c>). Sent by a remote
-    /// lookup (DESIGN §3.4.4); a resolve's owner query carries none.
+    /// lookup; a resolve's owner query carries none.
     /// </summary>
     [JsonPropertyName("references")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

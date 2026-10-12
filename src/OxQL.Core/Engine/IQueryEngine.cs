@@ -11,7 +11,7 @@ public interface IQueryEngine
     Task<QueryOutcome> ExecuteAsync(QueryRequest request, RequestContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Everything about one request without executing it (DESIGN §4): binds, compiles when it binds,
+    /// Everything about one request without executing it: binds, compiles when it binds,
     /// and answers the errors, each stage with the shape of the row after it, the aliases, the types
     /// and, on request, the compiled form. A request that does not bind is an answer with
     /// <c>valid: false</c>. Reads Mongo only for the addon definitions and, when
@@ -21,7 +21,7 @@ public interface IQueryEngine
     Task<ExplainOutcome> ExplainAsync(ExplainRequest request, RequestContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Explains the checks of one internal explain batch (improvement plan §3.E), each as
+    /// Explains the checks of one internal explain batch, each as
     /// <see cref="ExplainAsync"/> explains it, within <paramref name="budget"/> together: the time the
     /// origin has left and the owner calls it may still cause. One outcome per request, in order; a
     /// request the time ran out before is refused. The default explains them one after another, each
@@ -66,7 +66,7 @@ public interface IEntityModelProvider
 
     /// <summary>
     /// The revision of the schema document the host publishes for the model, which explain answers
-    /// in <c>revision.schema</c> (DESIGN §4.3); null when the host publishes none (the default).
+    /// in <c>revision.schema</c>; null when the host publishes none (the default).
     /// </summary>
     string? SchemaRevision => null;
 }
@@ -89,3 +89,9 @@ public sealed class LazyEntityModelProvider(Func<EntityModel> build) : IEntityMo
     /// <inheritdoc/>
     public EntityModel Model => model.Value;
 }
+
+/// <summary>
+/// What the explains that belong together share (<see cref="Binding.RequestContext.ExplainOwners"/>).
+/// It has no members: only the engine implements it and only the engine reads what is behind it.
+/// </summary>
+public interface IExplainShare;

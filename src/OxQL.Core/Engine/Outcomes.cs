@@ -250,12 +250,23 @@ public sealed record Refusal
     }
 
     /// <summary>The aggregate exceeded its time budget: 504.</summary>
-    public static Refusal Timeout(string message) => new()
+    public static Refusal Timeout(string message) => Timeout(message, null);
+
+    /// <summary>
+    /// The aggregate exceeded its time budget: 504, with the budget it had in
+    /// <c>params.maxTimeMs</c> when <paramref name="maxTimeMs"/> says it.
+    /// </summary>
+    public static Refusal Timeout(string message, int? maxTimeMs) => new()
     {
         Type = "timeout",
         Title = "The query exceeded its time budget.",
         Status = 504,
-        Errors = [new QueryValidationError { Code = Binding.Codes.QueryTimeout, Message = message }],
+        Errors = [new QueryValidationError
+        {
+            Code = Binding.Codes.QueryTimeout,
+            Message = message,
+            Params = maxTimeMs is { } budget ? new Dictionary<string, object?> { ["maxTimeMs"] = budget } : null,
+        }],
     };
 
     /// <summary>
@@ -298,12 +309,23 @@ public sealed record Refusal
     };
 
     /// <summary>The body too large: 413.</summary>
-    public static Refusal RequestTooLarge(int bytes, int max) => new()
+    public static Refusal RequestTooLarge(int bytes, int max) => RequestTooLarge(bytes, max, null);
+
+    /// <summary>
+    /// The body too large: 413, with <c>params { limit, max, count }</c> when <paramref name="limit"/>
+    /// names the limit as health publishes it (<c>maxRequestBytes</c>, <c>explainMaxRequestBytes</c>).
+    /// </summary>
+    public static Refusal RequestTooLarge(int bytes, int max, string? limit) => new()
     {
         Type = "validation_error",
         Title = "The request body is too large.",
         Status = 413,
-        Errors = [new QueryValidationError { Code = Binding.Codes.RequestTooLarge, Message = $"The request body is {bytes} bytes; the limit is {max}." }],
+        Errors = [new QueryValidationError
+        {
+            Code = Binding.Codes.RequestTooLarge,
+            Message = $"The request body is {bytes} bytes; the limit is {max}.",
+            Params = limit is null ? null : new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["count"] = bytes },
+        }],
     };
 }
 

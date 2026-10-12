@@ -251,16 +251,16 @@ public class ValuesStageBindTests
 
         limit.Message.Should().Be("The values limit 501 exceeds the maximum of 500; narrow the values with 'search' instead.");
         limit.Stage.Should().Be(0);
-        limit.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "maxValuesLimit", ["max"] = 500, ["value"] = 501 });
+        limit.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "maxValuesLimit", ["max"] = 500, ["value"] = 501, ["count"] = 501 });
 
         var scan = await Error(Values(""" "path": "number", "scan": 50001 """), Codes.ValuesLimitExceeded);
 
         scan.Message.Should().Be("The values scan 50001 exceeds the 50000 rows this host reads for a list of values.");
-        scan.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "valuesScanRows", ["max"] = 50_000, ["value"] = 50_001 });
+        scan.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "valuesScanRows", ["max"] = 50_000, ["value"] = 50_001, ["count"] = 50_001 });
 
         var search = await Error(Values($$""" "path": "number", "search": "{{new string('a', 201)}}" """), Codes.ValuesLimitExceeded);
 
-        search.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "regexMaxLength", ["max"] = 200, ["value"] = 201 });
+        search.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["limit"] = "regexMaxLength", ["max"] = 200, ["value"] = 201, ["count"] = 201 });
         Basis.OfCode[Codes.ValuesLimitExceeded].Should().Be(Basis.Limits);
 
         foreach (var (members, member, text) in new[]

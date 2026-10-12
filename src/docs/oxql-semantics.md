@@ -602,8 +602,9 @@ below it), answered as
 - A projection keeps a path with `1` or `true` and removes it with `0` or `false` (any other
   number keeps it); a nested object is read as dotted paths (`{ "address": { "city": 1 } }` is
   `address.city`). A value that is neither a number nor a boolean (a string, `null`, an array) is
-  `MIXED_PROJECTION`, as are an inclusion mixed with an exclusion (other than `"id": 0`) and an
-  empty projection.
+  `MIXED_PROJECTION`, as are an inclusion mixed with an exclusion and an empty projection. `id`
+  stands aside from that rule: `"id": 0` may stand in an inclusion, and `"id": 1` beside removed
+  paths is the inclusion of `id` alone.
 
 ## What a join loads
 

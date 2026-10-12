@@ -531,6 +531,17 @@ caller reads the new members by name.
   The filter is public (`OxQLRequestBodyAttribute`, `OxQL.AspNetCore.Binding`) for a host's own
   controller over an OxQL body. See *A body that does not read* in
   [`oxql-operations.md`](src/docs/oxql-operations.md).
+- **Refusals a client can render (contract 2).** `params` on the codes whose message alone named
+  the values: `INVALID_OPERAND` (`path`, `operator`, `expected`, `actual`, or `reason` and `kind`),
+  `UNKNOWN_ENUM_MEMBER` (`path`, `operator`, `value`, `values`), `UNKNOWN_VARIANT` (`path`,
+  `variant`, `variants`), every limit code (`limit`, `max`, `count`; the table is in
+  [`oxql-operations.md`](src/docs/oxql-operations.md)), `UNKNOWN_REQUEST_MEMBER` (`members`,
+  `member`, `reason`), `CURSOR_INVALID` (`reason`: `query`, `signature`, `malformed`),
+  `OPTION_NOT_APPLICABLE` (`option`, `reason`), `QUERY_TIMEOUT` (`maxTimeMs`) and
+  `RESOLVE_UNAVAILABLE` (`service`, `reason`, `status`). Nothing a code carried before is renamed
+  or removed, and a caller without the contract header reads the codes as before. A `null` entry
+  of a batch is `INVALID_REQUEST_BODY` under contract 2 (it was `UNKNOWN_STAGE`, which a caller
+  without the header still reads).
 - **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
   starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
   (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
@@ -544,6 +555,9 @@ caller reads the new members by name.
   `IEntityModelProvider.Degraded` (default: not said); `RemoteServiceState.Contract`,
   `EngineVersion`, `Usable`, `Reason`, `References`, `Degrades`; `MongoQueryEngine.Availability`
   and `ReferenceValidator`; `RemoteHealthProbe.Availability`;
+  `OxQLRequestBodyAttribute` (`OxQL.AspNetCore.Binding`); `Codes.InvalidRequestBody`;
+  `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
+  and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
   `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`.
   `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.

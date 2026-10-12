@@ -757,10 +757,43 @@ internal sealed class KeyedFetch
             slot.Ids.Add(OwnerValueToBson(value, reference));
     }
 
-    private static Refusal Unanswered(string service, CallOutcome outcome) =>
-        Refusal.NotExecutable(Codes.ResolveUnavailable, outcome.Status is { } status
-            ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
-            : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.");
+    /// <summary>
+    /// The refusal of a condition whose owner did not answer: without the owner's keys no row can
+    /// be told to match. It carries what the diagnostics of an owner that did not answer a join
+    /// carry: the service and why (<c>timeout</c>, <c>unreachable</c>, <c>route</c>, <c>status</c>
+    /// with the status, and <c>remembered</c> with <c>retryAfterMs</c> when the owner was not called).
+    /// </summary>
+    private static Refusal Unanswered(string service, CallOutcome outcome)
+    {
+        var remembered = outcome.Remembered;
+        var reason = remembered is not null ? remembered.Reason
+            : outcome.Failure == Failure.Timeout ? ReasonTimeout
+            : outcome.Status is null ? ReasonUnreachable
+            : outcome.Status == NoRoute ? ReasonRoute
+            : ReasonStatus;
+        var parameters = new Dictionary<string, object?> { ["service"] = service, ["reason"] = reason };
+
+        if (outcome.Status is { } answered)
+            parameters["status"] = answered;
+
+        if (remembered is not null)
+        {
+            parameters["remembered"] = true;
+            parameters["retryAfterMs"] = (int)Math.Ceiling(remembered.RetryAfter.TotalMilliseconds);
+        }
+
+        return Refusal.NotExecutable(Codes.ResolveUnavailable, "", inner:
+        [
+            new QueryValidationError
+            {
+                Code = Codes.ResolveUnavailable,
+                Message = outcome.Status is { } status
+                    ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
+                    : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.",
+                Params = parameters,
+            },
+        ]);
+    }
 
     private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
         Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{OwnerQueryBuilder.TargetOf(slot)}'; narrow it.", stage);

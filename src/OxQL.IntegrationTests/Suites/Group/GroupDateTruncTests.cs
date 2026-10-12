@@ -263,16 +263,16 @@ public class GroupDateTruncTests
     }
 
     [Theory]
-    [InlineData("N45", "shipmentNumber")]
-    [InlineData("N45", "id")]
-    [InlineData("N45", "isDeleted")]
-    [InlineData("N45", "actualWeight.value")]
-    public async Task N45_date_trunc_on_a_non_temporal_path_is_refused(string id, string path)
+    [InlineData("N45", "shipmentNumber", "a string")]
+    [InlineData("N45", "id", "a guid")]
+    [InlineData("N45", "isDeleted", "a bool")]
+    [InlineData("N45", "actualWeight.value", "a double")]
+    public async Task N45_date_trunc_on_a_non_temporal_path_is_refused_with_the_kind_the_member_is(string id, string path, string kind)
     {
         _ = id;
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, Refused($$"""{ "path": "{{path}}", "unit": "day" }"""));
 
-        answer.ShouldRefuse("INVALID_AGGREGATE_ARGUMENT", 400, path)["message"]!.GetValue<string>().Should().Be($"'{path}' is not a date under no collection.");
+        answer.ShouldRefuse("INVALID_AGGREGATE_ARGUMENT", 400, path)["message"]!.GetValue<string>().Should().Be($"'{path}' is {kind}; dateTrunc takes a date or a dateTime.");
         answer.ErrorCodes[0].Should().Be("INVALID_AGGREGATE_ARGUMENT");
     }
 
@@ -282,7 +282,7 @@ public class GroupDateTruncTests
         // Legacy: items.weightNotes.createDateTime; the lab's date under a collection is billingLines.date.
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, Refused("""{ "path": "billingLines.date", "unit": "day" }"""));
 
-        ShouldRefuseOnly(answer, "GROUP_ON_COLLECTION").Should().Be("'billingLines.date' is not a date under no collection.");
+        ShouldRefuseOnly(answer, "GROUP_ON_COLLECTION").Should().Be("'billingLines.date' lies under a collection that is not unwound; a dateTrunc key is one date per row. Unwind the collection first.");
     }
 
     [Fact]

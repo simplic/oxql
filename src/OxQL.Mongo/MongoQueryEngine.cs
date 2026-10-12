@@ -135,7 +135,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         timing.Compile(compiling);
 
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
-            return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
+            return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "", inner: [NoRemoteClient()]));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
 
@@ -290,7 +290,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         {
             Abandon();
 
-            var refusal = MapDriverError(exception, context);
+            var refusal = MapDriverError(exception, context, compiled.MaxTimeMs);
 
             Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
@@ -507,7 +507,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            var refusal = MapDriverError(exception, context);
+            var refusal = MapDriverError(exception, context, compiled.MaxTimeMs);
 
             Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
@@ -896,15 +896,23 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             RemoveAt(nested, storage[(cut + 1)..]);
     }
 
-    private Refusal MapDriverError(Exception exception, RequestContext context)
+    /// <summary>The error of a join into another service on a host that has no client to reach one.</summary>
+    internal static QueryValidationError NoRemoteClient() => new()
+    {
+        Code = Codes.ResolveUnavailable,
+        Message = "This host has no remote query client; a remote resolve cannot run.",
+        Params = new Dictionary<string, object?> { ["reason"] = "noClient" },
+    };
+
+    private Refusal MapDriverError(Exception exception, RequestContext context, int maxTimeMs)
     {
         switch (exception)
         {
             case MongoExecutionTimeoutException:
-                return Refusal.Timeout("The query exceeded its time budget.");
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case MongoCommandException command when command.Code == 50:
-                return Refusal.Timeout("The query exceeded its time budget.");
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case var _ when RequestError(exception) is { } refusal:
                 return refusal;

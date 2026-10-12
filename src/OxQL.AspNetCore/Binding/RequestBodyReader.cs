@@ -245,7 +245,7 @@ internal static class RequestBodyReader
                 {
                     Code = Codes.UnknownRequestMember,
                     Message = $"'{member.Name}' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.",
-                    Params = new Dictionary<string, object?> { ["member"] = member.Name, ["members"] = new[] { member.Name }, ["reason"] = "envelope", ["path"] = Join(Root, member.Name) },
+                    Params = new Dictionary<string, object?> { ["member"] = member.Name, ["members"] = new[] { member.Name }, ["reason"] = "unknown", ["path"] = Join(Root, member.Name) },
                 });
 
         if (!body.TryGetProperty("query", out var query))
@@ -272,7 +272,7 @@ internal static class RequestBodyReader
                     {
                         Code = Codes.UnknownRequestMember,
                         Message = $"'{member.Name}' is not a member of 'shape'; it carries depth.",
-                        Params = new Dictionary<string, object?> { ["member"] = "shape." + member.Name, ["members"] = new[] { "shape." + member.Name }, ["reason"] = "envelope", ["path"] = place },
+                        Params = new Dictionary<string, object?> { ["member"] = "shape." + member.Name, ["members"] = new[] { "shape." + member.Name }, ["reason"] = "unknown", ["path"] = place },
                     });
                 else if (Takes(member.Value, place, "integer", errors, null) && member.Value.GetInt32() < 1)
                     errors.Add(new QueryValidationError
@@ -376,7 +376,7 @@ internal static class RequestBodyReader
                                 Code = Codes.LookupLimitExceeded,
                                 Message = "'limit' of lookup is a whole number.",
                                 Stage = index,
-                                Params = new Dictionary<string, object?> { ["stage"] = "lookup", ["member"] = "limit", ["reason"] = ReasonKind, ["path"] = Join(place, "limit"), ["expected"] = "integer", ["actual"] = "number" },
+                                Params = new Dictionary<string, object?> { ["stage"] = "lookup", ["member"] = "limit", ["limit"] = "maxLookupLimit", ["reason"] = ReasonKind, ["path"] = Join(place, "limit"), ["expected"] = "integer", ["actual"] = "number" },
                             });
                     }
 

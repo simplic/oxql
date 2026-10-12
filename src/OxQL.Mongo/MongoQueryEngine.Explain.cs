@@ -151,7 +151,7 @@ public sealed partial class MongoQueryEngine
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false,
-                [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }], cancellationToken).ConfigureAwait(false));
+                [NoRemoteClient()], cancellationToken).ConfigureAwait(false));
 
         // The remote check: the owner queries of every keyed stage are bound by their
         // owners' internal explain; an owner error there is this request's, at the caller's stage. So

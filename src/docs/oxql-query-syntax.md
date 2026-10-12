@@ -49,6 +49,8 @@ means is in
   retired id the host declared is answered as the current entity with an `ENTITY_ID_RETIRED`
   diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
   entity and carries the same diagnostic, with the lookup's `stage`.
+- A member written twice in one JSON object is read once, the last one written (a second
+  `pipeline` replaces the first); nothing is merged.
 - Each pipeline element is an object with exactly one stage key: `match`, `lookup`, `resolve`,
   `unwind`, `group`, `project`, `sort`, `page`, or `values`, which ends a pipeline in place of
   `page` and answers the distinct values of one path instead of rows. Two keys in one element is
@@ -264,6 +266,12 @@ storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 
 What the service returns for a `long` and a `decimal` is a JSON number (see the semantics guide,
 *Storage representations per kind*); an operand may be that number or its digits as a string.
+
+An operand of the right kind is compared as it is written, also where no stored value can equal
+it: a whole number beyond what an `int` member holds (`99999999999`), or the text `"NaN"` on a
+`double`, binds and matches the rows the comparison is true for, which for `eq` is none. The
+strings of a `bool` are read in any case (`"TRUE"`). An enum name is matched as it is written
+(`"Customer"`, not `"customer"`): `UNKNOWN_ENUM_MEMBER` lists the names in `params.values`.
 
 `{ "$var": "name" }` is the only wrapper: the value comes from `variables` in the same
 encoding and is checked at the place of use (`UNBOUND_VARIABLE` when missing;
@@ -639,7 +647,8 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   `dateTrunc` over a member that is no `date` or `dateTime`.
 - **A group over no key** (`"by": []`) is the totals of the rows that reach it: one row with the
   aggregates, no order, no next page. Over no row at all there is no group and so no row: an
-  empty `items` is the total of nothing.
+  empty `items` is the total of nothing. A `group` that names neither keys nor fields (`{}`) is
+  that group without aggregates: one row without members when any row reaches it.
 - A string key folds case and accents under the collation: `Open` and `OPEN` are one group,
   reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
   same way.
@@ -672,10 +681,13 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 { "project": { "internalNotes": 0 } }                             // exclusion: everything else
 ```
 
-A path is kept with `1` or `true` and removed with `0` or `false`; a projection is all one or
-all the other (`MIXED_PROJECTION`; `"id": 0` may stand in an inclusion). Any other value (`null`,
-a string, an array) is `MIXED_PROJECTION` with `params { stage: "project", paths }`, and so is a
-projection that names no path. A nested object is the dotted path: `{ "department": { "name": 1 } }`
+A path is kept with `1` or `true` and removed with `0` or `false`; any other whole number keeps
+it, as `1` does. A projection is all one or all the other (`MIXED_PROJECTION`), `id` aside:
+`"id": 0` may stand in an inclusion, and `"id": 1` beside removed paths makes the projection the
+inclusion of `id` alone (`{ "id": 1, "notes": 0 }` answers rows that hold `id` and nothing else;
+to keep everything but `notes`, write `{ "notes": 0 }`). A value that is no number and no boolean
+(`null`, a string, an array) is `MIXED_PROJECTION` with `params { stage: "project", paths }`, and
+so is a projection that names no path; a number that is not whole is `INVALID_REQUEST_BODY`. A nested object is the dotted path: `{ "department": { "name": 1 } }`
 is `"department.name": 1`. `id` is kept in an inclusion unless excluded explicitly; at most
 `MaxProjectionFields` paths. The reserved key `"$default": 1` includes the
 entity's key and display members; it applies to the entity's own shape, not after a `group` or

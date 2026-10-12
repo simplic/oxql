@@ -311,7 +311,7 @@ public class HostRequestBodyTests
         var error = Refused(response, text, answer);
 
         error["params"]!["member"]!.GetValue<string>().Should().Be("verbose");
-        error["params"]!["reason"]!.GetValue<string>().Should().Be("envelope");
+        error["params"]!["reason"]!.GetValue<string>().Should().Be("unknown");
     }
 
     // ---- what the filter leaves alone -------------------------------------------------------------

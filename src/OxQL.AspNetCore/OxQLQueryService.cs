@@ -147,7 +147,10 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Code = Codes.UnknownRequestMember,
                 // On the internal route the batch is written by the calling service's engine: an unknown member is another build's.
                 Message = $"'{string.Join(", ", unknown.Keys)}' is not a member of a batch; a batch carries queries and maxTimeMs, and each query its own strict." + (internalCall ? " " + Binder.OtherBuildHint : ""),
-                Params = internalCall ? new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = unknown.Keys.ToList() } : null,
+                // What another build of the engine reads between two services stays as it is; a caller reads the member too.
+                Params = internalCall
+                    ? new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = unknown.Keys.ToList() }
+                    : new Dictionary<string, object?> { ["reason"] = "unknown", ["members"] = unknown.Keys.ToList(), ["member"] = unknown.Keys.First() },
             }]));
 
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)
@@ -155,6 +158,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
             {
                 Code = Codes.BatchTooLarge,
                 Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
+                Params = ContractOf(options, httpContextAccessor?.HttpContext) == 1 ? null
+                    : new Dictionary<string, object?> { ["limit"] = "maxBatchQueries", ["max"] = options.Limits.MaxBatchQueries, ["count"] = batch.Queries.Count },
             }]));
 
         // A batch's maxTimeMs bounds the whole batch, not each query: it is one deadline, and each
@@ -230,6 +235,7 @@ public sealed class OxQLQueryService : IOxQLQueryService
             {
                 Code = Codes.UnknownRequestMember,
                 Message = "'budget' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.",
+                Params = new Dictionary<string, object?> { ["reason"] = "internal", ["members"] = new[] { "budget" }, ["member"] = "budget" },
             }]));
 
         if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)

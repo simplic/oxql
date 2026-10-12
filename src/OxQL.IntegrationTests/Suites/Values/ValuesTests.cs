@@ -292,7 +292,7 @@ public class ValuesTests
         remote["path"]!.GetValue<string>().Should().Be("dep.name");
 
         (await Ask(Corpus.Shipment, """ "path": "status.name", "limit": 501 """)).ShouldRefuse("VALUES_LIMIT_EXCEEDED", 400).ToJsonString(Plain).Should().Be(
-            """{"code":"VALUES_LIMIT_EXCEEDED","message":"The values limit 501 exceeds the maximum of 500; narrow the values with 'search' instead.","stage":0,"params":{"limit":"maxValuesLimit","max":500,"value":501}}""");
+            """{"code":"VALUES_LIMIT_EXCEEDED","message":"The values limit 501 exceeds the maximum of 500; narrow the values with 'search' instead.","stage":0,"params":{"limit":"maxValuesLimit","max":500,"value":501,"count":501}}""");
         (await Ask(Corpus.Shipment, """ "path": "status.name", "scan": 50001 """)).ShouldRefuse("VALUES_LIMIT_EXCEEDED", 400)["params"]!["limit"]!.GetValue<string>().Should().Be("valuesScanRows");
         (await Ask(Corpus.Shipment, """ "path": "status" """)).ShouldRefuse("NOT_FILTERABLE", 400);
         (await Ask(Corpus.Shipment, """ "path": "items" """)).ShouldRefuse("GROUP_ON_COLLECTION", 400);

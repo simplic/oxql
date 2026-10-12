@@ -90,8 +90,8 @@ the listed status.
 | `UNWIND_ORDER` | 400 | an inner collection unwound before its outer one; under contract 2 an unwind of a collection a join of an earlier stage reads its keys from (`params` `reason: "joinReadsCollection"`, `join`, `alias`: join after the unwind) |
 | `ALIAS_COLLISION` | 400 | an alias equal to a member's wire or storage name or an earlier alias; two group outputs of one name; an unwind's `as` equal to its `includeIndex` |
 | `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr`; a contract 2 `unwind` without `as` (`params` `stage: "unwind"`, `member: "as"`, `reason: "required"`) |
-| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names |
-| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes) |
+| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names. Contract 2 `params`: for an operand of another kind `path`, `operator`, `expected` (the kind the place takes: a kind of the schema such as `string`, `int`, `dateTime`, `enum`; `boolean` for `exists`) and `actual` (the JSON kind written: `string`, `number`, `boolean`, `null`, `array`, `object`); for an operator that does not fit the member `path`, `operator`, `reason` (`operator`, `length`, `collection`) and, with `operator`, the member's `kind` |
+| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes). Contract 2 `params`: `path`, `operator`, `value` (what was written) and `values` (the member names of the enum, or the key's list). An enum name is matched as it is written, so `values` says how the names are spelled |
 | `OPERAND_NOT_ARRAY` | 400 | `in` or `nin` without an array |
 | `DECIMAL_TEXT_NOT_ORDERABLE` | 400 | `gt gte lt lte` on a decimal member whose declared storage is text |
 | `UNBOUND_VARIABLE` | 400 | `{ "$var": … }` names a variable the request does not bind |
@@ -100,8 +100,8 @@ the listed status.
 | `MAX_FILTER_ENTRIES_EXCEEDED` | 400 | contract 2: the request's `filter` carries more entries than `Limits:MaxFilterEntries`; one error, no entry is read; `params` `limit: "maxFilterEntries"`, `max`, `count`. (The filter's conditions over `MaxConditions`: `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry and `params` `limit: "maxConditions"`, `max`, before any is placed) |
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
-| `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason` |
+| `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants, and so does `params` under contract 2 (`path`, `variant`, `variants`) |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason`. Contract 2 `params` on the public routes: `members` (every such member), `member` (the first) and `reason`: `unknown` (no member of a request, a batch or an explain envelope), `internal` (a member only the internal route takes: `keyedBy`, an explain's `budget`), `contract` (the header) |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
@@ -113,7 +113,7 @@ the listed status.
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
 | `MULTIPLE_PAGE_STAGES` | 400 | two `page` stages |
-| `MIXED_PROJECTION` | 400 | inclusion and exclusion in one projection (other than `"id": 0`); an empty projection |
+| `MIXED_PROJECTION` | 400 | paths kept and paths removed in one projection, `id` aside (`"id": 0` may stand in an inclusion; `"id": 1` beside removed paths is the inclusion of `id` alone); a value that is neither a number nor a boolean; an empty projection |
 | `GROUP_ON_COLLECTION` | 400 | a group key or aggregate argument under a collection that is not unwound |
 | `UNKNOWN_AGG_FUNCTION` | 400 | an aggregate outside `count countDistinct sum avg min max first last push` |
 | `INVALID_AGGREGATE_ARGUMENT` | 400 | `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date |
@@ -130,7 +130,7 @@ the listed status.
 | `RESOLVE_PARENT_NOT_ITEM` | 400 | a resolve's `parentAs` on a reference whose (narrowed) targets include an entity rather than an item |
 | `RESOLVE_NOT_FILTERABLE` | 400 | a condition on a remote resolve alias itself (`{"veh":{"eq":null}}`, `{"veh":{"exists":true}}`); the owner is not called. A condition on a member of a plain remote alias (`veh.matchCode`) is a semi-join; under a keyed, typed, item, converted, element-wise or continued alias any condition is refused, since the alias is joined after the page |
 | `RESOLVE_NOT_SORTABLE` | 400 | a sort on a path under a remote or keyed alias; a sort on a join's outcome (`outcomeAs`), wherever the join runs |
-| `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*) |
+| `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*). Every limit code carries `params { limit, max, count }` under contract 2: see *What a limit refusal carries* below |
 | `INVALID_PAGE_LIMIT` | 400 | `limit` below 1 (contract 2: `limit: 0` without `count` or with a cursor, `params` `limit: 0`, `needs: "count"`); a `count` that is not `true`, `false` or an object, or whose `upTo` or `budgetMs` is not a positive integer; contract 1 and internal calls: a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
 | `PAGE_SIZE_EXCEEDED` | 400 | `limit` above `MaxPageSize` |
 | `LOOKUP_LIMIT_EXCEEDED` | 400 | a lookup `limit` below 1 or above `MaxLookupLimit` |
@@ -139,16 +139,37 @@ the listed status.
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
 | `EXPLAIN_LIMIT` | 400, or 429 | 400: an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound. 429 (`rate_limited`, with `Retry-After`): more explains than a caller may send or have in flight, refused before the body is read; `params` `limit`, `max`, `retryAfter`. As an explain note: a cost limit was hit mid-way and a part was left out |
-| `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
+| `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered. Contract 2 `params.reason`: `query` (this host issued it for another query: another entity, condition, sort or organisation), `signature` (altered, or issued under another signing key), `malformed` (no cursor at all), `kind` (the member is no string) |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
-| `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
+| `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error. `params`: `reason: "noClient"` for the first; for an owner `service` and `reason` (`timeout`, `unreachable`, `route`, `status` with the HTTP `status`), and `remembered` with `retryAfterMs` when the owner was not called because it had just failed, as the `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` diagnostics carry them |
 | `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`; an error about the owner query as a whole, which names no stage, such as `UNKNOWN_ENTITY` for a target the owner does not have: the `resolve` stage, `params.owner.stage: null`, and the head says that the reference declares a target its owner does not publish). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
-| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's |
+| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's; `params.maxTimeMs` is the time the request had |
 | `INTERNAL_ERROR` | 500 | any other fault |
 | `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a `lookup` or `resolve` (in the v1 form only where the legacy pipeline is switched off or the request is an explain; in the contract 2 form always), an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
+
+**What a limit refusal carries.** Under contract 2 a refusal for a limit of the host carries
+`params { limit, max, count }`: `limit` is the limit's name as `GET /oxql/health` publishes it under
+`limits`, `max` its value on this host and `count` what the request asked for, so one message
+template renders every one of them:
+
+| code | `limit` |
+|---|---|
+| `MAX_PIPELINE_STAGES_EXCEEDED` | `maxPipelineStages` |
+| `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | `maxLookupStages`, `maxUnwindStages`, `maxResolveStages`, `maxContinuedStages` (`count` is the stage that went over) |
+| `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `MAX_FILTER_ENTRIES_EXCEEDED` | `maxGroupFields`, `maxProjectionFields`, `maxVariables`, `maxFilterEntries` |
+| `MAX_CONDITIONS_EXCEEDED` | `maxConditions`; `maxConditionDepth` for conditions nested too deep (no `count`: the binder stops there) |
+| `REGEX_TOO_LONG` | `regexMaxLength` (`count` is the pattern's length) |
+| `PAGE_SIZE_EXCEEDED` | `maxPageSize`, `maxReportPageSize` for a report page, `maxReportedRows` for the rows its lookups could join |
+| `LOOKUP_LIMIT_EXCEEDED` | `maxLookupLimit` |
+| `MAX_OFFSET_EXCEEDED` | `maxOffset` |
+| `VALUES_LIMIT_EXCEEDED` | `maxValuesLimit`, `valuesScanRows`, `regexMaxLength` (also `value`, the same number as `count`) |
+| `BATCH_TOO_LARGE` | `maxBatchQueries` |
+| `REQUEST_TOO_LARGE` (413) | `maxRequestBytes`, or `explainMaxRequestBytes` where an explain's own bound is the smaller one (`count` is the body's length in bytes) |
+
+A caller without the contract header reads these codes without `params`, as before.
 
 Diagnostics travel in `diagnostics` of a successful answer. Those marked *loss* refuse a `strict`
 request instead (422 `not_executable`, the diagnostic as the error); `RESOLVE_MISSING` refuses by its

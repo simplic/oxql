@@ -41,7 +41,8 @@ public sealed class RequestSizeFilter(OxQLOptions options, ILogger<RequestSizeFi
         context.HttpContext.Items[QueryTiming.StartItem] = System.Diagnostics.Stopwatch.GetTimestamp();
 
         // An explain route takes the tighter of the two caps (Explain:MaxRequestBytes).
-        var max = context.ActionDescriptor.EndpointMetadata.OfType<ExplainBodyAttribute>().Any()
+        var explain = context.ActionDescriptor.EndpointMetadata.OfType<ExplainBodyAttribute>().Any();
+        var max = explain
             ? Math.Min(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes)
             : options.Limits.MaxRequestBytes;
         var request = context.HttpContext.Request;
@@ -52,7 +53,12 @@ public sealed class RequestSizeFilter(OxQLOptions options, ILogger<RequestSizeFi
 
         if (length is { } known && known > max)
         {
-            context.Result = Refusal.RequestTooLarge((int)Math.Min(known, int.MaxValue), max).ToActionResult();
+            // A contract 2 caller reads which limit it met; a caller without the header reads what it always read.
+            var limit = OxQLQueryService.ContractOf(options, context.HttpContext) == 1 ? null
+                : explain && max < options.Limits.MaxRequestBytes ? "explainMaxRequestBytes"
+                : "maxRequestBytes";
+
+            context.Result = Refusal.RequestTooLarge((int)Math.Min(known, int.MaxValue), max, limit).ToActionResult();
             return;
         }
 

@@ -80,6 +80,9 @@ public sealed record FilterCondition
 
     /// <summary>The sentinel an empty <c>not</c> carries, so the refusal can name <c>not</c>.</summary>
     internal static readonly FilterCondition EmptyGroup = new() { And = [] };
+
+    /// <summary>What an <c>any</c> written with no condition in it carries, so the refusal can name <c>any</c>.</summary>
+    internal static readonly FilterCondition EmptyAny = new() { And = [] };
 }
 
 /// <summary>
@@ -190,7 +193,7 @@ internal sealed class FilterConditionConverter : JsonConverter<FilterCondition>
 
             if (property.Name == AnyKey && property.Value.ValueKind == JsonValueKind.Object)
             {
-                any = ReadFromElement(property.Value, options) ?? new FilterCondition { And = [] };
+                any = ReadFromElement(property.Value, options) ?? FilterCondition.EmptyAny;
                 continue;
             }
 

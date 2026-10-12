@@ -54,6 +54,9 @@ public class PagingLimitsTests
         ["negativeResolveTtlSeconds"] = 10,
         // The fleet's hosts remember nothing of an owner that failed, for the suites (FleetHost); the default is 5.
         ["ownerUnavailableTtlSeconds"] = 0,
+        ["countStepRows"] = 1_000,
+        ["countBudgetMs"] = 500,
+        ["countMaxBudgetMs"] = 5_000,
         ["explainRemoteTimeoutMs"] = 1_500,
         ["explainTimeoutMs"] = 2_000,
         ["explainMaxRequestBytes"] = 65_536,

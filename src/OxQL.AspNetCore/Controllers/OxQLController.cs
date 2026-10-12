@@ -271,6 +271,12 @@ public class OxQLController : ControllerBase
 
         limits["ownerUnavailableTtlSeconds"] = Math.Max(0, options.Cache.OwnerUnavailableTtlSeconds);
 
+        // Where the count beside a page ends: above the step it is a lower bound (stoppedBy "step") and the
+        // count alone (limit 0) goes further, within the budget a request may ask for at most.
+        limits["countStepRows"] = options.Count.EffectiveStepRows;
+        limits["countBudgetMs"] = options.Count.EffectiveBudgetMs;
+        limits["countMaxBudgetMs"] = options.Count.EffectiveMaxBudgetMs;
+
         return limits;
     }
 

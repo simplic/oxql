@@ -241,7 +241,7 @@ public class LegacyPipelineTests
         var current = (await ledger.Contract(2).HealthAsync()).Body!;
 
         Names(current["capabilities"]).Should().Contain(["lookup.remote", "explain", "compat.v1"]).And.NotContain(["batch", "page.offset"]);
-        current["limits"]!.AsObject().Count.Should().Be(49, "the contract 2 list, with what was added to it since a caller without the header first read its own");
+        current["limits"]!.AsObject().Count.Should().Be(52, "the contract 2 list, with what was added to it since a caller without the header first read its own");
 
         // The rewrite first: it pages by offset for a caller without the header, and health lists that.
         var rewrite = await Ledger(Rewrite, RewriteFirst);

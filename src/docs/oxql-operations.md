@@ -457,6 +457,7 @@ Anonymous, always 200, and never waits for another service:
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
     "maxValuesLimit": 500, "valuesScanRows": 50000, "valuesDefaultLimit": 100,
     "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10, "ownerUnavailableTtlSeconds": 5,
+    "countStepRows": 1000, "countBudgetMs": 500, "countMaxBudgetMs": 5000,
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
     "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
@@ -497,12 +498,20 @@ Anonymous, always 200, and never waits for another service:
   On a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`, or the
   legacy support off) a request without the header reads, ahead of the host's own names,
   `batch`, `group.page`, `page.offset`, `any`, and the limits that caller has always read (what is
-  added to the list later is a contract 2 caller's: `ownerUnavailableTtlSeconds`). That
+  added to the list later is a contract 2 caller's: `ownerUnavailableTtlSeconds`, `countStepRows`,
+  `countBudgetMs`, `countMaxBudgetMs`). That
   host does all four for that caller, and a contract 1 client may gate on a name.
   For a contract 2 caller health is read by name: members and
   limits are added, never removed or renamed.
 - `limits` are the values in force after registration adjusted them, not the configured ones;
   `chainTimeoutMs` is the effective value (clamped to `MaxTimeMs`).
+- **Where a count ends** is published for a client that shows one: `countStepRows` is how many
+  rows the count beside a page counts (`Count:StepRows`). Up to it `pageInfo.count` is `exact`;
+  above it the page answers `atLeast` that number with `stoppedBy: "step"`, and a client that needs
+  the number sends the count alone (`limit: 0` with `count`), which goes on to `countCap`.
+  `countBudgetMs` is the time a count has when the request names none and `countMaxBudgetMs` the
+  most a request's `count.budgetMs` is given. A request's `count.upTo` lowers the step, never
+  raises it.
 - `remote` lists every service the model references remotely, from a root member, a member of
   an embedded object or a member of a collection element alike, and every target of a typed
   reference, and is absent when the host has no remote query client or the request says

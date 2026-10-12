@@ -157,6 +157,8 @@ public class NonQueryTests
             ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds, 
             // what a host remembers of an owner that failed, which the fleet's hosts switch off for the suites
             ["ownerUnavailableTtlSeconds"] = 0,
+            // where the count beside a page ends, and the time a count has and may ask for
+            ["countStepRows"] = options.Count.EffectiveStepRows, ["countBudgetMs"] = options.Count.EffectiveBudgetMs, ["countMaxBudgetMs"] = options.Count.EffectiveMaxBudgetMs,
             ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["explainTimeoutMs"] = options.Explain.TimeoutMs,
             // the explain protection bounds, refused before anything is bound
             ["explainMaxRequestBytes"] = Math.Min(defaults.MaxRequestBytes, options.Explain.MaxRequestBytes), ["explainMaxStages"] = options.Explain.MaxStages,
@@ -171,7 +173,7 @@ public class NonQueryTests
             // the bounds of a values stage
             ["maxValuesLimit"] = defaults.MaxValuesLimit, ["valuesScanRows"] = options.Values.ScanRows, ["valuesDefaultLimit"] = options.Values.DefaultLimit,
         };
-        expected.Should().HaveCount(49);
+        expected.Should().HaveCount(52);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();

@@ -512,7 +512,8 @@ caller reads the new members by name.
 
 - **Health (contract 2).** Per remote service `contract`, `engineVersion`, `usable`, `reason` and
   `references { declared, validated, revision, unknownTargets, reason }`; `model { entities,
-  degraded, reason }`; the limit `ownerUnavailableTtlSeconds`. `status` is also `degraded` for an
+  degraded, reason }`; the limits `ownerUnavailableTtlSeconds`, `countStepRows`, `countBudgetMs`
+  and `countMaxBudgetMs` (where the count beside a page ends and the time a count has). `status` is also `degraded` for an
   owner that is not usable, a declared target its owner does not publish, and a degraded model. A
   caller without the contract header reads the members it always read.
 - **Diagnostics.** `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` carry `params.reason` (`timeout`,

@@ -36,9 +36,9 @@ public class OaResource
 
 /// <summary>
 /// What a host remembers of an owner that did not answer, and what a page asks of owners at all:
-/// an owner that failed is not called again for a short time and its rows say so at once; one caller
-/// tries it when the time is over; a page asks only the owners it has keys for, for their facts and
-/// for rows.
+/// an owner that failed is not called again for a short time and its rows say so at once, under the
+/// code of the call that failed; every caller asks it again when the time is over; a page asks only
+/// the owners it has keys for, for their facts and for rows.
 /// </summary>
 public class OwnerAvailabilityTests
 {

@@ -45,9 +45,17 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// <summary>Why the owner is not usable (<see cref="NotConfigured"/>, <see cref="Unreachable"/>, <see cref="Engine"/>); null otherwise.</summary>
     public string? Reason { get; init; }
 
+    /// <summary>
+    /// The targets of the references this host declares into the service, checked against the owner's
+    /// schema document (<see cref="RemoteReferenceValidator"/>): how many are declared, whether the
+    /// check could be made, and the target entities the owner does not publish. Null when the host
+    /// runs no such check.
+    /// </summary>
+    public RemoteReferenceValidation? References { get; init; }
+
     /// <summary>Whether the state is a finding: the status of <c>/oxql/health</c> is <c>degraded</c> with one.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public bool Degrades => !Configured || Reachable == false || Usable == false;
+    public bool Degrades => !Configured || Reachable == false || Usable == false || References is { UnknownTargets.Count: > 0 };
 
     /// <summary>The state of a service this host has no <c>InternalHosts</c> entry for.</summary>
     public static RemoteServiceState Unconfigured(string service) => new(service, false, null) { Usable = false, Reason = NotConfigured };

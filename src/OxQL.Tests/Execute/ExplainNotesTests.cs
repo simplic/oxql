@@ -42,7 +42,8 @@ public class ExplainNotesTests
             "TEXT_FOLDS", "PATTERN_FOLDS_CASE_ONLY", "EXACT_FORCES_EXACT", "SOME_ELEMENT", "NEQ_MATCHES_ABSENT", "ONLY_FOR_VARIANTS", "SNAPSHOT_COPY",
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
             "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER",
-            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER", "SEMI_JOIN_NOT_BY_KEY", "GROUP_SCANS", "VALUES_SCANS");
+            "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER", "SEMI_JOIN_NOT_BY_KEY", "GROUP_SCANS", "VALUES_SCANS",
+            "REFERENCE_TARGET_UNKNOWN");
         Notes.All.Except([Notes.ExplainLimit]).Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue; only an explain limit is both a refusal (past a bound, before binding) and a note (hit mid-way)");
     }

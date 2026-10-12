@@ -428,6 +428,9 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// </summary>
     public IReadOnlyDictionary<string, string?> Revisions => revisions;
 
+    /// <summary>Something the answer would say was not checked by an owner's answer: it is not complete.</summary>
+    public void Incomplete() => Complete = false;
+
     /// <summary>The <c>EXPLAIN_LIMIT</c> notes of the parts a limit left out.</summary>
     public IReadOnlyList<Diagnostic> LimitNotes => limitNotes;
 

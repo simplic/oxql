@@ -384,8 +384,10 @@ Anonymous, always 200, and never waits for another service:
     "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
   "remote": [
-    { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true },
-    { "service": "hr", "configured": true, "reachable": true, "usable": false, "reason": "engine" }
+    { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true,
+      "references": { "declared": 3, "validated": true, "revision": "sha256:…", "unknownTargets": [] } },
+    { "service": "hr", "configured": true, "reachable": true, "usable": false, "reason": "engine",
+      "references": { "declared": 14, "validated": false, "unknownTargets": [], "reason": "unavailable" } }
   ],
   "model": { "entities": 12, "degraded": false }
 }
@@ -438,6 +440,19 @@ Anonymous, always 200, and never waits for another service:
   contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
   `usable: false` degrades `status` as `reachable: false` does. A caller without the contract
   header reads the three members `service`, `configured`, `reachable` and the same `status`.
+- `references` of a `remote` entry (contract 2) is the host's check of the references it declares
+  into that service against the owner's schema document: `declared` (how many), `validated`
+  (whether the check could be made), the `revision` of the document it was made against, and
+  `unknownTargets`: the declared target entity ids the owner does not publish, each once. A target
+  listed there degrades `status`: a join over it is refused when it runs. While `validated` is
+  false nothing is known and nothing degrades; `reason` says why: `pending` (no check has
+  finished), `unsupported` (the host's remote client cannot read schema documents,
+  `IRemoteSchemaSource`), `notConfigured`, or `unavailable` (the owner did not answer or serves no
+  document). The check runs in the background: once after the host has started, then when health
+  or an explain is asked and one is due (30 s after a check that left a service not validated,
+  5 min after one that validated all, the read conditional on the revision last seen). It never
+  delays the start, never fails a request, and what it validated stays when the owner stops
+  answering. A host logs a warning under `OxQL.Startup` per service with unknown targets.
 - `model` (contract 2, also with `?shallow=true`) says what the host binds against: `entities`, the
   number of entities of its model, and `degraded`, with a `reason` when true: `build` (the model
   provider says the host's build failed and it serves what was left, `IEntityModelProvider.Degraded`),
@@ -766,7 +781,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `params.addon { key, state }`, `state` one of `undefined`, `retired`, `object`, `defined`.
   `owner`: a part could not be checked (`RESOLVE_UNAVAILABLE`; the notes `REMOTE_UNCHECKED`,
   `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). `data`: only a run can tell (never an explain error; the
-  note `SEMI_JOIN_NOT_BY_KEY` has it).
+  note `SEMI_JOIN_NOT_BY_KEY` has it). The note `REFERENCE_TARGET_UNKNOWN` has `model`.
   `advisory`: the query runs. `RESOLVE_REFUSED` beside the errors it wraps has the strongest of
   theirs. The top-level `executable` is derived: `never` with an error whose basis is `request`,
   `model` or `limits`; `unknown` with no such error and another error or `cache.complete: false`;
@@ -898,9 +913,14 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`: one per index of the advisory, at
   the part of the request the index serves, `params` `id`, `for`, `collection`, `existing`, `used`,
   `index`; an index list that cannot be read is one more `INDEX_ADVICE` note saying so, `params.reason`),
-  `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
+  `REMOTE_LOOKUP`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED` and `REFERENCE_TARGET_UNKNOWN` (a join's
+  target is an entity its owner does not publish, by the host's check of its declared remote
+  references against the owner's schema document; at the join's stage, basis `model`, `params`
+  `service`, `target`, `revision`; the answer is then not complete and `executable` is not `yes`.
+  It is a note because the check reads the owner's document from time to time and may be behind
+  it; an owner this explain asks says the error itself, `UNKNOWN_ENTITY` under `RESOLVE_REFUSED`). Codes
   are stable; messages may change. Without `include: "notes"` only the notes about the answer itself
-  are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). A remote union target's
+  are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`, `REFERENCE_TARGET_UNKNOWN`). A remote union target's
   `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check), which then
   checks that target again without the paths it lacks, as a run asks again, so the stages continued
   at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics,

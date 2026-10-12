@@ -93,6 +93,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
     }
 
+    /// <summary>
+    /// The host's check of its declared remote references against the owners' schema documents
+    /// (null: none): explain notes a join whose target the owner does not publish.
+    /// </summary>
+    public RemoteReferenceValidator? ReferenceValidator { get; init; }
+
     /// <inheritdoc/>
     public bool RemoteResolve => remoteClient;
 

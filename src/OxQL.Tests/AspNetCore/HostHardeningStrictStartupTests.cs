@@ -116,7 +116,8 @@ public class HostHardeningStrictStartupTests
         startup.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error).Select(entry => entry.Message).Should().SatisfyRespectively(
             crm => crm.Should().Contain("service 'crm'").And.Contain("InternalHosts:crm"),
             transport => transport.Should().Contain("service 'transport'").And.Contain("InternalHosts:transport"));
-        startup.Count(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Debug).Should().Be(references.Count, "every reference path is still listed for whoever asks");
+        startup.Count(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Debug && entry.Message.StartsWith("OxQL remote reference without a configured service", StringComparison.Ordinal))
+            .Should().Be(references.Count, "every reference path is still listed for whoever asks");
     }
 
     // ---- strictness the host states ----------------------------------------------------------------

@@ -100,6 +100,7 @@ public static class ServiceCollectionExtensions
             {
                 // The host's one record, shared with its health probe; an engine built by hand has its own.
                 Availability = provider.GetService<OwnerAvailability>(),
+                ReferenceValidator = provider.GetService<RemoteReferenceValidator>(),
             };
         });
 

@@ -270,6 +270,9 @@ public class HostHardeningHealthTests
         var body = await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health"));
         var remote = body!["remote"]!.AsArray().Select(node => node!.AsObject()).ToList();
 
+        // What the check of the declared references says of each service has tests of its own (RemoteReferenceValidatorTests).
+        remote.ForEach(entry => entry.Remove("references").Should().BeTrue("a contract 2 caller reads the state of the declared references beside the owner's"));
+
         body["status"]!.GetValue<string>().Should().Be("degraded");
         remote.Single(entry => entry["service"]!.GetValue<string>() == "crm").ToJsonString()
             .Should().Be("""{"service":"crm","configured":true,"reachable":true,"usable":false,"reason":"engine"}""");

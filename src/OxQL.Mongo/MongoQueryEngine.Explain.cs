@@ -420,6 +420,7 @@ public sealed partial class MongoQueryEngine
 
         owners.Read(draft.Owners);
         Unasked(draft, owners);
+        UnknownTargets(draft);
 
         var notes = draft.Notes.Concat(draft.Owners.LimitNotes)
             .Where(note => request.IncludesNotes || IsAboutTheAnswer(note) || (note.Code == Notes.IndexAdvice && request.IncludesIndexes))
@@ -694,7 +695,7 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>The notes that say what the answer itself lacks; they are answered also without <c>include: "notes"</c>.</summary>
-    private static bool IsAboutTheAnswer(Diagnostic note) => note.Code is Notes.RemoteUnchecked or Notes.ExplainLimit or Notes.ExplainTrimmed;
+    private static bool IsAboutTheAnswer(Diagnostic note) => note.Code is Notes.RemoteUnchecked or Notes.ExplainLimit or Notes.ExplainTrimmed or Notes.ReferenceTargetUnknown;
 
     /// <summary>The notes in stage order, request-wide ones (no stage) last; within a stage as they were found.</summary>
     private static IReadOnlyList<Diagnostic> Ordered(List<Diagnostic> notes) =>
@@ -892,6 +893,53 @@ public sealed partial class MongoQueryEngine
 
                 if (draft.Owners.Unasked(query.Service, query.Target, resolve.As, bound.CallerIndexOf(resolve), facts, availability.OutageOf(query.Service), draft.Notes) is { } reason)
                     entry["reason"] = reason;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The joins whose target the owner does not publish, by the host's check of its declared remote
+    /// references (<see cref="RemoteReferenceValidator"/>): each is noted
+    /// <c>REFERENCE_TARGET_UNKNOWN</c> at its stage, once per target, and the answer is not complete,
+    /// so the verdict is not <c>yes</c>. The check reads the owner's document from time to time and
+    /// may be behind it, which is why this is a note and not an error: an owner asked by this
+    /// explain says the error itself.
+    /// </summary>
+    private void UnknownTargets(Draft draft)
+    {
+        if (ReferenceValidator is not { } validator || remote is null || draft.Bound is not { } bound)
+            return;
+
+        // Reading the state starts a check that is due; it never waits for one.
+        validator.State(models.Model, remote);
+
+        var said = new HashSet<(int? Stage, string Target)>();
+
+        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>())
+        {
+            if (!draft.Explained.TryGetValue(resolve.As, out var explained))
+                continue;
+
+            foreach (var query in explained.Where(query => query.Remote))
+            {
+                var entity = query.Target.Split('#')[0];
+
+                if (validator.Of(query.Service) is not { Validated: true } validation || !validation.UnknownTargets.Contains(entity, StringComparer.Ordinal))
+                    continue;
+
+                var stage = bound.CallerIndexOf(resolve);
+
+                if (!said.Add((stage, entity)))
+                    continue;
+
+                draft.Owners.Incomplete();
+                draft.Notes.Add(new Diagnostic
+                {
+                    Code = Notes.ReferenceTargetUnknown,
+                    Message = $"'{query.Service}' does not publish the entity '{entity}' that '{resolve.As}' joins: the reference declares a target its owner does not have under that id, and a run is refused for it. Correct the declared target id, or have the owner publish the entity.",
+                    Stage = stage,
+                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision },
+                });
             }
         }
     }

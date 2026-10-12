@@ -63,7 +63,8 @@ public class ExplainFactsTests
         Of(Basis.Organisation).Should().BeEmpty("a code is the organisation's only by its path: one under an addon bag");
         Basis.OfNote.Where(pair => pair.Value == Basis.Owner).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.RemoteUnchecked, Notes.ExplainLimit, Notes.ExplainTrimmed]);
         Basis.OfNote.Where(pair => pair.Value == Basis.Data).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.SemiJoinNotByKey], "what only an owner's rows decide");
-        Basis.OfNote.Where(pair => pair.Value is not (Basis.Owner or Basis.Data)).Should().OnlyContain(pair => pair.Value == Basis.Advisory);
+        Basis.OfNote.Where(pair => pair.Value == Basis.Model).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.ReferenceTargetUnknown], "the host's model declares a target the owner's does not have");
+        Basis.OfNote.Where(pair => pair.Value is not (Basis.Owner or Basis.Data or Basis.Model)).Should().OnlyContain(pair => pair.Value == Basis.Advisory);
     }
 
     [Fact]

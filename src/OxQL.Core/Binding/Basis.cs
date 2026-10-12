@@ -106,6 +106,9 @@ public static class Basis
 
         // the query binds; what an owner's rows hold decides whether a run answers
         [Notes.SemiJoinNotByKey] = Data,
+
+        // the host's model declares a target the owner's does not have
+        [Notes.ReferenceTargetUnknown] = Model,
     };
 
     /// <summary>The codes that are the organisation's to decide when their path lies under an addon bag.</summary>

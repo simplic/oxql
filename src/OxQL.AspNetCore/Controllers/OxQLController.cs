@@ -117,7 +117,7 @@ public class OxQLController : ControllerBase
         [FromQuery] bool shallow = false)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-        var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
+        var services = client is null || shallow ? null : Referenced(probe.State(ModelOrNull(models), client), models, client);
         var model = ModelHealth.Of(models);
         var degraded = model.Degraded || (services is not null && services.Any(state => state.Degrades));
 
@@ -164,6 +164,21 @@ public class OxQLController : ControllerBase
                 _ => new ModelHealth(entities, false, null),
             };
         }
+    }
+
+    /// <summary>
+    /// Each remote service with what the host's check of its declared references says of it
+    /// (<see cref="RemoteReferenceValidator"/>): read without waiting, and a check that is due starts
+    /// in the background as the reachability measurement does.
+    /// </summary>
+    private IReadOnlyList<RemoteServiceState> Referenced(IReadOnlyList<RemoteServiceState> services, IEntityModelProvider models, IRemoteQueryClient client)
+    {
+        if (HttpContext?.RequestServices?.GetService(typeof(RemoteReferenceValidator)) is not RemoteReferenceValidator validator)
+            return services;
+
+        var validated = validator.State(ModelOrNull(models), client);
+
+        return services.Select(service => service with { References = validated.FirstOrDefault(each => each.Service == service.Service) }).ToList();
     }
 
     /// <summary>

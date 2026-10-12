@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
             // What the probe measures of an owner is what the keyed fetch goes by, and the other way round.
             Availability = provider.GetService<Core.Engine.OwnerAvailability>(),
         });
+        services.AddHostedService<RemoteReferenceValidationStarter>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();
 

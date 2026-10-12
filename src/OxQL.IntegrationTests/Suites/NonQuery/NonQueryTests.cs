@@ -211,6 +211,57 @@ public class NonQueryTests
     }
 
     [Fact]
+    public async Task Y13_every_remote_reference_the_fleet_declares_names_an_entity_its_owner_publishes()
+    {
+        // Each host's declared references, checked against the owners' own models as a host checks them
+        // against the owners' schema documents. The check is the case's own, on its own clock: the
+        // hosts' checks do not read schemas in a fleet (InMemoryRemoteClient.ReadsSchemas).
+        foreach (var service in LabService.All)
+        {
+            var host = await (await Lab.ClientAsync(service)).HostAsync();
+            var model = host.Services.GetRequiredService<OxQL.Core.Engine.IEntityModelProvider>().Model;
+            var remote = (InMemoryRemoteClient)host.Services.GetRequiredService<OxQL.Core.Engine.IRemoteQueryClient>();
+            var reading = new InMemoryRemoteClient((await CorpusFleet.SharedAsync()).Fleet, host.Services.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>()) { ReadsSchemas = true };
+            var validator = new OxQL.Core.Engine.RemoteReferenceValidator { ReadTimeout = TimeSpan.FromSeconds(60) };
+
+            validator.State(model, reading);
+            await validator.Refreshing;
+
+            var states = validator.State(model, reading);
+
+            states.Select(state => state.Service).Should().Equal(RemoteServicesOf(service), service.Key);
+
+            foreach (var state in states)
+            {
+                // The fleet has a host for each of its services; what it only names (an owner served by a handler, a service without a server) publishes no document.
+                var served = LabService.All.Any(owner => owner.Key == state.Service);
+
+                state.Validated.Should().Be(served, $"{service.Key} -> {state.Service}");
+                state.UnknownTargets.Should().BeEmpty($"{service.Key} -> {state.Service}: a declared target its owner does not publish is refused when a join runs");
+
+                if (!served)
+                    state.Reason.Should().Be(OxQL.Core.Engine.RemoteReferenceValidation.Unavailable);
+            }
+
+            // On the host itself the references are listed and not validated: nothing is read, nothing degrades.
+            await (await Lab.ClientAsync(service)).HealthAsync();
+            await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+            await host.Services.GetRequiredService<OxQL.Core.Engine.RemoteReferenceValidator>().Refreshing;
+
+            var health = await (await Lab.ClientAsync(service)).HealthAsync();
+
+            remote.ReadsSchemas.Should().BeFalse();
+            health.Body!["remote"]!.AsArray().Should().AllSatisfy(entry =>
+            {
+                entry!["references"]!["validated"]!.GetValue<bool>().Should().BeFalse();
+                entry["references"]!["declared"]!.GetValue<int>().Should().BePositive();
+                entry["references"]!["unknownTargets"]!.AsArray().Should().BeEmpty();
+            });
+            health.Body!["status"]!.GetValue<string>().Should().Be("healthy");
+        }
+    }
+
+    [Fact]
     public async Task Y12_an_owner_whose_health_is_down_makes_the_host_degraded_and_says_which_service()
     {
         await using var fleet = await CorpusFleet.CreateAsync("case-y12-degraded", seed: []);

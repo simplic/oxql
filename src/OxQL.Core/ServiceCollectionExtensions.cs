@@ -57,6 +57,9 @@ public static class ServiceCollectionExtensions
         // One record of the owners that did not answer per host: the keyed fetch and the health probe share it.
         services.TryAddSingleton(provider => new OwnerAvailability(provider.GetRequiredService<OxQLOptions>(), provider.GetService<TimeProvider>()));
 
+        // One check of the declared remote references per host: health and explain read the same result.
+        services.TryAddSingleton(provider => new RemoteReferenceValidator(provider.GetService<TimeProvider>()));
+
         return services;
     }
 }

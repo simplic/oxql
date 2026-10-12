@@ -332,6 +332,94 @@ public class HostRequestBodyTests
         batchAnswer!["results"]!.AsArray().Should().HaveCount(2).And.OnlyContain(result => result!["items"] != null);
     }
 
+    // ---- a body longer than a request may be ---------------------------------------------------
+
+    private const int Cap = 512;
+
+    private static SampleHost Capped() => new(options =>
+    {
+        options.Limits.MaxRequestBytes = Cap;
+        options.Explain.MaxRequestBytes = Cap;
+    });
+
+    /// <summary>A request sent chunked: it never tells the server how long its body is.</summary>
+    private static HttpRequestMessage Chunked(string route, string json)
+    {
+        var content = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes(json)));
+
+        content.Headers.ContentType = new("application/json") { CharSet = "utf-8" };
+
+        var request = new HttpRequestMessage(HttpMethod.Post, route) { Content = content };
+
+        request.Headers.TransferEncodingChunked = true;
+
+        return request;
+    }
+
+    [Theory]
+    [InlineData(Query, "maxRequestBytes")]
+    [InlineData(Batch, "maxRequestBytes")]
+    [InlineData(Explain, "maxRequestBytes")]
+    public async Task A_body_that_declares_more_than_a_request_may_be_long_is_413_whether_or_not_it_would_read(string route, string limit)
+    {
+        using var host = Capped();
+
+        var padding = new string('x', Cap * 2);
+
+        foreach (var body in new[]
+        {
+            $$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "{{padding}}" } } }] }""",
+            $$"""{ "entityType": 5, "pipeline": "{{padding}}" }""",
+            "{ \"entityType\": " + padding,
+        })
+        {
+            var (response, text, answer) = await PostAsync(host, route, body);
+
+            response.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, text);
+
+            var error = answer!["errors"]!.AsArray().Should().ContainSingle().Subject!;
+
+            error["code"]!.GetValue<string>().Should().Be(Codes.RequestTooLarge);
+            error["params"]!["limit"]!.GetValue<string>().Should().Be(limit);
+            error["params"]!["max"]!.GetValue<int>().Should().Be(Cap);
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_does_not_read_is_refused_without_a_place()
+    {
+        // The test server has no body size limit to set, so the model binder reads the whole body;
+        // what is kept beside it for the refusal ends at the length a request may have.
+        using var host = Capped();
+
+        var response = await host.Client(contract: 2).SendAsync(Chunked(Query, $$"""{ "entityType": 5, "pipeline": [], "variables": { "pad": "{{new string('x', Cap * 2)}}" } }"""));
+        var text = await response.Content.ReadAsStringAsync();
+        var error = Refused(response, text, JsonNode.Parse(text));
+
+        error["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody);
+        error["params"]!["path"]!.GetValue<string>().Should().Be("$", "the body was not kept, so no place in it is named");
+        error["params"]!["reason"]!.GetValue<string>().Should().Be("kind");
+        host.Runner.Calls.Should().BeEmpty();
+
+        // The same body within the length is said with its place.
+        var (within, withinText, withinBody) = await PostAsync(host, Query, """{ "entityType": 5, "pipeline": [] }""");
+
+        Refused(within, withinText, withinBody)["params"]!["path"]!.GetValue<string>().Should().Be("$.entityType");
+    }
+
+    [Fact]
+    public async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_reads_is_bound_as_without_the_copy()
+    {
+        using var host = Capped();
+
+        var response = await host.Client(contract: 2).SendAsync(Chunked(Query, $$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "number": { "eq": "{{new string('x', Cap * 2)}}" } } }, { "page": { "limit": 1 } }] }"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        host.Runner.Calls.Should().NotBeEmpty("keeping the copy never stands between a body and its binder");
+    }
+
     [Fact]
     public async Task A_body_of_another_media_type_stays_the_frameworks_415()
     {

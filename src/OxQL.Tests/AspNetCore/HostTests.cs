@@ -109,6 +109,42 @@ public class HostTests
         lines[1].Should().Contain("firstLegacyPath=(null)").And.Contain("legacyPaths=0");
     }
 
+    [Fact]
+    public async Task A_contract_1_group_by_a_date_bucket_answered_by_the_rewrite_keeps_its_key_within_the_calendar()
+    {
+        const string group = """{ "entityType": "probe.order", "pipeline": [{ "group": { "by": [{ "dateTrunc": { "path": "CreateDateTime", "unit": "month" }, "as": "month" }], "fields": { "n": { "count": {} } } } }] }""";
+
+        using var rewritten = new SampleHost(options => options.Compat.Legacy.Enabled = false);
+
+        var response = await rewritten.Client(contract: null).PostAsync(Query, SampleHost.Json(group));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, (await SampleHost.Body(response))?.ToJsonString());
+
+        // The key is the bucket where it lies within the calendar, and the first or the last instant where it does not.
+        var key = BucketKey(rewritten);
+
+        key["$let"]["vars"]["bucket"].AsBsonDocument.Contains("$dateTrunc").Should().BeTrue();
+
+        var branches = key["$let"]["in"]["$switch"]["branches"].AsBsonArray;
+
+        branches.Select(branch => branch["then"]).Should().Equal(OxQL.Mongo.MongoCompiler.FirstInstant, OxQL.Mongo.MongoCompiler.LastInstant);
+        key["$let"]["in"]["$switch"]["default"].AsString.Should().Be("$$bucket");
+
+        // A contract 2 request for the same group is keyed the same.
+        using var second = new SampleHost();
+
+        (await second.Client(contract: 2).PostAsync(Query, SampleHost.Json(group.Replace("CreateDateTime", "createDateTime")))).StatusCode.Should().Be(HttpStatusCode.OK);
+        BucketKey(second).ToJson().Should().Be(key.ToJson());
+    }
+
+    /// <summary>The expression a host's one group keys its date bucket with, alone or among the keys.</summary>
+    private static BsonDocument BucketKey(SampleHost host)
+    {
+        var id = host.Runner.Calls.SelectMany(call => call.Stages).Single(stage => stage.Contains("$group"))["$group"]["_id"].AsBsonDocument;
+
+        return id.Contains("$let") ? id : id.Values.OfType<BsonDocument>().Single(value => value.Contains("$let"));
+    }
+
     // LEGACY(compat.v1): the three tests below are one again when the legacy pipeline goes (src/docs/LEGACY.md):
     // a v1 join under contract 1 is refused as a legacy stage.
     private const string V1Join = """{ "entityType": "probe.order", "pipeline": [{ "lookup": { "from": "customers", "localPath": "CustomerId", "foreignPath": "id", "as": "customer" } }] }""";

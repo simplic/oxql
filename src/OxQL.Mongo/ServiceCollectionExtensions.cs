@@ -99,7 +99,7 @@ public static class ServiceCollectionExtensions
                 provider.GetRequiredService<OwnerFetchCache>())
             {
                 // The host's one record, shared with its health probe; an engine built by hand has its own.
-                Availability = provider.GetService<OwnerAvailability>(),
+                Availability = provider.GetService<OwnerAvailability>() ?? new OwnerAvailability(provider.GetRequiredService<OxQLOptions>()),
                 ReferenceValidator = provider.GetService<RemoteReferenceValidator>(),
             };
         });

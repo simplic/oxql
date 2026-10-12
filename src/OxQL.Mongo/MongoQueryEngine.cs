@@ -88,7 +88,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         get => availability;
         init
         {
-            availability = value ?? availability;
+            availability = value ?? throw new ArgumentNullException(nameof(value));
             fetch.Availability = availability;
         }
     }

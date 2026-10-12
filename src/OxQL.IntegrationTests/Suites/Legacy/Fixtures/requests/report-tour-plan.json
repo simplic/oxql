@@ -1,0 +1,194 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "EndDateTime": {
+          "lte": {
+            "$date": "2026-06-09T00:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "tour",
+        "localPath": "GlobalTourId",
+        "foreignPath": "GlobalTourId",
+        "as": "SubTours",
+        "filter": {
+          "and": [
+            {
+              "IsMirroredTour": {
+                "eq": true
+              }
+            },
+            {
+              "IsDeleted": {
+                "eq": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "project": {
+        "id": 1,
+        "Number": 1,
+        "Reference": 1,
+        "GlobalTourId": 1,
+        "GeneratedTourNrCounter": 1,
+        "IsMirroredTour": 1,
+        "Status": {
+          "Name": 1
+        },
+        "Resource": {
+          "_t": 1,
+          "_id": 1,
+          "MatchCode": 1,
+          "DisplayName": 1
+        },
+        "StartDateTime": 1,
+        "EndDateTime": 1,
+        "ActualStartDateTime": 1,
+        "ActualEndDateTime": 1,
+        "CalculatedStartDateTime": 1,
+        "CalculatedEndDateTime": 1,
+        "StartAddress": {
+          "CompanyName": 1,
+          "Street": 1,
+          "HouseNumber": 1,
+          "Zipcode": 1,
+          "City": 1
+        },
+        "EndAddress": {
+          "CompanyName": 1,
+          "Street": 1,
+          "HouseNumber": 1,
+          "Zipcode": 1,
+          "City": 1
+        },
+        "Notes": 1,
+        "Actions": {
+          "_t": 1,
+          "_id": 1,
+          "GlobalActionId": 1,
+          "OrderId": 1,
+          "OutOfTour": 1,
+          "DateTime": 1,
+          "CalculatedDateTime": 1,
+          "ActualDateTime": 1,
+          "Notes": 1,
+          "Address": {
+            "CompanyName": 1,
+            "Street": 1,
+            "HouseNumber": 1,
+            "Zipcode": 1,
+            "City": 1
+          },
+          "Resource": {
+            "_t": 1,
+            "_id": 1,
+            "MatchCode": 1,
+            "DisplayName": 1
+          },
+          "MirroredTourNumber": 1,
+          "Entity": {
+            "_t": 1,
+            "_id": 1,
+            "ShipmentNumber": 1,
+            "Number": 1,
+            "LoadNumber": 1,
+            "Status": {
+              "Name": 1
+            },
+            "DeliveryAddress": {
+              "CompanyName": 1,
+              "Zipcode": 1,
+              "City": 1
+            },
+            "Items": {
+              "Text": 1,
+              "Quantity": {
+                "Value": 1
+              },
+              "Weight": {
+                "Value": 1
+              }
+            }
+          }
+        },
+        "AttachedResources": {
+          "Resource": {
+            "_t": 1,
+            "_id": 1,
+            "DisplayName": 1
+          },
+          "AttachAction": {
+            "GlobalActionId": 1,
+            "DateTime": 1,
+            "ActualDateTime": 1
+          },
+          "DetachAction": {
+            "GlobalActionId": 1,
+            "DateTime": 1,
+            "ActualDateTime": 1
+          }
+        },
+        "AttachedEntities": {
+          "Entitiy": {
+            "_t": 1,
+            "_id": 1,
+            "ShipmentNumber": 1
+          },
+          "AttachingAction": {
+            "GlobalActionId": 1,
+            "DateTime": 1,
+            "ActualDateTime": 1
+          },
+          "DetachingAction": {
+            "GlobalActionId": 1,
+            "DateTime": 1,
+            "ActualDateTime": 1
+          }
+        },
+        "Transits": {
+          "StartDateTime": 1,
+          "EndDateTime": 1,
+          "Distance": 1,
+          "DrivingTime": 1,
+          "GlobalStartActionId": 1,
+          "GlobalEndActionId": 1,
+          "StartAddress": {
+            "City": 1
+          },
+          "EndAddress": {
+            "City": 1
+          }
+        },
+        "SubTours": {
+          "_id": 1,
+          "Number": 1,
+          "Status": {
+            "Name": 1
+          },
+          "Resource": {
+            "_t": 1,
+            "_id": 1,
+            "DisplayName": 1
+          },
+          "StartDateTime": 1,
+          "EndDateTime": 1,
+          "ActualStartDateTime": 1,
+          "ActualEndDateTime": 1
+        }
+      }
+    },
+    {
+      "page": {
+        "limit": 100
+      }
+    }
+  ]
+}

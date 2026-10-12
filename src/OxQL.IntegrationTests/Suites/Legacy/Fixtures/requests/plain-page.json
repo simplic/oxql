@@ -1,0 +1,25 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "TransactionYear": {
+          "eq": 2026
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "desc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 1,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

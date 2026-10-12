@@ -1,0 +1,57 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "GlobalTourId": {
+              "eq": {
+                "$uuid": "1e9ac700-0000-4000-8000-000000001100"
+              }
+            }
+          },
+          {
+            "EndDateTime": {
+              "gte": {
+                "$date": "2026-06-01T00:00:00"
+              }
+            }
+          },
+          {
+            "Number": {
+              "contains": "tr-m",
+              "options": {
+                "ignoreCase": true
+              }
+            }
+          },
+          {
+            "Number": {
+              "in": [
+                "TR-M-1",
+                "TR-M-2"
+              ]
+            }
+          },
+          {
+            "not": {
+              "IsDeleted": {
+                "eq": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Resource": {
+          "_t": 1,
+          "DisplayName": 1
+        }
+      }
+    }
+  ]
+}

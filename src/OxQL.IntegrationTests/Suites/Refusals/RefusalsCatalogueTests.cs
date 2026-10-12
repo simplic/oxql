@@ -32,6 +32,7 @@ public class RefusalsCatalogueTests
     {
         "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED", "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE",
         "RESOLVE_PARTIAL", "SORT_ON_ADDON", "REGEX_UNANCHORED", "DECIMAL_TEXT_EXCLUDED",
+        "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED", "VALUES_SCAN_CAPPED",
     };
 
     /// <summary>Every error code and the case that provokes it outside the V table.</summary>
@@ -44,7 +45,23 @@ public class RefusalsCatalogueTests
         ["SEMI_JOIN_TOO_LARGE"] = nameof(V56_a_semi_join_selecting_more_owner_rows_than_the_cap_is_refused_and_one_under_it_is_answered),
         ["QUERY_TOO_EXPENSIVE"] = nameof(V57_a_push_that_builds_a_value_above_the_document_limit_is_refused_as_too_expensive),
         ["INTERNAL_ERROR"] = nameof(V58_an_exception_escaping_a_seam_is_a_coded_500_that_names_the_correlation_id),
+        ["EXPLAIN_LIMIT"] = nameof(V61_an_explain_past_its_bounds_is_refused_EXPLAIN_LIMIT_and_one_within_them_answers),
         ["RESOLVE_NOT_FILTERABLE"] = nameof(RefusalsServerTests.V35_a_condition_on_the_remote_alias_itself_is_refused_with_RESOLVE_NOT_FILTERABLE_before_the_owner_is_called),
+        ["UNKNOWN_VARIANT"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
+        ["FLATTEN_NOT_RECURSIVE"] = nameof(Rows.RowsVariantsTests.An_unknown_variant_and_a_flatten_over_a_member_that_does_not_nest_the_items_are_refused),
+        ["LOOKUP_ON_NOT_ENTITY"] = nameof(Joins.JoinsLookupMembersTests.On_a_lookup_array_is_LOOKUP_ON_NOT_ENTITY),
+        ["NOT_CONTINUABLE"] = nameof(Joins.JoinsContinuationTests.An_unwind_under_a_remote_alias_is_NOT_CONTINUABLE),
+        ["MAX_CONTINUED_STAGES_EXCEEDED"] = nameof(Joins.JoinsContinuationTests.More_stages_continued_under_one_alias_than_MaxContinuedStages_is_MAX_CONTINUED_STAGES_EXCEEDED),
+        ["UNION_CARDINALITY_MISMATCH"] = nameof(Joins.JoinsUnionJoinTests.Branches_of_one_record_and_of_every_element_are_UNION_CARDINALITY_MISMATCH),
+        ["RESOLVE_ON_COLLECTION"] = nameof(Joins.JoinsResolveMembersTests.A_resolve_through_items_that_are_not_unwound_is_RESOLVE_ON_COLLECTION),
+        ["RESOLVE_TARGET_NOT_DECLARED"] = nameof(Joins.JoinsResolveMembersTests.A_target_that_is_not_a_target_of_the_reference_is_RESOLVE_TARGET_NOT_DECLARED),
+        ["RESOLVE_PARENT_NOT_ITEM"] = nameof(Joins.JoinsResolveMembersTests.ParentAs_on_an_entity_target_is_RESOLVE_PARENT_NOT_ITEM),
+        ["UNKNOWN_REQUEST_MEMBER"] = nameof(RefusalsRequestMembersTests.An_unknown_top_level_member_under_contract_2_is_UNKNOWN_REQUEST_MEMBER),
+        ["PAGE_INCOMPLETE"] = nameof(Joins.JoinsOutcomesTests.A_strict_report_page_that_holds_fewer_rows_than_match_is_PAGE_INCOMPLETE),
+        ["INVALID_FILTER"] = nameof(Filters.FilterPlacementTests.A_malformed_filter_is_INVALID_FILTER_and_an_error_in_a_condition_names_its_entry_by_id_or_index),
+        ["FILTER_NOT_PLACEABLE"] = nameof(Filters.FilterPlacementTests.A_condition_that_cannot_be_placed_is_FILTER_NOT_PLACEABLE_and_names_its_entry_and_the_births_of_its_paths),
+        ["MAX_FILTER_ENTRIES_EXCEEDED"] = nameof(Filters.FilterPlacementTests.A_filter_over_its_bounds_is_refused_once_before_anything_is_placed),
+        ["VALUES_LIMIT_EXCEEDED"] = nameof(Values.ValuesTests.What_it_refuses_is_refused_before_anything_runs),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -75,13 +92,20 @@ public class RefusalsCatalogueTests
     }
 
     [Fact]
-    public void V60_the_catalogue_holds_sixty_error_codes_and_eight_diagnostics()
+    public void V60_the_catalogue_holds_its_counted_error_codes_and_diagnostics()
     {
         var catalogue = Catalogue();
 
-        catalogue.Should().HaveCount(68);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(60);
-        catalogue.Count(DiagnosticCodes.Contains).Should().Be(8);
+        // Contract 1 knows 60 errors and 8 diagnostics; contract 2 adds UNKNOWN_VARIANT, FLATTEN_NOT_RECURSIVE and
+        // UNWIND_DEPTH_TRUNCATED, then LOOKUP_ON_NOT_ENTITY, NOT_CONTINUABLE and LOOKUP_TRUNCATED, then RESOLVE_ON_COLLECTION,
+        // RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM, then UNKNOWN_REQUEST_MEMBER, then
+        // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
+        // MAX_CONTINUED_STAGES_EXCEEDED, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH, then
+        // INVALID_FILTER and FILTER_NOT_PLACEABLE, then VALUES_LIMIT_EXCEEDED with the diagnostic VALUES_SCAN_CAPPED,
+        // then (the bound on the filter's entries) MAX_FILTER_ENTRIES_EXCEEDED.
+        catalogue.Should().HaveCount(90);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(76);
+        catalogue.Count(DiagnosticCodes.Contains).Should().Be(14);
     }
 
     [Fact]
@@ -109,9 +133,9 @@ public class RefusalsCatalogueTests
         // no server finishes that in time. The legacy rig could not lower the budget at start-up.
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
-        var client = shared.Variant(LabService.Transport, "b5-maxtime-1", new Dictionary<string, string?> { ["OxQL:Execution:MaxTimeMs"] = "1" }, Org.C);
+        var client = shared.Variant(LabService.Transport, "case-maxtime-1", new Dictionary<string, string?> { ["OxQL:Execution:MaxTimeMs"] = "1" }, Org.C);
 
-        var answer = await client.SendAsync(Corpus.Template, """[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var answer = await client.SendAsync(Corpus.Template, """[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         answer.StatusCode.Should().Be(504, answer.ToString());
         answer.Type.Should().Be("timeout");
@@ -169,7 +193,7 @@ public class RefusalsCatalogueTests
 
         foreach (var pipeline in new[]
         {
-            """[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } }, { "page": { "limit": 5 } }]""",
+            """[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "page": { "limit": 5 } }]""",
             """[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "VEH-002" } } }, { "page": { "limit": 5 } }]""",
         })
         {
@@ -188,7 +212,7 @@ public class RefusalsCatalogueTests
     [Fact]
     public async Task V55_an_owner_that_does_not_answer_a_semi_join_refuses_the_query_rather_than_evaluating_something_else()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-semi-unanswered", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-semi-unanswered", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Status, Status = HttpStatusCode.InternalServerError });
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, """
@@ -212,10 +236,10 @@ public class RefusalsCatalogueTests
         two.Should().HaveCountLessThanOrEqualTo(2);
         var expected = Corpus.SortedIds(Corpus.Template, "id", filter: row => Corpus.GuidAt(row, "createUserId") is { } user && two.Contains(user));
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-semijoin-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxSemiJoinIds"] = "2" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-semijoin-2", new Dictionary<string, string?> { ["OxQL:Limits:MaxSemiJoinIds"] = "2" });
 
         var over = await capped.SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "startsWith": "VEH" } } },
               { "page": { "limit": 5 } } ]
             """);
@@ -226,7 +250,7 @@ public class RefusalsCatalogueTests
         over.Errors[0]["stage"]!.GetValue<int>().Should().Be(1);
 
         var under = await capped.SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "VEH-002" } } },
               { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50 } } ]
             """);
@@ -243,7 +267,7 @@ public class RefusalsCatalogueTests
         const int rows = 20;
         var big = new string('x', 1024 * 1024);
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-too-expensive", seed: [], extra: async lab =>
+        await using var fleet = await CorpusFleet.CreateAsync("case-too-expensive", seed: [], extra: async lab =>
         {
             var database = await lab.DatabaseAsync(LabService.Staff);
             await database.GetCollection<BsonDocument>("employee").InsertManyAsync(Enumerable.Range(1, rows).Select(n => new BsonDocument
@@ -281,9 +305,26 @@ public class RefusalsCatalogueTests
             answer.StatusCode.Should().Be(500, answer.ToString());
             answer.Type.Should().Be("internal_error");
             answer.ErrorCodes.Should().Equal(["INTERNAL_ERROR"]);
-            answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("b5-correlation", "the message points at the log line");
+            answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("case-correlation", "the message points at the log line");
             answer.Text.Should().NotContain("down").And.NotContain("did not answer", "the fault's own text stays in the log");
         }
+    }
+
+    [Fact]
+    public async Task V61_an_explain_past_its_bounds_is_refused_EXPLAIN_LIMIT_and_one_within_them_answers()
+    {
+        var staff = await Lab.ClientAsync(LabService.Staff);
+        var query = $$"""{ "entityType": "{{Corpus.Employee}}", "pipeline": [{ "page": { "limit": 1 } }] }""";
+
+        var unknown = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "include": ["executionStats"] }""");
+        unknown.ShouldRefuse("EXPLAIN_LIMIT", 400);
+        unknown.ErrorCodes.Should().Equal(["EXPLAIN_LIMIT"]);
+
+        var deep = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "shape": { "depth": 4 } }""");
+        deep.ShouldRefuse("EXPLAIN_LIMIT", 400)["params"]!["max"]!.GetValue<int>().Should().Be(3);
+
+        var within = await staff.ExplainHereAsync($$"""{ "query": {{query}}, "shape": { "depth": 3 } }""");
+        within.Body!["valid"]!.GetValue<bool>().Should().BeTrue(within.Text);
     }
 
     /// <summary>An entity with no organisation member, and one that joins it both ways.</summary>

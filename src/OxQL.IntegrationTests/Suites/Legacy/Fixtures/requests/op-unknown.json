@@ -1,0 +1,17 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "like": "TR%"
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

@@ -19,67 +19,116 @@ public class CountCapTests
     private static Task<LabClient> Staff() => Lab.ClientAsync(LabService.Staff);
 
     [Fact]
-    public async Task CC01_a_cap_of_10_over_6000_rows_answers_10_capped_with_TOTAL_COUNT_CAPPED_naming_the_cap()
+    public async Task CC01_an_upTo_of_10_over_6000_rows_answers_at_least_10_stopped_by_the_cap()
     {
         var total = Corpus.Counts(Corpus.Template).A;
         total.Should().Be(Corpus.TemplateVolume).And.BeGreaterThan(10);
 
         var transport = await Transport();
-        var capped = await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 2, "includeTotalCount": 10 } } ]""");
+        var capped = await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 2, "count": { "upTo": 10 } } } ]""");
 
-        capped.ShouldHaveTotal(10, capped: true);
+        capped.ShouldCount("atLeast", 10, "cap").ShouldHaveNoDiagnostics();
         capped.Items.Should().HaveCount(2);
-        capped.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
-        capped.Diagnostics[0]["params"]!["cap"]!.GetValue<int>().Should().Be(10, capped.ToString());
 
-        // true still counts everything: the host's own cap is far above the entity.
-        (await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldHaveTotal(total, capped: false);
+        // true counts one step beside the page; the count alone runs to the end within its budget.
+        (await transport.SendAsync(Corpus.Template, """[ { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldCount("atLeast", 1_000, "step");
+        (await transport.CountOnlyAsync(Corpus.Template, """[ { "project": { "id": 1 } } ]""")).ShouldCount("exact", total);
     }
 
     [Fact]
-    public async Task CC02_a_cap_at_or_above_the_match_count_is_an_exact_count_not_capped()
+    public async Task CC02_an_upTo_at_or_above_the_match_count_is_an_exact_count()
     {
         var count = Corpus.Counts(Corpus.Employee).A;
         count.Should().BeLessThan(100);
 
         var staff = await Staff();
 
-        var above = await staff.SendAsync(Corpus.Employee, """[ { "project": { "id": 1 } }, { "page": { "limit": 2, "includeTotalCount": 100 } } ]""");
-        above.ShouldHaveTotal(count, capped: false).ShouldHaveNoDiagnostics();
+        var above = await staff.SendAsync(Corpus.Employee, """[ { "project": { "id": 1 } }, { "page": { "limit": 2, "count": { "upTo": 100 } } } ]""");
+        above.ShouldCount("exact", count).ShouldHaveNoDiagnostics();
 
-        var at = await staff.SendAsync(Corpus.Employee, $$"""[ { "project": { "id": 1 } }, { "page": { "limit": 2, "includeTotalCount": {{count}} } } ]""");
-        at.ShouldHaveTotal(count, capped: false);
+        var at = await staff.SendAsync(Corpus.Employee, $$"""[ { "project": { "id": 1 } }, { "page": { "limit": 2, "count": { "upTo": {{count}} } } } ]""");
+        at.ShouldCount("exact", count);
     }
 
     [Fact]
-    public async Task CC03_a_zero_or_negative_cap_is_INVALID_PAGE_LIMIT_and_the_number_form_under_contract_1_is_LEGACY_STAGE_UNSUPPORTED()
+    public async Task CC03_a_bound_that_is_not_a_positive_integer_is_INVALID_PAGE_LIMIT_and_includeTotalCount_is_contract_1s()
     {
         var transport = await Transport();
 
-        foreach (var cap in new[] { 0, -5 })
-            (await transport.SendAsync(Corpus.Template, $$"""[ { "page": { "limit": 2, "includeTotalCount": {{cap}} } } ]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT")
-                .Should().Contain("is not a positive integer", $"cap {cap}");
+        foreach (var member in new[] { "upTo", "budgetMs" })
+            foreach (var value in new[] { "0", "-5", "1.5", "\"x\"" })
+                (await transport.SendAsync(Corpus.Template, $$"""[ { "page": { "limit": 2, "count": { "{{member}}": {{value}} } } } ]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT")
+                    .Should().Contain("is a positive integer", $"{member} {value}");
+
+        (await transport.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "count": 10 } } ]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
+        (await transport.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "count": { "max": 10 } } } ]""")).ShouldRefuseExactly("UNKNOWN_STAGE_MEMBER");
+
+        // Contract 2 asks with 'count'; both forms of includeTotalCount are refused by name.
+        foreach (var form in new[] { "true", "false", "10" })
+        {
+            var refused = await transport.SendAsync(Corpus.Template, $$"""[ { "page": { "limit": 2, "includeTotalCount": {{form}} } } ]""");
+
+            refused.ShouldRefuseExactly("UNKNOWN_STAGE_MEMBER");
+            refused.Body!["errors"]![0]!["params"]!.ToJsonString().Should().Be("""{"stage":"page","member":"includeTotalCount","reason":"removed","use":"count"}""");
+        }
 
         var v1 = await Transport(contract: 1);
 
         (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "includeTotalCount": 10 } } ]""")).ShouldRefuseExactly("LEGACY_STAGE_UNSUPPORTED")
-            .Should().Be("'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2).");
+            .Should().Be("'includeTotalCount' is true or false under contract 1; a count cap needs contract 2 (X-OxQL-Contract: 2). This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.");
+        (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 2, "count": true } } ]""")).ShouldRefuseExactly("LEGACY_STAGE_UNSUPPORTED");
 
-        // Contract 1's boolean is untouched.
-        (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldBeOk().TotalCount.Should().Be(Corpus.TemplateVolume);
+        // Contract 1's boolean is untouched, and its answer carries no 'count'.
+        var legacy = (await v1.SendAsync(Corpus.Template, """[ { "page": { "limit": 1, "includeTotalCount": true } } ]""")).ShouldBeOk();
+
+        legacy.PageInfo["totalCount"]!.GetValue<long>().Should().Be(Corpus.TemplateVolume);
+        legacy.PageInfo.ContainsKey("count").Should().BeFalse();
     }
 
     [Fact]
-    public async Task CC04_the_cap_counts_under_the_collation_a_folded_match_capped_below_its_match_count()
+    public async Task CC04_the_count_runs_under_the_collation_a_folded_match_bounded_below_its_match_count()
     {
         var matching = Corpus.Where(Corpus.Employee, row => Corpus.Text(row, "matchCode") is { } code && Order.EqualsCi(code, "muller")).Count;
         matching.Should().Be(4);
 
         var staff = await Staff();
 
-        (await staff.SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": "MULLER" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": {{matching - 1}} } } ]"""))
-            .ShouldHaveTotal(matching - 1, capped: true);
-        (await staff.SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": "MULLER" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": {{matching}} } } ]"""))
-            .ShouldHaveTotal(matching, capped: false);
+        (await staff.SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": "MULLER" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": { "upTo": {{matching - 1}} } } } ]"""))
+            .ShouldCount("atLeast", matching - 1, "cap");
+        (await staff.SendAsync(Corpus.Employee, $$"""[ { "match": { "matchCode": { "eq": "MULLER" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": { "upTo": {{matching}} } } } ]"""))
+            .ShouldCount("exact", matching);
+    }
+
+    /// <summary>What every page knows without a count step: the rows served, and one more while a page follows; the last page is exact.</summary>
+    [Fact]
+    public async Task CC05_a_walk_without_a_count_knows_the_rows_served_plus_one_and_ends_exact()
+    {
+        var total = Corpus.Counts(Corpus.Employee).A;
+        var staff = await Staff();
+        string? cursor = null;
+        long served = 0;
+
+        // The page size changes mid walk: the cursor carries the rows served, not a page number.
+        foreach (var limit in new[] { 2, 5, 3, 500 })
+        {
+            var page = await staff.SendAsync(Corpus.Employee, $$"""[ { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1 } }, { "page": { "limit": {{limit}}{{(cursor is null ? "" : $", \"cursor\": \"{cursor}\"")}} } } ]""");
+
+            served += page.Items.Count;
+
+            if (page.HasNextPage)
+                page.ShouldCount("atLeast", served + 1, "page");
+            else
+                page.ShouldCount("exact", served);
+
+            cursor = page.NextCursor;
+        }
+
+        served.Should().Be(total);
+
+        // A first page that holds every row is exact although a count was asked, and no step was waited for.
+        var whole = await staff.SendAsync(Corpus.Employee, """[ { "page": { "limit": 500, "count": true } } ]""");
+
+        whole.ShouldCount("exact", total);
+        whole.Count!.ContainsKey("ms").Should().BeFalse();
     }
 }

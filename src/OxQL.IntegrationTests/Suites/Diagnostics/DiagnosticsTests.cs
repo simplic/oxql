@@ -85,7 +85,7 @@ public class DiagnosticsTests
     {
         var expected = Corpus.AllIds(Corpus.Employee);
 
-        var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """[{ "sort": [{ "addon.shiftModel": "asc" }] }, { "page": { "limit": 500, "includeTotalCount": true } }]""");
+        var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """[{ "sort": [{ "addon.shiftModel": "asc" }] }, { "page": { "limit": 500, "count": true } }]""");
 
         answer.ShouldHaveIdsInAnyOrder(expected).ShouldHaveTotal(expected.Count);
         answer.Diagnostics.Should().ContainSingle();
@@ -121,17 +121,16 @@ public class DiagnosticsTests
         var all = Corpus.AllIds(Corpus.Template);
         all.Count.Should().BeGreaterThan(cap);
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = $"{cap}" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = $"{cap}" });
 
-        var answer = await capped.SendAsync(Corpus.Template, """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var answer = await capped.SendAsync(Corpus.Template, """[{ "sort": [{ "id": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 5, "count": true } }]""");
 
-        answer.ShouldHaveIds(Corpus.PageOf(all, 5)).ShouldHaveTotal(cap, capped: true);
-        var diagnostic = Only(answer, "TOTAL_COUNT_CAPPED");
-        diagnostic["params"]!["cap"]!.GetValue<int>().Should().Be(cap);
+        // The bound and why counting stopped there are in the count itself; no diagnostic repeats them.
+        answer.ShouldHaveIds(Corpus.PageOf(all, 5)).ShouldCount("atLeast", cap, "cap").ShouldHaveNoDiagnostics();
 
         // Under the cap the count is exact and says nothing.
         var under = Corpus.IdsWhere(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP");
-        var small = await capped.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50, "includeTotalCount": true } }]""");
+        var small = await capped.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50, "count": true } }]""");
         small.ShouldHaveIds(under).ShouldHaveTotal(under.Count, capped: false).ShouldHaveNoDiagnostics();
     }
 
@@ -152,7 +151,7 @@ public class DiagnosticsTests
         var rows = WidgetRows();
         rows.Should().NotBeEmpty().And.OnlyContain(row => row.Widget != null, "every row names a widget, so a null is the timeout's doing");
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-timeout", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-timeout", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Hang });
         var client = fleet.Variant(LabService.Conformance, "resolve-200", new Dictionary<string, string?> { ["OxQL:Execution:ResolveTimeoutMs"] = "200" });
 
@@ -170,7 +169,7 @@ public class DiagnosticsTests
     {
         var rows = WidgetRows();
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-unreachable", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-unreachable", seed: [LabService.Conformance]);
         fleet.Owner.Set(new ChaosSettings { Mode = ChaosMode.Status, Status = HttpStatusCode.InternalServerError });
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, WidgetPipeline);
@@ -189,7 +188,7 @@ public class DiagnosticsTests
         var keys = rows.Select(row => row.Widget).Distinct().ToList();
         keys.Should().HaveCountGreaterThan(1, "the page must need more keys than the cap of one");
 
-        await using var fleet = await CorpusFleet.CreateAsync("b5-resolve-partial", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-resolve-partial", seed: [LabService.Conformance]);
         var client = fleet.Variant(LabService.Conformance, "resolve-keys-1", new Dictionary<string, string?> { ["OxQL:Limits:MaxResolveKeys"] = "1" });
 
         var answer = await client.SendAsync(Corpus.Conformance, WidgetPipeline);
@@ -220,12 +219,15 @@ public class DiagnosticsTests
     }
 
     [Fact]
-    public void W12_the_engine_declares_exactly_the_eight_diagnostics_and_this_suite_provokes_each_live()
+    public void W12_the_engine_declares_exactly_the_diagnostics_that_are_provoked_live()
     {
+        // UNWIND_DEPTH_TRUNCATED is provoked in RowsVariantsTests, LOOKUP_TRUNCATED in JoinsLookupMembersTests, RESOLVE_MISSING,
+        // RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED in JoinsOutcomesTests, VALUES_SCAN_CAPPED in ValuesTests, every other one in this suite.
         var provoked = new[]
         {
             "SORT_ON_ADDON", "REGEX_UNANCHORED", "ENTITY_ID_RETIRED", "TOTAL_COUNT_CAPPED",
             "RESOLVE_TIMEOUT", "RESOLVE_UNREACHABLE", "RESOLVE_PARTIAL", "DECIMAL_TEXT_EXCLUDED",
+            "UNWIND_DEPTH_TRUNCATED", "LOOKUP_TRUNCATED", "RESOLVE_MISSING", "RESOLVE_AMBIGUOUS", "RESOLVE_TRUNCATED", "VALUES_SCAN_CAPPED",
         };
         var catalogue = typeof(OxQL.Core.Binding.Codes).GetFields()
             .Where(field => field.IsLiteral)
@@ -233,10 +235,10 @@ public class DiagnosticsTests
             .ToList();
 
         // Every other code of the catalogue is an error, each provoked in the refusal suites
-        // (RefusalsCatalogueTests checks that half), so these eight are the diagnostics.
+        // (RefusalsCatalogueTests checks that half), so these are the diagnostics.
         provoked.Should().BeSubsetOf(catalogue);
         RefusalsCatalogueTests.DiagnosticCodes.Should().BeEquivalentTo(provoked);
-        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 8 + provoked.Length,
-            "52 codes of the V table, 8 provoked outside it (7 in the catalogue suite and RESOLVE_NOT_FILTERABLE in V35) and the 8 diagnostics");
+        catalogue.Should().HaveCount(RefusalsServerTests.Table.Select(row => row.Code).Distinct().Count() + 24 + provoked.Length,
+            "52 codes of the V table, 24 provoked outside it (VALUES_LIMIT_EXCEEDED in ValuesTests, INVALID_FILTER, FILTER_NOT_PLACEABLE and MAX_FILTER_ENTRIES_EXCEEDED in FilterPlacementTests, 8 in the catalogue suite, EXPLAIN_LIMIT among them, UNKNOWN_REQUEST_MEMBER in RefusalsRequestMembersTests, PAGE_INCOMPLETE in JoinsOutcomesTests, RESOLVE_NOT_FILTERABLE in V35, UNKNOWN_VARIANT and FLATTEN_NOT_RECURSIVE in RowsVariantsTests, LOOKUP_ON_NOT_ENTITY in JoinsLookupMembersTests, NOT_CONTINUABLE and MAX_CONTINUED_STAGES_EXCEEDED in JoinsContinuationTests, UNION_CARDINALITY_MISMATCH in JoinsUnionJoinTests, RESOLVE_ON_COLLECTION, RESOLVE_TARGET_NOT_DECLARED and RESOLVE_PARENT_NOT_ITEM in JoinsResolveMembersTests) and the 14 diagnostics");
     }
 }

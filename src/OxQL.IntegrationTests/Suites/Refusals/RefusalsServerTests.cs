@@ -53,7 +53,7 @@ public class RefusalsServerTests
     private static Case Template(string id, string code, string why, string pipeline) =>
         new(id, code, 400, "validation_error", why, LabService.Transport, Corpus.Template, pipeline);
 
-    /// <summary>The 76 provocations of the legacy table, in its order.</summary>
+    /// <summary>The 75 provocations of the legacy table (76 less the cursor-with-offset case contract 2 lost with its offset), in its order.</summary>
     public static readonly IReadOnlyList<Case> Table =
     [
         // entity
@@ -74,10 +74,10 @@ public class RefusalsServerTests
         Staff("V5.addon-undefined", "NOT_FILTERABLE", "a filter on an addon key with no definition", $$"""[{ "match": { "addon.undefinedKey": { "eq": "opaque" } } }, {{Page1}}]"""),
         Shipment("V6", "NOT_SORTABLE", "a sort on a path under a collection, unwound by nothing", $$"""[{ "sort": [{ "items.quantity.value": "asc" }] }, {{Page1}}]"""),
         Staff("V6.addon-undefined", "NOT_SORTABLE", "a sort on an addon key with no definition", $$"""[{ "sort": [{ "addon.undefinedKey": "asc" }] }, {{Page1}}]"""),
-        Shipment("V7", "NOT_A_COLLECTION", "unwind of a scalar", $$"""[{ "unwind": { "path": "shipmentNumber" } }, {{Page1}}]"""),
-        Shipment("V8", "UNWIND_ORDER", "the inner collection unwound before its outer one", $$"""[{ "unwind": { "path": "billingLines.references" } }, {{Page1}}]"""),
-        Shipment("V9", "ALIAS_COLLISION", "includeIndex equal to an existing member", $$"""[{ "unwind": { "path": "items", "includeIndex": "items" } }, {{Page1}}]"""),
-        Shipment("V10", "INVALID_ALIAS", "an alias that is not a plain identifier", $$"""[{ "unwind": { "path": "items", "includeIndex": "my-alias" } }, {{Page1}}]"""),
+        Shipment("V7", "NOT_A_COLLECTION", "unwind of a scalar", $$"""[{ "unwind": { "path": "shipmentNumber", "as": "shipmentNumberRow" } }, {{Page1}}]"""),
+        Shipment("V8", "UNWIND_ORDER", "the inner collection unwound before its outer one", $$"""[{ "unwind": { "path": "billingLines.references", "as": "reference" } }, {{Page1}}]"""),
+        Shipment("V9", "ALIAS_COLLISION", "includeIndex equal to an existing member", $$"""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "items" } }, {{Page1}}]"""),
+        Shipment("V10", "INVALID_ALIAS", "an alias that is not a plain identifier", $$"""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "my-alias" } }, {{Page1}}]"""),
         Template("V10.no-as", "INVALID_ALIAS", "a resolve with no as at all", $$"""[{ "resolve": { "path": "createUserId" } }, {{Page1}}]"""),
 
         // operand
@@ -96,7 +96,7 @@ public class RefusalsServerTests
         Staff("V16", "UNKNOWN_OPERATOR", "an operator the server has no spelling for ('like')", $$"""[{ "match": { "matchCode": { "like": "a" } } }, {{Page1}}]"""),
         Staff("V16.between", "UNKNOWN_OPERATOR", "'between' is client sugar and never reaches the wire", $$"""[{ "match": { "children": { "between": [1, 3] } } }, {{Page1}}]"""),
         Staff("V17", "EMPTY_LOGICAL_GROUP", "and: []", $$"""[{ "match": { "and": [] } }, {{Page1}}]"""),
-        Staff("V18", "OPTION_NOT_APPLICABLE", "ignoreCase on gt", $$"""[{ "match": { "matchCode": { "gt": "a", "options": { "ignoreCase": true } } } }, {{Page1}}]"""),
+        Staff("V18", "OPTION_NOT_APPLICABLE", "caseSensitive on gt", $$"""[{ "match": { "matchCode": { "gt": "a", "options": { "caseSensitive": false } } } }, {{Page1}}]"""),
         Staff("V18.unknown-option", "OPTION_NOT_APPLICABLE", "an option name the server does not know", $$"""[{ "match": { "matchCode": { "eq": "a", "options": { "nope": true } } } }, {{Page1}}]"""),
         Staff("V18.options-scalar", "OPTION_NOT_APPLICABLE", "options: 5, not an object at all", $$"""[{ "match": { "matchCode": { "eq": "a", "options": 5 } } }, {{Page1}}]"""),
         Staff("V19", "INVALID_REGEX", "a pattern .NET cannot compile", $$"""[{ "match": { "matchCode": { "regex": "a|*" } } }, {{Page1}}]"""),
@@ -122,26 +122,25 @@ public class RefusalsServerTests
         Staff("V32", "INVALID_SORT_DIRECTION", "an upper-case direction under contract 2", $$"""[{ "sort": [{ "id": "ASC" }] }, {{Page1}}]"""),
         Staff("V33", "LOOKUP_NOT_DECLARED", "a lookup along a child member that declares no reference back", $$"""[{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "x" } }, {{Page1}}]"""),
         Shipment("V34", "RESOLVE_NOT_DECLARED", "a resolve on a member with no declared reference", $$"""[{ "resolve": { "path": "createUserId", "as": "u" } }, {{Page1}}]"""),
-        Template("V36", "RESOLVE_NOT_SORTABLE", "a sort on a remote resolve alias", $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } }, { "sort": [{ "veh.matchCode": "asc" }] }, {{Page1}}]"""),
+        Template("V36", "RESOLVE_NOT_SORTABLE", "a sort on a remote resolve alias", $$"""[{ "resolve": { "path": "createUserId", "as": "veh" } }, { "sort": [{ "veh.matchCode": "asc" }] }, {{Page1}}]"""),
 
         // limits
         Staff("V37", "MAX_PIPELINE_STAGES_EXCEEDED", "21 stages, one over maxPipelineStages", $$"""[{{Repeat(20, _ => """{ "match": { "id": { "neq": null } } }""")}}, {{Page1}}]"""),
         Staff("V38", "MAX_LOOKUP_STAGES_EXCEEDED", "6 lookups, one over maxLookupStages", $$"""[{{Repeat(6, i => $$"""{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "a{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
         Shipment("V39", "MAX_UNWIND_STAGES_EXCEEDED", "6 unwinds, one over maxUnwindStages", $$"""[{{Repeat(6, i => $$"""{ "unwind": { "path": "items", "as": "u{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
-        Template("V40", "MAX_RESOLVE_STAGES_EXCEEDED", "3 resolves, one over maxResolveStages", $$"""[{{Repeat(3, i => $$"""{ "resolve": { "path": "createUserId", "as": "r{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
-        Staff("V41", "MAX_GROUP_FIELDS_EXCEEDED", "21 group fields, one over maxGroupFields", $$"""[{ "group": { "by": [], "fields": { {{Repeat(21, i => $$"""
+        Template("V40", "MAX_RESOLVE_STAGES_EXCEEDED", "9 resolves, one over maxResolveStages (8)", $$"""[{{Repeat(9, i => $$"""{ "resolve": { "path": "createUserId", "as": "r{{i}}" } }""")}}, {{Page1}}]""") with { Contains = true },
+        Staff("V41", "MAX_GROUP_FIELDS_EXCEEDED", "41 group fields, one over maxGroupFields", $$"""[{ "group": { "by": [], "fields": { {{Repeat(41, i => $$"""
             "f{{i}}": { "count": true }
             """)}} } } }]"""),
         Staff("V42", "MAX_PROJECTION_FIELDS_EXCEEDED", "501 projection paths, one over maxProjectionFields", $$"""[{ "project": { {{Repeat(501, i => $"\"p{i}\": 1")}} } }, {{Page1}}]""") with { Contains = true },
         Staff("V43", "MAX_CONDITIONS_EXCEEDED", "201 leaf conditions, one over maxConditions", $$"""[{ "match": { "and": [{{Repeat(201, i => $$"""{ "matchCode": { "neq": "x{{i}}" } }""")}}] } }, {{Page1}}]"""),
         Staff("V44", "MAX_VARIABLES_EXCEEDED", "65 variables, one over maxVariables", $$"""[{ "match": { "matchCode": { "eq": { "$var": "v0" } } } }, {{Page1}}]""", $"{{ {Repeat(65, i => $"\"v{i}\": \"x\"")} }}"),
         Staff("V45", "INVALID_PAGE_LIMIT", "limit: 0", """[{ "page": { "limit": 0 } }]"""),
-        Staff("V45.offset", "INVALID_PAGE_LIMIT", "offset: -1", """[{ "page": { "limit": 1, "offset": -1 } }]"""),
-        Staff("V45.cursor-offset", "INVALID_PAGE_LIMIT", "a cursor and an offset in the same page stage", """[{ "page": { "limit": 1, "offset": 1, "cursor": "anything" } }]"""),
+        Staff("V45.offset", "UNKNOWN_STAGE_MEMBER", "offset: 1, which a contract 2 page does not have", """[{ "page": { "limit": 1, "offset": 1 } }]"""),
         Staff("V46", "PAGE_SIZE_EXCEEDED", "limit: 501, one over maxPageSize", """[{ "page": { "limit": 501 } }]"""),
         new("V47", "LOOKUP_LIMIT_EXCEEDED", 400, "validation_error", "lookup.limit 101, one over maxLookupLimit, on a declared backward reference",
             LabService.Fleet, Corpus.Vehicle, $$"""[{ "lookup": { "path": "vehicle.id", "from": "fleet.equipment", "as": "eq", "limit": 101 } }, {{Page1}}]"""),
-        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset", """[{ "page": { "limit": 1, "offset": 5001 } }]"""),
+        Template("V48", "MAX_OFFSET_EXCEEDED", "offset 5001, one over maxOffset, under contract 1 (a contract 2 page has no offset)", """[{ "page": { "limit": 1, "offset": 5001 } }]""") with { ContractOne = true },
         new("V50", "REQUEST_TOO_LARGE", 413, "validation_error", "a body above maxRequestBytes (262 144)", LabService.Staff, Corpus.Employee,
             $$"""[{ "match": { "or": [{{Repeat(4000, i => $$"""{ "matchCode": { "eq": "{{new string('x', 60)}}{{i}}" } }""")}}] } }, {{Page1}}]"""),
 
@@ -150,7 +149,7 @@ public class RefusalsServerTests
         new("V52", "ACCESS_DENIED", 403, "access_denied", "a request that carries no organisation at all (legacy: a token without the OId claim)",
             LabService.Staff, Corpus.Employee, $"[{Page1}]", Anonymous: true),
         new("V54", "RESOLVE_REFUSED", 422, "not_executable", "a remote resolve whose filter the owner refuses", LabService.Transport, Corpus.Template,
-            $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"], "filter": { "nosuchpath": { "eq": 1 } } } }, {{Page1}}]""", Contains: true),
+            $$"""[{ "resolve": { "path": "createUserId", "as": "veh", "filter": { "nosuchpath": { "eq": 1 } } } }, {{Page1}}]""", Contains: true),
         Staff("V59", "LEGACY_STAGE_UNSUPPORTED", "a lookup stage under contract 1, where the compat binder has no equivalent",
             $$"""[{ "lookup": { "path": "emailAddresses", "from": "staff.employee", "as": "x" } }, {{Page1}}]""") with { ContractOne = true },
         Staff("V59.no-header", "LEGACY_STAGE_UNSUPPORTED", "the same stage with no contract header at all: the compat leg treats it as contract 1",
@@ -197,9 +196,9 @@ public class RefusalsServerTests
     }
 
     [Fact]
-    public void Va_the_table_carries_the_legacy_76_provocations_with_unique_ids()
+    public void Va_the_table_carries_the_legacy_provocations_with_unique_ids()
     {
-        Table.Should().HaveCount(76);
+        Table.Should().HaveCount(75);
         Table.Select(row => row.Id).Should().OnlyHaveUniqueItems();
         Table.Select(row => row.Code).Distinct().Should().HaveCount(52, "the legacy table provoked 52 distinct codes; two more lived in the batch battery and six were out of the old rig's reach");
     }
@@ -216,7 +215,7 @@ public class RefusalsServerTests
         expected.Should().NotBeEmpty().And.HaveCountLessThan(20);
 
         var answer = await (await Lab.ClientAsync(LabService.Transport)).SendAsync(Corpus.Template, """
-            [ { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+            [ { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "VEH-002" } } },
               { "project": { "id": 1, "templateName": 1, "veh.matchCode": 1 } },
               { "sort": [{ "id": "asc" }] },
@@ -234,7 +233,7 @@ public class RefusalsServerTests
         // that name, so no semi-join can express the condition. The binder refuses it with
         // RESOLVE_NOT_FILTERABLE, with the path and the stage, and nothing is sent to the owner
         // (it used to send the owner a match on the alias and answer its 422 refusal).
-        await using var fleet = await CorpusFleet.CreateAsync("b5-d4", seed: [LabService.Conformance]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-d4", seed: [LabService.Conformance]);
         var client = fleet.Client(LabService.Conformance);
         var mark = fleet.Owner.Mark();
 

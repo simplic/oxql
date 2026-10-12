@@ -17,7 +17,7 @@ namespace OxQL.IntegrationTests.Suites.Chaos;
 [Trait("Category", "Integration")]
 public class ChaosOwnerTests
 {
-    private static JsonObject ResolveQuery(params string[] keys) => new()
+    private static JsonObject OwnerQuery(params string[] keys) => new()
     {
         ["entityType"] = ChaosOwner.Entity,
         ["pipeline"] = JsonNode.Parse($$"""
@@ -27,7 +27,7 @@ public class ChaosOwnerTests
             """),
     };
 
-    private static readonly JsonObject Two = new() { ["queries"] = new JsonArray(ResolveQuery("W-1", "W-2"), ResolveQuery("W-3")) };
+    private static readonly JsonObject Two = new() { ["queries"] = new JsonArray(OwnerQuery("W-1", "W-2"), OwnerQuery("W-3")) };
 
     private static async Task<(HttpStatusCode Status, string Text)> Batch(ChaosOwner owner, JsonNode? body = null, CancellationToken cancellationToken = default)
     {
@@ -67,8 +67,8 @@ public class ChaosOwnerTests
     public async Task Every_match_stage_applies_with_combinators_and_folding_and_the_decoy_id_answers_another_widget()
     {
         var owner = new ChaosOwner();
-        var both = ResolveQuery("W-1", "W-2", "W-3");
-        both["pipeline"]!.AsArray().Insert(1, JsonNode.Parse("""{ "match": { "and": [ { "name": { "contains": "widget t", "options": { "ignoreCase": true } } }, { "not": { "code": { "eq": "W-3" } } } ] } }"""));
+        var both = OwnerQuery("W-1", "W-2", "W-3");
+        both["pipeline"]!.AsArray().Insert(1, JsonNode.Parse("""{ "match": { "and": [ { "name": { "contains": "widget t", "options": { "caseSensitive": false } } }, { "not": { "code": { "eq": "W-3" } } } ] } }"""));
 
         var filtered = await Parsed(owner, new JsonObject { ["queries"] = new JsonArray(both) });
         var decoy = await Parsed(owner, JsonNode.Parse("""{ "queries": [ { "entityType": "owner.widget", "pipeline": [ { "match": { "id": { "in": ["W-1"] } } } ] } ] }"""));
@@ -272,8 +272,8 @@ public class ChaosOwnerTests
         var mark = fleet.Owner.Mark();
 
         var answer = await client.SendAsync(Corpus.Conformance, """
-            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } },
-              { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "w": 1 } } ]
+            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
+              { "sort": [ { "id": "asc" } ] }, { "project": { "id": 1, "w.id": 1, "w.name": 1 } } ]
             """);
 
         answer.ShouldHaveIds(Corpus.AllIds(Corpus.Conformance));
@@ -295,7 +295,7 @@ public class ChaosOwnerTests
 
         var answer = await fleet.Client(LabService.Conformance).SendAsync(Corpus.Conformance, """
             [ { "match": { "name": { "eq": "Alpha" } } },
-              { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } } ]
+              { "resolve": { "path": "widgetCodeExplicit", "as": "w" } } ]
             """);
 
         answer.ShouldHaveIds([Corpus.IdOf(Corpus.Conformance, "c-alpha")]);

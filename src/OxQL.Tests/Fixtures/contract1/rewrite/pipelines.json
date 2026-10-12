@@ -1,0 +1,559 @@
+{
+  "fold-option": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$match\u0022 : { \u0022Number\u0022 : { \u0022$regularExpression\u0022 : { \u0022pattern\u0022 : \u0022^a$\u0022, \u0022options\u0022 : \u0022i\u0022 } } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OmJlM2E2MWQ0MDc0MDkzMzJmMGI1MzZlZjkzMWVjNzU0ZTY5NTIzNDI4NjEzNWU4NzVhZWQzMDQ5OGI4NWMzYjUiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJudW1iZXIiLCJkIjoiYXNjIiwiYiI6Ilx1MDAyMm4yXHUwMDIyIn0seyJwIjoiX2lkIiwiZCI6ImFzYyIsImIiOiJ7IFx1MDAyMiRiaW5hcnlcdTAwMjIgOiB7IFx1MDAyMmJhc2U2NFx1MDAyMiA6IFx1MDAyMkFBQUFBZ0FBQUFBQUFBQUFBQUFBQUE9PVx1MDAyMiwgXHUwMDIyc3ViVHlwZVx1MDAyMiA6IFx1MDAyMjA0XHUwMDIyIH0gfSJ9XX0.rN2sPT-Qu1yAcNIxmFtxRGvvKP-Yf1nvXnNV99tHe04",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022Number\u0022 : \u0022n2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022Number\u0022 : { \u0022$gt\u0022 : \u0022n2\u0022 } }] }] } }",
+          "{ \u0022$match\u0022 : { \u0022Number\u0022 : { \u0022$regularExpression\u0022 : { \u0022pattern\u0022 : \u0022^a$\u0022, \u0022options\u0022 : \u0022i\u0022 } } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "group": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$group\u0022 : { \u0022_id\u0022 : \u0022$State\u0022, \u0022n\u0022 : { \u0022$sum\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : \u0022$_id\u0022, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OmFiNjg2N2FiZDI5NzBlYjJhNTY1NDUyN2RjMzQwYTQyYjQ1YjdlOTc3OGZmYjY3OWQ0ZjNmYTJmMmRmMzQwZmQiLCJtIjoibyIsIm8iOjIsInYiOltdfQ.-HMQOafAgLiE8587Z8Gdc6UmHlTMk0j_Qz-H0c69JcM",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$group\u0022 : { \u0022_id\u0022 : \u0022$State\u0022, \u0022n\u0022 : { \u0022$sum\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : \u0022$_id\u0022, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00222\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "group-sorted-count": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$group\u0022 : { \u0022_id\u0022 : { \u0022st\u0022 : { \u0022$ifNull\u0022 : [\u0022$State\u0022, null] }, \u0022no\u0022 : { \u0022$ifNull\u0022 : [\u0022$Number\u0022, null] } }, \u0022n\u0022 : { \u0022$sum\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, \u0022total\u0022 : { \u0022$sum\u0022 : \u0022$Amount\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : \u0022$_id.st\u0022, \u0022no\u0022 : \u0022$_id.no\u0022, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022total\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022n\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022no\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      },
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$group\u0022 : { \u0022_id\u0022 : { \u0022st\u0022 : { \u0022$ifNull\u0022 : [\u0022$State\u0022, null] }, \u0022no\u0022 : { \u0022$ifNull\u0022 : [\u0022$Number\u0022, null] } }, \u0022n\u0022 : { \u0022$sum\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, \u0022total\u0022 : { \u0022$sum\u0022 : \u0022$Amount\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : \u0022$_id.st\u0022, \u0022no\u0022 : \u0022$_id.no\u0022, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022total\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022100001\u0022 } }",
+          "{ \u0022$count\u0022 : \u0022n\u0022 }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjU0Y2EzOWRhYmRjYjA4YjRiMDQ2YjVmNmRhZjk3MDk4OTc5NmMxNzdmOTVhNmY3M2M5MmRmNTJmZDNiZDUxN2YiLCJtIjoibyIsIm8iOjIsInYiOltdfQ.FkpaXKQXTbpTZwmMUmi6ExY49N9SCwm-sUTHXs6lAOM",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$group\u0022 : { \u0022_id\u0022 : { \u0022st\u0022 : { \u0022$ifNull\u0022 : [\u0022$State\u0022, null] }, \u0022no\u0022 : { \u0022$ifNull\u0022 : [\u0022$Number\u0022, null] } }, \u0022n\u0022 : { \u0022$sum\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, \u0022total\u0022 : { \u0022$sum\u0022 : \u0022$Amount\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : \u0022$_id.st\u0022, \u0022no\u0022 : \u0022$_id.no\u0022, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022total\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022n\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022no\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022st\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022n\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00222\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "lookup-matched": {
+    "first": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }",
+          "{ \u0022$match\u0022 : { \u0022orders.Number\u0022 : \u0022x\u0022 } }",
+          "{ \u0022$project\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxLk0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      },
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }",
+          "{ \u0022$match\u0022 : { \u0022orders.Number\u0022 : \u0022x\u0022 } }",
+          "{ \u0022$project\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxLk0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022100001\u0022 } }",
+          "{ \u0022$count\u0022 : \u0022n\u0022 }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjMyZTUxYzA4OThjMjYwMjg5MWZmYTlmZTk3MThiN2M3OWFiMDI1NzA2YmY3YzdlZjU2YWQ5MzM1YTdiODIzZjgiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.dsIgZg_BDed_ordKi9H_6XsP6fBhDqRheWzkuAr9J3M",
+    "next": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }] } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }",
+          "{ \u0022$match\u0022 : { \u0022orders.Number\u0022 : \u0022x\u0022 } }",
+          "{ \u0022$project\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxLk0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "lookup-projected": {
+    "first": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022orders\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2Ojk4OWIyNzEzZGMwODYzY2Y1MDI1ZWI3OTE4ZWNjYzc4ODUwN2MxNjIxOGNjOGRhNTE2ZDMzNTk3MWU0MTQxYTAiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.a3SWhxZ9NYEWL1ABzDsK-kGw71g0YGRYAtiho5iNJbQ",
+    "next": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }] } }",
+          "{ \u0022$project\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022orders\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }"
+        ]
+      }
+    ]
+  },
+  "lookup-unwound": {
+    "first": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$orders\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false } }",
+          "{ \u0022$sort\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2Ojg3YjRlMWFkNTQ1ZTBlODcyYmY5ZjVjYzNmYjliZmEzMTI3NzY3MjUzNzYwNTc1NmZjOGM2NWEwZjY0YTgxYzkiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJuYW1lIiwiZCI6ImFzYyIsImIiOiJcdTAwMjJuYW1lIDJcdTAwMjIifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.qcXlkS41sxsZu67E8FKj8FQfoiBen93aymzCtM-4aRQ",
+    "next": [
+      {
+        "collection": "customers",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022Name\u0022 : \u0022name 2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022Name\u0022 : { \u0022$gt\u0022 : \u0022name 2\u0022 } }] }] } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022orders\u0022, \u0022localField\u0022 : \u0022_id\u0022, \u0022foreignField\u0022 : \u0022CustomerId\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022101\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022orders\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022__oxLk0\u0022 : { \u0022$gt\u0022 : [{ \u0022$size\u0022 : \u0022$orders\u0022 }, { \u0022$numberInt\u0022 : \u0022100\u0022 }] }, \u0022orders\u0022 : { \u0022$slice\u0022 : [\u0022$orders\u0022, { \u0022$numberInt\u0022 : \u0022100\u0022 }] } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$orders\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false } }",
+          "{ \u0022$sort\u0022 : { \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "match-sort": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$match\u0022 : { \u0022Number\u0022 : \u0022x\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OmViMTRhYWZlYjZiODUzY2E4Y2ExYzBjMjZmNTEyZTU1N2JhZjBmZjI3MDQ1MGQ1ZjI5MjA2NTFjZDU4OTRkODMiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJudW1iZXIiLCJkIjoiYXNjIiwiYiI6Ilx1MDAyMm4yXHUwMDIyIn0seyJwIjoiX2lkIiwiZCI6ImFzYyIsImIiOiJ7IFx1MDAyMiRiaW5hcnlcdTAwMjIgOiB7IFx1MDAyMmJhc2U2NFx1MDAyMiA6IFx1MDAyMkFBQUFBZ0FBQUFBQUFBQUFBQUFBQUE9PVx1MDAyMiwgXHUwMDIyc3ViVHlwZVx1MDAyMiA6IFx1MDAyMjA0XHUwMDIyIH0gfSJ9XX0.nLLv72b0eeMP0dtIq7q9YfnVnaK92fSKn6nzmGCFd5U",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022Number\u0022 : \u0022n2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022Number\u0022 : { \u0022$gt\u0022 : \u0022n2\u0022 } }] }] } }",
+          "{ \u0022$match\u0022 : { \u0022Number\u0022 : \u0022x\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "offset": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$sort\u0022 : { \u0022When\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00224\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OmRlN2ZmZTE2ZDA0NTZmNmZkMTIxNDM1NTVlOWQ5NTdhZGQ3MjRiM2EzNzE0NWU3NTI2NDhkNTE2YWE2YWRlZGQiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJ3aGVuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkZGF0ZVx1MDAyMiA6IHsgXHUwMDIyJG51bWJlckxvbmdcdTAwMjIgOiBcdTAwMjIxNzY3MzEyMDAwMDAwXHUwMDIyIH0gfSJ9LHsicCI6Il9pZCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkYmluYXJ5XHUwMDIyIDogeyBcdTAwMjJiYXNlNjRcdTAwMjIgOiBcdTAwMjJBQUFBQWdBQUFBQUFBQUFBQUFBQUFBPT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.CUw_pNtNkOz2Cg2pCDgzs_FZNlB9wKfL8wVjrJsO5Pc",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022When\u0022 : { \u0022$date\u0022 : { \u0022$numberLong\u0022 : \u00221767312000000\u0022 } }, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022When\u0022 : { \u0022$lt\u0022 : { \u0022$date\u0022 : { \u0022$numberLong\u0022 : \u00221767312000000\u0022 } } } }, { \u0022When\u0022 : null }] }] } }",
+          "{ \u0022$sort\u0022 : { \u0022When\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "project-before-sort": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022State\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjdjZTJmOTE3YjJlZDYxMGIxMmExNWU0YjhjNDkxM2Y1YzNhNjg1ZDE2YjRlMmQ2OGM2ZDY5NzNmNzM3MWVlNTIiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJudW1iZXIiLCJkIjoiZGVzYyIsImIiOiJcdTAwMjJuMlx1MDAyMiJ9LHsicCI6Il9pZCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkYmluYXJ5XHUwMDIyIDogeyBcdTAwMjJiYXNlNjRcdTAwMjIgOiBcdTAwMjJBQUFBQWdBQUFBQUFBQUFBQUFBQUFBPT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.h_gGYKHAkZ5vqBjcHMyfEf6Lnq4Jo-KHSEjDCHzCcZU",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022Number\u0022 : \u0022n2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022Number\u0022 : { \u0022$lt\u0022 : \u0022n2\u0022 } }, { \u0022Number\u0022 : null }] }] } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022State\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "project-drops-the-key": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Addon\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OmVhOWMwYjgwZTQwN2ZlMzQxMzJiMzI3M2YxMWMwNGE5Y2M5NjM2OTcxYTA2MzU3OWY3ZWE4ODA2YzBkYzE3ZWEiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.P-caF6yVB9R5FveEG6PgNC3zUl6nvhahJ4sqgupGf90",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }] } }",
+          "{ \u0022$project\u0022 : { \u0022Addon\u0022 : { \u0022$numberInt\u0022 : \u00220\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "project-match-count": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Flag\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$match\u0022 : { \u0022Flag\u0022 : false } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      },
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Flag\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$match\u0022 : { \u0022Flag\u0022 : false } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022100001\u0022 } }",
+          "{ \u0022$count\u0022 : \u0022n\u0022 }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjdmZmVlZjJhOGJhMTI5YTBiM2I4NjczMjI4ZDg3MDVjNGU0MWQzNDMxYmExMzM3Mjk0NWMxODRmNjE1ZGI0NzQiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.0NCFLuSApWueF-9hBc4QVIeqFXHMzVAIpOOvD8W1UN0",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }] } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Flag\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$match\u0022 : { \u0022Flag\u0022 : false } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "resolve-projected": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022cust\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022CustomerId\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022customers\u0022, \u0022localField\u0022 : \u0022CustomerId\u0022, \u0022foreignField\u0022 : \u0022_id\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022cust__arr\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022cust\u0022 : { \u0022$arrayElemAt\u0022 : [\u0022$cust__arr\u0022, { \u0022$numberInt\u0022 : \u00220\u0022 }] } } }",
+          "{ \u0022$unset\u0022 : \u0022cust__arr\u0022 }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjZiYTllYjU1MTVlODEwMDY3MTkzMjAxZmVmNGM4ZDNkZTRlNDIwYTgxYmE1OGQ0YjE1YWI0ZDNlZGQwYWIzMjgiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJpZCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkYmluYXJ5XHUwMDIyIDogeyBcdTAwMjJiYXNlNjRcdTAwMjIgOiBcdTAwMjJBQUFBQWdBQUFBQUFBQUFBQUFBQUFBPT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.rkqhax8nZGhZo3v4B_uoZ5_mlK8121ryvwbFzVSa2dY",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }] }] } }",
+          "{ \u0022$project\u0022 : { \u0022cust\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022CustomerId\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022customers\u0022, \u0022localField\u0022 : \u0022CustomerId\u0022, \u0022foreignField\u0022 : \u0022_id\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022cust__arr\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022cust\u0022 : { \u0022$arrayElemAt\u0022 : [\u0022$cust__arr\u0022, { \u0022$numberInt\u0022 : \u00220\u0022 }] } } }",
+          "{ \u0022$unset\u0022 : \u0022cust__arr\u0022 }"
+        ]
+      }
+    ]
+  },
+  "resolve-sorted": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022customers\u0022, \u0022localField\u0022 : \u0022CustomerId\u0022, \u0022foreignField\u0022 : \u0022_id\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022cust__arr\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022cust\u0022 : { \u0022$arrayElemAt\u0022 : [\u0022$cust__arr\u0022, { \u0022$numberInt\u0022 : \u00220\u0022 }] } } }",
+          "{ \u0022$unset\u0022 : \u0022cust__arr\u0022 }",
+          "{ \u0022$sort\u0022 : { \u0022cust.Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjMxMmJjMTVkNDVhZTlmOGYyNWQ0MWI3NmZmNTEzMGM3NjQwYWFkNWRmMTEyOTY2NjZlM2RiYTI4NjhmYTk5MWIiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJjdXN0Lm5hbWUiLCJkIjoiYXNjIiwiYiI6Ilx1MDAyMmN1c3RvbWVyIDJcdTAwMjIifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.sdrzC8gFLuETsOWDrzaAxDQczvI8c_1eSpmwRS2Fnl4",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$lookup\u0022 : { \u0022from\u0022 : \u0022customers\u0022, \u0022localField\u0022 : \u0022CustomerId\u0022, \u0022foreignField\u0022 : \u0022_id\u0022, \u0022pipeline\u0022 : [{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } }, { \u0022$project\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }], \u0022as\u0022 : \u0022cust__arr\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022cust\u0022 : { \u0022$arrayElemAt\u0022 : [\u0022$cust__arr\u0022, { \u0022$numberInt\u0022 : \u00220\u0022 }] } } }",
+          "{ \u0022$unset\u0022 : \u0022cust__arr\u0022 }",
+          "{ \u0022$match\u0022 : { \u0022$or\u0022 : [{ \u0022cust.Name\u0022 : \u0022customer 2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022cust.Name\u0022 : { \u0022$gt\u0022 : \u0022customer 2\u0022 } }] } }",
+          "{ \u0022$sort\u0022 : { \u0022cust.Name\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "sort-before-project": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$sort\u0022 : { \u0022When\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022ShipTo.City\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022When\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjcxM2UwYThmZTVmYzMwMWY5NGRlNGMyZjZmNzFhZDY3YmVkNTBjNGNmMjQyYjhlNmExOTU1M2ZiOTNjMWVkZjAiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJ3aGVuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkZGF0ZVx1MDAyMiA6IHsgXHUwMDIyJG51bWJlckxvbmdcdTAwMjIgOiBcdTAwMjIxNzY3MzEyMDAwMDAwXHUwMDIyIH0gfSJ9LHsicCI6Im51bWJlciIsImQiOiJhc2MiLCJiIjoiXHUwMDIybjJcdTAwMjIifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQUFBQUFnQUFBQUFBQUFBQUFBQUFBQT09XHUwMDIyLCBcdTAwMjJzdWJUeXBlXHUwMDIyIDogXHUwMDIyMDRcdTAwMjIgfSB9In1dfQ.hLs7XsCXHDG_nM9TFqxGb0nP_I2BWqxINTXpqh8waEA",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022$and\u0022 : [{ \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } }, { \u0022$or\u0022 : [{ \u0022When\u0022 : { \u0022$date\u0022 : { \u0022$numberLong\u0022 : \u00221767312000000\u0022 } }, \u0022Number\u0022 : \u0022n2\u0022, \u0022_id\u0022 : { \u0022$gt\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022AAAAAgAAAAAAAAAAAAAAAA==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }, { \u0022When\u0022 : { \u0022$date\u0022 : { \u0022$numberLong\u0022 : \u00221767312000000\u0022 } }, \u0022Number\u0022 : { \u0022$gt\u0022 : \u0022n2\u0022 } }, { \u0022When\u0022 : { \u0022$lt\u0022 : { \u0022$date\u0022 : { \u0022$numberLong\u0022 : \u00221767312000000\u0022 } } } }, { \u0022When\u0022 : null }] }] } }",
+          "{ \u0022$sort\u0022 : { \u0022When\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022ShipTo.City\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022When\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "unwind-in-place": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false, \u0022includeArrayIndex\u0022 : \u0022__oxIx0\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$unset\u0022 : [\u0022__oxIx0\u0022] }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2Ojk1NDc1OWEwZTE4ZDhiZmI4ZjkxODExZWU0ODQ3NGRkNDhmNTcwNTMyYTUxYTQyMDhiNDEyNzdiOTdjYmNiYjYiLCJtIjoibyIsIm8iOjIsInYiOltdfQ.LLHSLyWwO8XXuLE8e5DLHm9CSEDnLPhnKUiL1cpigZE",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false, \u0022includeArrayIndex\u0022 : \u0022__oxIx0\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$unset\u0022 : [\u0022__oxIx0\u0022] }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00222\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "unwind-match-project": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false, \u0022includeArrayIndex\u0022 : \u0022__oxIx0\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022it\u0022 : \u0022$Items\u0022 } }",
+          "{ \u0022$match\u0022 : { \u0022it.Quantity\u0022 : { \u0022$gt\u0022 : { \u0022$numberLong\u0022 : \u00222\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022it.Quantity\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$unset\u0022 : [\u0022__oxIx0\u0022] }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      },
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false, \u0022includeArrayIndex\u0022 : \u0022__oxIx0\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022it\u0022 : \u0022$Items\u0022 } }",
+          "{ \u0022$match\u0022 : { \u0022it.Quantity\u0022 : { \u0022$gt\u0022 : { \u0022$numberLong\u0022 : \u00222\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022it.Quantity\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u0022100001\u0022 } }",
+          "{ \u0022$count\u0022 : \u0022n\u0022 }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjI4NzdmYTg1MmFiYjg3MzgzYTBjMmE4ZmY3ZTBjYmMwYTM5MDk0ZjM2YWMzZGEyMzY4MGE1NzMwOTViY2FmNWIiLCJtIjoibyIsIm8iOjIsInYiOltdfQ.8diPc42nUCCrEF8PhbzjcoPXEjmyepfU-8fg50hiAxo",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : false, \u0022includeArrayIndex\u0022 : \u0022__oxIx0\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022it\u0022 : \u0022$Items\u0022 } }",
+          "{ \u0022$match\u0022 : { \u0022it.Quantity\u0022 : { \u0022$gt\u0022 : { \u0022$numberLong\u0022 : \u00222\u0022 } } } }",
+          "{ \u0022$project\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022it.Quantity\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$sort\u0022 : { \u0022Number\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022__oxIx0\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$unset\u0022 : [\u0022__oxIx0\u0022] }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00222\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  },
+  "unwind-sorted": {
+    "first": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : true, \u0022includeArrayIndex\u0022 : \u0022i\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022it\u0022 : \u0022$Items\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022it.Quantity\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022i\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ],
+    "cursor": "eyJmIjoic2hhMjU2OjBlMGFiODNjN2RmNmUyNzRlOTZjMWFiMDhjYzliZWNmYTRlZGNmMDJjNjczMmQyZTNmODU0Mjg4YTc2YWJiNDUiLCJtIjoibyIsIm8iOjIsInYiOltdfQ.4ZRd8gcLHnlTRnFp8DwZXyihGL-lmu4aZVdqhG73s4E",
+    "next": [
+      {
+        "collection": "orders",
+        "collation": null,
+        "stages": [
+          "{ \u0022$match\u0022 : { \u0022OrganizationId\u0022 : { \u0022$binary\u0022 : { \u0022base64\u0022 : \u0022qNiZpCApSAakt6QU6rIYAQ==\u0022, \u0022subType\u0022 : \u002204\u0022 } } } }",
+          "{ \u0022$unwind\u0022 : { \u0022path\u0022 : \u0022$Items\u0022, \u0022preserveNullAndEmptyArrays\u0022 : true, \u0022includeArrayIndex\u0022 : \u0022i\u0022 } }",
+          "{ \u0022$set\u0022 : { \u0022it\u0022 : \u0022$Items\u0022 } }",
+          "{ \u0022$sort\u0022 : { \u0022it.Quantity\u0022 : { \u0022$numberInt\u0022 : \u0022-1\u0022 }, \u0022_id\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 }, \u0022i\u0022 : { \u0022$numberInt\u0022 : \u00221\u0022 } } }",
+          "{ \u0022$skip\u0022 : { \u0022$numberInt\u0022 : \u00222\u0022 } }",
+          "{ \u0022$limit\u0022 : { \u0022$numberInt\u0022 : \u00223\u0022 } }"
+        ]
+      }
+    ]
+  }
+}

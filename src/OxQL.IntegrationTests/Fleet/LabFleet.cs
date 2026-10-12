@@ -48,6 +48,31 @@ public sealed class LabFleet : IAsyncDisposable
     /// <summary>The cursor signing key of the fleet's hosts; generated per fleet, never stored.</summary>
     public string SigningKey { get; } = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
+    /// <summary>
+    /// Configuration every host of this fleet starts with, over the defaults and under a variant's own
+    /// keys. Set before the first host starts: a host reads it once.
+    /// </summary>
+    public Dictionary<string, string?> Configuration { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether this fleet's hosts answer contract 1 as a host that sets nothing does: every request
+    /// without the contract header on the legacy pipeline. False for every fleet but the legacy
+    /// suites': the other suites' contract 1 cases hold the compatibility rewrite, so their hosts
+    /// answer contract 1 by the rewrite first (<c>OxQL:Compat:Legacy:Always=false</c>). Set before
+    /// the first host starts.
+    /// </summary>
+    public bool Contract1AsShipped { get; set; }
+
+    /// <summary>
+    /// How long every aggregate of this fleet's hosts takes at least, as a database a network away
+    /// would make it: with it, which aggregates run side by side and which one after another shows in
+    /// <see cref="Aggregates"/>. Zero by default. Set before the first host starts.
+    /// </summary>
+    public TimeSpan AggregateDelay { get; set; }
+
+    /// <summary>The aggregates the fleet's hosts ran while <see cref="AggregateDelay"/> is set: the service, the entity, and when each started and ended.</summary>
+    public ConcurrentQueue<(string Service, string Entity, long Started, long Ended)> Aggregates { get; } = new();
+
     /// <summary>A private fleet for a test that writes; its databases are dropped on disposal.</summary>
     public static LabFleet Create(string purpose) => new(purpose, dropOnDispose: true);
 

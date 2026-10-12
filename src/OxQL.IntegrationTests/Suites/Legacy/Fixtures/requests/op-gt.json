@@ -1,0 +1,24 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "GeneratedTourNrCounter": {
+          "gt": 3
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

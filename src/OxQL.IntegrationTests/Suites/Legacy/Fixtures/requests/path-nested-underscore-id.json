@@ -1,0 +1,28 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "or": [
+          {
+            "Status._id": {
+              "eq": "1e9ac700-0000-4000-8000-000000001300"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

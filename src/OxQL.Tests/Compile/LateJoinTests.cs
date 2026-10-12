@@ -25,12 +25,15 @@ public class LateJoinTests
     private static readonly Guid Id1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid Id2 = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    private const string OrdersLookup = """{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"] } }""";
-    private const string CustomerResolve = """{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }""";
+    private const string OrdersLookup = """{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }""";
+    private const string CustomerResolve = """{ "resolve": { "path": "customerId", "as": "cust" } }""";
 
     private static string OrgJson => $"{{ OrganizationId: {Org.ToJson()} }}";
 
-    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1, Number: 1 } } ], as: "orders" } }""";
+    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { _id: 1, Number: 1 } } ], as: "orders" } }""";
+
+    /// <summary>The lookup's cut to its limit and its truncation flag: it fetches one child more than it keeps.</summary>
+    private const string OrdersCutJson = """{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 100 ] }, orders: { $slice: [ "$orders", 100 ] } } }""";
 
     private static string CustomerLookupJson => $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }""";
 
@@ -55,23 +58,24 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_nothing_but_the_display_reads_runs_after_the_page()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
             "{ $sort: { Name: 1, _id: 1 } }",
             "{ $limit: 6 }",
-            OrdersLookupJson);
+            OrdersLookupJson,
+            OrdersCutJson);
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
     }
 
     [Fact]
     public async Task A_local_resolve_nothing_but_the_display_reads_runs_after_the_page()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
@@ -82,16 +86,69 @@ public class LateJoinTests
             """{ $unset: "cust__arr" }""");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
     }
 
-    [Fact]
-    public async Task A_display_only_join_runs_after_an_unwind_of_another_path_and_its_offset_page()
-    {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "unwind": { "path": "items" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "offset": 10 } }]""");
+    // ---- before an unwind: once per parent, never once per element ---------------------------
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$unwind", "$sort", "$unset", "$skip", "$limit", "$lookup", "$set", "$unset");
+    [Fact]
+    public async Task A_display_only_join_written_before_an_unwind_runs_on_the_parents_cut_before_it()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+        var compiled = MongoCompiler.Compile(bound, Options);
+
+        // The parents with an item in the page's order, cut to the page's reach; the join, once per parent
+        // kept; the unwind; the page; the rename. After the page the join would run once per element.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$match", "$sort", "$limit", "$lookup", "$set", "$unset", "$unwind", "$sort", "$limit", "$set", "$unset");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $limit: NumberLong(6) }"), "a page's worth of parents");
+        MongoCompiler.PhaseOf(bound, 0, bound.Stages.OfType<BoundStage.Resolve>().Single()).Should().Be(JoinPhase.Parents);
+        MongoCompiler.KeptBefore(bound, 0)!.Path.Wire.Should().Be("items");
+
+        // As written (what the differential compares against) nothing is cut first: the join stays where it stands.
+        var written = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(written.PageStages).Should().StartWith(["$match", "$lookup", "$set", "$unset", "$unwind"]);
+    }
+
+    [Fact]
+    public async Task A_display_only_join_written_before_an_unwind_stays_where_it_was_written_when_the_parents_are_not_cut_first()
+    {
+        // Ordered by the element: every parent is unwound, so the join runs once per parent where it stands.
+        var byElement = await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "item.quantity": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        Kinds(MongoCompiler.Compile(byElement, Options).PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$unwind", "$sort", "$limit", "$set", "$unset");
+        MongoCompiler.PhaseOf(byElement, 0, byElement.Stages.OfType<BoundStage.Resolve>().Single()).Should().Be(JoinPhase.BeforePage);
+        MongoCompiler.KeptBefore(byElement, 0)!.Path.Wire.Should().Be("items");
+
+        // The same for a lookup whose projection names paths under its alias, and its count never runs the join.
+        var narrowed = MongoCompiler.Compile(await BindHost.BoundAsync(OxQL.TestCases.LateJoinCases.Model, OxQL.TestCases.LateJoinCases.Parent, """
+            [{ "match": { "name": { "eq": "x" } } }, { "lookup": { "from": "lj.child", "path": "parentId", "as": "children" } }, { "unwind": { "path": "tags", "as": "tag", "includeIndex": "at" } },
+             { "project": { "name": 1, "tag": 1, "at": 1, "children.title": 1 } }, { "sort": [{ "tag": "desc" }] }, { "page": { "limit": 5, "count": true } }]
+            """), Options);
+
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$match", "$lookup", "$set", "$unwind", "$sort", "$limit", "$set", "$unset", "$project");
+        Kinds(narrowed.CountStages!).Should().Equal(["$match", "$match", "$match", "$limit", "$unwind", "$limit", "$count"], "only the display reads the alias; the parents that yield a row are bounded as the rows are");
+    }
+
+    [Fact]
+    public async Task A_display_only_join_written_after_an_unwind_runs_after_the_page()
+    {
+        var compiled = await Compile($$"""[{ "unwind": { "path": "items", "as": "item" } }, {{CustomerResolve}}, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
+
+        // It was written to run once per element: the page holds no more rows than it would have read there.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$match", "$sort", "$limit", "$unwind", "$sort", "$limit", "$set", "$unset", "$lookup", "$set", "$unset");
+    }
+
+    [Fact]
+    public async Task Under_contract_1_a_display_only_join_before_an_unwind_runs_after_the_page_as_it_did()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order,
+            $$"""[{{CustomerResolve}}, { "unwind": { "path": "items", "as": "item" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""", BindHost.Context(contract: 1));
+        var compiled = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(compiled.PageStages).Should().EndWith(["$limit", "$lookup", "$set", "$unset"]);
+        MongoCompiler.PhaseOf(bound, 0, bound.Stages.OfType<BoundStage.Resolve>().Single(), asWritten: true).Should().Be(JoinPhase.AfterPage);
     }
 
     [Fact]
@@ -99,18 +156,18 @@ public class LateJoinTests
     {
         var included = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "name": 1, "orders": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup");
-        included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Name: 1, orders: 1, _id: 1 } }"), "the projection is emitted as written; the join adds the alias to what it kept");
+        Kinds(included.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
+        included.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { Name: 1, orders: 1, _id: 1 } }"), "the projection cuts the page's rows; the join adds the alias to what it kept");
 
         var excludedElsewhere = await Compile($$"""[{{OrdersLookup}}, { "project": { "matchCode": 0 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup");
+        Kinds(excludedElsewhere.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
     }
 
     [Fact]
     public async Task A_join_written_before_another_join_that_a_match_reads_runs_after_it()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "resolve": { "path": "customerId", "as": "buyer", "select": ["name"] } }, { "match": { "buyer.name": { "eq": "x" } } }, { "page": { "limit": 5 } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "resolve": { "path": "customerId", "as": "buyer" } }, { "match": { "buyer.name": { "eq": "x" } } }, { "page": { "limit": 5 } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$match", "$sort", "$limit", "$lookup", "$set", "$unset");
         compiled.PageStages[1]["$lookup"]["as"].AsString.Should().Be("buyer__arr");
@@ -122,13 +179,13 @@ public class LateJoinTests
     {
         var included = await Compile($$"""[{{CustomerResolve}}, { "project": { "id": 1, "cust": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(included.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
-        included.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { cust: 1, _id: 1, CustomerId: 1 } }"), "the join after the page reads the key off the row");
+        Kinds(included.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set", "$unset");
+        included.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { cust: 1, _id: 1, CustomerId: 1 } }"), "the join after the page reads the key off the row");
 
         var excluded = await Compile($$"""[{{CustomerResolve}}, { "project": { "customerId": 0, "number": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""");
 
-        Kinds(excluded.PageStages).Should().Equal("$match", "$project", "$sort", "$limit", "$lookup", "$set", "$unset");
-        excluded.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 0 } }"), "an exclusion of the key is not emitted while a later join reads it");
+        Kinds(excluded.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set", "$unset");
+        excluded.PageStages[3].ShouldBeBson(BsonDocument.Parse("{ $project: { Number: 0 } }"), "an exclusion of the key is not emitted while a later join reads it");
     }
 
     // ---- not moved -------------------------------------------------------------------------
@@ -136,16 +193,16 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_a_later_match_reads_stays_before_the_match_and_in_the_count()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "x" } } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$match", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$match", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit");
+        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$set", "$match", "$limit", "$count");
     }
 
     [Fact]
     public async Task A_keyset_cursor_on_a_resolve_alias_is_evaluated_after_the_join_and_before_the_sort()
     {
-        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 2 } }]""";
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 2 } }]""";
         var first = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
         var id = new BsonBinaryData(Id1, GuidRepresentation.Standard);
         var cursor = BindHost.Cursors.Encode(new CursorPayload(first.Fingerprint, PagingMode.Keyset, [new CursorValue("cust.name", true, new BsonString("abc")), new CursorValue("_id", true, id)], 0));
@@ -158,7 +215,7 @@ public class LateJoinTests
             CustomerLookupJson,
             """{ $set: { cust: { $arrayElemAt: ["$cust__arr", 0] } } }""",
             """{ $unset: "cust__arr" }""",
-            $$"""{ $match: { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } }""",
+            $$"""{ $match: { $and: [ { "cust.Name": { $gte: "abc" } }, { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } ] } }""",
             """{ $sort: { "cust.Name": 1, _id: 1 } }""",
             "{ $limit: 3 }");
     }
@@ -166,7 +223,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_resolve_alias_sorted_on_and_dropped_by_the_projection_stays_in_storage_and_out_of_the_row()
     {
-        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "sort": [{ "cust.name": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2 } }]""";
+        const string pipeline = """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "sort": [{ "cust.name": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2 } }]""";
         var bound = await BindHost.BoundAsync(BindHost.Probe, Order, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
@@ -180,7 +237,7 @@ public class LateJoinTests
     [Fact]
     public async Task A_resolve_a_later_sort_reads_stays_before_the_sort()
     {
-        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var compiled = await Compile($$"""[{{CustomerResolve}}, { "sort": [{ "cust.name": "asc" }] }, { "page": { "limit": 5, "count": true } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$sort", "$limit");
         Kinds(compiled.CountStages!).Should().Equal(["$match", "$limit", "$count"], "the sort is not in the count, so the count does not need the join");
@@ -197,9 +254,17 @@ public class LateJoinTests
         var bound = await BindHost.BoundAsync(BindHost.Probe, Customer, pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$unwind", "$set", "$match", "$project", "$sort", "$limit");
-        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
-        compiled.PageStages[4]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "the child's member under the name the unwind wrote");
+        // The parents with a child that passes the match, in key order, cut to the page's reach; the unwind; the
+        // match on the child where the unwind left it; the page; then the child under the name the unwind writes.
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit", "$unwind", "$match", "$sort", "$limit", "$set", "$unset", "$project");
+        compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { "orders.Number": "n-1" } }"""), "a parent no child of which passes is not unwound");
+        compiled.PageStages[7]["$match"].AsBsonDocument.Names.Should().Equal(["orders.Number"], "the child's member where the unwind left the child");
+        compiled.PageStages[10].ShouldBeBson(BsonDocument.Parse("""{ $set: { order: "$orders" } }"""));
+
+        var written = MongoCompiler.Compile(bound, Options with { AsWritten = true });
+
+        Kinds(written.PageStages).Should().Equal("$match", "$lookup", "$set", "$unwind", "$set", "$unset", "$match", "$project", "$sort", "$limit");
+        written.PageStages[6]["$match"].AsBsonDocument.Names.Should().Equal(["order.Number"], "as written, the match reads the child under the name the unwind wrote");
 
         var row = WireEncoder.Encode(new BsonDocument
         {
@@ -215,10 +280,10 @@ public class LateJoinTests
     [Fact]
     public async Task A_lookup_a_later_unwind_reads_stays_before_the_unwind()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders" } }, { "page": { "limit": 5, "includeTotalCount": true } }]""", Customer);
+        var compiled = await Compile($$"""[{{OrdersLookup}}, { "unwind": { "path": "orders", "as": "order" } }, { "page": { "limit": 5, "count": true } }]""", Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$unwind", "$sort", "$limit");
-        Kinds(compiled.CountStages!).Should().Equal("$match", "$lookup", "$unwind", "$limit", "$count");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$match", "$sort", "$limit", "$unwind", "$sort", "$limit", "$set", "$unset");
+        Kinds(compiled.CountStages!).Should().Equal(["$match", "$lookup", "$set", "$match", "$limit", "$unwind", "$limit", "$count"], "the count unwinds and counts: it orders and renames nothing, and bounds the parents that yield a row as it bounds the rows");
     }
 
     [Fact]
@@ -240,23 +305,43 @@ public class LateJoinTests
     [Fact]
     public async Task A_join_a_later_resolve_reads_stays_before_the_resolve()
     {
-        var compiled = await Compile($$"""[{{OrdersLookup}}, { "resolve": { "path": "orders.customerId", "as": "again", "select": ["name"] } }, { "page": { "limit": 5 } }]""", Customer);
+        // A resolve through the lookup's array needs 'elements' (RESOLVE_ON_COLLECTION); through
+        // its first child it reads one row, as the plain form of this case means.
+        var compiled = await Compile("""
+            [{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "first": true } },
+             { "resolve": { "path": "orders.customerId", "as": "again" } }, { "page": { "limit": 5 } }]
+            """, Customer);
 
-        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$sort", "$limit", "$lookup", "$set", "$unset");
+        Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$sort", "$limit", "$lookup", "$set", "$unset");
         compiled.PageStages[1]["$lookup"]["as"].AsString.Should().Be("orders", "the lookup that is read stays before the page");
-        compiled.PageStages[4]["$lookup"]["as"].AsString.Should().Be("again__arr", "the resolve nothing reads runs after it");
+        compiled.PageStages[5]["$lookup"]["as"].AsString.Should().Be("again__arr", "the resolve nothing reads runs after it");
     }
 
     [Fact]
-    public async Task A_join_stays_before_a_projection_that_narrows_or_drops_its_alias()
+    public async Task A_join_runs_after_a_projection_that_names_paths_under_its_alias_and_stays_before_one_that_cuts_it_or_a_stage_that_reads_it()
     {
+        // A contract 2 join has no select: the projection names what the alias shows, the join loads
+        // those paths with its key, and it still runs for the page's rows only.
         var narrowed = await Compile($$"""[{{OrdersLookup}}, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(narrowed.PageStages).Should().Equal("$match", "$lookup", "$project", "$sort", "$limit");
+        Kinds(narrowed.PageStages).Should().Equal("$match", "$sort", "$limit", "$project", "$lookup", "$set");
+        narrowed.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the late join loads what the projection names, and its key");
+
+        // An exclusion under the alias cuts what the join produced: the join stays before it.
+        var cut = await Compile($$"""[{{OrdersLookup}}, { "project": { "orders.number": 0 } }, { "page": { "limit": 5 } }]""", Customer);
+
+        Kinds(cut.PageStages).Should().StartWith(["$match", "$lookup"]);
+
+        // Contract 1 keeps its rule: its join fetches the select as written, and a projection that narrows the alias cuts it.
+        var legacy = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Customer,
+            """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number"] } }, { "project": { "id": 1, "orders.number": 1 } }, { "page": { "limit": 5 } }]""",
+            BindHost.Context(contract: 1)), Options);
+
+        Kinds(legacy.PageStages).Should().StartWith(["$match", "$lookup"]);
 
         var read = await Compile($$"""[{{OrdersLookup}}, { "match": { "orders.number": { "eq": "n-1" } } }, { "project": { "id": 1, "name": 1 } }, { "page": { "limit": 5 } }]""", Customer);
 
-        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$match", "$project", "$sort", "$limit"], "a match reads the alias before the projection drops it");
+        Kinds(read.PageStages).Should().Equal(["$match", "$lookup", "$set", "$match", "$sort", "$limit", "$project"], "a match reads the alias before the projection drops it");
     }
 
     [Fact]
@@ -269,10 +354,10 @@ public class LateJoinTests
             (Order, CustomerResolve, """{ "project": { "id": 1, "number": 1 } }"""),
         })
         {
-            var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "includeTotalCount": true } }]""", entity);
+            var compiled = await Compile($$"""[{{join}}, {{projection}}, { "page": { "limit": 5, "count": true } }]""", entity);
 
-            Kinds(compiled.PageStages).Should().Equal(["$match", "$project", "$sort", "$limit"], $"{join} then {projection}: the row does not carry the alias");
-            Kinds(compiled.CountStages!).Should().Equal("$match", "$project", "$limit", "$count");
+            Kinds(compiled.PageStages).Should().Equal(["$match", "$sort", "$limit", "$project"], $"{join} then {projection}: the row does not carry the alias");
+            Kinds(compiled.CountStages!).Should().Equal(["$match", "$limit", "$count"], "a projection that runs after the page is not in the count: it changes no row");
         }
     }
 
@@ -282,7 +367,7 @@ public class LateJoinTests
         var compiled = await Compile("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5 } }]""");
 
         Kinds(compiled.PageStages).Should().Equal("$match", "$sort", "$limit");
-        compiled.RemoteResolves.Should().ContainSingle();
+        compiled.KeyedResolves.Should().ContainSingle();
     }
 
     // ---- the rows and the cursor -----------------------------------------------------------
@@ -329,7 +414,7 @@ public class LateJoinTests
 
         var withJoin = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 1, "cursor": "{{first.PageInfo.NextCursor}}" } }]""", Customer);
 
-        Kinds(withJoin.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup");
+        Kinds(withJoin.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup", "$set");
         withJoin.PageStages[0]["$match"].AsBsonDocument.Contains("$and").Should().BeTrue("the cursor predicate is merged into the leading match");
         withJoin.PageStages[0]["$match"]["$and"].AsBsonArray[1].AsBsonDocument.ToJson().Should().Contain("Name", "the predicate reads the sort leg off the row, which no join touches");
     }

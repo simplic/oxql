@@ -1,0 +1,20 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "eq": "tr-m-1",
+          "options": {
+            "caseSensitive": false
+          }
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

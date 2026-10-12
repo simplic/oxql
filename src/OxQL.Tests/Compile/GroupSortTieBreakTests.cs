@@ -29,7 +29,7 @@ public sealed class GroupSortTieBreakTests
     [Fact]
     public async Task A_sort_on_an_aggregate_is_completed_by_the_group_key()
     {
-        var compiled = await Compile($$"""[{{ByNumber}}, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 5, "offset": 10 } }]""");
+        var compiled = await Compile($$"""[{{ByNumber}}, { "sort": [{ "n": "desc" }] }, { "page": { "limit": 5, "offset": 10 } }]""", BindHost.Context() with { Internal = true });
 
         SortOf(compiled).ToJson().Should().Be(BsonDocument.Parse("{ n: -1, no: 1 }").ToJson(), "the key is unique per group, so no two rows tie on the whole order");
         compiled.PageStages.Select(stage => stage.GetElement(0).Name).TakeLast(3).Should().Equal("$sort", "$skip", "$limit");

@@ -18,7 +18,7 @@ namespace OxQL.IntegrationTests.Suites.EngineOnly;
 [Trait("Category", "Integration")]
 public class EngineOnlyOTests
 {
-    private const string Counted = """{ "page": { "limit": 3, "includeTotalCount": true } }""";
+    private const string Counted = """{ "page": { "limit": 3, "count": true } }""";
 
     private static Task<LabClient> Transport() => Lab.ClientAsync(LabService.Transport);
 
@@ -166,7 +166,7 @@ public class EngineOnlyOTests
     {
         var expected = Corpus.Rows(Corpus.Shipment).GroupBy(row => Corpus.Text(row, "status.name")!)
             .OrderBy(group => group.Key, Comparer<string>.Create(Order.CompareCollated))
-            .Select(group => new JsonObject { ["s"] = group.Key, ["c"] = group.Count().ToString() }).ToList();
+            .Select(group => new JsonObject { ["s"] = group.Key, ["c"] = group.Count() }).ToList();
 
         var falsey = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": false } } } }, { "sort": [ { "s": "asc" } ] }, { "page": { "limit": 10 } } ]""");
         var truthy = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": true } } } }, { "sort": [ { "s": "asc" } ] }, { "page": { "limit": 10 } } ]""");
@@ -195,7 +195,7 @@ public class EngineOnlyOTests
             """);
 
         answer.ShouldBeOk();
-        answer.Items.ToJsonString().Should().Be(new JsonArray(new JsonObject { ["s"] = "Planned", ["c"] = planned.ToString() }).ToJsonString());
+        answer.Items.ToJsonString().Should().Be(new JsonArray(new JsonObject { ["s"] = "Planned", ["c"] = planned }).ToJsonString());
 
         // The post-group match addresses the alias, not the source path.
         var wrong = await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "s" } ], "fields": { "c": { "count": true } } } }, { "match": { "status.name": { "eq": "Planned" } } }, { "page": { "limit": 10 } } ]""");
@@ -204,16 +204,18 @@ public class EngineOnlyOTests
     }
 
     [Fact]
-    public async Task O20_explain_answers_404_while_disabled_and_200_on_a_host_that_enables_it()
+    public async Task O20_explain_answers_on_every_host_by_default_with_the_shape_and_the_bound_pipeline_when_asked()
     {
         var body = Json.Request(Corpus.Shipment, """[ { "page": { "limit": 1 } } ]""");
-        var transport = await Transport();
 
-        (await transport.ExplainHereAsync(body)).StatusCode.Should().Be(404, "Explain:Enabled is off by default");
+        var answer = await (await Transport()).ExplainHereAsync(body);
+        answer.StatusCode.Should().Be(200, "Explain:Enabled is on by default: " + answer);
+        answer.Body!["valid"]!.GetValue<bool>().Should().BeTrue(answer.ToString());
+        answer.Body!["entry"]!["shape"]!["roots"]![""]!.GetValue<string>().Should().Be("t:" + Corpus.Shipment);
+        answer.Body!.AsObject().ContainsKey("plan").Should().BeFalse("the plan is opt-in");
 
-        var enabled = await transport.ExplainAsync(body);
-        enabled.StatusCode.Should().Be(200, enabled.ToString());
-        enabled.Body!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
+        var planned = await (await Transport()).ExplainHereAsync(new JsonObject { ["query"] = Json.Request(Corpus.Shipment, """[ { "page": { "limit": 1 } } ]"""), ["include"] = new JsonArray("plan") });
+        planned.Body!["plan"]!["bound"]!["entity"]!.GetValue<string>().Should().Be(Corpus.Shipment);
     }
 
     [Fact]
@@ -223,7 +225,7 @@ public class EngineOnlyOTests
 
         var answer = await (await Transport()).BatchAsync(
         [
-            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "count": true } } ]"""),
             Json.Request(Corpus.Shipment, """[ { "match": { "nope": { "eq": 1 } } }, { "page": { "limit": 1 } } ]"""),
         ], maxTimeMs: 5000);
 
@@ -241,7 +243,7 @@ public class EngineOnlyOTests
 
         var answer = await (await Transport()).BatchAsync(
         [
-            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Json.Request(Corpus.Shipment, """[ { "page": { "limit": 2, "count": true } } ]"""),
             Json.Request(Corpus.Shipment, """[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 1 } } ]"""),
         ]);
 
@@ -274,7 +276,7 @@ public class EngineOnlyOTests
         notAnObject.IsProblemDetails.Should().BeTrue("the converter rejects a non-object before the body is a request: " + notAnObject);
         notAnObject.ErrorCodes.Should().BeEmpty();
 
-        // Legacy R5 (closed): a null element used to fall out of the host as an unhandled 500.
+        // A null element is answered, not a fault of the host.
         var nullElement = await Send("""[ null, { "page": { "limit": 1 } } ]""");
         nullElement.Type.Should().Be("validation_error", nullElement.ToString());
         var error = nullElement.ShouldRefuse("UNKNOWN_STAGE", 400);
@@ -283,25 +285,8 @@ public class EngineOnlyOTests
         error["stage"]!.GetValue<int>().Should().Be(0);
     }
 
-    // ── O13, O16, O17: the engine-only join forms. Legacy: unreachable (no declared reference);
+    // ── O16, O17: the engine-only join forms (O13, a lookup select given as a bare string, went with the select). Legacy: unreachable (no declared reference);
     // the lab model declares references, so each now runs.
-
-    [Fact]
-    public async Task O13_a_lookup_select_given_as_a_bare_string_selects_that_one_path()
-    {
-        var parents = Corpus.Rows(Corpus.Conformance);
-        var children = Corpus.Rows(Corpus.ConformanceChild);
-        var expected = parents.Select(parent => children.Where(child => Corpus.GuidAt(child, "parentId") == parent.Id)
-            .Order(Comparer<CorpusRow>.Create(Corpus.CompareIds)).Select(child => (child.WireId, Corpus.Text(child, "name"))).ToList()).ToList();
-        expected.Should().Contain(list => list.Count > 0);
-
-        var answer = await Send("""[ { "lookup": { "from": "conformance.child", "path": "parentId", "as": "children", "select": "name" } }, { "project": { "id": 1, "children": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 50 } } ]""", Corpus.Conformance);
-
-        answer.ShouldHaveIds(parents.Select(parent => parent.Id));
-        answer.Items.Select(row => row!["children"]!.AsArray().Select(child => (child!["id"]!.GetValue<string>(), child["name"]?.GetValue<string>())).ToList())
-            .Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
-        answer.Items.SelectMany(row => row!["children"]!.AsArray()).Should().OnlyContain(child => child!.AsObject().Select(member => member.Key).Order(StringComparer.Ordinal).SequenceEqual(new[] { "id", "name" }));
-    }
 
     [Fact]
     public async Task O16_an_operand_under_a_remote_alias_is_forwarded_to_the_owner_which_binds_and_refuses_it()

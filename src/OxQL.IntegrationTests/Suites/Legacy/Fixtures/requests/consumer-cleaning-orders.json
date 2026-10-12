@@ -1,0 +1,38 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "IsDeleted": {
+              "eq": false
+            }
+          },
+          {
+            "Status.Name": {
+              "eq": "planned"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sort": [
+        {
+          "StartDateTime": "asc"
+        },
+        {
+          "EndDateTime": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 500,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    }
+  ]
+}

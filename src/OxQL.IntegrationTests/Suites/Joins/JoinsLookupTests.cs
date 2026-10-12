@@ -89,15 +89,15 @@ public class JoinsLookupTests
     }
 
     [Fact]
-    public async Task L08_select_keeps_the_named_child_paths_and_the_child_key_whether_or_not_it_was_asked_for()
+    public async Task L08_a_projection_under_the_alias_keeps_the_named_child_paths_and_nothing_else()
     {
         var parent = TwoChildParent();
         var expected = ChildrenOf(parent.Id);
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 2 } } ]
             """);
 
@@ -105,27 +105,7 @@ public class JoinsLookupTests
         var children = answer.Items[0]!["eq"]!.AsArray();
         IdsIn(children).Should().Equal(IdsOf(expected));
         children.Select(child => child!["name"]!.GetValue<string>()).Should().Equal(expected.Select(child => Corpus.Text(child, "name")));
-        children.Should().AllSatisfy(child => child!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "name"], "the key is kept although select did not name it, and it is the only extra member"));
-    }
-
-    [Fact]
-    public async Task L10_select_accepts_a_bare_string_as_well_as_an_array_and_answers_identically()
-    {
-        var parent = TwoChildParent();
-        var client = await FleetClient();
-
-        async Task<string> ChildrenFor(string select) => (await client.SendAsync(Corpus.Vehicle, $$"""
-            [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": {{select}} } },
-              { "project": { "id": 1, "eq": 1 } },
-              { "page": { "limit": 2 } } ]
-            """)).ShouldBeOk().Items[0]!["eq"]!.ToJsonString();
-
-        var bare = await ChildrenFor("\"name\"");
-        var array = await ChildrenFor("[\"name\"]");
-
-        bare.Should().Be(array);
-        IdsIn(JsonNode.Parse(bare)).Should().Equal(IdsOf(ChildrenOf(parent.Id)));
+        children.Should().AllSatisfy(child => child!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "name"], "exactly the paths the projection names under the alias"));
     }
 
     [Fact]
@@ -140,8 +120,8 @@ public class JoinsLookupTests
 
         async Task<JsonNode?> Children(string name) => (await client.SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"], "filter": { "name": { "eq": "{{name}}" } } } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "filter": { "name": { "eq": "{{name}}" } } } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 2 } } ]
             """)).ShouldHaveIds([parent.Id]).Items[0]!["eq"];
 
@@ -163,8 +143,8 @@ public class JoinsLookupTests
 
         var capped = await client.SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"], "limit": 1 } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "limit": 1 } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 2 } } ]
             """);
 
@@ -216,8 +196,8 @@ public class JoinsLookupTests
 
         async Task<IReadOnlyList<Guid>> Children(string limit) => IdsIn((await client.SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"]{{limit}} } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq"{{limit}} } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 1 } } ]
             """)).ShouldHaveIds([parent.Id]).Items[0]!["eq"]);
 
@@ -233,8 +213,8 @@ public class JoinsLookupTests
         expected.Select(ids => ids.Count).Should().Equal(Vehicles().Count, 0, 0);
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Department, """
-            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "vehicles", "select": ["matchCode"], "limit": 100 } },
-              { "project": { "id": 1, "name": 1, "vehicles": 1 } },
+            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "vehicles", "limit": 100 } },
+              { "project": { "id": 1, "name": 1, "vehicles.id": 1, "vehicles.matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 10 } } ]
             """);
@@ -249,8 +229,8 @@ public class JoinsLookupTests
     public async Task L15_the_child_sub_pipeline_carries_the_childs_own_organisation_scope()
     {
         var answer = await (await FleetClient()).SendAsync(Corpus.Department, """
-            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "vehicles", "select": ["matchCode", "organizationId"], "limit": 100 } },
-              { "project": { "id": 1, "vehicles": 1 } },
+            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "vehicles", "limit": 100 } },
+              { "project": { "id": 1, "vehicles.id": 1, "vehicles.matchCode": 1, "vehicles.organizationId": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 10 } } ]
             """);
@@ -269,11 +249,11 @@ public class JoinsLookupTests
         expected.Should().NotBeEmpty();
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, $$"""
-            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
+            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -288,11 +268,11 @@ public class JoinsLookupTests
         expected.Should().NotBeEmpty();
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, $$"""
-            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
+            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
               { "project": { "id": 1, "matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         // Every one of these rows provably has a child, so an [] under the alias is a lie; the
@@ -322,11 +302,11 @@ public class JoinsLookupTests
     [InlineData("L16", Corpus.Vehicle, """[ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "matchCode" } }, { "page": { "limit": 1 } } ]""", "ALIAS_COLLISION")]
     [InlineData("L18", Corpus.Vehicle, """[ { "group": { "by": [ { "path": "matchCode", "as": "mc" } ], "fields": { "n": { "count": true } } } }, { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_PATH")]
     [InlineData("L20", Corpus.Vehicle, """[ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "nope": 1 } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_STAGE_MEMBER")]
-    [InlineData("L25", Corpus.Vehicle, """[ { "lookup": { "from": "transport.shipment_template", "path": "createUserId", "as": "templates" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_ENTITY")]
+    [InlineData("L25", Corpus.Vehicle, """[ { "lookup": { "from": "billing.run", "path": "vehicleId", "as": "runs" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_ENTITY")]
     public async Task L03_L04_L06_L07_L16_L18_L20_L25_the_engine_refuses_the_lookup_shapes_it_cannot_serve(string caseId, string entity, string pipeline, string code)
     {
-        // L7: `equipment` is the collection's name, never an entity id. L25: the child lives on
-        // another service; there is no remote backward lookup, so the host does not know it.
+        // L7: `equipment` is the collection's name, never an entity id. L25: the child lives on a
+        // service this host knows no owner for (another service's entity is a remote lookup, L26).
         var answer = await (await FleetClient()).SendAsync(entity, pipeline);
 
         answer.ShouldRefuse(code, 400, caseId);
@@ -334,6 +314,20 @@ public class JoinsLookupTests
 
         if (caseId == "L18")
             answer.Errors[0]["message"]!.GetValue<string>().Should().Contain("no key to join on");
+    }
+
+    [Fact]
+    public async Task L26_a_lookup_of_another_services_entity_runs_at_its_owner_along_the_reference_the_owner_declares()
+    {
+        // A template's createUserId names a fleet vehicle, so transport answers the
+        // templates of each vehicle grouped per key; it was UNKNOWN_ENTITY before the remote lookup.
+        var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, """
+            [ { "lookup": { "from": "transport.shipment_template", "path": "createUserId", "as": "templates", "limit": 2 } }, { "page": { "limit": 1 } } ]
+            """);
+
+        answer.ShouldBeOk();
+        answer.Items[0]!["templates"]!.AsArray().Should().HaveCount(2, "the vehicle names four templates; the limit keeps two");
+        answer.DiagnosticCodes.Should().Contain("LOOKUP_TRUNCATED");
     }
 
     [Fact]
@@ -369,8 +363,8 @@ public class JoinsLookupTests
         var (direct, engine) = await RetiredEquipmentEngineAsync();
         var outcome = await engine.ExecuteAsync(EngineDirect.Request(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "equipment", "path": "vehicle.id", "as": "eq" } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 1 } } ]
             """), direct.Context());
 
@@ -417,7 +411,7 @@ public class JoinsLookupTests
         var client = await FleetClient();
 
         var unread = await client.SendAsync(Corpus.Vehicle, """
-            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "project": { "id": 1 } }, { "page": { "limit": 3, "includeTotalCount": true } } ]
+            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } }, { "project": { "id": 1 } }, { "page": { "limit": 3, "count": true } } ]
             """);
         unread.ShouldHaveTotal(Vehicles().Count);
 
@@ -426,10 +420,10 @@ public class JoinsLookupTests
         expected.Should().BeInRange(1, Vehicles().Count - 1);
 
         var read = await client.SendAsync(Corpus.Vehicle, $$"""
-            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
+            [ { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
               { "match": { "eq.name": { "eq": "{{wanted}}" } } },
-              { "project": { "id": 1, "eq": 1 } },
-              { "page": { "limit": 3, "includeTotalCount": true } } ]
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
+              { "page": { "limit": 3, "count": true } } ]
             """);
         read.ShouldHaveTotal(expected);
     }
@@ -441,14 +435,14 @@ public class JoinsLookupTests
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"] } },
-              { "unwind": { "path": "eq" } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
+              { "unwind": { "path": "eq", "as": "eqRow" } },
+              { "project": { "id": 1, "eqRow": 1 } },
               { "page": { "limit": 10 } } ]
             """);
 
         answer.ShouldHaveIds([parent.Id, parent.Id]);
-        answer.Items.Select(row => Guid.Parse(row!["eq"]!["id"]!.GetValue<string>())).Should().Equal(IdsOf(ChildrenOf(parent.Id)));
+        answer.Items.Select(row => Guid.Parse(row!["eqRow"]!["id"]!.GetValue<string>())).Should().Equal(IdsOf(ChildrenOf(parent.Id)));
     }
 
     [Fact]
@@ -459,8 +453,8 @@ public class JoinsLookupTests
 
         var joined = await client.SendAsync(Corpus.Vehicle, $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name", "number", "createDateTime", "organizationId"] } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq" } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1, "eq.number": 1, "eq.createDateTime": 1, "eq.organizationId": 1 } },
               { "page": { "limit": 1 } } ]
             """);
         var child = joined.ShouldHaveIds([parent.Id]).Items[0]!["eq"]![0]!.AsObject();
@@ -490,8 +484,8 @@ public class JoinsLookupTests
         var client = await FleetClient();
         var pipeline = $$"""
             [ { "match": { "id": { "eq": "{{parent.WireId}}" } } },
-              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "select": ["name"], "filter": { "name": { "eq": { "$var": "wanted" } } } } },
-              { "project": { "id": 1, "eq": 1 } },
+              { "lookup": { "from": "fleet.equipment", "path": "vehicle.id", "as": "eq", "filter": { "name": { "eq": { "$var": "wanted" } } } } },
+              { "project": { "id": 1, "eq.id": 1, "eq.name": 1 } },
               { "page": { "limit": 2 } } ]
             """;
 

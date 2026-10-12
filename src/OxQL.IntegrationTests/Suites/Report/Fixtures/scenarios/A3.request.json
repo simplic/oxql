@@ -1,0 +1,34 @@
+{
+  "entityType": "ledger.transaction",
+  "variables": {
+    "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+  },
+  "strict": true,
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": {
+            "$var": "transactionId"
+          }
+        }
+      }
+    },
+    {
+      "resolve": {
+        "path": "invoiceRecipient.address.id",
+        "as": "recipientContact"
+      }
+    },
+    {
+      "project": {
+        "number": 1,
+        "invoiceRecipient": 1,
+        "recipientContact.id": 1,
+        "recipientContact.primaryEmailAddress.email": 1,
+        "recipientContact.primaryPhoneNumber.number": 1,
+        "recipientContact.address.companyName": 1
+      }
+    }
+  ]
+}

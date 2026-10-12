@@ -65,6 +65,10 @@ public static class RegexGuard
     public static bool LiteralFits(string literal) =>
         Encoding.UTF8.GetByteCount(Escape(literal)) + AnchorBytes <= MaxPatternBytes;
 
+    /// <summary>Whether a pattern the engine built from a literal (an accent-folding one, <see cref="AccentFold"/>) still fits the server's pattern limit once anchored.</summary>
+    public static bool PatternFits(string pattern) =>
+        Encoding.UTF8.GetByteCount(pattern) + AnchorBytes <= MaxPatternBytes;
+
     /// <summary>Escapes a literal for use inside a pattern.</summary>
     public static string Escape(string literal) => Regex.Escape(literal);
 }

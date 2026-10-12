@@ -8,7 +8,7 @@ using OxQL.Model;
 namespace OxQL.AspNetCore.Compat;
 
 /// <summary>What the compat rewrite did to a contract 1 request, for the log line and the engine.</summary>
-public sealed record CompatRewrite
+internal sealed record CompatRewrite
 {
     /// <summary>The request in contract 2 spelling; the engine binds it like any other.</summary>
     public required QueryRequest Request { get; init; }
@@ -40,7 +40,7 @@ public sealed record CompatRewrite
 /// <c>LEGACY_STAGE_UNSUPPORTED</c>. Rows of a contract 1 request are rendered by the v1
 /// converter in the engine, so <c>_id</c> and the storage names come back as they did.
 /// </summary>
-public sealed class CompatBinder
+internal sealed class CompatBinder
 {
     private static readonly IReadOnlyDictionary<string, string> OperatorsByLowerCase =
         OperandCoercer.Operators.ToDictionary(op => op.ToLowerInvariant(), op => op, StringComparer.Ordinal);
@@ -111,7 +111,8 @@ public sealed class CompatBinder
                             Refusal = Refusal.Validation([new QueryValidationError
                             {
                                 Code = Codes.LegacyStageUnsupported,
-                                Message = $"The v1 '{stage.Kind}' stage has no equivalent under contract 1; send the request under contract 2 (X-OxQL-Contract: 2) with the v2 '{stage.Kind}' form.",
+                                // LEGACY(compat.v1): a query with the v1 form of the stage never reads this while Compat:Legacy:Enabled, the legacy pipeline answers it; an explain does, and a host that switched the pipeline off.
+                                Message = $"A '{stage.Kind}' stage in a request without the contract header is read as contract 1, and the contract 2 engine cannot express a v1 join. A query that writes the v1 form ({(stage.Kind == "lookup" ? "from, localPath, foreignPath" : "source, localPath")}) is answered by the contract 1 legacy pipeline while 'Compat:Legacy:Enabled' is on; an explain of it is not. The contract 2 form, '{stage.Kind}' with 'path' along a reference the service's model declares, needs the header 'X-OxQL-Contract: 2'." + Binder.Contract1Hint,
                                 Stage = index,
                             }]),
                         };
@@ -205,15 +206,16 @@ public sealed class CompatBinder
 
         private UnwindStage RewriteUnwind(UnwindStage unwind)
         {
-            var path = Translate(unwind.Path, roots);
+            // An unwind without a path stays as written; the binder refuses it.
+            Translated? path = unwind.Path is null ? null : Translate(unwind.Path, roots);
 
             if (unwind.As is not null)
-                roots[unwind.As] = ElementType(path.Shape);
+                roots[unwind.As] = ElementType(path?.Shape);
 
             if (unwind.IncludeIndex is not null)
                 roots[unwind.IncludeIndex] = null;
 
-            return unwind with { Path = path.Wire };
+            return path is { } translated ? unwind with { Path = translated.Wire } : unwind;
         }
 
         private GroupStage RewriteGroup(GroupStage group)
@@ -257,10 +259,10 @@ public sealed class CompatBinder
         {
             var fields = new Dictionary<string, int>(StringComparer.Ordinal);
 
-            foreach (var (wire, value) in project.Fields)
+            foreach (var (wire, value) in project.AsContract1().Fields)
                 fields[Translate(wire, roots).Wire] = value;
 
-            return project with { Fields = fields };
+            return project with { Fields = fields, WrittenFalse = [] };
         }
 
         private IReadOnlyList<SortField> RewriteSort(IReadOnlyList<SortField> fields) =>

@@ -24,7 +24,7 @@ public class HostHardeningLogTextTests
     [Fact]
     public async Task The_compat_line_keeps_a_callers_entity_and_path_on_one_bounded_line()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         await host.Client(contract: null).PostAsync("/OxQL/query", SampleHost.Json($$"""{ "entityType": "{{Forged}}", "pipeline": [] }"""));
         await host.Client(contract: null).PostAsync("/OxQL/query", SampleHost.Json($$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "Number": { "eq": { "$uuid": "x" } } } }, { "match": { "{{Forged}}": { "eq": { "$uuid": "x" } } } }] }"""));
@@ -49,7 +49,7 @@ public class HostHardeningLogTextTests
     [Fact]
     public async Task A_first_legacy_path_with_a_line_break_stays_on_one_line()
     {
-        using var host = new SampleHost();
+        using var host = new SampleHost(SampleHost.RewriteFirst);
 
         await host.Client(contract: null).PostAsync("/OxQL/query", SampleHost.Json($$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "{{Forged}}": { "eq": { "$uuid": "195fb742-82b3-405e-b77b-42838eb0aaa9" } } } }] }"""));
 

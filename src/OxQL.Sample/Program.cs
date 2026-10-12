@@ -43,7 +43,7 @@ builder.Services.AddOxQLStudio(options =>
     options.RoutePath = "/oxql";
     options.ApiBasePath = "/OxQL";   // matches the OxQLController route
     options.Title = "OxQL Studio";
-    options.EnableExplain = builder.Configuration.GetValue<bool>("OxQL:Explain:Enabled");
+    options.EnableExplain = builder.Configuration.GetValue("OxQL:Explain:Enabled", true);
 });
 
 // ── Standard ASP.NET Core services ─────────────────────────────────────

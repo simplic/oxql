@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using OxQL.Model.Addon;
@@ -8,9 +9,11 @@ namespace OxQL.IntegrationTests.Fleet;
 /// An organisation's addon definitions, read per request from the host's own database in the
 /// shape the base package stores them (<see cref="Collection"/>, PascalCase members, Guids as
 /// subtype 4). Unlike the base package it caches nothing, so a test that writes a definition
-/// sees it on the next query.
+/// sees it on the next query; every call is a command at the database, and it says so
+/// (<see cref="IReportingAddonDefinitionSource"/>), so a request's timing lists the read as
+/// database time.
 /// </summary>
-public sealed class TestAddonSource(IMongoDatabase database) : IAddonDefinitionSource
+public sealed class TestAddonSource(IMongoDatabase database) : IReportingAddonDefinitionSource
 {
     /// <summary>Where the base package stores addon definitions, in every service's own database.</summary>
     public const string Collection = "model_definition.addon_definition";
@@ -29,8 +32,12 @@ public sealed class TestAddonSource(IMongoDatabase database) : IAddonDefinitionS
         ["object"] = AddonKind.Object,
     };
 
-    public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken)
+    public ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
+        ForEntityAsync(entity, organisation, new AddonReadReport(), cancellationToken);
+
+    public async ValueTask<IReadOnlyList<AddonDefinition>> ForEntityAsync(string entity, Guid organisation, AddonReadReport report, CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
         var filter = new BsonDocument
         {
             ["Entity"] = entity,
@@ -39,6 +46,8 @@ public sealed class TestAddonSource(IMongoDatabase database) : IAddonDefinitionS
         };
 
         var documents = await database.GetCollection<BsonDocument>(Collection).Find(filter).ToListAsync(cancellationToken);
+
+        report.Database(Collection, started, documents.Count);
 
         return documents.Select(ToDefinition).ToList();
     }

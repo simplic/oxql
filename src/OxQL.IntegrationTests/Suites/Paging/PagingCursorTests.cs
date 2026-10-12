@@ -5,6 +5,7 @@ using MongoDB.Bson;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Suites.Filters;
 using Xunit;
 
 namespace OxQL.IntegrationTests.Suites.Paging;
@@ -80,41 +81,21 @@ public class PagingCursorTests
 
     // ── P7 · P8 · P9 · P10 · P11 · P12 · P13 — the offset and the stage ─────────────────────
 
-    [Fact]
-    public async Task P07_offset_0_is_the_same_page_as_no_offset()
+    /// <summary>Contract 2 addresses a page by its cursor alone; every form of <c>offset</c> is a member the page does not have.</summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("3")]
+    [InlineData("5001")]
+    [InlineData("-1")]
+    public async Task P07_P10_an_offset_is_refused_as_a_member_the_page_does_not_have(string offset)
     {
-        var client = await Transport();
+        var answer = await (await Transport()).SendAsync(Corpus.Template, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": 3, "offset": {{offset}} } }]""");
 
-        var zero = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 3, "offset": 0 } }]""");
-        var none = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 3 } }]""");
+        var error = answer.ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400);
 
-        zero.ShouldHaveIds(Corpus.PageOf(TemplateIds(), limit: 3));
-        none.ShouldHaveIds(zero.Ids());
-    }
-
-    [Fact]
-    public async Task P08_offset_5000_exactly_max_offset_answers_the_corpus_slice_at_5000()
-    {
-        var expected = Corpus.PageOf(TemplateIds(), limit: 2, offset: MaxOffset);
-        expected.Should().HaveCount(2);
-
-        var answer = await (await Transport()).SendAsync(Corpus.Template, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": 2, "offset": {{MaxOffset}} } }]""");
-
-        answer.ShouldHaveIds(expected);
-    }
-
-    [Fact]
-    public async Task P09_P10_an_offset_above_max_offset_and_a_negative_offset_are_refused()
-    {
-        var client = await Transport();
-
-        var over = await client.SendAsync(Corpus.Template, $$"""[{ "page": { "limit": 2, "offset": {{MaxOffset + 1}} } }]""");
-        over.ShouldRefuse("MAX_OFFSET_EXCEEDED", 400)["message"]!.GetValue<string>().Should().Contain(MaxOffset.ToString(CultureInfo.InvariantCulture));
-        over.ErrorCodes.Should().Equal("MAX_OFFSET_EXCEEDED");
-
-        var negative = await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 2, "offset": -1 } }]""");
-        negative.ShouldRefuse("INVALID_PAGE_LIMIT", 400);
-        negative.ErrorCodes.Should().Equal("INVALID_PAGE_LIMIT");
+        answer.ErrorCodes.Should().Equal("UNKNOWN_STAGE_MEMBER");
+        error["stage"]!.GetValue<int>().Should().Be(1);
+        error["params"]!.ToJsonString().Should().Be("""{"stage":"page","member":"offset","reason":"removed","use":"cursor"}""");
     }
 
     [Fact]
@@ -126,8 +107,8 @@ public class PagingCursorTests
 
         var answer = await client.SendAsync(Corpus.Template, $$"""[{ "sort": [{ "id": "asc" }] }, { "page": { "limit": 2, "offset": 1, "cursor": "{{first.NextCursor}}" } }]""");
 
-        answer.ShouldRefuse("INVALID_PAGE_LIMIT", 400);
-        answer.ErrorCodes.Should().Equal("INVALID_PAGE_LIMIT");
+        answer.ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400);
+        answer.ErrorCodes.Should().Equal("UNKNOWN_STAGE_MEMBER");
     }
 
     [Fact]
@@ -279,18 +260,13 @@ public class PagingCursorTests
     }
 
     [Fact]
-    public async Task P36_offset_paging_and_cursor_paging_return_the_same_rows_at_the_same_positions_up_to_max_offset()
+    public async Task P36_cursor_paging_returns_every_row_once_in_the_sort_order()
     {
         const string stages = """[{ "sort": [{ "templateName": "asc" }] }, { "project": { "id": 1, "templateName": 1 } }]""";
         var client = await Transport();
 
         var cursorWalk = await client.WalkAsync(Corpus.Template, stages, limit: 500);
-        // The last offset page a caller may ask for starts at the ceiling: offset paging reaches
-        // 5 500 of 6 000 rows and no further, which is the reason the cursor exists.
-        var offsetWalk = await client.OffsetWalkAsync(Corpus.Template, stages, limit: 500, rows: MaxOffset + 1);
 
-        offsetWalk.Ids.Should().HaveCount(MaxOffset + 500).And.OnlyHaveUniqueItems();
-        offsetWalk.Ids.Should().Equal(cursorWalk.Ids.Take(MaxOffset + 500));
         cursorWalk.Ids.Should().Equal(Corpus.SortedIds(Corpus.Template, "templateName"));
     }
 
@@ -312,7 +288,6 @@ public class PagingCursorTests
             ("other direction", Corpus.Template, client, $$"""[{ "sort": [{ "templateName": "desc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("added match", Corpus.Template, client, $$"""[{ "match": { "isDeleted": { "eq": false } } }, { "sort": [{ "templateName": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("other entity", Corpus.Shipment, client, $$"""[{ "sort": [{ "shipmentNumber": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
-            ("added projection", Corpus.Template, client, $$"""[{ "sort": [{ "templateName": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
             ("other organisation", Corpus.Template, client.As(Org.B), $$"""[{ "sort": [{ "templateName": "asc" }] }, { "page": { "limit": 3, "cursor": "{{cursor}}" } }]"""),
         };
 
@@ -322,6 +297,45 @@ public class PagingCursorTests
             answer.ShouldRefuse("CURSOR_INVALID", 400, why);
             answer.ErrorCodes.Should().Equal(["CURSOR_INVALID"], why);
         }
+    }
+
+    /// <summary>
+    /// A cursor is bound to what decides the rows and their order, not to what the row shows.
+    /// A walk goes on through a changed projection and through a join nothing but the display reads;
+    /// a join a filter reads, like any filter, is another query.
+    /// </summary>
+    [Fact]
+    public async Task P29b_a_cursor_survives_a_changed_projection_and_a_display_only_join_and_no_change_of_filter_or_sort()
+    {
+        const string Sort = """{ "sort": [{ "shipmentNumber": "asc" }, { "id": "asc" }] }""";
+        const string Join = """{ "resolve": { "path": "department.id", "as": "creator" } }""";
+        var expected = Corpus.Sorted(Corpus.Shipment, [("shipmentNumber", false), ("id", false)]).Select(row => Guid.Parse(row.WireId)).ToList();
+        expected.Count.Should().BeGreaterThan(12);
+        var client = await Transport();
+
+        string Page(string cursor) => $$"""{ "page": { "limit": 3, "cursor": "{{cursor}}" } }""";
+
+        var first = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "page": { "limit": 3 } }]""");
+        first.ShouldHaveIds(expected.Take(3));
+
+        // A projection appears, changes, and goes again; a display-only join comes and goes.
+        var projected = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "project": { "id": 1, "shipmentNumber": 1 } }, {{Page(first.NextCursor!)}}]""");
+        projected.ShouldHaveIds(expected.Skip(3).Take(3), "a projection was added");
+        projected.Items[0]!.AsObject().Select(member => member.Key).Should().Equal("id", "shipmentNumber");
+
+        var other = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, { "project": { "id": 1, "status": 1 } }, {{Page(projected.NextCursor!)}}]""");
+        other.ShouldHaveIds(expected.Skip(6).Take(3), "another column is shown");
+
+        var joined = await client.SendAsync(Corpus.Shipment, $$"""[{{Join}}, {{Sort}}, { "project": { "id": 1, "creator.id": 1 } }, {{Page(other.NextCursor!)}}]""");
+        joined.ShouldHaveIds(expected.Skip(9).Take(3), "a join only the row's display reads was added");
+
+        var bare = await client.SendAsync(Corpus.Shipment, $$"""[{{Sort}}, {{Page(joined.NextCursor!)}}]""");
+        bare.ShouldHaveIds(expected.Skip(12).Take(3), "the join and the projection are gone again");
+        bare.ShouldCount("atLeast", 16, "page", because: "the cursor carried the rows served through every change");
+
+        // What decides the rows still binds the cursor: a join a filter reads, and a projection a later stage follows.
+        (await client.SendAsync(Corpus.Shipment, $$"""[{{Join}}, { "match": { "creator.id": { "exists": true } } }, {{Sort}}, {{Page(first.NextCursor!)}}]""")).ShouldRefuse("CURSOR_INVALID", 400, "a filter reads the join");
+        (await client.SendAsync(Corpus.Shipment, $$"""[{ "project": { "id": 1, "shipmentNumber": 1 } }, { "match": { "shipmentNumber": { "exists": true } } }, {{Sort}}, {{Page(first.NextCursor!)}}]""")).ShouldRefuse("CURSOR_INVALID", 400, "a match follows the projection");
     }
 
     [Fact]
@@ -344,17 +358,17 @@ public class PagingCursorTests
     }
 
     [Fact]
-    public async Task P32_limit_offset_and_include_total_count_are_outside_the_fingerprint_so_the_page_size_may_change_mid_walk()
+    public async Task P32_limit_and_count_are_outside_the_fingerprint_so_the_page_size_may_change_mid_walk()
     {
         const string stages = """{ "sort": [{ "templateName": "asc" }] }, { "project": { "id": 1, "templateName": 1 } }""";
         var expected = Corpus.SortedIds(Corpus.Template, "templateName");
         var client = await Transport();
 
         var first = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 3 } }]""");
-        var wider = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 7, "cursor": "{{first.NextCursor}}", "includeTotalCount": true } }]""");
+        var wider = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 7, "cursor": "{{first.NextCursor}}", "count": true } }]""");
 
         first.ShouldHaveIds(expected.Take(3));
-        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldHaveTotal(Corpus.TemplateVolume);
+        wider.ShouldHaveIds(expected.Skip(3).Take(7)).ShouldCount("atLeast", 1_000, "step");
     }
 
     [Fact]
@@ -433,20 +447,28 @@ public class PagingCursorTests
     private const string GroupByNumber = """{ "group": { "by": [{ "path": "number", "as": "number" }], "fields": { "total": { "count": true } } } }""";
 
     [Fact]
-    public async Task P34_a_group_and_an_unwind_both_switch_the_query_to_offset_paging_and_the_cursor_carries_the_offset()
+    public async Task P34_a_group_and_an_unwind_both_page_by_value_and_the_cursor_carries_no_offset()
     {
         var grouped = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 2 } }]""");
         grouped.ShouldBeOk();
         var groupedHead = Cursors.Payload(grouped.NextCursor!);
-        groupedHead["m"]!.GetValue<string>().Should().Be("o");
-        groupedHead["o"]!.GetValue<int>().Should().Be(2);
-        ((JsonArray)groupedHead["v"]!).Should().BeEmpty();
+        groupedHead["m"]!.GetValue<string>().Should().Be("k");
+        groupedHead["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)groupedHead["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["number"], "the key of the last group; a group has no record key");
 
-        var unwound = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items" } }, { "page": { "limit": 5 } }]""");
+        var unwound = await (await Transport()).SendAsync(Corpus.Shipment, """[{ "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 5 } }]""");
         unwound.ShouldBeOk();
         var unwoundHead = Cursors.Payload(unwound.NextCursor!);
-        unwoundHead["m"]!.GetValue<string>().Should().Be("o");
-        unwoundHead["o"]!.GetValue<int>().Should().Be(5);
+        unwoundHead["m"]!.GetValue<string>().Should().Be("k");
+        unwoundHead["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)unwoundHead["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["id", "_id", "__oxIx0"], "the sort the binder supplied, the key, the position of the unwind");
+
+        // Contract 1 pages both by offset, as it always has.
+        var legacy = await (await Ledger()).Contract(1).SendAsync(Corpus.Transaction, """[{ "group": { "by": [{ "path": "Number", "as": "number" }], "fields": { "total": { "count": true } } } }, { "page": { "limit": 2 } }]""");
+        legacy.ShouldBeOk();
+        var legacyHead = Cursors.Payload(legacy.NextCursor!);
+        legacyHead["m"]!.GetValue<string>().Should().Be("o");
+        legacyHead["o"]!.GetValue<int>().Should().Be(2);
     }
 
     [Fact]
@@ -462,17 +484,17 @@ public class PagingCursorTests
     }
 
     [Fact]
-    public async Task P35_P20_offset_paging_after_a_group_walks_the_same_groups_in_the_same_order()
+    public async Task P35_P20_paging_after_a_group_walks_the_same_groups_in_the_same_order()
     {
         var numbers = TransactionNumbers();
 
-        var walk = await (await Ledger()).OffsetWalkAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}]""", limit: 5, rows: numbers.Count);
+        var walk = await (await Ledger()).WalkAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}]""", limit: 5);
 
         walk.Items.Select(item => item["number"]!.GetValue<string>()).Should().Equal(numbers);
     }
 
     [Fact]
-    public async Task P34b_P08_an_offset_cursor_walks_past_max_offset_although_an_offset_of_that_size_is_refused()
+    public async Task P34b_P08_a_cursor_after_a_group_walks_past_what_max_offset_bounds_elsewhere()
     {
         // Legacy ran this over the bulk organisation; grouping the 6 000 templates by name already
         // gives more groups than the offset ceiling, under the default limits.
@@ -480,9 +502,6 @@ public class PagingCursorTests
         var groups = Corpus.Rows(Corpus.Template).Select(row => Corpus.Text(row, "templateName")).Distinct().Count();
         groups.Should().BeGreaterThan(MaxOffset + 500);
         var client = await Transport();
-
-        var refused = await client.SendAsync(Corpus.Template, $$"""[{{stages}}, { "page": { "limit": 2, "offset": {{MaxOffset + 1}} } }]""");
-        refused.ShouldRefuse("MAX_OFFSET_EXCEEDED", 400)["message"]!.GetValue<string>().Should().Contain("use a cursor beyond it");
 
         string? cursor = null;
         var rows = 0;
@@ -498,7 +517,8 @@ public class PagingCursorTests
         }
 
         rows.Should().BeGreaterThan(MaxOffset);
-        Cursors.Payload(cursor!)["o"]!.GetValue<int>().Should().Be(rows);
+        Cursors.Payload(cursor!)["o"]!.GetValue<int>().Should().Be(0, "a page of groups starts after the last group by its key, at any depth; nothing is skipped");
+        Cursors.Payload(cursor!)["n"]!.GetValue<long>().Should().Be(rows, "the cursor carries the rows served");
     }
 
     // ── P37 · P38 · P40 · P42 · P44 — counts ───────────────────────────────────────────────
@@ -520,14 +540,12 @@ public class PagingCursorTests
         dup.Should().Be(10);
         var client = await Transport();
 
-        (await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(Corpus.TemplateVolume, capped: false);
-        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(dup);
+        (await client.CountOnlyAsync(Corpus.Template, """[{ "project": { "id": 1 } }]""")).ShouldCount("exact", Corpus.TemplateVolume);
+        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } }]"""))
+            .ShouldCount("exact", dup);
 
-        var none = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "no such template" } } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        none.ShouldHaveTotal(0, capped: false);
-        none.PageInfo["totalCountCapped"]!.GetValue<bool>().Should().BeFalse();
+        var none = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "no such template" } } }, { "page": { "limit": 1, "count": true } }]""");
+        none.ShouldCount("exact", 0);
     }
 
     [Fact]
@@ -536,28 +554,36 @@ public class PagingCursorTests
         var groups = TransactionNumbers().Count;
         groups.Should().BeLessThan(Corpus.Counts(Corpus.Transaction).A);
 
-        var answer = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var answer = await (await Ledger()).SendAsync(Corpus.Transaction, $$"""[{{GroupByNumber}}, { "page": { "limit": 1, "count": true } }]""");
 
         answer.ShouldHaveTotal(groups);
     }
 
     [Fact]
-    public async Task P44_the_count_request_the_client_sends_limit_1_with_the_count_answers_the_exact_total()
+    public async Task P44_the_count_only_request_limit_0_with_the_count_answers_the_exact_total_and_no_rows()
     {
-        // The client's count() terminal writes { limit: 1, includeTotalCount: true } and yields no
-        // rows (that half is the client's). The engine half: the total of that exact request.
+        // A count() terminal writes { limit: 0, count: { budgetMs } }: no page is read.
         var client = await Transport();
 
-        (await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(10, capped: false);
-        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 1, "includeTotalCount": true } }]"""))
-            .ShouldHaveTotal(Corpus.TemplateVolume, capped: false);
+        var dup = await client.SendAsync(Corpus.Template, """[{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 0, "count": true } }]""");
+        dup.ShouldCount("exact", 10).Items.Should().BeEmpty();
+        dup.HasNextPage.Should().BeFalse("a count-only answer says nothing of pages");
+        dup.NextCursor.Should().BeNull();
+
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": { "budgetMs": 5000 } } }]""")).ShouldCount("exact", Corpus.TemplateVolume);
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": { "budgetMs": 5000, "upTo": 2500 } } }]""")).ShouldCount("atLeast", 2_500, "cap");
+
+        // limit 0 is the count alone: without a count, or with a cursor, it asks for nothing.
+        var bare = await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0 } }]""");
+        bare.ShouldRefuseExactly("INVALID_PAGE_LIMIT");
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": false } }]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
+        (await client.SendAsync(Corpus.Template, """[{ "page": { "limit": 0, "count": true, "cursor": "a.b" } }]""")).ShouldRefuseExactly("INVALID_PAGE_LIMIT");
     }
 
     [Fact]
     public async Task P42_the_page_and_the_count_come_from_one_request_and_agree_on_a_quiet_corpus()
     {
-        var answer = await (await Staff()).SendAsync(Corpus.Employee, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": {{MaxPageSize}}, "includeTotalCount": true } }]""");
+        var answer = await (await Staff()).SendAsync(Corpus.Employee, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": {{MaxPageSize}}, "count": true } }]""");
 
         answer.ShouldHaveTotal(Corpus.Counts(Corpus.Employee).A);
         answer.TotalCount.Should().Be(answer.Items.Count);
@@ -566,22 +592,23 @@ public class PagingCursorTests
     // ── P39 — the count cap, against the bulk organisation ─────────────────────────────────
 
     [Fact]
-    public async Task P39_one_row_above_the_cap_counts_the_cap_flags_it_and_carries_the_diagnostic_and_exactly_the_cap_counts_exactly()
+    public async Task P39_one_row_above_the_cap_counts_the_cap_as_a_lower_bound_and_exactly_the_cap_counts_exactly()
     {
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
         BulkRows.Count.Should().Be(CountCap + 1);
         var client = shared.Client(LabService.Transport, Org.C);
 
-        var over = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        over.ShouldHaveTotal(CountCap, capped: true);
-        over.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
-        over.Diagnostics[0]["params"]!.ToJsonString().Should().Be($$"""{"cap":{{CountCap}}}""");
+        // Beside a page the count is one step; alone it climbs to the cap and says the cap stopped it.
+        var beside = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } }]""");
+        beside.ShouldCount("atLeast", 1_000, "step").ShouldHaveNoDiagnostics();
+
+        var over = await client.CountOnlyAsync(Corpus.Template, """[{ "project": { "id": 1 } }]""");
+        over.ShouldCount("atLeast", CountCap, "cap").ShouldHaveNoDiagnostics();
 
         // The last bulk name is the one row above the cap; everything below it is exactly the cap.
-        var exact = await client.SendAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        exact.ShouldHaveTotal(CountCap, capped: false);
-        exact.ShouldHaveNoDiagnostics();
+        var exact = await client.CountOnlyAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }]""");
+        exact.ShouldCount("exact", CountCap).ShouldHaveNoDiagnostics();
     }
 
     // ── keyset paging with a sort on a local resolve alias ────────────────────────────────

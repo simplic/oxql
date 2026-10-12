@@ -1,0 +1,43 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items"
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items.AssignedTransactionItems"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Items.SortNumber": 1,
+        "Items.Text": 1,
+        "Items.AssignedTransactionItems.Text": 1,
+        "Items.AssignedTransactionItems.SortNumber": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Items.AssignedTransactionItems.SortNumber": "desc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 500
+      }
+    }
+  ]
+}

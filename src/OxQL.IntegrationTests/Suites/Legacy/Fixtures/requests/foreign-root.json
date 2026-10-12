@@ -1,0 +1,18 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000009"
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "ReportingInformation": 1
+      }
+    }
+  ]
+}

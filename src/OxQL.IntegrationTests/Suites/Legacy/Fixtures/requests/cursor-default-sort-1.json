@@ -1,0 +1,16 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "page": {
+        "limit": 3,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

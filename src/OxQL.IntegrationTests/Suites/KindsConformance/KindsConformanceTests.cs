@@ -57,13 +57,14 @@ public class KindsConformanceTests
         return 0;
     }
 
-    private const long MaxSafe = (1L << 53) - 1;
+    /// <summary>A long on the wire: a JSON number, every digit of it written (9007199254740993, never …992 and never quoted).</summary>
+    private static string Digits(BsonValue value) => value.ToInt64().ToString(CultureInfo.InvariantCulture);
 
     public static readonly IReadOnlyDictionary<string, Kind> Kinds = new Dictionary<string, Kind>
     {
         ["long"] = new("long", "magnitude", "optionalMagnitude", true,
             (a, b) => a.ToInt64().CompareTo(b.ToInt64()),
-            value => Quote(value.ToInt64().ToString(CultureInfo.InvariantCulture)),
+            Digits,
             value => Quote(value.ToInt64().ToString(CultureInfo.InvariantCulture)),
             value => value.ToInt64().ToString(CultureInfo.InvariantCulture)),
         ["date"] = new("date", "day", "optionalDay", true,
@@ -83,7 +84,7 @@ public class KindsConformanceTests
             value => value.AsInt32.ToString(CultureInfo.InvariantCulture)),
         ["enum"] = new("enum", "state", "optionalState", true,
             (a, b) => a.ToInt64().CompareTo(b.ToInt64()),
-            value => Math.Abs(value.ToInt64()) <= MaxSafe ? value.ToInt64().ToString(CultureInfo.InvariantCulture) : Quote(value.ToInt64().ToString(CultureInfo.InvariantCulture)),
+            Digits,
             value => Quote(Enum.GetName(typeof(ConformanceState), value.ToInt64())!),
             value => value.ToInt64().ToString(CultureInfo.InvariantCulture)),
     };
@@ -183,7 +184,7 @@ public class KindsConformanceTests
     [Fact]
     public async Task K0_the_conformance_host_holds_exactly_the_corpus_rows_of_organisation_A()
     {
-        var answer = await Send("""[{ "project": { "id": 1, "name": 1, "organizationId": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10, "includeTotalCount": true } }]""");
+        var answer = await Send("""[{ "project": { "id": 1, "name": 1, "organizationId": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
 
         answer.ShouldHaveIds(Mine.Select(row => row.Id)).ShouldHaveTotal(Mine.Count);
         answer.Strings("name").Should().Equal(Mine.Select(NameOf));
@@ -209,7 +210,7 @@ public class KindsConformanceTests
                 var stored = At(row, path);
 
                 item.ContainsKey(path).Should().BeTrue($"{id}: {NameOf(row)}.{path} is present [G17]");
-                // The member's own text: a bare 9007199254740993 must not pass for "9007199254740993".
+                // The member's own text: a long is the bare number 9007199254740993, digit for digit; "9007199254740993" and …992 must not pass for it.
                 (item[path]?.ToJsonString() ?? "null").Should().Be(stored is null ? "null" : kind.Wire(stored), $"{id}: {NameOf(row)}.{path}");
             }
     }
@@ -320,14 +321,14 @@ public class KindsConformanceTests
 
         if (name != "char")
         {
-            await ShouldRefuse($$"""{ "{{kind.Member}}": { "eq": {{kind.Operand(At(Mine[0], kind.Member)!)}}, "options": { "ignoreCase": true } } }""", "OPTION_NOT_APPLICABLE");
+            await ShouldRefuse($$"""{ "{{kind.Member}}": { "eq": {{kind.Operand(At(Mine[0], kind.Member)!)}}, "options": { "caseSensitive": false } } }""", "OPTION_NOT_APPLICABLE");
             return;
         }
 
         // K-4: eq 'a' with ignoreCase either finds Alpha ('A') or is refused; 200 with no rows is the defect.
         var folded = Names(row => char.ToUpperInvariant((char)At(row, kind.Member)!.AsInt32) == 'A');
         folded.Should().ContainSingle();
-        var answer = await Send(Matching("""{ "grade": { "eq": "a", "options": { "ignoreCase": true } } }"""));
+        var answer = await Send(Matching("""{ "grade": { "eq": "a", "options": { "caseSensitive": false } } }"""));
 
         if (answer.StatusCode == 200)
             answer.Strings("name").Should().Equal(folded, id);
@@ -420,10 +421,10 @@ public class KindsConformanceTests
             Holds("[F57] one character", "\"B\"", (int)'B'),
             Refused("the code point as a number is not the wire form", "66", "INVALID_OPERAND"),
             Holds("contract 2 folds the case of a char by default", "\"b\"", (int)'B', foldCase: true),
-            Holds("pins: two characters bind and match nothing", "\"AB\"", -1),
-            Holds("pins: the empty string binds and matches nothing", "\"\"", -1),
+            Refused("two characters", "\"AB\"", "INVALID_OPERAND"),
+            Refused("the empty string", "\"\"", "INVALID_OPERAND"),
             Holds("a BMP character outside the corpus", "\"é\"", (int)'é'),
-            Holds("an astral character (two UTF-16 units)", "\"😀\"", -1),
+            Refused("an astral character (two UTF-16 units, which no char member holds)", "\"😀\"", "INVALID_OPERAND"),
         ],
         ["enum"] =
         [
@@ -545,7 +546,7 @@ public class KindsConformanceTests
     {
         var kind = Kinds[name];
         var expected = Mine.GroupBy(row => WireOrNull(kind, At(row, kind.Twin)))
-            .Select(group => $"{{\"k\":{group.Key},\"n\":\"{group.Count()}\"}}").Order(StringComparer.Ordinal).ToList();
+            .Select(group => $"{{\"k\":{group.Key},\"n\":{group.Count()}}}").Order(StringComparer.Ordinal).ToList();
         expected.Should().Contain(bucket => bucket.StartsWith("{\"k\":null", StringComparison.Ordinal));
 
         var answer = await Send($$"""[{ "group": { "by": [{ "path": "{{kind.Twin}}", "as": "k" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 10 } }]""");
@@ -563,7 +564,7 @@ public class KindsConformanceTests
         var twins = Mine.Select(row => At(row, kind.Twin)).OfType<BsonValue>().Order(Comparer<BsonValue>.Create((a, b) => kind.Compare(a, b))).ToList();
         var expected = "{" + string.Join(",", new (string Key, string Value)[]
         {
-            ("distinct", $"\"{Mine.Select(row => At(row, kind.Member)!).Distinct().Count()}\""),
+            ("distinct", $"{Mine.Select(row => At(row, kind.Member)!).Distinct().Count()}"),
             ("head", kind.Wire(At(Mine[0], kind.Member)!)),
             ("hi", kind.Wire(At(byValue[^1], kind.Member)!)),
             ("lo", kind.Wire(At(byValue[0], kind.Member)!)),
@@ -584,26 +585,23 @@ public class KindsConformanceTests
     }
 
     [Fact]
-    public async Task K_long_7c_7d_7e_sum_and_avg_over_a_long_are_exact_and_travel_as_strings()
+    public async Task K_long_7c_7d_7e_sum_and_avg_over_a_long_are_exact_and_travel_as_numbers_with_every_digit()
     {
         var values = Mine.Select(row => At(row, "magnitude")!.ToInt64()).ToList();
         var twins = Mine.Select(row => At(row, "optionalMagnitude")).OfType<BsonValue>().Select(value => value.ToInt64()).ToList();
         var total = values.Aggregate(0m, (sum, value) => sum + value);
         var twinTotal = twins.Aggregate(0m, (sum, value) => sum + value);
         (total % values.Count).Should().Be(0, "the corpus makes the average integral, so there is one right answer");
-        var expected = new JsonObject
-        {
-            ["total"] = total.ToString(CultureInfo.InvariantCulture),
-            ["twinTotal"] = twinTotal.ToString(CultureInfo.InvariantCulture),
-            ["mean"] = (total / values.Count).ToString(CultureInfo.InvariantCulture),
-            ["twinMean"] = (twinTotal / twins.Count).ToString(CultureInfo.InvariantCulture),
-        };
-        expected["twinMean"]!.GetValue<string>().Should().EndWith(".5", "(2^53 + 1 + 42) / 2 is not representable as a double");
+        // The digits as decimal arithmetic gives them: the body carries each as a bare number, compared as text so no digit passes through a double.
+        var twinMean = (twinTotal / twins.Count).ToString(CultureInfo.InvariantCulture);
+        var expected = $$"""{"mean":{{(total / values.Count).ToString(CultureInfo.InvariantCulture)}},"total":{{total.ToString(CultureInfo.InvariantCulture)}},"twinMean":{{twinMean}},"twinTotal":{{twinTotal.ToString(CultureInfo.InvariantCulture)}}}""";
+        twinMean.Should().EndWith(".5", "(2^53 + 1 + 42) / 2 is not representable as a double");
+        total.Should().BeGreaterThan(1L << 53, "the sum is above what a double holds exactly");
 
         var answer = await Send("""[{ "group": { "by": [], "fields": { "total": { "sum": "magnitude" }, "twinTotal": { "sum": "optionalMagnitude" }, "mean": { "avg": "magnitude" }, "twinMean": { "avg": "optionalMagnitude" } } } }, { "page": { "limit": 10 } }]""");
 
         answer.ShouldBeOk();
-        Canonical(answer.Items.Single()).Should().Be(Canonical(expected));
+        Canonical(answer.Items.Single()).Should().Be(expected);
     }
 
     [Theory]

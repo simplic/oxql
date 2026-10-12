@@ -27,7 +27,7 @@ public class CoreHardeningAliasTests
         { Order, """[{ "resolve": { "path": "customerId", "as": "{0}" } }]""" },
         { Order, """[{ "resolve": { "path": "vehicleId", "as": "{0}" } }]""" },
         { Order, """[{ "unwind": { "path": "items", "as": "{0}" } }]""" },
-        { Order, """[{ "unwind": { "path": "items", "includeIndex": "{0}" } }]""" },
+        { Order, """[{ "unwind": { "path": "items", "as": "item", "includeIndex": "{0}" } }]""" },
         { Order, """[{ "group": { "by": [{ "path": "number", "as": "{0}" }], "fields": { "n": { "count": true } } } }]""" },
         { Order, """[{ "group": { "by": [{ "path": "number", "as": "k" }], "fields": { "{0}": { "count": true } } } }]""" },
     };
@@ -60,7 +60,7 @@ public class CoreHardeningAliasTests
     [Theory]
     [InlineData("""[{ "resolve": { "path": "customerId", "as": "{0}" } }]""")]
     [InlineData("""[{ "unwind": { "path": "items", "as": "{0}" } }]""")]
-    [InlineData("""[{ "unwind": { "path": "items", "includeIndex": "{0}" } }]""")]
+    [InlineData("""[{ "unwind": { "path": "items", "as": "item", "includeIndex": "{0}" } }]""")]
     public async Task An_alias_collides_with_a_member_under_its_storage_name_too(string pipeline)
     {
         // 'number' is stored as 'Number', 'renamed' as 'x'.

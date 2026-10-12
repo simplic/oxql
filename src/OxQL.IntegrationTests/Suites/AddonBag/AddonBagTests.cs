@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using MongoDB.Bson;
@@ -27,7 +28,7 @@ public class AddonBagTests
     private static IReadOnlyList<CorpusRow> Rows => Corpus.Rows(Corpus.Conformance);
 
     private static string Page(string match, string extra = "") =>
-        $$"""[{ "match": {{match}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, {{(extra.Length > 0 ? extra + ", " : "")}}{ "page": { "limit": 50, "includeTotalCount": true } }]""";
+        $$"""[{ "match": {{match}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, {{(extra.Length > 0 ? extra + ", " : "")}}{ "page": { "limit": 50, "count": true } }]""";
 
     /// <summary>The ids of the conformance rows whose bag value at <paramref name="key"/> satisfies <paramref name="predicate"/>, in id order.</summary>
     private static IReadOnlyList<Guid> Where(string key, Func<BsonValue?, bool> predicate, string entity = Corpus.Conformance) =>
@@ -89,7 +90,7 @@ public class AddonBagTests
     }
 
     [Fact]
-    public async Task T16_a_wrapped_decimal_matches_at_the_key_the_wrapper_leaf_is_not_a_path_and_the_value_travels_back_wrapped()
+    public async Task T16_a_wrapped_decimal_matches_at_the_key_the_wrapper_leaf_is_not_a_path_and_the_value_travels_back_as_a_decimal_number()
     {
         var wrapped = Rows.Where(row => row.Stored["Addon"] is BsonDocument bag && bag.TryGetValue("zuschlag", out var value)
             && value is BsonDocument { } wrapper && wrapper["_t"] == Addons.DecimalDiscriminator).ToList();
@@ -114,8 +115,17 @@ public class AddonBagTests
         var projected = await client.SendAsync(Corpus.Conformance, """[{ "project": { "id": 1, "addon.zuschlag": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } }]""");
         projected.ShouldBeOk();
         var first = projected.Items[0]!["addon"]!["zuschlag"]!;
-        first["_t"]!.GetValue<string>().Should().Be(Addons.DecimalDiscriminator);
-        first["_v"]!.GetValue<string>().Should().Be(value);
+        first.GetValueKind().Should().Be(JsonValueKind.Number, "the driver's { _t, _v } wrapper never reaches the wire: a decimal travels as a number in canonical digits, like every decimal");
+        first.ToJsonString().Should().Be(value);
+
+        // An aggregate over the defined decimal key reads the wrapped value: it sums what the rows show.
+        var summed = await client.SendAsync(Corpus.Conformance, """[{ "group": { "by": [], "fields": { "total": { "sum": "addon.zuschlag" }, "top": { "max": "addon.zuschlag" } } } }]""");
+        var total = wrapped.Sum(row => decimal.Parse(Order.NumberText(row.Stored["Addon"]["zuschlag"]["_v"]), CultureInfo.InvariantCulture));
+
+        summed.ShouldBeOk();
+        summed.Items[0]!["total"]!.GetValueKind().Should().Be(JsonValueKind.Number, "an aggregate over a decimal is a number, as the member is");
+        decimal.Parse(summed.Items[0]!["total"]!.ToJsonString(), CultureInfo.InvariantCulture).Should().Be(total, "a sum over wrapped decimals is the sum of the values, exact");
+        summed.Items[0]!["top"]!.ToJsonString().Should().Be(value);
     }
 
     [Fact]
@@ -191,7 +201,7 @@ public class AddonBagTests
         projected.ShouldHaveIds(Corpus.AllIds(Corpus.Conformance));
         projected.Values("addon.looseKey").Select(value => value?.GetValue<string>())
             .Should().Equal(Rows.Select(row => Corpus.Text(row, "addon.looseKey")));
-        Canonical(projected.Items[0]!["addon"]!["vincario"]).Should().Be(Canonical(Wire(Corpus.Row(Corpus.Conformance, "c-alpha").Stored["Addon"]["vincario"])), "an object-valued key is projected whole, wrapper included");
+        Canonical(projected.Items[0]!["addon"]!["vincario"]).Should().Be(Canonical(Wire(Corpus.Row(Corpus.Conformance, "c-alpha").Stored["Addon"]["vincario"])), "an object-valued key is projected whole, as the value the wrapper holds");
     }
 
     [Fact]
@@ -237,7 +247,7 @@ public class AddonBagTests
     }
 
     [Fact]
-    public async Task T24_the_bag_travels_verbatim_keys_as_stored_wrappers_kept_a_null_kept_and_an_empty_bag_an_empty_object()
+    public async Task T24_the_bag_travels_verbatim_keys_as_stored_wrappers_unwrapped_a_null_kept_and_an_empty_bag_an_empty_object()
     {
         var answer = await (await Conformance()).SendAsync(Corpus.Conformance, """[{ "project": { "id": 1, "addon": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } }]""");
 
@@ -328,8 +338,8 @@ public class AddonBagTests
         expectedChildren.SelectMany(children => children).Should().NotBeEmpty();
 
         var lookup = await fleet.SendAsync(Corpus.Department, $$"""
-            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "select": ["matchCode"], "limit": 100, "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
-              { "project": { "id": 1, "v": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
+            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "limit": 100, "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
+              { "project": { "id": 1, "v.id": 1, "v.matchCode": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
             """);
 
         lookup.ShouldHaveIds(departments.Select(department => department.Id));
@@ -341,8 +351,8 @@ public class AddonBagTests
         expectedTargets.Should().Contain(id => id != null).And.Contain(id => id == null);
 
         var resolve = await fleet.SendAsync(Corpus.Equipment, $$"""
-            [ { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"], "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
-              { "project": { "id": 1, "veh": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
+            [ { "resolve": { "path": "vehicle.id", "as": "veh", "filter": { "addon.{{key}}": { "eq": "{{value}}" } } } },
+              { "project": { "id": 1, "veh.id": 1, "veh.matchCode": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } } ]
             """);
 
         resolve.ShouldHaveIds(equipment.Select(row => row.Id));
@@ -355,7 +365,7 @@ public class AddonBagTests
         // The engine keeps no definition cache of its own: it asks the host's source on every
         // request (a host's source may cache; the lab's does not). The legacy case could only
         // observe the host's 30 s TTL.
-        await using var fleet = await CorpusFleet.CreateAsync("b5-t25", seed: [LabService.Staff]);
+        await using var fleet = await CorpusFleet.CreateAsync("case-t25", seed: [LabService.Staff]);
         var staff = fleet.Client(LabService.Staff);
         var definitions = (await fleet.Fleet.DatabaseAsync(LabService.Staff)).GetCollection<BsonDocument>(TestAddonSource.Collection);
         var expected = Corpus.SortedIds(Corpus.Employee, "id", filter: row => Corpus.Text(row, "addon.undefinedKey") == "opaque");
@@ -376,7 +386,7 @@ public class AddonBagTests
     public async Task T33_a_list_under_the_bag_is_projected_verbatim_and_is_not_filterable_as_an_undefined_key()
     {
         // No corpus bag holds a list, so the case seeds one of its own.
-        await using var fleet = await CorpusFleet.CreateAsync("b5-t33", seed: [], extra: async lab =>
+        await using var fleet = await CorpusFleet.CreateAsync("case-t33", seed: [], extra: async lab =>
         {
             var database = await lab.DatabaseAsync(LabService.Staff);
             await database.GetCollection<BsonDocument>("employee").InsertOneAsync(new BsonDocument
@@ -397,7 +407,7 @@ public class AddonBagTests
 
     // ── the bag's wire form, computed from storage ─────────────────────────────────────────
 
-    /// <summary>A stored bag value as the wire writes it: decimals as canonical text, documents and arrays recursively.</summary>
+    /// <summary>A stored bag value as the wire writes it: a long and a decimal as numbers with every digit (a decimal in canonical digits), documents and arrays recursively.</summary>
     private static JsonNode? Wire(BsonValue value) => value switch
     {
         BsonNull => null,
@@ -405,8 +415,11 @@ public class AddonBagTests
         BsonBoolean flag => JsonValue.Create(flag.Value),
         BsonInt32 number => JsonValue.Create(number.Value),
         BsonDouble number => JsonValue.Create(number.Value),
-        BsonInt64 number => Math.Abs(number.Value) < (1L << 53) ? JsonValue.Create(number.Value) : JsonValue.Create(number.Value.ToString(CultureInfo.InvariantCulture)),
-        BsonDecimal128 number => JsonValue.Create(Order.NumberText(number)),
+        BsonInt64 number => JsonValue.Create(number.Value),
+        // Parsed from its digits, so the node writes them back as they are: no trailing fractional zero, no exponent.
+        BsonDecimal128 number => JsonNode.Parse(Order.NumberText(number) is var digits && digits.Contains('.', StringComparison.Ordinal) ? digits.TrimEnd('0').TrimEnd('.') : digits),
+        // The driver's wrapper of an object-typed value is never shown: the value it holds is.
+        BsonDocument { ElementCount: 2 } wrapper when wrapper.Contains("_t") && wrapper.Contains("_v") => Wire(wrapper["_v"]),
         BsonDocument document => new JsonObject(document.Select(element => KeyValuePair.Create(element.Name, Wire(element.Value)))),
         BsonArray array => new JsonArray(array.Select(Wire).ToArray()),
         _ => throw new NotSupportedException($"No wire form for {value.BsonType} in this suite."),

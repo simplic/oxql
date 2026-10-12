@@ -10,9 +10,16 @@ public sealed record BatchRequest
     [JsonPropertyName("queries")]
     public required IReadOnlyList<QueryRequest> Queries { get; init; }
 
-    /// <summary>A ceiling on every query's aggregate, under the host's.</summary>
+    /// <summary>
+    /// A ceiling on the whole batch, under the host's own per query: the queries run one after
+    /// another, each under what is left of it, so the batch ends within it.
+    /// </summary>
     [JsonPropertyName("maxTimeMs")]
     public int? MaxTimeMs { get; init; }
+
+    /// <summary>Members of the batch the engine does not know (a batch-level <c>strict</c>, say); refused under contract 2.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? Unknown { get; init; }
 }
 
 /// <summary>The body of a batch response: one full success body or refusal envelope per request, in order.</summary>
@@ -21,4 +28,8 @@ public sealed record BatchResponse
     /// <summary>The outcomes.</summary>
     [JsonPropertyName("results")]
     public required IReadOnlyList<JsonNode?> Results { get; init; }
+
+    /// <summary>The collectors the queries were measured with, for the host's <c>Server-Timing</c> header; never part of the body.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<Engine.QueryTiming> Measured { get; init; } = [];
 }

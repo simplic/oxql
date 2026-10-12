@@ -1,0 +1,60 @@
+{
+  "entityType": "staff.employee",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000701"
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "employee.holiday",
+        "localPath": "_id",
+        "foreignPath": "Employee._id",
+        "as": "Holidays",
+        "convert": "stringToUuid"
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items",
+        "as": "Item",
+        "preserveNull": true
+      }
+    },
+    {
+      "unwind": {
+        "path": "EmailAddresses",
+        "as": "EmailAddress",
+        "preserveNull": true
+      }
+    },
+    {
+      "unwind": {
+        "path": "PhoneNumbers",
+        "as": "PhoneNumber",
+        "preserveNull": true
+      }
+    },
+    {
+      "unwind": {
+        "path": "Bank",
+        "as": "Bk",
+        "preserveNull": true
+      }
+    },
+    {
+      "unwind": {
+        "path": "Holidays",
+        "preserveNull": true
+      }
+    },
+    {
+      "page": {
+        "limit": 25
+      }
+    }
+  ]
+}

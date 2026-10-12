@@ -1,0 +1,161 @@
+{
+  "description": "Cursors over the fingerprints of the named golden renders (signing key BindHost.SigningKey). The contract 1 cursor was minted by OxQL 2.0 and must decode for ever; the contract 2 cursors were minted anew at the wire freeze of contract 2 and carry the rows served. A cursor over unwound rows carries the sort values, the key and the position of each unwind; a cursor over groups the sort values, which end in the group keys (DG2 M5, S5).",
+  "cursors": [
+    {
+      "case": "empty-default-page",
+      "cursor": "eyJmIjoic2hhMjU2OjA1OThiMzY3NWIyZGNhNTdlNzI1Yjg1YmY0YjM5YTExZGE0YzFmNzMzNzEyYjViNmZjODk2MmEwMmNmZGQ1ZDEiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV0sIm4iOjV9.UihVsXMfWIqNfaESYimkqWmvQKUtcwB8EndpLoJL1kE",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "sort-object-form-count-cap",
+      "cursor": "eyJmIjoic2hhMjU2OjExNDFlMTJhOTY0YzJiNzA1YzVjOGEwYjczOWFmNjk0ZjY2ODg2MGY4Y2JhNmJjYmI1ODkzYmJmZTFkYjIwMjIiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJudW1iZXIiLCJkIjoiZGVzYyIsImIiOiJcdTAwMjJhYmNcdTAwMjIifSx7InAiOiJ3aGVuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkZGF0ZVx1MDAyMiA6IHsgXHUwMDIyJG51bWJlckxvbmdcdTAwMjIgOiBcdTAwMjIxNzY3MzIzMDQ1MDAwXHUwMDIyIH0gfSJ9LHsicCI6ImFtb3VudCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkbnVtYmVyRGVjaW1hbFx1MDAyMiA6IFx1MDAyMjEyLjUwXHUwMDIyIH0ifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV0sIm4iOjV9.PxGy1tA7dZrwRGge99XNw4vEkmcleBhq0t-fMHpvfH0",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "number",
+          "direction": "desc",
+          "value": "\"abc\""
+        },
+        {
+          "path": "when",
+          "direction": "desc",
+          "value": "{ \"$date\" : { \"$numberLong\" : \"1767323045000\" } }"
+        },
+        {
+          "path": "amount",
+          "direction": "asc",
+          "value": "{ \"$numberDecimal\" : \"12.50\" }"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "resolve-local",
+      "cursor": "eyJmIjoic2hhMjU2OjE4YjNmNjlhMGU2ZjA3OTU2M2Y0NzJhMGYzMjQ3NjM4ZGFkN2EwMmY0MjUyYTI0OTc2MzhlYmUwOTMwOGUzZjciLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJjdXN0Lm5hbWUiLCJkIjoiYXNjIiwiYiI6Im51bGwifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV0sIm4iOjV9.a_5WYX_XHaZLnAqQrRBSI5D0R4juUDrWhdbklZA6iDU",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "cust.name",
+          "direction": "asc",
+          "value": "null"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "lookup-full",
+      "cursor": "eyJmIjoic2hhMjU2OjlkMmY2ODNhZGZlZjQ3YzJjYWQ4MjlmNGQ3NmY2YzZmYzhkZGIwZmVjNjIzZTNhNTUyN2ExYmM3YWM2N2VjNWQiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV0sIm4iOjV9.9cc20Y3kGZ1q-yzcu3M6S3hl3JD2T49XjsMXsi7964E",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "resolve-remote-semi-join",
+      "cursor": "eyJmIjoic2hhMjU2OjA1Mzc1YTg0NmFjZGY2NjY2NGM4ZGRiOWJlMWQzNjNiNzliMjBlMDY0MTE1ZWZhYzMxMWI0YjFlYTFkMzBiZWMiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV0sIm4iOjV9.zyPzHnShSShRfIq47E0b2QJ2BB2LJtGEaOIMgac9byo",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "unwind-paging",
+      "cursor": "eyJmIjoic2hhMjU2Ojk3OTY2ZWY1MTNiYzc1NWU1OTlkYTA3MzMwYmNmMzQ5OGI4N2NiYzk1ZGIzZGU4YjliMDFlNzlmYTUwZjMyMmUiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJpdC5xdWFudGl0eSIsImQiOiJkZXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjdcdTAwMjIgfSJ9LHsicCI6Il9pZCIsImQiOiJhc2MiLCJiIjoieyBcdTAwMjIkYmluYXJ5XHUwMDIyIDogeyBcdTAwMjJiYXNlNjRcdTAwMjIgOiBcdTAwMjJDM3g4Vlc4T1RRNmRmbHRxSEMwXHUwMDJCVHc9PVx1MDAyMiwgXHUwMDIyc3ViVHlwZVx1MDAyMiA6IFx1MDAyMjA0XHUwMDIyIH0gfSJ9LHsicCI6ImkiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjJcdTAwMjIgfSJ9XSwibiI6NX0.qYTY1p3FTn-kNAMWbCwsE6q944_cZ0B_GgPWAGi7qWU",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "it.quantity",
+          "direction": "desc",
+          "value": "{ \"$numberInt\" : \"7\" }"
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        },
+        {
+          "path": "i",
+          "direction": "asc",
+          "value": "{ \"$numberInt\" : \"2\" }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "group-composite",
+      "cursor": "eyJmIjoic2hhMjU2OjdkY2Y2NDU5NDI1MzAxMDZhNTk4NWQ3ZTI2Y2U3MzkyZDlhNDhmZmFlNDNjODQzZGM3OTNjMzVhYjM0ZWI1ODgiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJuIiwiZCI6ImRlc2MiLCJiIjoieyBcdTAwMjIkbnVtYmVySW50XHUwMDIyIDogXHUwMDIyM1x1MDAyMiB9In0seyJwIjoic3QiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJG51bWJlckludFx1MDAyMiA6IFx1MDAyMjFcdTAwMjIgfSJ9LHsicCI6IndrIiwiZCI6ImFzYyIsImIiOiJ7IFx1MDAyMiRkYXRlXHUwMDIyIDogeyBcdTAwMjIkbnVtYmVyTG9uZ1x1MDAyMiA6IFx1MDAyMjE3NjczMjMwNDUwMDBcdTAwMjIgfSB9In1dLCJuIjo1fQ.TeZXdjnbiRa-k4C-kZ-vhJx2oRJ_T1K5hcJgFlHaZgg",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "n",
+          "direction": "desc",
+          "value": "{ \"$numberInt\" : \"3\" }"
+        },
+        {
+          "path": "st",
+          "direction": "asc",
+          "value": "{ \"$numberInt\" : \"1\" }"
+        },
+        {
+          "path": "wk",
+          "direction": "asc",
+          "value": "{ \"$date\" : { \"$numberLong\" : \"1767323045000\" } }"
+        }
+      ],
+      "served": 5
+    },
+    {
+      "case": "contract-1-match-sort",
+      "cursor": "eyJmIjoic2hhMjU2OmViMTRhYWZlYjZiODUzY2E4Y2ExYzBjMjZmNTEyZTU1N2JhZjBmZjI3MDQ1MGQ1ZjI5MjA2NTFjZDU4OTRkODMiLCJtIjoiayIsIm8iOjAsInYiOlt7InAiOiJOdW1iZXIiLCJkIjoiYXNjIiwiYiI6Ilx1MDAyMnhcdTAwMjIifSx7InAiOiJfaWQiLCJkIjoiYXNjIiwiYiI6InsgXHUwMDIyJGJpbmFyeVx1MDAyMiA6IHsgXHUwMDIyYmFzZTY0XHUwMDIyIDogXHUwMDIyQzN4OFZXOE9UUTZkZmx0cUhDMFx1MDAyQlR3PT1cdTAwMjIsIFx1MDAyMnN1YlR5cGVcdTAwMjIgOiBcdTAwMjIwNFx1MDAyMiB9IH0ifV19.sBQyn8HrpFw8BTtlTBb039dFTI1VDG0bJDcZKniuAM8",
+      "mode": "keyset",
+      "offset": 0,
+      "fields": [
+        {
+          "path": "Number",
+          "direction": "asc",
+          "value": "\"x\""
+        },
+        {
+          "path": "_id",
+          "direction": "asc",
+          "value": "{ \"$binary\" : { \"base64\" : \"C3x8VW8OTQ6dfltqHC0+Tw==\", \"subType\" : \"04\" } }"
+        }
+      ]
+    }
+  ]
+}

@@ -75,16 +75,19 @@ public class CaseInsensitiveBindingTests
     }
 
     [Fact]
-    public async Task IgnoreCase_is_the_alias_with_the_opposite_sense()
+    public async Task IgnoreCase_is_not_an_option_under_contract_2()
     {
-        Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": true } } } }]""")).IgnoreCase.Should().BeTrue();
-        Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": false } } } }]""")).IgnoreCase.Should().BeFalse();
-        Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": false, "caseSensitive": true } } } }]""")).IgnoreCase.Should().BeFalse("the two agree");
+        Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": false } } } }]""")).IgnoreCase.Should().BeTrue();
+        Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""")).IgnoreCase.Should().BeFalse();
 
-        var contradiction = await Error("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": true, "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
+        // The alias with the opposite sense is contract 1's; whatever it says, contract 2 refuses it.
+        foreach (var options in new[] { """{ "ignoreCase": true }""", """{ "ignoreCase": false }""", """{ "ignoreCase": false, "caseSensitive": true }""" })
+        {
+            var refused = await Error($$"""[{ "match": { "number": { "eq": "x", "options": {{options}} } } }]""", Codes.OptionNotApplicable);
 
-        contradiction.Message.Should().Contain("contradict");
-        contradiction.Path.Should().Be("number");
+            refused.Path.Should().Be("number");
+            System.Text.Json.JsonSerializer.Serialize(refused.Params).Should().Be("""{"option":"ignoreCase","reason":"removed","use":"caseSensitive"}""", options);
+        }
     }
 
     [Fact]
@@ -92,14 +95,8 @@ public class CaseInsensitiveBindingTests
     {
         (await Error("""[{ "match": { "count": { "eq": 1, "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable)).Path.Should().Be("count");
         await Error("""[{ "match": { "count": { "eq": 1, "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
-        await Error("""[{ "match": { "count": { "eq": 1, "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
         await Error("""[{ "match": { "when": { "gt": "2026-01-01T00:00:00Z", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
 
-        // ignoreCase: false asks a number for the exact comparison it already makes; it changes nothing.
-        var number = await Bound("""[{ "match": { "count": { "eq": 1, "options": { "ignoreCase": false } } } }]""");
-
-        Leaf(number).IgnoreCase.Should().BeFalse();
-        number.Collated.Should().BeFalse();
 
         var guid = await Bound("""[{ "match": { "id": { "eq": "195fb742-82b3-405e-b77b-42838eb0aaa9" } } }]""");
 
@@ -113,8 +110,8 @@ public class CaseInsensitiveBindingTests
         var ordered = await Error("""[{ "match": { "number": { "gt": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
 
         ordered.Message.Should().Contain("cannot opt out");
-        await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": false } } } }]""", Codes.OptionNotApplicable);
-        await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
+        await Error("""[{ "match": { "number": { "gt": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
+        await Error("""[{ "match": { "number": { "gt": "x", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
         await Error("""[{ "match": { "number": { "regex": "^x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable);
         await Error("""[{ "match": { "number": { "exists": true, "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
     }
@@ -233,8 +230,8 @@ public class CaseInsensitiveBindingTests
 
         Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x" } } }]"""), 1).IgnoreCase.Should().BeNull("the owner applies its own default");
         Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x", "options": { "caseSensitive": true } } } }]"""), 1).IgnoreCase.Should().BeFalse();
-        Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x", "options": { "ignoreCase": false } } } }]"""), 1).IgnoreCase.Should().BeFalse();
-        Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x", "options": { "ignoreCase": true } } } }]"""), 1).IgnoreCase.Should().BeTrue();
+        Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x", "options": { "caseSensitive": true } } } }]"""), 1).IgnoreCase.Should().BeFalse();
+        Leaf(await Bound($$"""[{{Resolve}}, { "match": { "contact.name": { "eq": "x", "options": { "caseSensitive": false } } } }]"""), 1).IgnoreCase.Should().BeTrue();
     }
 
     // ---- patterns ---------------------------------------------------------------------------
@@ -244,7 +241,7 @@ public class CaseInsensitiveBindingTests
     {
         var tooLong = new string('a', 40_000);
 
-        await Bound($$"""[{ "match": { "number": { "eq": "{{tooLong}}", "options": { "ignoreCase": true } } } }]""");
+        await Bound($$"""[{ "match": { "number": { "eq": "{{tooLong}}", "options": { "caseSensitive": false } } } }]""");
         await Bound($$"""[{ "match": { "number": { "eq": "{{tooLong}}", "options": { "caseSensitive": true } } } }]""");
 
         var refused = await Error($$"""[{ "match": { "number": { "eq": "{{tooLong}}", "options": { "caseSensitive": true } }, "note": { "eq": "x" } } }]""", Codes.InvalidOperand);
@@ -283,7 +280,7 @@ public class CaseInsensitiveBindingTests
         folded.Collated.Should().BeFalse("contract 1 folds with a pattern, never with the collation");
         Leaf(await Bound("""[{ "match": { "number": { "eq": "x", "options": { "ignoreCase": false } } } }]""", Contract1)).IgnoreCase.Should().BeFalse();
 
-        (await Error("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable, Contract1)).Message.Should().Be("'caseSensitive' is not an option.");
+        (await Error("""[{ "match": { "number": { "eq": "x", "options": { "caseSensitive": true } } } }]""", Codes.OptionNotApplicable, Contract1)).Message.Should().Be("'caseSensitive' is not an option under contract 1; it is a contract 2 option." + Binder.Contract1Hint);
         await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable, Contract1);
         await Error("""[{ "sort": [{ "number": { "direction": "asc", "caseSensitive": true } }] }]""", Codes.InvalidSortDirection, Contract1);
         (await Bound("""[{ "group": { "by": [{ "path": "number", "as": "n" }], "fields": { "c": { "count": true } } } }]""", Contract1)).Collated.Should().BeFalse();

@@ -3,6 +3,8 @@ namespace OxQL.Core.Binding;
 /// <summary>
 /// The closed list of error and diagnostic codes. Codes are the contract; messages may
 /// change. An error refuses the request; a diagnostic travels with a successful response.
+/// A successful response may also carry two of explain's notes as diagnostics
+/// (<see cref="Notes.SelectPathNotOnTarget"/>, <see cref="Notes.FilterBindsEarlier"/>); their codes are listed there.
 /// </summary>
 public static class Codes
 {
@@ -39,9 +41,33 @@ public static class Codes
     public const string RegexTooLong = "REGEX_TOO_LONG";
     public const string AnyNotApplicable = "ANY_NOT_APPLICABLE";
 
+    /// <summary>An <c>is</c> names a type that is neither a variant of the member's type nor its concrete base.</summary>
+    public const string UnknownVariant = "UNKNOWN_VARIANT";
+
+    // request
+
+    /// <summary>A contract 2 request carries a top-level member a request does not have.</summary>
+    public const string UnknownRequestMember = "UNKNOWN_REQUEST_MEMBER";
+
     // stage
     public const string UnknownStage = "UNKNOWN_STAGE";
     public const string UnknownStageMember = "UNKNOWN_STAGE_MEMBER";
+
+    /// <summary>An unwind's <c>flatten</c> names a member that is not a collection of the same items as the unwound collection.</summary>
+    public const string FlattenNotRecursive = "FLATTEN_NOT_RECURSIVE";
+
+    /// <summary>
+    /// The top-level <c>filter</c> is malformed: it is not an array, an entry is not an object or carries
+    /// a member it does not have, <c>where</c> is missing or is no condition object, or an <c>id</c> is
+    /// not a non-empty string of at most 64 characters or names two entries (params <c>reason</c>).
+    /// </summary>
+    public const string InvalidFilter = "INVALID_FILTER";
+
+    /// <summary>
+    /// A condition of the top-level <c>filter</c> reads paths that are never in the row at the same
+    /// point of the pipeline, so the engine has nowhere to place it (params <c>paths</c>, <c>births</c>).
+    /// </summary>
+    public const string FilterNotPlaceable = "FILTER_NOT_PLACEABLE";
     public const string StageAfterPage = "STAGE_AFTER_PAGE";
     public const string MultiplePageStages = "MULTIPLE_PAGE_STAGES";
     public const string MixedProjection = "MIXED_PROJECTION";
@@ -52,7 +78,33 @@ public static class Codes
     public const string InvalidTimezone = "INVALID_TIMEZONE";
     public const string InvalidSortDirection = "INVALID_SORT_DIRECTION";
     public const string LookupNotDeclared = "LOOKUP_NOT_DECLARED";
+
+    /// <summary>A lookup's <c>on</c> names an alias that is not one entity row: a lookup array, an unwound element, a scalar or a group output.</summary>
+    public const string LookupOnNotEntity = "LOOKUP_ON_NOT_ENTITY";
+
+    /// <summary>
+    /// A stage cannot run on an alias whose rows come from an owner after the page: anything but a
+    /// resolve or a lookup (which continue at the owner), a continuation under an <c>elements: "all"</c>
+    /// alias, or a projection that keeps a continued alias but drops the alias it continues under.
+    /// </summary>
+    public const string NotContinuable = "NOT_CONTINUABLE";
+
+    /// <summary>
+    /// The branches of a union join (<c>byTarget</c>) do not yield one shape: some resolve one record
+    /// per row and another every element (<c>elements: "all"</c>). The message names the branch to change.
+    /// </summary>
+    public const string UnionCardinalityMismatch = "UNION_CARDINALITY_MISMATCH";
     public const string ResolveNotDeclared = "RESOLVE_NOT_DECLARED";
+
+    /// <summary>A resolve's path lies under a collection that is not unwound, and the stage does not say which elements it resolves (<c>elements</c>).</summary>
+    public const string ResolveOnCollection = "RESOLVE_ON_COLLECTION";
+
+    /// <summary>A resolve's <c>target</c> names an entity that is not a target of any case of the reference.</summary>
+    public const string ResolveTargetNotDeclared = "RESOLVE_TARGET_NOT_DECLARED";
+
+    /// <summary>A resolve's <c>parentAs</c> asks for the owning row of a target that is an entity, not an item of one.</summary>
+    public const string ResolveParentNotItem = "RESOLVE_PARENT_NOT_ITEM";
+
     /// <summary>
     /// A condition on the alias of a remote resolve itself (<c>{"veh":{"eq":null}}</c>,
     /// <c>{"veh":{"exists":true}}</c>): the alias is the owner's row, not a path of the owner, so
@@ -67,16 +119,38 @@ public static class Codes
     public const string MaxLookupStagesExceeded = "MAX_LOOKUP_STAGES_EXCEEDED";
     public const string MaxUnwindStagesExceeded = "MAX_UNWIND_STAGES_EXCEEDED";
     public const string MaxResolveStagesExceeded = "MAX_RESOLVE_STAGES_EXCEEDED";
+
+    /// <summary>More stages continue under one keyed or remote alias than <c>MaxContinuedStages</c>.</summary>
+    public const string MaxContinuedStagesExceeded = "MAX_CONTINUED_STAGES_EXCEEDED";
     public const string MaxGroupFieldsExceeded = "MAX_GROUP_FIELDS_EXCEEDED";
     public const string MaxProjectionFieldsExceeded = "MAX_PROJECTION_FIELDS_EXCEEDED";
     public const string MaxConditionsExceeded = "MAX_CONDITIONS_EXCEEDED";
+
+    /// <summary>The request's <c>filter</c> carries more entries than <c>MaxFilterEntries</c> (contract 2).</summary>
+    public const string MaxFilterEntriesExceeded = "MAX_FILTER_ENTRIES_EXCEEDED";
     public const string MaxVariablesExceeded = "MAX_VARIABLES_EXCEEDED";
     public const string InvalidPageLimit = "INVALID_PAGE_LIMIT";
     public const string PageSizeExceeded = "PAGE_SIZE_EXCEEDED";
     public const string LookupLimitExceeded = "LOOKUP_LIMIT_EXCEEDED";
+
+    /// <summary>
+    /// A <c>values</c> stage asks for more than the host allows: more values than <c>MaxValuesLimit</c>,
+    /// more rows read than <c>Values:ScanRows</c>, or a longer search text than <c>RegexMaxLength</c>
+    /// (params <c>limit</c>, <c>max</c>, <c>value</c>).
+    /// </summary>
+    public const string ValuesLimitExceeded = "VALUES_LIMIT_EXCEEDED";
     public const string MaxOffsetExceeded = "MAX_OFFSET_EXCEEDED";
     public const string BatchTooLarge = "BATCH_TOO_LARGE";
     public const string RequestTooLarge = "REQUEST_TOO_LARGE";
+
+    /// <summary>
+    /// A bound of explain. As an error: a body past one of the explain bounds (stages, catalog entries,
+    /// shape depth, checks of a batch) or naming an include or remote value the engine does not know,
+    /// refused before anything is bound (400); or more explains than the caller may send or have in
+    /// flight (429, type <c>rate_limited</c>, params <c>limit</c>, <c>max</c>, <c>retryAfter</c>). As a
+    /// note of an answer: a bound hit mid-way (<see cref="Notes.ExplainLimit"/>).
+    /// </summary>
+    public const string ExplainLimit = "EXPLAIN_LIMIT";
 
     // cursor
     public const string CursorInvalid = "CURSOR_INVALID";
@@ -87,10 +161,14 @@ public static class Codes
     // execution
     public const string ResolveUnavailable = "RESOLVE_UNAVAILABLE";
     public const string ResolveRefused = "RESOLVE_REFUSED";
+
     public const string SemiJoinTooLarge = "SEMI_JOIN_TOO_LARGE";
     public const string QueryTooExpensive = "QUERY_TOO_EXPENSIVE";
     public const string QueryTimeout = "QUERY_TIMEOUT";
     public const string InternalError = "INTERNAL_ERROR";
+
+    /// <summary>A strict request without <c>cursor</c> or <c>offset</c> matches more rows than its page holds (422).</summary>
+    public const string PageIncomplete = "PAGE_INCOMPLETE";
 
     // compat
     public const string LegacyStageUnsupported = "LEGACY_STAGE_UNSUPPORTED";
@@ -101,11 +179,11 @@ public static class Codes
     public const string ResolveTimeout = "RESOLVE_TIMEOUT";
     public const string ResolveUnreachable = "RESOLVE_UNREACHABLE";
     /// <summary>
-    /// Dormant at the shipped defaults rather than dead: one resolve stage cannot need more
-    /// distinct keys than the page has rows, and <c>MaxPageSize</c> (500) is below
-    /// <c>MaxResolveKeys</c> (2 000), so it cannot fire until a host raises the page size past
-    /// the resolve cap. <see cref="Models.LimitOptions.MaxResolveKeys"/> says so where an
-    /// operator will read it.
+    /// Part of a page's references are not resolved: the request's key budget
+    /// (<see cref="Models.LimitOptions.MaxResolveKeys"/>, one budget for every keyed stage of the
+    /// request) ran out, or an owner answered a chunk with a next page. It fires at the shipped
+    /// defaults too: several keyed stages over a 5 000-row report page, or <c>elements: "all"</c>
+    /// with many keys per row, need more than 10 000 keys.
     /// </summary>
     public const string ResolvePartial = "RESOLVE_PARTIAL";
     public const string SortOnAddon = "SORT_ON_ADDON";
@@ -113,4 +191,29 @@ public static class Codes
 
     /// <summary>An ordered comparison on a decimal member covered the numerically stored rows only; rows still stored as text are outside it.</summary>
     public const string DecimalTextExcluded = "DECIMAL_TEXT_EXCLUDED";
+
+    /// <summary>An unwind with <c>flatten</c> met items nested deeper than <see cref="Models.LimitOptions.MaxFlattenDepth"/>; they are not in the rows.</summary>
+    public const string UnwindDepthTruncated = "UNWIND_DEPTH_TRUNCATED";
+
+    /// <summary>A lookup had more children for some parent than its limit; only the first <c>limit</c> are in the rows.</summary>
+    public const string LookupTruncated = "LOOKUP_TRUNCATED";
+
+    /// <summary>
+    /// A resolve with <c>onMissing: "report"</c> or <c>"refuse"</c> lost rows: the referenced record
+    /// does not exist (<c>not_found</c>), the key does not convert (<c>invalid_key</c>), or the owner
+    /// did not answer (<c>owner_unanswered</c>). An error under <c>onMissing: "refuse"</c>.
+    /// </summary>
+    public const string ResolveMissing = "RESOLVE_MISSING";
+
+    /// <summary>A resolve met a key more than one record holds; the alias holds the first by target order, then key.</summary>
+    public const string ResolveAmbiguous = "RESOLVE_AMBIGUOUS";
+
+    /// <summary>An <c>elements: "all"</c> resolve met a row with more targets than <c>MaxLookupLimit</c>; only the first are in the alias.</summary>
+    public const string ResolveTruncated = "RESOLVE_TRUNCATED";
+
+    /// <summary>
+    /// A <c>values</c> stage read as many rows as its bound lets it (params <c>scan</c>): the values are
+    /// those among that many rows that reach the stage, not among all of them, and a count is a count within them.
+    /// </summary>
+    public const string ValuesScanCapped = "VALUES_SCAN_CAPPED";
 }

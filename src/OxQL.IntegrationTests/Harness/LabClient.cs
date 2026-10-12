@@ -47,6 +47,9 @@ public sealed class LabClient
     /// <summary>The same client as any organisation id; null sends no organisation (the engine answers 403).</summary>
     public LabClient As(Guid? organisation) => new(Fleet, Service, host, Who with { Organisation = organisation });
 
+    /// <summary>The same client as another user of its organisation: what an explain keeps of its owners' answers is kept per user.</summary>
+    public LabClient AsUser(Guid user) => new(Fleet, Service, host, Who with { User = user });
+
     /// <summary>The same client with no identity at all: no organisation, no user.</summary>
     public LabClient Anonymous() => new(Fleet, Service, host, Who with { Organisation = null, User = null });
 
@@ -83,11 +86,11 @@ public sealed class LabClient
     /// <summary><c>POST OxQL/batch</c> with a whole body, for a malformed batch.</summary>
     public Task<WireAnswer> BatchBodyAsync(object body) => PostAsync("OxQL/batch", Json.Text(body));
 
-    /// <summary><c>POST OxQL/explain</c> on the service's explain-enabled variant (explain is off by default).</summary>
+    /// <summary><c>POST OxQL/explain</c> on the service's explain variant, which sets <c>OxQL:Explain:Enabled</c> explicitly; explain is on by default, so it answers as the standard host does.</summary>
     public async Task<WireAnswer> ExplainAsync(object request) =>
         await SendAsync(await Fleet.ExplainHostAsync(Service), HttpMethod.Post, "OxQL/explain", Json.Text(request), "application/json");
 
-    /// <summary><c>POST OxQL/explain</c> on this client's own host: 404 unless it is a variant with explain enabled.</summary>
+    /// <summary><c>POST OxQL/explain</c> on this client's own host: explain is on by default, 404 only on a variant that switches it off.</summary>
     public Task<WireAnswer> ExplainHereAsync(object request) => PostAsync("OxQL/explain", Json.Text(request));
 
     /// <summary><c>GET OxQL/health</c>; <paramref name="shallow"/> leaves the remote services out.</summary>
@@ -142,7 +145,7 @@ public sealed class LabClient
     /// </summary>
     public async Task<IReadOnlyList<Guid>> MatchIdsAsync(string entityType, object condition, int limit = 500)
     {
-        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": {{limit}}, "includeTotalCount": true } }]""");
+        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": {{limit}}, "count": true } }]""");
 
         answer.ShouldBeOk();
         answer.HasNextPage.Should().BeFalse($"MatchIdsAsync needs the whole set in one page: {answer}");
@@ -150,14 +153,33 @@ public sealed class LabClient
         return answer.Ids();
     }
 
-    /// <summary>The number of rows a condition matches, read off <c>includeTotalCount</c>.</summary>
+    /// <summary>The number of rows a condition matches: a count-only request with a budget that lets the count finish.</summary>
     public async Task<long> MatchCountAsync(string entityType, object condition)
     {
-        var answer = await SendAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var answer = await CountOnlyAsync(entityType, $$"""[{ "match": {{Json.Text(condition)}} }]""");
 
         answer.ShouldBeOk();
+        answer.CountState.Should().Be("exact", answer.ToString());
 
-        return answer.TotalCount ?? throw new InvalidOperationException($"The engine answered no totalCount: {answer}");
+        return answer.TotalCount ?? throw new InvalidOperationException($"The engine answered no count: {answer}");
+    }
+
+    /// <summary>
+    /// The count-only request over <paramref name="stages"/> (a JSON array without a page): <c>limit: 0</c>
+    /// with <c>count</c>, refined within <paramref name="budgetMs"/> and, when given, no further than <paramref name="upTo"/>.
+    /// </summary>
+    public Task<WireAnswer> CountOnlyAsync(string entityType, object stages, int budgetMs = 5_000, int? upTo = null)
+    {
+        var pipeline = Json.Node(stages) as JsonArray ?? throw new ArgumentException("The stages are a JSON array.", nameof(stages));
+        var count = new JsonObject { ["budgetMs"] = budgetMs };
+
+        if (upTo is not null)
+            count["upTo"] = upTo;
+
+        pipeline = (JsonArray)pipeline.DeepClone();
+        pipeline.Add(new JsonObject { ["page"] = new JsonObject { ["limit"] = 0, ["count"] = count } });
+
+        return SendAsync(entityType, pipeline);
     }
 
     /// <summary>
@@ -214,32 +236,6 @@ public sealed class LabClient
         }
 
         return new Walk(items, cursors.Count + 1, cursors, last);
-    }
-
-    /// <summary>Walks the same query by offset instead, <paramref name="rows"/> rows in pages of <paramref name="limit"/>.</summary>
-    public async Task<Walk> OffsetWalkAsync(string entityType, object stages, int limit, int rows)
-    {
-        var before = Json.Node(stages) as JsonArray ?? throw new ArgumentException("The stages are a JSON array.", nameof(stages));
-        var items = new List<JsonObject>();
-        var pages = 0;
-        WireAnswer? last = null;
-
-        for (var offset = 0; offset < rows; offset += limit)
-        {
-            var pipeline = (JsonArray)before.DeepClone();
-            var page = new JsonObject { ["limit"] = limit };
-
-            if (offset > 0)
-                page["offset"] = offset;
-
-            pipeline.Add(new JsonObject { ["page"] = page });
-            last = await SendAsync(entityType, pipeline);
-            last.ShouldBeOk($"the offset walk at {offset}");
-            items.AddRange(last.Items.OfType<JsonObject>());
-            pages++;
-        }
-
-        return new Walk(items, pages, [], last ?? throw new ArgumentOutOfRangeException(nameof(rows)));
     }
 
     public override string ToString() => $"{Service}{(Who.Organisation is { } organisation ? " as " + organisation : "")} (contract {Who.Contract?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"})";

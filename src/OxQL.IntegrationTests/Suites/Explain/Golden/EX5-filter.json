@@ -1,0 +1,387 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "filter": [
+      {
+        "id": "removeDeleted",
+        "where": {
+          "isDeleted": {
+            "neq": true
+          }
+        }
+      },
+      {
+        "id": "col:text",
+        "where": {
+          "item.text": {
+            "contains": "a"
+          }
+        }
+      },
+      {
+        "id": "preset:first",
+        "where": {
+          "or": [
+            {
+              "number": {
+                "startsWith": "R"
+              }
+            },
+            {
+              "position": {
+                "eq": 0
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "pipeline": [
+      {
+        "unwind": {
+          "path": "items",
+          "as": "item",
+          "includeIndex": "position"
+        }
+      },
+      {
+        "project": {
+          "number": 1,
+          "position": 1,
+          "item.text": 1
+        }
+      },
+      {
+        "sort": [
+          {
+            "number": "asc"
+          }
+        ]
+      },
+      {
+        "page": {
+          "limit": 100,
+          "count": true
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "executable": "yes",
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": [],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {"code":"UNWIND_PREFILTER","message":"Only rows with an element of 'items' that passes what is asked of 'item' after the unwind are unwound.","stage":0,"path":"items","params":{"path":"items","alias":"item","paths":["item.text"]},"basis":"advisory"},
+      {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":1,"basis":"advisory"},
+      {"code":"TEXT_FOLDS","message":"'sort' on 'number' folds case and accents (collation de, strength 1).","stage":2,"path":"number","params":{"locale":"de","strength":1,"op":"sort"},"basis":"advisory"},
+      {"code":"NEQ_MATCHES_ABSENT","message":"'neq' on 'isDeleted' also matches rows where the member is absent or null.","path":"isDeleted","filter":"removeDeleted","params":{"op":"neq"},"basis":"advisory"},
+      {"code":"PATTERN_FOLDS","message":"'contains' on 'item.text' folds case and accents (collation de, strength 1) as a pattern: no index bounds it, it reads every candidate row.","path":"item.text","filter":"col:text","params":{"locale":"de","strength":1,"op":"contains","accents":true},"basis":"advisory"},
+      {"code":"TEXT_FOLDS","message":"'startsWith' on 'number' folds case and accents (collation de, strength 1).","path":"number","filter":"preset:first","params":{"locale":"de","strength":1,"op":"startsWith"},"basis":"advisory"}
+    ],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "unwind",
+        "status": "ok",
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
+        "creates": ["item","position"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false
+            }
+          }
+        }
+      },
+      {
+        "index": 1,
+        "kind": "project",
+        "status": "ok",
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"position","use":"project"},
+          {"path":"item.text","use":"project"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["id","item.text","number","position"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "sort",
+        "status": "ok",
+        "reads": [
+          {"path":"number","use":"sort"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["id","item.text","number","position"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 3,
+        "kind": "page",
+        "status": "ok",
+        "reads": [],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["id","item.text","number","position"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      }
+    ],
+    "filter": [
+      {
+        "id": "removeDeleted",
+        "status": "ok",
+        "placed": [
+          {
+            "before": 0,
+            "paths": ["isDeleted"]
+          }
+        ]
+      },
+      {
+        "id": "col:text",
+        "status": "ok",
+        "placed": [
+          {
+            "after": 0,
+            "paths": ["item.text"]
+          }
+        ]
+      },
+      {
+        "id": "preset:first",
+        "status": "ok",
+        "placed": [
+          {
+            "after": 0,
+            "paths": ["number","position"]
+          }
+        ]
+      }
+    ],
+    "aliases": {
+      "item": {
+        "stage": 0,
+        "node": "element",
+        "entities": ["ledger.transaction"],
+        "source": "items",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "t:ledger.transaction#items"
+      },
+      "position": {
+        "stage": 0,
+        "node": "scalar",
+        "kind": "int",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "k:int"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "service": "ledger"
+      },
+      "t:ledger.transaction#items": {
+        "entity": "ledger.transaction",
+        "item": "items",
+        "service": "ledger"
+      }
+    },
+    "rules": {
+      "r:1": {
+        "unwound": ["items"]
+      },
+      "r:2": {
+        "self": "42800"
+      },
+      "r:3": {
+        "self": "588ff"
+      }
+    },
+    "result": {
+      "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        }
+      ],
+      "order": [
+        {
+          "path": "number",
+          "direction": "asc"
+        },
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        },
+        {
+          "path": "position",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":0,"root":"item","present":"ifStored","can":"c:2"},
+        {"path":"position","kind":"int","nullable":false,"stage":0,"root":"","present":"always","can":"c:3"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        }
+      }
+    },
+    "owners": [],
+    "catalog": []
+  }
+}

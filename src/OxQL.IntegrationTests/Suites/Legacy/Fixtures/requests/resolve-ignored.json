@@ -1,0 +1,28 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "resolve": {
+        "source": "crm.customer",
+        "localPath": "FinancialPartner._id",
+        "as": "Customer"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Customer": 1,
+        "FinancialPartner": {
+          "CompanyName": 1
+        }
+      }
+    }
+  ]
+}

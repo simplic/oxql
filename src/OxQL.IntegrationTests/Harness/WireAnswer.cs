@@ -70,9 +70,17 @@ public sealed class WireAnswer
 
     public string? NextCursor => PageInfo["nextCursor"]?.GetValue<string>();
 
-    public long? TotalCount => PageInfo["totalCount"]?.GetValue<long>();
+    /// <summary>What the answer knows of the count (contract 2, <c>pageInfo.count</c>); null on a contract 1 answer.</summary>
+    public JsonObject? Count => PageInfo["count"] as JsonObject;
 
-    public bool? TotalCountCapped => PageInfo["totalCountCapped"]?.GetValue<bool>();
+    /// <summary><c>pageInfo.count.state</c>: <c>exact</c>, <c>atLeast</c> or <c>unknown</c>.</summary>
+    public string? CountState => Count?["state"]?.GetValue<string>();
+
+    /// <summary>The count: contract 1's <c>totalCount</c>, or the value contract 2 knows (exact, or its lower bound).</summary>
+    public long? TotalCount => PageInfo["totalCount"]?.GetValue<long>() ?? Count?["value"]?.GetValue<long>();
+
+    /// <summary>Whether the count is a bound rather than exact: contract 1's <c>totalCountCapped</c>, or a contract 2 lower bound.</summary>
+    public bool? TotalCountCapped => PageInfo["totalCountCapped"]?.GetValue<bool>() ?? (Count is null ? null : CountState == "atLeast");
 
     /// <summary>The diagnostics beside the rows; the engine leaves the member out when there are none.</summary>
     public IReadOnlyList<JsonObject> Diagnostics => (Body?["diagnostics"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
@@ -138,6 +146,27 @@ public sealed class WireAnswer
     {
         ShouldBeOk(because);
         Ids().Should().BeEquivalentTo(expected, $"{because} {this}".Trim());
+        return this;
+    }
+
+    /// <summary>Asserts <c>pageInfo.count</c> of a contract 2 answer: its state, its value and why counting stopped; <c>ms</c> is left out of the comparison.</summary>
+    public WireAnswer ShouldCount(string state, long? value = null, string? stoppedBy = null, string? reason = null, string because = "")
+    {
+        ShouldBeOk(because);
+
+        var count = Count ?? throw new InvalidOperationException($"The answer carries no pageInfo.count: {this}");
+        var known = (JsonObject)count.DeepClone();
+
+        known.Remove("ms");
+
+        var expected = new JsonObject { ["state"] = state };
+
+        if (value is not null) expected["value"] = value;
+        if (stoppedBy is not null) expected["stoppedBy"] = stoppedBy;
+        if (reason is not null) expected["reason"] = reason;
+
+        known.ToJsonString().Should().Be(expected.ToJsonString(), $"{because} {this}".Trim());
+
         return this;
     }
 

@@ -10,22 +10,59 @@ public interface IEngineFeatures
 /// <summary>The capability names, in the fixed spelling of the design, and the contract number.</summary>
 public static class EngineCapabilities
 {
-    /// <summary>The contract this engine speaks.</summary>
+    /// <summary>
+    /// The contract this engine speaks. Contract 2 is the marker of this package: every engine that
+    /// reports it has the whole contract 2 language and the explain answer, so a
+    /// caller gates on <c>engine.contract</c>, never on a capability per feature.
+    /// </summary>
     public const int Contract = 2;
 
-    /// <summary>The capabilities of a host with the given features and options.</summary>
-    public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain)
+    /// <summary>Chains across services by remote continuation; only with a remote query client.</summary>
+    public const string ResolveChain = "resolve.chain";
+
+    /// <summary>A <c>lookup</c> whose <c>from</c> is another service's entity; only with a remote query client.</summary>
+    public const string LookupRemote = "lookup.remote";
+
+    /// <summary><c>POST /oxql/explain</c> answers.</summary>
+    public const string Explain = "explain";
+
+    /// <summary>The engine version, as health and explain publish it.</summary>
+    public static string? Version { get; } = typeof(EngineCapabilities).Assembly.GetName().Version?.ToString();
+
+    /// <summary>
+    /// What the published engine listed before contract 2 became the marker: batches, paging after a
+    /// group, paging by offset and <c>any</c>. A host that answers contract 1 by the compatibility
+    /// rewrite still does all four for such a caller, and a contract 1 client may gate on a name, so
+    /// the list such a caller reads there keeps them (<see cref="Of"/>). <c>unwind.keepPath</c>, which
+    /// only an unpublished build listed, names a member no engine takes any more and is not among them.
+    /// </summary>
+    public static IReadOnlyList<string> Contract1 { get; } = ["batch", "group.page", "page.offset", "any"];
+
+    /// <summary>
+    /// The capabilities of a host with the given features and options: only what depends on the host.
+    /// What every contract 2 engine has (batches, paging after a group, <c>any</c>) is not listed; the
+    /// contract number says it. For a contract 1 caller the rewrite answers
+    /// (<paramref name="contract1"/>: the request carries no contract header while the host answers
+    /// contract 1) the list begins with <see cref="Contract1"/>, as it did when that caller was
+    /// written; of those, <c>page.offset</c> is contract 1 syntax only.
+    /// </summary>
+    public static IReadOnlyList<string> Of(bool remoteResolve, bool compat, bool explain, bool contract1 = false)
     {
-        var capabilities = new List<string> { "batch", "group.page", "page.offset", "any" };
+        var capabilities = new List<string>();
+
+        if (contract1 && compat)
+            capabilities.AddRange(Contract1);
 
         if (remoteResolve)
         {
             capabilities.Add("resolve.remote");
             capabilities.Add("semiJoin");
+            capabilities.Add(ResolveChain);
+            capabilities.Add(LookupRemote);
         }
 
         if (explain)
-            capabilities.Add("explain");
+            capabilities.Add(Explain);
 
         if (compat)
             capabilities.Add("compat.v1");

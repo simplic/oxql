@@ -1,0 +1,270 @@
+{
+  "request": {
+    "entityType": "transport.shipment",
+    "variables": {
+      "shipmentId": "5b2a7e10-0c1d-4a5e-8f7b-9a1c2d3e4f50"
+    },
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "shipmentId"
+            }
+          }
+        }
+      },
+      {
+        "lookup": {
+          "from": "transport.delivery_attempt",
+          "path": "shipmentId",
+          "as": "lastAttempt",
+          "first": true,
+          "sort": [
+            {
+              "dateTime": "desc"
+            }
+          ]
+        }
+      },
+      {
+        "project": {
+          "shipmentNumber": 1,
+          "lastAttempt.id": 1,
+          "lastAttempt.dateTime": 1,
+          "lastAttempt.status": 1,
+          "lastAttempt.text": 1
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "executable": "yes",
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": [],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {"code":"JOIN_AFTER_PAGE","message":"'lastAttempt' is joined after the page is taken, for the page's rows only.","stage":1,"path":"lastAttempt","params":{"alias":"lastAttempt","kind":"lookup"},"basis":"advisory"},
+      {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":2,"basis":"advisory"}
+    ],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:transport.shipment"
+        },
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "transport.shipment",
+          "key": ["id"]
+        }
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:transport.shipment"
+          },
+          "rules": {}
+        }
+      },
+      {
+        "index": 1,
+        "kind": "lookup",
+        "status": "ok",
+        "placement": {
+          "executor": "inline",
+          "phase": "afterPage",
+          "host": "transport"
+        },
+        "reads": [
+          {"path":"id","use":"lookupOn"}
+        ],
+        "creates": ["lastAttempt"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:transport.shipment",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "rules": {
+            "lastAttempt": "r:1"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "project",
+        "status": "ok",
+        "reads": [
+          {"path":"shipmentNumber","use":"project"},
+          {"path":"lastAttempt.id","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.dateTime","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.status","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.text","use":"project","alias":"lastAttempt"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": ["id","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","lastAttempt.text","shipmentNumber"],
+          "roots": {
+            "": "t:transport.shipment",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "rules": {
+            "lastAttempt": "r:1"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "lastAttempt": {
+        "stage": 1,
+        "node": "entity",
+        "entities": ["transport.delivery_attempt"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "targets": [
+          {
+            "target": "transport.delivery_attempt",
+            "service": "transport",
+            "remote": false,
+            "type": "t:transport.delivery_attempt"
+          }
+        ],
+        "loads": ["dateTime","id","status","text"],
+        "shows": ["dateTime","id","status","text"],
+        "type": "t:transport.delivery_attempt"
+      }
+    },
+    "types": {
+      "t:transport.shipment": {
+        "entity": "transport.shipment",
+        "service": "transport"
+      },
+      "t:transport.delivery_attempt": {
+        "entity": "transport.delivery_attempt",
+        "service": "transport"
+      }
+    },
+    "rules": {
+      "r:1": {
+        "self": "40800"
+      }
+    },
+    "result": {
+      "paging": "cursor",
+      "identity": {
+        "kind": "entity",
+        "entity": "transport.shipment",
+        "key": ["id"]
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "transport.shipment",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "lastAttempt",
+          "entity": "transport.delivery_attempt",
+          "key": "lastAttempt.id",
+          "nullable": true,
+          "many": false
+        }
+      ],
+      "order": [
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"shipmentNumber","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"lastAttempt.dateTime","kind":"dateTime","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:3"},
+        {"path":"lastAttempt.id","kind":"guid","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:1"},
+        {"path":"lastAttempt.status","kind":"object","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:4"},
+        {"path":"lastAttempt.text","kind":"string","nullable":true,"stage":1,"root":"lastAttempt","present":"ifJoined","can":"c:2"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        }
+      }
+    },
+    "owners": [],
+    "catalog": []
+  }
+}

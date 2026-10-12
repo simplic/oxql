@@ -10,16 +10,51 @@ namespace OxQL.Tests.Execute;
 /// (rows, a refusal, or a fault), records every call with its budget, and reports which
 /// services it knows.
 /// </summary>
-internal sealed class FakeRemoteClient : IRemoteQueryClient
+internal sealed class FakeRemoteClient : IRemoteQueryClient, IRemoteOwnerInfo
 {
+    /// <summary>What the client read of each owner's shallow health; an owner without an entry is unknown.</summary>
+    public Dictionary<string, RemoteOwnerInfo> Owners { get; } = new(StringComparer.Ordinal);
+
+    public RemoteOwnerInfo? OwnerOf(string serviceKey) => Owners.GetValueOrDefault(serviceKey);
+
+    /// <summary>What an owner's shallow health says when first asked before a batch; null: nothing learned.</summary>
+    public Func<string, RemoteOwnerInfo?>? Probe { get; set; }
+
+    /// <summary>The services asked for their facts before a batch.</summary>
+    public List<string> Probed { get; } = [];
+
+    /// <summary>How long reading an owner's facts takes; the caller's token still cuts it.</summary>
+    public TimeSpan ProbeDelay { get; set; }
+
+    public async ValueTask<RemoteOwnerInfo?> OwnerOfAsync(string serviceKey, CancellationToken cancellationToken)
+    {
+        Probed.Add(serviceKey);
+
+        if (ProbeDelay > TimeSpan.Zero)
+            await Task.Delay(ProbeDelay, cancellationToken);
+
+        if (!Owners.ContainsKey(serviceKey) && Probe?.Invoke(serviceKey) is { } learned)
+            Owners[serviceKey] = learned;
+
+        return OwnerOf(serviceKey);
+    }
+
+    /// <summary>The API version each service is routed to.</summary>
+    public Dictionary<string, string> ApiVersions { get; } = new(StringComparer.Ordinal);
+
+    public string? ApiVersionOf(string serviceKey) => ApiVersions.GetValueOrDefault(serviceKey);
+
     /// <summary>What one query is answered with.</summary>
     public abstract record Answer
     {
         /// <summary>Rows, as the owner's wire objects.</summary>
         public sealed record Rows(params JsonObject[] Items) : Answer;
 
-        /// <summary>A refusal envelope.</summary>
-        public sealed record Refused(string Code, string Message) : Answer;
+        /// <summary>A refusal envelope; its one error at the owner's <paramref name="Stage"/> and <paramref name="Path"/>.</summary>
+        public sealed record Refused(string Code, string Message, int Stage = 0, string? Path = null) : Answer;
+
+        /// <summary>Rows with the diagnostics the owner reported beside them.</summary>
+        public sealed record Reported(JsonArray Diagnostics, params JsonObject[] Items) : Answer;
 
         /// <summary>Rows with a page after them, reachable through <paramref name="NextCursor"/>.</summary>
         public sealed record Page(string NextCursor, params JsonObject[] Items) : Answer;
@@ -37,6 +72,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
     /// <summary>Services that never answer within the budget.</summary>
     public HashSet<string> Silent { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Services whose explain is cut at once, as by a timer that fires before the clock the budget is read from has reached it.</summary>
+    public HashSet<string> CutEarly { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Services the host knows; every service when null.</summary>
     public HashSet<string>? Configured { get; set; }
 
@@ -44,6 +82,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
     public HashSet<string> Reachable { get; } = new(StringComparer.Ordinal);
 
     public List<(string Service, BatchRequest Request, TimeSpan Budget)> Calls { get; } = [];
+
+    /// <summary>How long every batch takes before it answers; the caller's budget still cuts it.</summary>
+    public TimeSpan Delay { get; set; }
 
     public async Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
     {
@@ -58,6 +99,9 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
             throw new OperationCanceledException(cancellationToken);
         }
 
+        if (Delay > TimeSpan.Zero)
+            await Task.Delay(Delay, cancellationToken);
+
         var results = new List<JsonNode?>();
 
         for (var index = 0; index < request.Queries.Count; index++)
@@ -68,6 +112,12 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
                 {
                     ["items"] = new JsonArray(rows.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
                     ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                },
+                Answer.Reported reported => new JsonObject
+                {
+                    ["items"] = new JsonArray(reported.Items.Select(item => (JsonNode)item.DeepClone()).ToArray()),
+                    ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                    ["diagnostics"] = reported.Diagnostics.DeepClone(),
                 },
                 Answer.Page page => new JsonObject
                 {
@@ -88,7 +138,7 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
                 {
                     ["type"] = "validation_error",
                     ["title"] = "The request could not be bound.",
-                    ["errors"] = new JsonArray(new JsonObject { ["code"] = refused.Code, ["message"] = refused.Message, ["stage"] = 0 }),
+                    ["errors"] = new JsonArray(new JsonObject { ["code"] = refused.Code, ["message"] = refused.Message, ["stage"] = refused.Stage, ["path"] = refused.Path }),
                 },
                 _ => null,
             });
@@ -98,6 +148,31 @@ internal sealed class FakeRemoteClient : IRemoteQueryClient
     }
 
     public bool IsConfigured(string serviceKey) => Configured is null || Configured.Contains(serviceKey);
+
+    /// <summary>The owner's explain answer per (service, request); null (the default) is a client that cannot explain at owners.</summary>
+    public Func<string, ExplainRequest, JsonObject?>? Explains { get; set; }
+
+    public List<(string Service, ExplainRequest Request, TimeSpan Budget)> ExplainCalls { get; } = [];
+
+    public async Task<JsonObject?> ExplainAsync(string serviceKey, ExplainRequest request, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        lock (ExplainCalls)
+            ExplainCalls.Add((serviceKey, request, budget));
+
+        if (Unreachable.Contains(serviceKey))
+            throw new HttpRequestException($"'{serviceKey}' is not reachable.");
+
+        if (CutEarly.Contains(serviceKey))
+            throw new OperationCanceledException($"The call to '{serviceKey}' was cut.");
+
+        if (Silent.Contains(serviceKey))
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        return Explains?.Invoke(serviceKey, request);
+    }
 
     /// <summary>How many reachability probes were answered; the health cache is measured by it.</summary>
     public int Reachability { get; private set; }

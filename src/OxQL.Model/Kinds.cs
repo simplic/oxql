@@ -14,13 +14,13 @@ public enum Kind
     /// <summary>A 32-bit or narrower integer.</summary>
     Int,
 
-    /// <summary>A 64-bit integer, a JSON string on the wire.</summary>
+    /// <summary>A 64-bit integer, a JSON number on the wire.</summary>
     Long,
 
     /// <summary>A floating-point number.</summary>
     Double,
 
-    /// <summary>A decimal, a JSON string on the wire.</summary>
+    /// <summary>A decimal, a JSON number on the wire.</summary>
     Decimal,
 
     /// <summary>A boolean.</summary>
@@ -121,11 +121,7 @@ public static class Kinds
     /// <summary>The wire spelling of a kind.</summary>
     public static string NameOf(Kind kind) => Names[kind];
 
-    /// <summary>
-    /// The wire spelling with its indefinite article. Refusal messages are read by the person
-    /// whose filter was refused, and concatenating "a " in front of the spelling produced
-    /// "a enum", "a int", "a object" and "a array".
-    /// </summary>
+    /// <summary>The wire spelling with its indefinite article, as a refusal message reads: "an enum", "an int", "a string".</summary>
     public static string WithArticle(Kind kind)
     {
         var name = Names[kind];

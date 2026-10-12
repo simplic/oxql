@@ -13,13 +13,14 @@ answered 200" is not a case.
 
 ```bash
 dotnet test src/oxql.slnx                                   # everything
-dotnet test src/oxql.slnx --filter Category!=Integration    # the unit tests only
+dotnet test src/OxQL.Tests                                  # the unit tests only
 dotnet test src/OxQL.IntegrationTests                       # the conformance suite only
 dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Shipment"
 dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~SH03"
+dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report"   # the report scenarios
 ```
 
-Every test class carries `[Trait("Category", "Integration")]`.
+Every test class carries `[Trait("Category", "Integration")]`; the benchmarks in `Perf/` carry `Category=Perf`.
 
 **MongoDB.** The suite starts its own server; nothing needs to be installed. On first use
 EphemeralMongo downloads the official `mongod` binaries for the platform (checked against their
@@ -34,7 +35,10 @@ network access for the download; later runs start the server in well under a sec
 | `OXQL_TEST_MONGO_BIN=<directory>` | start the `mongod` in that directory instead of a downloaded one (pins an exact version) |
 
 When no server can be provided, every test fails with one message naming these variables.
-Nothing is skipped: a skipped case is not a passing case.
+Nothing is skipped for want of a server: a skipped case is not a passing case. The only skips
+are opt-in tools, each reported as skipped with the variable that turns it on: the fixture exporter
+and the fleet server of `Suites/Report`, the four benchmarks in `Perf/` and the one in `OxQL.Tests`
+(`EngineOverheadBench`).
 
 ## How it is built
 
@@ -43,6 +47,8 @@ Nothing is skipped: a skipped case is not a passing case.
 | `Fleet/` | the simulated fleet: one in-process host per lab service, the MongoDB fixture, the lab model |
 | `Corpus/` (namespace `Fixtures`) | the rows, the seeder, and the oracle every expectation is computed with |
 | `Harness/` | the verbs a case speaks: `LabClient`, `WireAnswer`, `CorpusFleet`, `ChaosOwner`, `EngineDirect` |
+| `Perf/` | opt-in benchmarks (`FirstUseBench`, `PerfBench`, `UnwindCutBench`); skipped unless their variable is set |
+| `Spike/` | the fleet model's own checks (`FleetModelTests`): entities, variants, references and build findings per service |
 | `Suites/<Area>/` | the cases, one folder per area |
 
 **The fleet.** Each lab service is a small ASP.NET Core application on an in-memory test server
@@ -50,24 +56,43 @@ that registers the engine exactly as a service does: the options section, the Mo
 the service's own database, the controller, a scope provider, an addon definition source and a
 remote query client. The seams are test implementations: the organisation comes from the
 `OrganizationId` header, addon definitions are read from the service's database on every request,
-and a remote reference is answered by the owning host's `OxQL/batch` route. Each host sees only
-its own entities, so a reference into another service is remote exactly as between real services.
+and a remote reference is answered by the owning host (`InMemoryRemoteClient`). The client calls the
+owner's query service through its internal overload (`BatchAsync(batch, internalCall: true)`), in a
+request scope of the owner carrying the caller's organisation, user and correlation, exactly as the
+base package's internal route does: only that path admits the keyed fetch's `keyedBy`. It answers
+the internal explain the same way (`ExplainAsync(request, internalCall: true)`), and keeps each
+owner's shallow health (engine version, `maxBatchQueries`) as the base package's client does. A
+service served by a mounted handler (the chaos owner, a scripted owner) is posted to over HTTP
+(`OxQL/batch`). Each host sees only its own entities, so a reference into another service is remote
+exactly as between real services, and a chain across services continues at each owner in process.
 Hosts are started on first use and shared by the whole run; a *variant* is the same service and
 database under changed configuration (`OxQL:Limits:MaxPageSize`, `OxQL:Explain:Enabled`, …).
+Explain is on by default, as on a real host.
 
 **The lab model.** Synthetic entities under neutral names; the shapes carry the storage hazards
-real services have.
+real services have. The member names, nesting, polymorphism and reference declarations of
+the report entities mirror the real services (ERP, logistics, HR, vehicle, contact), so a scenario
+path on the fleet is the path the real service accepts after its migration; only the namespace
+differs. The variants' class maps are registered with the storage conventions
+(`FleetClassMaps.Register()`), and the transport service's host-side reference declarations
+(`FleetReferences.For("transport")`) type the resource ids. The entities marked — hold no rows in
+organisations A and B.
 
 | service | entity | collection | rows A / B | what it is for |
 |---|---|---|---:|---|
-| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag |
+| `staff` | `staff.employee` | `employee` | 26 / 3 | strings: null, missing, empty, duplicates, case, accents, CJK, an astral code point, the Turkish dotted I; collections; the addon bag; `userId`, which a transaction's `createUserId` names |
 | `fleet` | `fleet.vehicle` | `vehicle` | 20 / 2 | numbers: decimals stored as Decimal128 and as strings, zero, negative, 25 places, Int32 max; a storage name the derivation does not give (`QRCode`) |
 | | `fleet.equipment` | `equipment` | 5 / 1 | a local reference onto vehicles: hit, duplicate, miss, null source |
 | | `fleet.department` | `department` | 3 / 1 | the target of the vehicle and shipment departments |
 | | `fleet.status` | `status` | 4 / 1 | a small lookup table with a null name |
-| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department` |
-| | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling; duplicate, null and missing names at scale; a remote reference onto vehicles |
-| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag |
+| `transport` | `transport.shipment` | `shipment` | 40 / 3 | temporals across DST and the UTC day, ISO weeks across a year, enums including absent and unnamed values, nested collections, tags, the bag, and a remote reference onto `fleet.department`; its `billingLines[]` are the item target of typed references, and `tours[].tourId` references `transport.tour` beside a polymorphic `tours[].resource` |
+| | `transport.shipment_template` | `shipment_template` | 6 000 / 40 | volume above the offset ceiling of contract 1 and above one count step (1 000); duplicate, null and missing names at scale; a remote reference onto vehicles |
+| | `transport.tour` | `tour` | — | billing lines (the shipment's item type), a polymorphic `resource`, `attachedResources[]`, and `actions`, an interface-typed collection of seven variants |
+| | `transport.delivery_attempt` | `deliveryAttempt` | — | `shipmentId` onto the shipment, `dateTime`, `status { displayName }`, `text`: "the latest attempt" |
+| | `transport.resource` | `resource` | — | an abstract entity of seven variants; the host-side declaration makes a driver's id an employee and a vehicle-like resource's id a vehicle; a carrier references nothing |
+| `ledger` | `ledger.transaction` | `transaction` | 25 / 2 | byte enums, prices as Decimal128 and as strings, a decimal beyond `System.Decimal`, a dotted dictionary key, no bag; `items` of seven variants with nested group items, billing-line items referencing `ledger.billing_line`, `references[].referenceId` typed by `dataType` onto shipment or tour (key as guid), the recipient's `address.id` onto `directory.contact`, `createUserId` onto `staff.employee.userId` |
+| | `ledger.billing_line` | `billing_line` | — | `sourceBillingLineReference { type, id }`, typed by `type`, onto the billing lines of a shipment or a tour (item targets, a union) |
+| `directory` | `directory.contact` | `contact` | — | the contact-like service: `primaryEmailAddress.email`, `primaryPhoneNumber.number`, `address.companyName`, a GeoJSON location (`unknown`) |
 | `conformance` | `conformance.entity` | `conformance` | 3 / 1 | every kind the model has: long above 2^53, date, char, binary, long enum, both dictionary forms, unstored members, local and remote references |
 | | `conformance.ref` | `conformance_ref` | 2 / 1 | a local target keyed on `code` |
 | | `conformance.child` | `conformance_child` | 3 / 1 | lookup children |
@@ -75,12 +100,33 @@ real services have.
 
 Organisation C (`55555555-…`) holds only the 100 001-row bulk volume, written on demand.
 
+**The report fleet.** Organisation R (`77777777-…`, tag `0077`) holds the rows of the report
+scenarios (A1–A5) and of their failure modes, and nothing else; no case over A
+or B sees them. They are seeded with the corpus (`ReportSeed`, rows in `Corpus/Rows/ReportRows.cs`)
+and read through `ReportSeed.Entities`, `Rows(entity)`, `Row(entity, key)` and the ids it names
+(`TransactionId`, `ShipmentId`, `ErpLineIds`, …); every oracle helper that takes a row reads them.
+`Lab.ClientAsync(service, Org.R)` asks as organisation R.
+
+| entity | rows | what they carry |
+|---|---:|---|
+| `ledger.transaction` | 6 | the mixed invoice: every item variant, groups two deep, shipment and tour lines, a tariff-only line; one invoice per failure: a deleted source line, a source id held by a shipment and a tour, a clerk user id two employees share, a user id no employee has, a billing line seven groups deep |
+| `ledger.billing_line` | 6 | the ERP lines the invoice's items name: shipment freight and waiting time, the tour line, a deleted source, a duplicate source, a tariff-only line |
+| `transport.shipment` | 3 | the scenario shipment (two billing lines, weight notes, its tour, three delivery attempts), one without attempts, one holding a billing-line id a tour holds too |
+| `transport.tour` | 2 | a tractor tour (driver, trailer attached, one action per variant, a billing line) and a carrier tour |
+| `transport.delivery_attempt` | 4 | three on the scenario shipment, the latest stored in the middle; one on the third shipment |
+| `transport.resource` | 7 | one per variant; the car, container and equipment name vehicles the fleet does not hold |
+| `staff.employee` | 4 | the clerk, two employees sharing one user id, the driver |
+| `fleet.vehicle` | 2 | the tractor and the trailer |
+| `directory.contact` | 2 | the invoice recipient, and a contact without an e-mail address |
+
+`Suites/Seed/ReportSeedTests` proves these rows against the engine like the corpus.
+
 ## The corpus
 
 The rules the data follows, and a case may rely on:
 
 - **Deterministic ids.** Every id is `TTTTTTTT-OOOO-4000-8000-NNNNNNNNNNNN`: the id space
-  (`Spaces`), the organisation tag (`0001` A, `0002` B, `0055` C), the version and variant
+  (`Spaces`), the organisation tag (`0001` A, `0002` B, `0055` C, `0077` R), the version and variant
   nibbles, and the ordinal. `Ids.Of(Spaces.Shipment, Org.A, 7)` is the same value on every
   machine. `00000000` is the dangling space: ids that name nothing, so a join that answers null is
   observable. A case never hard-codes an id; it asks `Corpus.IdOf(Corpus.Shipment, "items-one")`.
@@ -138,7 +184,7 @@ public class ShipmentTests
         var answer = await transport.SendAsync(Corpus.Shipment, """
             [ { "match": { "status.name": { "eq": "Planned" } } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -161,15 +207,19 @@ public class ShipmentTests
 | `SendAsync(entity, pipeline, variables?)` | `POST OxQL/query` |
 | `QueryAsync(body)` | the same with a whole request body |
 | `BatchAsync(queries, maxTimeMs?)`, `BatchBodyAsync(body)` | `POST OxQL/batch` |
-| `ExplainAsync(body)` | `POST OxQL/explain` on the explain-enabled variant |
+| `ExplainAsync(body)` | `POST OxQL/explain` (a plain query or the envelope); explain is on by default, the explain variant only sets it explicitly |
 | `HealthAsync(shallow)`, `GetAsync`, `PostAsync` | health, and raw requests for malformed bodies |
 | `As(Org.B)`, `As(guid)`, `Anonymous()`, `Contract(1)`, `Contract(null)`, `WithHeader` | who the request is sent as; contract 2 is the default, `null` sends no contract header |
-| `MatchIdsAsync`, `MatchCountAsync`, `PullAsync` | a condition's ids or count; every row as the engine renders it |
-| `WalkAsync`, `OffsetWalkAsync` | a cursor or offset walk to the end, every row in arrival order |
+| `MatchIdsAsync`, `MatchCountAsync`, `PullAsync` | a condition's ids or count (the count through a count-only request); every row as the engine renders it |
+| `CountOnlyAsync(entity, stages, budgetMs, upTo?)` | the count-only request over the stages: `page { limit: 0, count: { budgetMs, upTo } }` |
+| `WalkAsync` | a cursor walk to the end, every row in arrival order (a contract 2 page has no offset) |
 | `HostAsync()` | the host, for its captured log lines (`Logs`) |
 
 **The answer** (`WireAnswer`): `Status`, `Body`, `Text`, `Items`, `Ids()`, `Strings(path)`,
-`Values(path)`, `PageInfo`, `HasNextPage`, `NextCursor`, `TotalCount`, `TotalCountCapped`,
+`Values(path)`, `PageInfo`, `HasNextPage`, `NextCursor`, `Count` and `CountState` (contract 2's
+`pageInfo.count`), `TotalCount` and `TotalCountCapped` (contract 1's members, or the value and
+whether it is a lower bound of a contract 2 count), `ShouldCount(state, value?, stoppedBy?, reason?)`
+(the count without its `ms`),
 `Diagnostics`, `DiagnosticCodes`, `Errors`, `ErrorCodes`, `Type`, `IsProblemDetails`, `Results`
 (batch entries); assertions `ShouldBeOk`, `ShouldRefuse("CODE", status?)`, `ShouldHaveIds`,
 `ShouldHaveIdsInAnyOrder`, `ShouldHaveTotal`, `ShouldHaveDiagnostic`, `ShouldHaveNoDiagnostics`.
@@ -220,13 +270,76 @@ health probe independently. `BatchCalls`, `HealthCalls`, `Requests`, `Mark()` an
 The shared fleet's owner is frozen in `Ok`; a case that changes the mode, or counts owner calls,
 uses a private fleet's owner.
 
+**The scripted owner** (`Suites/Chain/ScriptedOwner`, mounted by `ScriptedOwnerFleet`) covers the
+keyed fetch's failure modes the chaos owner has no mode for. It answers as the chaos owner does,
+then hides widgets (`Hidden`), cuts each answer to `Cut` rows and says a next page exists, answers
+late (`Delay`) or with an error `Status`, and reports an engine `Version` and a `MaxBatchQueries`
+on its shallow health. Every batch it receives is kept (`Batches`, `Since(mark)`), so a case can
+assert what a forwarded query carried.
+
+## The contract 2 suites
+
+| suite | what it proves |
+|---|---|
+| `Rows/RowsVariantsTests` | polymorphic members on rows and in conditions, `is`, `flatten` |
+| `Rows/TypeMemberTests` | the model's own type member on a server: the value per variant in the model (an interface, an abstract base, a concrete base stored without a discriminator, a hierarchical discriminator, two variants with one value), a member that is a constant in some classes only (a finding), rows equal to what the REST serializer writes, projection and exclusion, `eq` `neq` `in` `nin` on an object, a collection, an unwound element, in `any` and in the request's `filter`, what is refused (`sort`, `group`, `values`, another operator, a projection of a member no row can carry), contract 1 unchanged, explain's column, flags and `values`, and the fleet's resources over HTTP against their stored discriminators |
+| `Joins/JoinsLookupMembersTests`, `JoinsResolveMembersTests` | lookup `sort`, `first`, `on`, `LOOKUP_TRUNCATED`; the resolve members and their refusals |
+| `Joins/JoinsKeyedFetchTests`, `JoinsOutcomesTests`, `JoinsRemoteVariablesTests` | the keyed fetch by keys, every outcome with `onMissing` and `strict`, variables substituted before sending |
+| `Joins/JoinsContinuationTests` | continued stages across services and in process, `forTarget`, `not_applicable` |
+| `Joins/JoinsOutcomeAsTests` | the outcome under a name (`outcomeAs`): every outcome of an inline, a keyed, an element-wise, a remote, a continued and a union join on the row; an inline outcome filtered, grouped and counted; `excluded` told from `not_found`; `ambiguous` onto a field that is not the key; nothing reported or refused by the member itself, and `strict` with `onMissing: "report"`; cursor pages; explain's member, values and rule |
+| `Joins/JoinsUnionJoinTests` | the union join (`byTarget`): one alias filled as two `forTarget` stages fill two, a path one branch does not reach dropped for it, one no branch reaches refused, a branch its owner cannot bind, a union join split by the owner of a continued alias, `UNION_CARDINALITY_MISMATCH`, and explain valid exactly when the run is not refused |
+| `Refusals/RefusalsRequestMembersTests` | `strict`, unknown top-level members, `keyedBy` refused on the public route |
+| `Chain/ChainOwnerFailureTests` | against the scripted owner, each outside strict, under `onMissing: "report"` and under `strict`: unreachable and late owners, a cut answer (`hasNextPage`), the key budget, a negative cache entry a strict request reads past, an owner batch cap below this host's, the chain ceiling, what a forwarded query carries |
+| `Explain/ExplainNeverExecutesTests` | a command monitor on the engine's client sees no command without `include`, only `listIndexes` with `include: ["indexes"]`, and the `aggregate` when the same query runs |
+| `Explain/ExplainIndexAdviceTests` | the index advisory over the wire: the rows of a grid with its filter entries and sort, a list of values, a level of groups and a join each get the definition of their index, what it serves by the caller's paths and filter entry ids, and one `INDEX_ADVICE` note per index |
+| `Explain/ExplainNestedColumnsTests` | a projected member below an object is a result column with what the member can, and a run does what the column says |
+| `Engine/IndexAdviceServerTests` | on a server, read off its execution statistics: the request does what explain says it does without the advised index (sorts in memory, reads the organisation's or the collection's rows, reads the joined collection per row), and with the index created from explain's definition it no longer does; the collation of a text key decides it; a values and a group index leave no document read |
+| `Engine/UnwindIrregularCollectionTests` | on a server (MongoDB 6, 7 and 8), over shipments whose `Items` is an array with a null, an undefined or a scalar beside its elements, nothing but nulls or scalars, an element without members, an empty array, a null, an undefined, not stored, a single object (with members and without) and a scalar: 47 requests (the parents cut first by member and key, ordered by position, `preserveNull`, and the element conditions asked of the collection: one comparison through the path, several conditions of one element, conditions an absent element passes, conditions that do not say what it passes) answer the rows of the stages as written in the same order, the same count as placed and as written, and the same rows in a walk by cursor in pages of 1, 2 and 5; each is cut first wherever its order is the parents', and nothing it asks before the unwind is an expression. An element that is itself an array is a row of its own where no condition is on the element |
+| `Engine/UnwindPlanServerTests` | on a server, read off its execution statistics, for a block of unwound rows ordered by the parent with no condition on the element, one an absent element fails and one it passes, over a collection stored as its type says and over one that is not: the stages before the unwind are the organisation, one plain filter, the parents' order and the page's reach; without an index the database keeps the page's reach while it scans and hands the unwind that many parents; with an index on the order it reads the parents up to the last one the page reaches and none after; the count asks the same of the parents, unwinds those with a passing row and no other, a step of ten rows is handed eleven parents and answers what it answers without that bound, and the count alone through the engine is exact; the rows are those of the stages as written |
+| `OxQL.Tests` `AspNetCore/Contract1HttpGoldenTests` | what a caller without the contract header receives over HTTP through the Sample host: status, every header, the body bytes of `query` and `batch`, for a request that carries `Accept-Encoding`, `Origin`, `X-OxQL-Timing` and the newer members in kinds contract 2 refuses. Two recorded sets of the same requests: the default (`Fixtures/contract1/http.json`, the legacy pipeline's answers) and the rewrite path under `Compat:Legacy:Always=false` (`Fixtures/contract1/rewrite/http.json`, recorded from the engine before the work on contract 2 answers), and where the two differ. And what health lists for such a caller |
+| `Legacy/LegacyGoldenTests` | contract 1 on a host that sets nothing: every request of `Suites/Legacy/Fixtures/requests` without the contract header, over documents written as the driver stores them, each answer equal to the one recorded from a build of the 1.1 query path (`Fixtures/legacy-1.1.json`): status, headers, envelope, page info with the cursor, rows member for member, and the body's bytes wherever the rows have one order. `G02` runs the report requests with `Compat:Legacy:Always=false` and holds which path answers each. What the requests are and how they are recorded again: [`LEGACY.md`](LEGACY.md#how-it-is-held) |
+| `Legacy/LegacyPipelineTests` | when the legacy pipeline answers (by default, off by its one switch, never under the contract 2 header or without compatibility, with `Always` off only what the rewrite cannot express, a batch entry by entry, the log line, explain, health) and what it guarantees: the caller's organisation is matched before any stage and in every lookup, a collection whose documents carry no organisation is not read, a path with `$` is refused in a lookup's filter as everywhere, `AllowedLookupSources`; a fault is a 500 that says where its detail is; the host's page sizes |
+| `Shape/ShapeRecursiveElementTests` | the members of an element whose type holds its own kind (an item's items) are paths after an unwind at every level, in a condition, and without an unwind; a name the type lacks is still `UNKNOWN_PATH` |
+| `Refusals/RefusalsGuidanceTests` | `RESOLVE_NOT_DECLARED` and `LOOKUP_NOT_DECLARED` list the members that declare a reference (`params.joinable`) and where a missing one is declared; `UNKNOWN_PATH` for the stored discriminator says it is no member under contract 2 |
+| `OxQL.Tests` `AspNetCore/LegacyIsolationTests` | the legacy support is removable: every legacy file carries the marker and every type in it the prefix, a legacy type is named outside the `Legacy` folders only at the five marked seams, none is declared and no legacy option is read outside them, and `LEGACY.md` lists every legacy file and seam |
+| `OxQL.Tests` `AspNetCore/HostTests` (the marked block) | through the Sample host: a host that sets nothing answers every contract 1 request by the legacy pipeline; the organisation match is the first stage sent to the database whatever the request starts with; the pipeline's own time ceiling (`Compat:Legacy:MaxTimeMs`, shared by the page and the count), a timeout as 504 and a request its caller abandons cancelled; a `regex` written as text over `RegexMaxLength` is refused, and a pattern given by `$var` or the `$regex` hint is handed on as written; a row the v1 encoding does not write is a fault in the legacy form; a legacy refusal repeats the status in its body and no other refusal does; a host that names no member for the organisation reads nothing |
+| `Rows/TypeMemberConcreteRootTests`, `OxQL.Tests` `Compile/TypeMemberConcreteRootTests` | a condition on the type member where the root class is concrete and its discriminator hierarchical (the root's discriminator stands in every row): `eq` `neq` `in` `nin` on the root class's own value, a derived value, a value a class and its subclass share, a value the root shares with a derived class; under a collection the root's value is refused with the way to ask and is exact inside `any` and after an unwind; rows equal to what the REST serializer writes. On a server and as the compiled filter |
+| `Engine/CountCancellationServerTests` | a count the page makes needless is given up with the answer and ended at the database: the count is in flight at the server before the page is sent, nothing but the cancellation can end it within the test (its rows take longer than its time limit, and the limit is a minute), its task ends cancelled, and the server stops running it long before the limit |
+| `Explain/ExplainShapeFleetTests` | the fleet's engines explaining for one another in process: every prefix of A1–A5 (what a studio explains while the query is built) binds, is complete and types every root of every stage, the owners' types included; a remote union is one union type; and the reference answers stay within their time budget, and at depth 1 within their size budget |
+| `Explain/ExplainGoldenTests` | the explain answers of the reference set equal their recorded golden answers (`Suites/Explain/Golden`), the engine–studio contract; re-recorded with `OXQL_RECORD_GOLDEN=1`. Beside them, recorded and compared the same way (`Golden/mirror`): the fleet's schema documents (`schema/<service>.json`), the answers of `A1`, `A5` and `EX1-source-chain` with the types written out (`types/<id>.json`), and one answer of hosts that publish revisions, with fixed revisions (`revision/EX1-revisions.json`) |
+| `Explain/ExplainRemoteFleetTests` | the remote side of explain over the fleet's hosts: a round asks each owner once whatever it carries, a cold explain stays within eight owner calls, owners answer slim; a warm explain and `remote: "cached"` ask no owner and answer what the check answered; what a target lacks is learned once; the tiers measured (cold check, warm check, cached, 304, the content codings); the limits under a flood, as far as one process shows it, a flood of valid, oversized and over-long explains of five users is refused at the limits (429, 413, 400), admits no user past its rate, causes no more owner calls and owner checks than the limits allow and leaves what the hosts keep within its bounds, while queries keep answering (`OXQL_LOAD_SECONDS`, `OXQL_LOAD_CLIENTS`); its latency and working-set criteria are printed, not asserted: they need load generators outside the host's process |
+| `Explain/ExplainRunDifferentialTests` | explain and the run agree on the reference set and on every route of at most two hops from five source entities along the fleet's declared references (and on routes that do not bind); the entity an owning row names is one explain lists |
+| `Report/ReportRequestTests` | the studio's scenario requests (`Fixtures/scenarios/<id>.request.json`) equal the design's JSON, structurally |
+| `Report/ReportExplainTests`, `ReportQueryTests` | A1–A5 and every prefix of them through `POST /oxql/explain` (valid, complete, the executor, phase and owner of every join, every alias typed, continued parts checked) and through `POST /oxql/query` under `strict`, over organisation R; the contract-1 hint |
+| `Report/ReportFailureModesTests`, `ReportInvalidKeyTests` | duplicate keys in one grouped chunk, ambiguity through a plain non-key remote resolve, the existence probe, a flatten cut at its depth, the key budget over an in-process chain, the 5 000-row report page and `PAGE_INCOMPLETE`, `MAX_CONTINUED_STAGES_EXCEEDED`, `invalid_key` |
+
+## The fixture exporter
+
+`Report/ReportFixtureExport` writes the fixtures the Angular studio's acceptance specs replay: every
+report scenario's request sent to the fleet as the studio sends it, and the answers as the wire
+JSON the hosts answered. It is opt-in and skipped unless `OXQL_EXPORT_FIXTURES` names the fixtures
+directory:
+
+```bash
+OXQL_EXPORT_FIXTURES=<absolute path>/oxql-studio/fixtures \
+  dotnet test src/OxQL.IntegrationTests --filter "FullyQualifiedName~Suites.Report.ReportFixtureExportTests"
+```
+
+It reads the scenario requests from that directory, so a re-export follows the studio's current
+requests, and writes per scenario `scenarios/<id>.explain.json` (the request explained and every
+prefix of its pipeline explained, one answer per stage a studio adds, each `{ status, answer }`) and
+`scenarios/<id>.query.json`; beside them `explain-invalid.json` (`valid: false`),
+`strict-missing.json`, `strict-ambiguous.json`, `contract1-hint.json` and `export.json` (the files
+and the flagged steps). The request files are input and are not rewritten. The output is indented
+with two spaces and LF, and holds nothing that changes between runs of the same engine.
+
 ## Conventions for adding cases
 
 - One folder per area under `Suites/`, one class per area file, namespace
   `OxQL.IntegrationTests.Suites.<Area>`, `[Trait("Category", "Integration")]` on every class. Do
   not name a namespace `Corpus`: it would hide the `Corpus` class.
 - A method name starts with the case id without punctuation and continues as a sentence:
-  `D07_an_or_of_two_conditions_matches_either`. A theory carries the id in its first argument.
+  `D07_or_takes_an_array_of_condition_objects_and_nests`. A theory carries the id in its first argument.
 - The corpus, the oracle, the harness and the lab model are shared and changed only on purpose, in
   their own commit. A suite adds its own files only.
 - When a suite replaces older tests, record for each original case whether it was ported (the

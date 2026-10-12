@@ -103,6 +103,14 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
         return host;
     }
 
+    /// <summary>
+    /// The options of a host that answers contract 1 by the compatibility rewrite first
+    /// (<c>Compat:Legacy:Always</c> off), as the published 2.0 engine did. A host that sets nothing
+    /// answers every contract 1 request by the legacy pipeline; a test of the rewrite's own behaviour
+    /// through a host says so with this.
+    /// </summary>
+    public static void RewriteFirst(OxQLOptions options) => options.Compat.Legacy.Always = false;
+
     /// <summary>A client under one contract (null: no header) for one organisation.</summary>
     public HttpClient Client(int? contract = 2, Guid? organisation = null)
     {
@@ -130,7 +138,7 @@ internal sealed class SampleHost : WebApplicationFactory<Program>
     };
 }
 
-/// <summary>Answers listIndexes and the server explain from fixtures; records every call.</summary>
+/// <summary>Answers listIndexes from fixtures, per collection when one is given; records every entity asked for.</summary>
 internal sealed class FakeIndexSource : IIndexSource
 {
     public List<BsonDocument> IndexDocuments { get; set; } =
@@ -138,25 +146,18 @@ internal sealed class FakeIndexSource : IIndexSource
         new BsonDocument { ["name"] = "_id_", ["key"] = new BsonDocument("_id", 1) },
     ];
 
-    public BsonDocument? ExplainDocument { get; set; }
+    /// <summary>The index lists of particular collections; any other collection answers <see cref="IndexDocuments"/>.</summary>
+    public Dictionary<string, List<BsonDocument>> ByCollection { get; } = new(StringComparer.Ordinal);
 
-    public int IndexCalls { get; private set; }
+    public int IndexCalls => Asked.Count;
 
-    public int ExplainCalls { get; private set; }
-
-    public int? ExplainMaxTimeMs { get; private set; }
+    /// <summary>The entities whose index list was read, in order.</summary>
+    public List<string> Asked { get; } = [];
 
     public Task<IReadOnlyList<BsonDocument>> IndexesAsync(EntityDef entity, CancellationToken cancellationToken)
     {
-        IndexCalls++;
-        return Task.FromResult<IReadOnlyList<BsonDocument>>(IndexDocuments);
-    }
-
-    public Task<BsonDocument?> ExplainAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, int maxTimeMs, CancellationToken cancellationToken)
-    {
-        ExplainCalls++;
-        ExplainMaxTimeMs = maxTimeMs;
-        return Task.FromResult(ExplainDocument);
+        Asked.Add(entity.Id);
+        return Task.FromResult<IReadOnlyList<BsonDocument>>(ByCollection.TryGetValue(entity.Collection, out var listed) ? listed : IndexDocuments);
     }
 }
 

@@ -5,7 +5,25 @@ using OxQL.Model;
 namespace OxQL.Mongo;
 
 /// <summary>The bounds one aggregate runs under, and the collation it carries when the pipeline folds a string.</summary>
-public sealed record AggregateRunOptions(int MaxTimeMs, bool? AllowDiskUse, BsonDocument? Collation = null);
+public sealed record AggregateRunOptions(int MaxTimeMs, bool? AllowDiskUse, BsonDocument? Collation = null)
+{
+    /// <summary>
+    /// How many rows the aggregate is expected to return at most: the cursor's batch is sized to it,
+    /// so the rows arrive in the reply of the aggregate itself instead of a first batch of 101 and a
+    /// <c>getMore</c> for the rest. Null leaves the server's default, which suits an aggregate that
+    /// returns a row or two (a count, a probe). The server still ends a reply at 16 MB whatever the
+    /// batch asks for, and the rest then costs a <c>getMore</c>.
+    /// </summary>
+    public int? BatchSize { get; init; }
+
+    /// <summary>
+    /// The command's <c>comment</c>: the request's correlation id, so an aggregate seen in the
+    /// database's profiler, its slow-query log or <c>currentOp</c> is found from the request that
+    /// sent it, and from the log lines of every service the request passed. It is not part of the
+    /// query's shape, so it changes neither the plan nor what the plan cache keeps. Null sends none.
+    /// </summary>
+    public string? Comment { get; init; }
+}
 
 /// <summary>Runs one aggregate against an entity's collection. The executor's only contact with the database, so tests replace it with fixture rows.</summary>
 public interface IAggregateRunner
@@ -17,6 +35,15 @@ public interface IAggregateRunner
 /// <summary>Runs aggregates on the host's client, resolving each entity's collection from the model.</summary>
 public sealed class MongoAggregateRunner : IAggregateRunner
 {
+    /// <summary>
+    /// The largest cursor batch the runner asks for, whatever <see cref="AggregateRunOptions.BatchSize"/>
+    /// names: twice the default report page. A larger result comes in several replies, as it would have.
+    /// </summary>
+    public const int MaxBatchSize = 10_000;
+
+    /// <summary>The longest <see cref="AggregateRunOptions.Comment"/> sent; a longer one is cut.</summary>
+    public const int MaxCommentLength = 128;
+
     private readonly IMongoClient client;
     private readonly string? defaultDatabase;
 
@@ -48,8 +75,52 @@ public sealed class MongoAggregateRunner : IAggregateRunner
         if (options.Collation is { } collation)
             aggregateOptions.Collation = Collation.FromBsonDocument(collation);
 
+        if (options.Comment is { Length: > 0 } comment)
+            aggregateOptions.Comment = comment.Length > MaxCommentLength ? comment[..MaxCommentLength] : comment;
+
+        // A batch of 0 would ask for an empty first reply and a getMore for every row.
+        if (options.BatchSize is { } batchSize and > 0)
+            aggregateOptions.BatchSize = Math.Min(batchSize, MaxBatchSize);
+
         using var cursor = await collection.AggregateAsync(definition, aggregateOptions, cancellationToken).ConfigureAwait(false);
 
-        return await cursor.ToListAsync(cancellationToken).ConfigureAwait(false);
+        // Nobody measures this aggregate: read it as the driver does.
+        if (AggregateRunStats.Current is not { } stats)
+            return await cursor.ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        // The command's own reply is here; every batch after the first cost a getMore.
+        stats.FirstBatch = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        var rows = new List<BsonDocument>();
+        var batches = 0;
+
+        while (await cursor.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+        {
+            batches++;
+            rows.AddRange(cursor.Current);
+        }
+
+        stats.GetMores = Math.Max(0, batches - 1);
+        stats.RoundTripMs = RoundTripMs();
+
+        return rows;
+    }
+
+    /// <summary>The round-trip time the driver's heartbeat last measured to the server it reads from; null while it knows none.</summary>
+    private double? RoundTripMs()
+    {
+        try
+        {
+            var servers = client.Cluster.Description.Servers.Where(server => server.State == MongoDB.Driver.Core.Servers.ServerState.Connected).ToList();
+            var chosen = servers.FirstOrDefault(server => server.Type is MongoDB.Driver.Core.Servers.ServerType.ReplicaSetPrimary or MongoDB.Driver.Core.Servers.ServerType.Standalone or MongoDB.Driver.Core.Servers.ServerType.ShardRouter)
+                ?? servers.FirstOrDefault();
+
+            return chosen?.AverageRoundTripTime.TotalMilliseconds;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException or NotSupportedException)
+        {
+            // A client that is not a driver's own (a test's) has no cluster to ask.
+            return null;
+        }
     }
 }

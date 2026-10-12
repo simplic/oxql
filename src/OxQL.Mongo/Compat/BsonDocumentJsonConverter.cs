@@ -10,7 +10,7 @@ namespace OxQL.Mongo.Compat;
 /// GUIDs (binary sub-types 3 and 4) are rendered as standard
 /// <c>"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"</c> strings.
 /// </summary>
-public sealed class BsonDocumentJsonConverter : JsonConverter<BsonDocument>
+internal sealed class BsonDocumentJsonConverter : JsonConverter<BsonDocument>
 {
     /// <inheritdoc />
     public override BsonDocument? Read(

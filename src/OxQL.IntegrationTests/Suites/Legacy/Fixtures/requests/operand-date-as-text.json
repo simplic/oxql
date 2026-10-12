@@ -1,0 +1,17 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "EndDateTime": {
+          "gte": "2026-06-08T00:00:00Z"
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

@@ -30,14 +30,12 @@ public class CorpusSeedTests(ITestOutputHelper output)
 
             if (expected.Count > 500)
             {
-                var counted = await client.SendAsync(entityId, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-
-                counted.ShouldHaveTotal(expected.Count, capped: false);
+                (await client.CountOnlyAsync(entityId, "[]")).ShouldCount("exact", expected.Count);
                 continue;
             }
 
             var key = Corpus.Entity(entityId).KeyPath;
-            var answer = await client.SendAsync(entityId, $$"""[{ "sort": [{ "{{key}}": "asc" }] }, { "page": { "limit": 500, "includeTotalCount": true } }]""");
+            var answer = await client.SendAsync(entityId, $$"""[{ "sort": [{ "{{key}}": "asc" }] }, { "page": { "limit": 500, "count": true } }]""");
 
             answer.ShouldHaveTotal(expected.Count);
             answer.Strings(key)

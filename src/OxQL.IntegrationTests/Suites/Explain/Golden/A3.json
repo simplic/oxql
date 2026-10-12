@@ -1,0 +1,338 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "strict": true,
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "invoiceRecipient.address.id",
+          "as": "recipientContact"
+        }
+      },
+      {
+        "project": {
+          "number": 1,
+          "invoiceRecipient": 1,
+          "recipientContact.id": 1,
+          "recipientContact.primaryEmailAddress.email": 1,
+          "recipientContact.primaryPhoneNumber.number": 1,
+          "recipientContact.address.companyName": 1
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "executable": "yes",
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": ["directory"],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {"code":"OWNER_BINDS","message":"'recipientContact' comes from another service; its owner binds the filter and every path under the alias.","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","services":["directory"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'recipientContact' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":1,"path":"invoiceRecipient.address.id","params":{"alias":"recipientContact","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'recipientContact' is joined after the page is taken, for the page's rows only.","stage":1,"path":"recipientContact","params":{"alias":"recipientContact","kind":"resolve"},"basis":"advisory"},
+      {"code":"PROJECT_AFTER_PAGE","message":"The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.","stage":2,"basis":"advisory"},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 100, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","params":{"limit":100,"max":5000},"basis":"advisory"}
+    ],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:ledger.transaction"
+          },
+          "rules": {}
+        }
+      },
+      {
+        "index": 1,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "keyed-remote",
+          "phase": "afterPage",
+          "host": "directory",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"invoiceRecipient.address.id","use":"resolveKey"}
+        ],
+        "creates": ["recipientContact"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:ledger.transaction",
+            "recipientContact": "t:directory.contact"
+          },
+          "rules": {
+            "recipientContact": "r:1"
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "project",
+        "status": "ok",
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"invoiceRecipient","use":"project"},
+          {"path":"recipientContact.id","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.primaryEmailAddress.email","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.primaryPhoneNumber.number","use":"project","alias":"recipientContact"},
+          {"path":"recipientContact.address.companyName","use":"project","alias":"recipientContact"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "projection": ["id","invoiceRecipient","number","recipientContact.address.companyName","recipientContact.id","recipientContact.primaryEmailAddress.email","recipientContact.primaryPhoneNumber.number"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "recipientContact": "t:directory.contact"
+          },
+          "rules": {
+            "recipientContact": "r:1"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "recipientContact": {
+        "stage": 1,
+        "node": "remote",
+        "entities": ["directory.contact"],
+        "heldBy": "directory",
+        "complete": true,
+        "lookupOn": true,
+        "reference": {
+          "path": "invoiceRecipient.address.id",
+          "name": "address",
+          "cases": [
+            {
+              "targets": [
+                {
+                  "entity": "directory.contact",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "loads": ["address.companyName","id","primaryEmailAddress.email","primaryPhoneNumber.number"],
+        "shows": ["address.companyName","id","primaryEmailAddress.email","primaryPhoneNumber.number"],
+        "targets": [
+          {
+            "target": "directory.contact",
+            "service": "directory",
+            "remote": true,
+            "grouped": false,
+            "owner": 0,
+            "continued": [],
+            "notApplicable": [],
+            "type": "t:directory.contact"
+          }
+        ],
+        "type": "t:directory.contact"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "service": "ledger"
+      },
+      "t:directory.contact": {
+        "entity": "directory.contact",
+        "service": "directory"
+      }
+    },
+    "rules": {
+      "r:1": {
+        "self": "40000",
+        "under": "owner",
+        "filter": true
+      }
+    },
+    "result": {
+      "paging": "cursor",
+      "identity": {
+        "kind": "entity",
+        "entity": "ledger.transaction",
+        "key": ["id"]
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "recipientContact",
+          "entity": "directory.contact",
+          "key": "recipientContact.id",
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.id","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.accountNumber","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.companyName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.firstName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.lastName","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.taxGroupId","kind":"guid","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:1"},
+        {"path":"invoiceRecipient.vatId","kind":"string","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:2"},
+        {"path":"invoiceRecipient.address","kind":"object","nullable":true,"root":"invoiceRecipient","present":"ifStored","can":"c:3"},
+        {"path":"recipientContact.address.companyName","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"},
+        {"path":"recipientContact.id","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:5"},
+        {"path":"recipientContact.primaryEmailAddress.email","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"},
+        {"path":"recipientContact.primaryPhoneNumber.number","kind":"unknown","nullable":true,"stage":1,"root":"recipientContact","present":"ifJoined","can":"c:4"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "semiJoin",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        },
+        "c:5": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "semiJoin",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        }
+      }
+    },
+    "owners": [
+      {
+        "service": "directory",
+        "remote": true,
+        "route": {
+          "apiName": "directory-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      }
+    ],
+    "catalog": []
+  }
+}

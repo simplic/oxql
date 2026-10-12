@@ -52,7 +52,7 @@ public class CaseInsensitiveCompileTests
                 { "number": { "gt": "a" } },
                 { "number": { "startsWith": "a.b" } },
                 { "number": { "contains": "a" } },
-                { "number": { "endsWith": "a" } } ] } }, { "page": { "includeTotalCount": true } }]
+                { "number": { "endsWith": "a" } } ] } }, { "page": { "count": true } }]
             """);
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
@@ -63,8 +63,8 @@ public class CaseInsensitiveCompileTests
                 { Number: { $nin: ['a'] } },
                 { Number: { $gt: 'a' } },
                 { Number: { $gte: 'a.b', $lt: 'a.b￿' } },
-                { Number: /a/i },
-                { Number: /a$/i } ] } }
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i } ] } }
             """));
         compiled.CountStages![1].ShouldBeBson(compiled.PageStages[1], "the count reads the same filter");
         compiled.Collation.Should().NotBeNull();
@@ -103,7 +103,7 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task An_exact_comparison_on_its_own_is_the_plain_form_without_a_collation()
     {
-        var compiled = await Compile("""[{ "match": { "number": { "eq": "a.b", "options": { "caseSensitive": true } }, "note": { "startsWith": "a", "options": { "ignoreCase": false } } } }]""");
+        var compiled = await Compile("""[{ "match": { "number": { "eq": "a.b", "options": { "caseSensitive": true } }, "note": { "startsWith": "a", "options": { "caseSensitive": true } } } }]""");
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { $and: [ { Number: 'a.b' }, { Note: /^a/ } ] } }"));
         compiled.Collation.Should().BeNull();
@@ -115,7 +115,7 @@ public class CaseInsensitiveCompileTests
         var compiled = await Compile("""
             [{ "match": { "count": { "gte": 1 }, "when": { "lt": "2026-01-01T00:00:00Z" }, "customerId": { "eq": "195fb742-82b3-405e-b77b-42838eb0aaa9" }, "flag": { "eq": true }, "state": { "in": ["Open"] } } },
              { "sort": [{ "count": "desc" }] },
-             { "page": { "limit": 20, "includeTotalCount": true } }]
+             { "page": { "limit": 20, "count": true } }]
             """);
 
         ShouldBe(compiled.PageStages,
@@ -126,7 +126,7 @@ public class CaseInsensitiveCompileTests
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
             """{ $match: { $and: [ { Count: { $gte: NumberLong(1) } }, { When: { $lt: ISODate("2026-01-01T00:00:00Z") } }, { CustomerId: BinData(4, "GV+3QoKzQF63e0KDjrCqqQ==") }, { Flag: true }, { State: { $in: [0] } } ] } }""",
-            "{ $limit: 100001 }",
+            "{ $limit: 1001 }",
             "{ $count: 'n' }");
         compiled.Collation.Should().BeNull();
     }
@@ -173,7 +173,7 @@ public class CaseInsensitiveCompileTests
         // The equality leg compares under the collation, so a neighbour that differs only in
         // case falls through to the key leg rather than being skipped or repeated.
         next.PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
-            { $match: { $and: [ {{OrgJson}}, { $or: [ { Number: 'abc', _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: 'abc' } } ] } ] } }
+            { $match: { $and: [ {{OrgJson}}, { Number: { $gte: 'abc' } }, { $or: [ { Number: 'abc', _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: 'abc' } } ] } ] } }
             """));
         next.Collation!.ShouldBeBson(DefaultCollation);
 
@@ -186,7 +186,7 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task A_join_on_a_guid_key_is_unchanged_inside_a_collated_aggregate()
     {
-        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"], "filter": { "matchCode": { "eq": "m" } } } }]""");
+        var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "filter": { "matchCode": { "eq": "m" } } } }]""");
 
         compiled.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }

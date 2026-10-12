@@ -1,0 +1,43 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "Number": {
+          "eq": "RE-2026-0042"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items",
+        "as": "Item",
+        "includeIndex": "Position"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Position": 1,
+        "Item": {
+          "Text": 1,
+          "_t": 1,
+          "SortNumber": 1
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Position": "desc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 3,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

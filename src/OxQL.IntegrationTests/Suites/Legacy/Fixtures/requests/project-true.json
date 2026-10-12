@@ -1,0 +1,17 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "project": {
+        "Number": true
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

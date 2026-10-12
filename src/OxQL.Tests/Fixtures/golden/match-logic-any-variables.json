@@ -1,0 +1,50 @@
+{
+  "description": "Logical groups, an any over an array and a variable in a local condition.",
+  "entity": "probe.order",
+  "variables": {
+    "max": 5
+  },
+  "pipeline": [
+    {
+      "match": {
+        "or": [
+          {
+            "flag": {
+              "eq": true
+            }
+          },
+          {
+            "not": {
+              "and": [
+                {
+                  "count": {
+                    "gt": 1
+                  }
+                },
+                {
+                  "count": {
+                    "lt": {
+                      "$var": "max"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "items": {
+          "any": {
+            "quantity": {
+              "gt": 1
+            },
+            "price.currency": {
+              "eq": "EUR"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "fingerprint": "sha256:738b9fc764ba7583385e50c7f014bf63b0d56000c7b77f626cb25da3e483bc11",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"match\":{\"and\":[{\"or\":[{\"path\":\"Flag\",\"op\":\"eq\",\"operand\":true,\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"not\":{\"and\":[{\"path\":\"Count\",\"op\":\"gt\",\"operand\":{\"$numberLong\":\"1\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Count\",\"op\":\"lt\",\"operand\":{\"$numberLong\":\"5\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false}]}}]},{\"any\":{\"path\":\"Items\",\"inner\":{\"and\":[{\"path\":\"Quantity\",\"op\":\"gt\",\"operand\":{\"$numberLong\":\"1\"},\"caseSensitive\":true,\"semiJoin\":false,\"addonDecimal\":false},{\"path\":\"Price.Currency\",\"op\":\"eq\",\"operand\":\"EUR\",\"caseSensitive\":false,\"semiJoin\":false,\"addonDecimal\":false}]}}}]}},{\"page\":{\"limit\":100}}],\"paging\":\"keyset\",\"page\":{\"limit\":100,\"cursor\":null}}"
+}

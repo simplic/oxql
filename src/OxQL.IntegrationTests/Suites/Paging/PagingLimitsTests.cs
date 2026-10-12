@@ -23,7 +23,7 @@ namespace OxQL.IntegrationTests.Suites.Paging;
 [Trait("Category", "Integration")]
 public class PagingLimitsTests
 {
-    /// <summary>The defaults every host runs with, as <c>LimitOptions</c> documents them; nineteen names.</summary>
+    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; forty-one names (the explain limits last).</summary>
     private static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>
     {
         ["maxPageSize"] = 500,
@@ -31,20 +31,50 @@ public class PagingLimitsTests
         ["maxPipelineStages"] = 20,
         ["maxLookupStages"] = 5,
         ["maxUnwindStages"] = 5,
-        ["maxResolveStages"] = 2,
-        ["maxGroupFields"] = 20,
+        ["maxResolveStages"] = 8,
+        ["maxGroupFields"] = 40,
         ["maxProjectionFields"] = 500,
         ["maxConditions"] = 200,
+        ["maxFilterEntries"] = 64,
         ["maxVariables"] = 64,
         ["maxOffset"] = 5_000,
         ["countCap"] = 100_000,
         ["maxSemiJoinIds"] = 5_000,
         ["resolveKeyChunk"] = 500,
-        ["maxResolveKeys"] = 2_000,
+        ["maxResolveKeys"] = 10_000,
         ["maxRequestBytes"] = 262_144,
         ["maxBatchQueries"] = 10,
         ["regexMaxLength"] = 200,
         ["maxLookupLimit"] = 100,
+        ["maxFlattenDepth"] = 5,
+        ["maxContinuedStages"] = 8,
+        ["maxReportPageSize"] = 5_000,
+        ["maxReportedRows"] = 50,
+        ["chainTimeoutMs"] = 6_000,
+        ["negativeResolveTtlSeconds"] = 10,
+        ["explainRemoteTimeoutMs"] = 1_500,
+        ["explainTimeoutMs"] = 2_000,
+        ["explainMaxRequestBytes"] = 65_536,
+        ["explainMaxStages"] = 30,
+        ["explainMaxCatalogEntries"] = 10,
+        ["explainMaxShapeDepth"] = 3,
+        ["explainDefaultShapeDepth"] = 2,
+        ["explainMaxTypeMembers"] = 300,
+        ["explainMaxAnswerBytes"] = 262_144,
+        ["explainMaxOwnerServices"] = 4,
+        ["explainMaxOwnerCalls"] = 8,
+        ["explainMaxBatchChecks"] = 64,
+        // The fleet's hosts raise the rate and concurrency of explain for the suites (FleetHost); the defaults are 120, 30, 20, 5, 2 and 8.
+        ["explainRatePerMinute"] = 600_000,
+        ["explainRateBurst"] = 100_000,
+        ["explainOwnerRatePerMinute"] = 600_000,
+        ["explainOwnerRateBurst"] = 100_000,
+        ["explainMaxConcurrentPerUser"] = 1_000,
+        ["explainMaxConcurrentPerHost"] = 1_000,
+        ["explainMaxConcurrentPerCaller"] = 4,
+        ["maxValuesLimit"] = 500,
+        ["valuesScanRows"] = 50_000,
+        ["valuesDefaultLimit"] = 100,
     };
 
     private static int Limit(string name) => Defaults[name];
@@ -67,7 +97,7 @@ public class PagingLimitsTests
     // ── U25 — where the numbers come from ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task U25_every_host_publishes_all_nineteen_limits_on_health_at_their_defaults()
+    public async Task U25_every_host_publishes_every_limit_on_health_at_its_default()
     {
         // The legacy half that compared them with the generated TypeScript modules is the client's.
         foreach (var service in LabService.All)
@@ -119,13 +149,12 @@ public class PagingLimitsTests
     }
 
     [Fact]
-    public async Task U11_max_offset_5000_is_served_and_5001_is_refused_with_the_number()
+    public async Task U11_max_offset_bounds_no_contract_2_page_because_a_page_has_no_offset()
     {
         var client = await Transport();
 
         (await client.SendAsync(Corpus.Template, $$"""[{ "project": { "id": 1 } }, { "page": { "limit": 1, "offset": {{Limit("maxOffset")}} } }]"""))
-            .ShouldHaveIds(Corpus.PageOf(Corpus.SortedIds(Corpus.Template, "id"), limit: 1, offset: Limit("maxOffset")));
-        ShouldRefuseAt(await client.SendAsync(Corpus.Template, $$"""[{ "page": { "limit": 1, "offset": {{Limit("maxOffset") + 1}} } }]"""), "MAX_OFFSET_EXCEEDED", Limit("maxOffset"));
+            .ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400);
     }
 
     // ── U3 · U4 · U5 · U6 · U7 · U8 · U15 — stage counts ───────────────────────────────────
@@ -144,9 +173,9 @@ public class PagingLimitsTests
     [Fact]
     public async Task U05_max_unwind_stages_five_unwinds_run_and_six_are_refused()
     {
-        string[] paths = ["items", "items.weightNotes", "documents", "tags", "billingLines", "billingLines.costCenters"];
+        string[] paths = ["items", "u0.weightNotes", "documents", "tags", "billingLines", "u4.costCenters"];
         var client = await Transport();
-        string Unwinds(int count) => Repeat(count, index => $$"""{ "unwind": { "path": "{{paths[index]}}" } }""");
+        string Unwinds(int count) => Repeat(count, index => $$"""{ "unwind": { "path": "{{paths[index]}}", "as": "u{{index}}" } }""");
 
         (await client.SendAsync(Corpus.Shipment, $$"""[{{Unwinds(Limit("maxUnwindStages"))}}, { "page": { "limit": 1 } }]""")).ShouldBeOk();
         ShouldRefuseAt(await client.SendAsync(Corpus.Shipment, $$"""[{{Unwinds(Limit("maxUnwindStages") + 1)}}, { "page": { "limit": 1 } }]"""), "MAX_UNWIND_STAGES_EXCEEDED", Limit("maxUnwindStages"));
@@ -202,7 +231,7 @@ public class PagingLimitsTests
     }
 
     [Fact]
-    public async Task U06_max_resolve_stages_two_resolves_run_and_three_are_refused()
+    public async Task U06_max_resolve_stages_eight_resolves_run_and_nine_are_refused()
     {
         var client = await Transport();
         static string Resolves(int count) => Repeat(count, index => $$"""{ "resolve": { "path": "createUserId", "as": "r{{index}}" } }""");
@@ -329,7 +358,7 @@ public class PagingLimitsTests
         var client = await Transport();
         var dup = Corpus.Where(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP").Count;
         static object[] Entries(int count) => Enumerable.Range(0, count)
-            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "includeTotalCount": true } }] }""")
+            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": true } }] }""")
             .ToArray();
 
         var at = await client.BatchAsync(Entries(Limit("maxBatchQueries")));
@@ -345,18 +374,17 @@ public class PagingLimitsTests
     // ── U17 — the count cap, against the bulk organisation ────────────────────────────────
 
     [Fact]
-    public async Task U17_count_cap_exactly_100000_matches_count_exactly_and_100001_answer_the_cap_with_the_diagnostic()
+    public async Task U17_count_cap_exactly_100000_matches_count_exactly_and_100001_answer_the_cap_as_a_lower_bound()
     {
         var shared = await CorpusFleet.SharedAsync();
         await shared.SeedBulkAsync();
         var client = shared.Client(LabService.Transport, Org.C);
 
-        var at = await client.SendAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        at.ShouldHaveTotal(Limit("countCap"), capped: false).ShouldHaveNoDiagnostics();
+        var at = await client.CountOnlyAsync(Corpus.Template, $$"""[{ "match": { "templateName": { "lt": "{{BulkRows.NameOf(BulkRows.Count)}}" } } }]""", budgetMs: 5_000);
+        at.ShouldCount("exact", Limit("countCap")).ShouldHaveNoDiagnostics();
 
-        var over = await client.SendAsync(Corpus.Template, """[{ "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
-        over.ShouldHaveTotal(Limit("countCap"), capped: true);
-        over.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
+        var over = await client.CountOnlyAsync(Corpus.Template, "[]", budgetMs: 5_000);
+        over.ShouldCount("atLeast", Limit("countCap"), "cap").ShouldHaveNoDiagnostics();
     }
 
     // ── the resolve limits, reached through variants ──────────────────────────────────────

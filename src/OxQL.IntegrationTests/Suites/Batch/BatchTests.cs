@@ -30,7 +30,7 @@ public class BatchTests
 
     private static JsonObject Query(string pipeline, object? variables = null) => Json.Request(Corpus.Employee, pipeline, variables);
 
-    private static JsonObject Heavy() => Json.Request(Corpus.Template, """[ { "sort": [ { "templateName": "desc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } } ]""");
+    private static JsonObject Heavy() => Json.Request(Corpus.Template, """[ { "sort": [ { "templateName": "desc" } ] }, { "page": { "limit": 500, "count": true } } ]""");
 
     [Fact]
     public async Task R01_R02_R03_one_POST_carrying_queries_answers_200_with_one_full_body_per_entry_in_order()
@@ -70,7 +70,7 @@ public class BatchTests
         {
             ["type"] = "validation_error",
             ["title"] = "The request could not be bound.",
-            ["errors"] = new JsonArray(new JsonObject { ["code"] = "UNKNOWN_PATH", ["message"] = $"'nosuchpath' is not a path of {Corpus.Employee}.", ["stage"] = 0, ["path"] = "nosuchpath" }),
+            ["errors"] = new JsonArray(new JsonObject { ["code"] = "UNKNOWN_PATH", ["message"] = $"'nosuchpath' is not a path of {Corpus.Employee}.", ["stage"] = 0, ["path"] = "nosuchpath", ["params"] = new JsonObject { ["reason"] = "notAMember", ["entity"] = Corpus.Employee } }),
         }.ToJsonString(), "R3: a refusal entry carries no status member");
     }
 
@@ -97,10 +97,25 @@ public class BatchTests
         answer.Results.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A client over the 100 001 bulk rows of organisation C, where <see cref="Heavy"/> sorts long
+    /// enough to run out of a millisecond every time. The server ends a command at its next interrupt
+    /// check after the limit, so a sort of organisation A's few thousand rows gets through a limit of
+    /// one millisecond every few runs when its page comes in one reply; measured, 109 of 600.
+    /// </summary>
+    private static async Task<LabClient> OverBulkAsync()
+    {
+        var shared = await CorpusFleet.SharedAsync();
+
+        await shared.SeedBulkAsync();
+
+        return shared.Client(LabService.Transport, Org.C);
+    }
+
     [Fact]
     public async Task R05_an_entry_that_times_out_carries_the_timeout_class_and_QUERY_TIMEOUT()
     {
-        var answer = await (await Lab.ClientAsync(LabService.Transport)).BatchAsync([Heavy()], maxTimeMs: 1);
+        var answer = await (await OverBulkAsync()).BatchAsync([Heavy()], maxTimeMs: 1);
 
         answer.StatusCode.Should().Be(200);
         var entry = answer.Results.Should().ContainSingle().Subject;
@@ -132,18 +147,18 @@ public class BatchTests
         var all = All();
         var client = await Staff();
 
-        var first = await client.BatchAsync([Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "includeTotalCount": true } } ]""")]);
+        var first = await client.BatchAsync([Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "count": true } } ]""")]);
         first.Results[0].ShouldHaveIds([all[0], all[1]]).ShouldHaveTotal(all.Count);
         var cursor = first.Results[0].NextCursor;
         cursor.Should().NotBeNullOrEmpty();
 
         var second = await client.BatchAsync([
-            Query($$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "cursor": "{{cursor}}", "includeTotalCount": false } } ]"""),
-            Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "includeTotalCount": true } } ]"""),
+            Query($$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "cursor": "{{cursor}}", "count": false } } ]"""),
+            Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 2, "count": true } } ]"""),
         ]);
 
         second.Results[0].ShouldHaveIds([all[2], all[3]]);
-        second.Results[0].TotalCount.Should().BeNull();
+        second.Results[0].ShouldCount("atLeast", 5, "page", because: "no count was asked: the two pages served four rows and a fifth is known to follow");
         second.Results[1].ShouldHaveIds([all[0], all[1]]).ShouldHaveTotal(all.Count);
     }
 
@@ -161,7 +176,7 @@ public class BatchTests
         answer.Results[0].ShouldHaveIds([all[0]]);
         answer.Results[0].Items[0]!.AsObject().Count.Should().BeGreaterThan(2, "the first entry carries the whole row");
         answer.Results[1].ShouldHaveIds([all[0]]).Items[0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "matchCode"]);
-        // Finding R7: the caller projects the displayed columns and sorts by the key; the key is
+        // The caller projects the displayed columns and sorts by the key; the key is
         // kept through the inclusion projection and the sort is served.
         answer.Results[2].ShouldHaveIds(all.Take(3));
     }
@@ -211,14 +226,14 @@ public class BatchTests
     {
         var client = await Lab.ClientAsync(LabService.Transport);
 
-        var tight = await client.BatchAsync([Heavy(), Heavy()], maxTimeMs: 1);
+        var tight = await (await OverBulkAsync()).BatchAsync([Heavy(), Heavy()], maxTimeMs: 1);
         tight.StatusCode.Should().Be(200);
         tight.Results.Select(entry => entry.Type).Should().Equal("timeout", "timeout");
         tight.Results.SelectMany(entry => entry.ErrorCodes).Should().Equal("QUERY_TIMEOUT", "QUERY_TIMEOUT");
 
         var expected = Corpus.PageOf(Corpus.SortedIds(Corpus.Template, "templateName", descending: true), limit: 500);
         var generous = await client.BatchAsync([Heavy()], maxTimeMs: 30_000);
-        generous.Results[0].ShouldHaveIds(expected).ShouldHaveTotal(Corpus.Counts(Corpus.Template).A);
+        generous.Results[0].ShouldHaveIds(expected).ShouldCount("atLeast", 1_000, "step");
     }
 
     [Fact]
@@ -240,7 +255,7 @@ public class BatchTests
 
         var answer = await (await Staff()).BatchAsync([
             Query("""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]"""),
-            Query("""[ { "match": { "matchCode": { "eq": "DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "includeTotalCount": true } } ]"""),
+            Query("""[ { "match": { "matchCode": { "eq": "DUP" } } }, { "project": { "id": 1 } }, { "page": { "limit": 1, "count": true } } ]"""),
             Query("""[ { "project": { "id": 1, "group.displayKey": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500 } } ]"""),
         ]);
 

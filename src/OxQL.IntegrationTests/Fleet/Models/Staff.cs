@@ -1,3 +1,4 @@
+using MongoDB.Bson.Serialization.Attributes;
 using OxQL.Core.Attributes;
 
 namespace OxQL.IntegrationTests.Fleet.Models.Staff;
@@ -78,6 +79,13 @@ public class Employee
     public string? MatchCode { get; set; }
 
     public string? ExternalReference { get; set; }
+
+    /// <summary>
+    /// The user account the employee signs in with; what a transaction's <c>createUserId</c>
+    /// names. Left out when null, so the corpus rows, which have none, are stored as before.
+    /// </summary>
+    [BsonIgnoreIfNull]
+    public Guid? UserId { get; set; }
 
     public Dictionary<string, object>? Addon { get; set; }
 }

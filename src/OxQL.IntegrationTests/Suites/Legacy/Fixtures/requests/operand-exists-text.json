@@ -1,0 +1,17 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "Notes": {
+          "exists": "yes"
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

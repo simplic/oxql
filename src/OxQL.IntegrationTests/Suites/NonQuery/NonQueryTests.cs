@@ -3,7 +3,9 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson.Serialization;
 using OxQL.AspNetCore.Health;
+using OxQL.Core.Attributes;
 using OxQL.Core.Models;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
@@ -23,19 +25,29 @@ namespace OxQL.IntegrationTests.Suites.NonQuery;
 [Trait("Category", "Integration")]
 public class NonQueryTests
 {
-    private static readonly string[] Universal = ["batch", "group.page", "page.offset", "any"];
+    /// <summary>What every host lists whatever it can do: nothing; the contract number says what every engine has.</summary>
+    private static readonly string[] Universal = [];
 
     private static IEnumerable<string> Strings(JsonNode? node) => (node as JsonArray ?? []).Select(item => item!.GetValue<string>());
 
     /// <summary>
     /// The services a lab service's model reaches remotely, read off the model classes: every
-    /// <c>[OxQLReference]</c> at any depth whose target lives in another service and which names
-    /// the target field (a fieldless remote reference is a build finding, not a reference).
+    /// <c>[OxQLReference]</c> and <c>[OxQLReferenceWhen]</c> target at any depth of any of the
+    /// service's entities (their registered variants included) that lives in another service and
+    /// names the target field (a fieldless remote reference is a build finding, not a
+    /// reference), and every target of the service's host-side declarations.
     /// </summary>
     private static IReadOnlyList<string> RemoteServicesOf(LabService service)
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<Type>();
+        var variants = BsonClassMap.GetRegisteredClassMaps().Select(map => map.ClassType).ToList();
+
+        void Add(string target, string? field)
+        {
+            if (field is not null && target.Split('#')[0].Split('.')[0] is var key && key != service.Key)
+                found.Add(key);
+        }
 
         void Walk(Type type)
         {
@@ -44,18 +56,31 @@ public class NonQueryTests
 
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (property.GetCustomAttribute<OxQLReferenceAttribute>() is { Field: not null } reference
-                    && reference.Entity.Split('.')[0] is var target && target != service.Key)
-                    found.Add(target);
+                if (property.GetCustomAttribute<OxQLReferenceAttribute>() is { } reference)
+                    Add(reference.Entity, reference.Field);
+
+                foreach (var when in property.GetCustomAttributes<OxQLReferenceWhenAttribute>())
+                    foreach (var target in when.Targets)
+                        Add(target, when.Field);
 
                 var member = property.PropertyType;
                 var element = member.IsGenericType && typeof(IEnumerable).IsAssignableFrom(member) ? member.GetGenericArguments().Last() : member;
                 Walk(Nullable.GetUnderlyingType(element) ?? element);
             }
+
+            foreach (var variant in variants.Where(variant => variant != type && type.IsAssignableFrom(variant)))
+                Walk(variant);
         }
 
-        foreach (var entity in Corpus.Entities.Where(entity => entity.Service == service))
-            Walk(entity.ModelType);
+        var entities = typeof(LabService).Assembly.GetTypes()
+            .Where(type => type.GetCustomAttribute<OxQLTypeAttribute>() is { } declared && declared.TypeName.StartsWith(service.Key + ".", StringComparison.Ordinal));
+
+        foreach (var entity in entities)
+            Walk(entity);
+
+        foreach (var declaration in service.References?.All ?? [])
+            foreach (var target in declaration.Targets)
+                Add(target, declaration.Field);
 
         return found.ToList();
     }
@@ -78,55 +103,79 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_four_plus_exactly_the_features_a_host_has_switched_on()
+    public async Task Y3_Y4_Y5_Y6_the_capabilities_are_the_universal_six_plus_exactly_the_features_a_host_has_switched_on()
     {
-        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "compat.v1"]).ToList();
+        var expectedFleet = Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"]).ToList();
 
         foreach (var service in LabService.All)
             Strings((await (await Lab.ClientAsync(service)).HealthAsync()).Body!["capabilities"]).Should().Equal(expectedFleet, service.Key);
 
+        // A contract 1 caller reads what it read from the published engine: the four earlier names, then the host's.
+        Strings((await (await Lab.ClientAsync(LabService.Transport)).Contract(null).HealthAsync()).Body!["capabilities"])
+            .Should().Equal(["batch", "group.page", "page.offset", "any", .. expectedFleet]);
+
         var shared = await CorpusFleet.SharedAsync();
 
-        // Y5: explain is published exactly when it is on, and the route answers to match.
-        var explain = await shared.Fleet.VariantAsync(LabService.Transport, "explain", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "true" });
-        using (var client = explain.Server.CreateClient())
+        // Y5: explain is published exactly when it is on (the default), and the route answers to match.
+        var explainOff = await shared.Fleet.VariantAsync(LabService.Transport, "explain-off", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "false" });
+        using (var client = explainOff.Server.CreateClient())
         {
             var body = JsonNode.Parse(await client.GetStringAsync("OxQL/health"))!;
-            Strings(body["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "explain", "compat.v1"]));
+            // A caller that names no contract on a host that answers contract 1 reads the names every engine listed before, first.
+            Strings(body["capabilities"]).Should().Equal(OxQL.Core.Engine.EngineCapabilities.Contract1.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "compat.v1"]));
         }
 
         // Y6: compat.v1 is published exactly when the compat binder is on.
-        var noCompat = shared.Variant(LabService.Staff, "b5-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
-        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin"]));
+        var noCompat = shared.Variant(LabService.Staff, "case-compat-off", new Dictionary<string, string?> { ["OxQL:Compat:Enabled"] = "false" });
+        Strings((await noCompat.HealthAsync()).Body!["capabilities"]).Should().Equal(Universal.Concat(["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain"]));
 
-        // Y4: resolve.remote and semiJoin need a remote query client.
+        // Y4: resolve.remote, semiJoin, resolve.chain and lookup.remote need a remote query client.
         await using var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport));
         var bareHealth = await bare.GetAsync("OxQL/health");
-        Strings(bareHealth.Body!["capabilities"]).Should().Equal(Universal.Concat(["compat.v1"]));
+        // This host sets nothing, so the legacy pipeline answers a caller without the header, and health lists what that pipeline honours.
+        Strings(bareHealth.Body!["capabilities"]).Should().Equal(["batch", "compat.v1"], "asked without the contract header: no remote name either way");
         bareHealth.Body!.AsObject().ContainsKey("remote").Should().BeFalse("a host with no remote client has no remote state to report");
     }
 
     [Fact]
-    public async Task Y8_the_limits_member_publishes_all_nineteen_limits_with_the_values_the_host_runs_under()
+    public async Task Y8_the_limits_member_publishes_every_limit_with_the_values_the_host_runs_under()
     {
         var defaults = new LimitOptions();
+        var options = new OxQLOptions();
         var expected = new Dictionary<string, int>
         {
             ["maxPageSize"] = defaults.MaxPageSize, ["defaultPageSize"] = defaults.DefaultPageSize, ["maxPipelineStages"] = defaults.MaxPipelineStages,
             ["maxLookupStages"] = defaults.MaxLookupStages, ["maxUnwindStages"] = defaults.MaxUnwindStages, ["maxResolveStages"] = defaults.MaxResolveStages,
-            ["maxGroupFields"] = defaults.MaxGroupFields, ["maxProjectionFields"] = defaults.MaxProjectionFields, ["maxConditions"] = defaults.MaxConditions,
+            ["maxGroupFields"] = defaults.MaxGroupFields, ["maxProjectionFields"] = defaults.MaxProjectionFields, ["maxConditions"] = defaults.MaxConditions, ["maxFilterEntries"] = defaults.MaxFilterEntries,
             ["maxVariables"] = defaults.MaxVariables, ["maxOffset"] = defaults.MaxOffset, ["countCap"] = defaults.CountCap,
             ["maxSemiJoinIds"] = defaults.MaxSemiJoinIds, ["resolveKeyChunk"] = defaults.ResolveKeyChunk, ["maxResolveKeys"] = defaults.MaxResolveKeys,
             ["maxRequestBytes"] = defaults.MaxRequestBytes, ["maxBatchQueries"] = defaults.MaxBatchQueries, ["regexMaxLength"] = defaults.RegexMaxLength,
             ["maxLookupLimit"] = defaults.MaxLookupLimit,
+            // the report limits
+            ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
+            ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
+            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
+            ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["explainTimeoutMs"] = options.Explain.TimeoutMs,
+            // the explain protection bounds, refused before anything is bound
+            ["explainMaxRequestBytes"] = Math.Min(defaults.MaxRequestBytes, options.Explain.MaxRequestBytes), ["explainMaxStages"] = options.Explain.MaxStages,
+            ["explainMaxCatalogEntries"] = options.Explain.MaxCatalogEntries, ["explainMaxShapeDepth"] = options.Explain.MaxShapeDepth,
+            // the size of an answer and the cost of one explain
+            ["explainDefaultShapeDepth"] = options.Explain.DefaultShapeDepth, ["explainMaxTypeMembers"] = options.Explain.MaxTypeMembers,
+            ["explainMaxAnswerBytes"] = options.Explain.MaxAnswerBytes, ["explainMaxOwnerServices"] = options.Explain.MaxOwnerServices,
+            ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls, ["explainMaxBatchChecks"] = options.Explain.MaxBatchChecks,
+            // the rate and concurrency of explain, which the fleet's hosts raise for the suites
+            ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainOwnerRatePerMinute"] = 600_000, ["explainOwnerRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
+            ["explainMaxConcurrentPerHost"] = 1_000, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
+            // the bounds of a values stage
+            ["maxValuesLimit"] = defaults.MaxValuesLimit, ["valuesScanRows"] = options.Values.ScanRows, ["valuesDefaultLimit"] = options.Values.DefaultLimit,
         };
-        expected.Should().HaveCount(19);
+        expected.Should().HaveCount(48);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();
         limits.ToDictionary(member => member.Key, member => member.Value!.GetValue<int>()).Should().BeEquivalentTo(expected);
 
-        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "b5-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = "1000" });
+        var capped = (await CorpusFleet.SharedAsync()).Variant(LabService.Transport, "case-countcap-1000", new Dictionary<string, string?> { ["OxQL:Limits:CountCap"] = "1000" });
         (await capped.HealthAsync()).Body!["limits"]!["countCap"]!.GetValue<int>().Should().Be(1000, "the body reports the host's configuration, not the defaults");
     }
 
@@ -153,7 +202,8 @@ public class NonQueryTests
             health.Body!["status"]!.GetValue<string>().Should().Be("healthy", "every reference reachable");
         }
 
-        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet"]);
+        RemoteServicesOf(LabService.Transport).Should().Equal(["fleet", "ledger", "staff"]);
+        RemoteServicesOf(LabService.Ledger).Should().Equal(["directory", "staff", "transport"]);
         RemoteServicesOf(LabService.Conformance).Should().Equal(["owner", "staff"]);
         RemoteServicesOf(LabService.Staff).Should().BeEmpty();
     }
@@ -161,7 +211,7 @@ public class NonQueryTests
     [Fact]
     public async Task Y12_an_owner_whose_health_is_down_makes_the_host_degraded_and_says_which_service()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-y12-degraded", seed: []);
+        await using var fleet = await CorpusFleet.CreateAsync("case-y12-degraded", seed: []);
         fleet.Owner.SetHealth(ChaosHealth.Down);
         var client = fleet.Client(LabService.Conformance);
         var host = await client.HostAsync();
@@ -178,7 +228,7 @@ public class NonQueryTests
     [Fact]
     public async Task Y11_reachability_is_measured_once_per_interval_however_often_health_is_asked()
     {
-        await using var fleet = await CorpusFleet.CreateAsync("b5-y11-cached", seed: []);
+        await using var fleet = await CorpusFleet.CreateAsync("case-y11-cached", seed: []);
         var client = fleet.Client(LabService.Conformance).Anonymous();
         var probe = (await client.HostAsync()).Services.GetRequiredService<RemoteHealthProbe>();
 
@@ -198,17 +248,21 @@ public class NonQueryTests
     }
 
     [Fact]
-    public async Task Y22_explain_is_404_while_disabled_and_answers_the_bound_pipeline_without_rows_when_enabled()
+    public async Task Y22_explain_answers_the_bound_pipeline_without_rows_by_default_and_is_404_on_a_host_that_switches_it_off()
     {
         var transport = await Lab.ClientAsync(LabService.Transport);
         var request = """{ "entityType": "transport.shipment", "pipeline": [{ "match": { "shipmentNumber": { "eq": "S-0001" } } }, { "page": { "limit": 1 } }] }""";
 
-        var off = await transport.ExplainHereAsync(request);
-        off.StatusCode.Should().Be(404);
-
-        var on = await transport.ExplainAsync(request);
+        var on = await transport.ExplainHereAsync(request);
         on.StatusCode.Should().Be(200, on.ToString());
         ((JsonObject)on.Body!).ContainsKey("items").Should().BeFalse("explain returns no rows");
+        on.Body!["valid"]!.GetValue<bool>().Should().BeTrue(on.ToString());
+
+        var shared = await CorpusFleet.SharedAsync();
+        var off = await shared.Fleet.VariantAsync(LabService.Transport, "explain-off", new Dictionary<string, string?> { ["OxQL:Explain:Enabled"] = "false" });
+        using var client = off.Server.CreateClient();
+
+        (await client.PostAsync("OxQL/explain", new StringContent(request, System.Text.Encoding.UTF8, "application/json"))).StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
     }
 
     [Fact]

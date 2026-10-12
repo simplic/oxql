@@ -96,7 +96,7 @@ public class RegisterCasesTests
     {
         var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "flag": 0, "organizationId": 0 } }]"""), Options);
 
-        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $project: { Flag: 0, OrganizationId: 0 } }"));
+        compiled.PageStages[^1].ShouldBeBson(BsonDocument.Parse("{ $project: { Flag: 0, OrganizationId: 0 } }"), "after the page is taken: the scope match reads the organisation before the projection drops it");
         await Error("""[{ "project": { "number": 1, "flag": 0 } }]""", Codes.MixedProjection);
     }
 
@@ -131,32 +131,41 @@ public class RegisterCasesTests
     [Fact]
     public async Task F12_ignoreCase_restates_the_fold_every_string_operator_makes_under_the_collation()
     {
-        (await Filter("""[{ "match": { "number": { "startsWith": "templatename", "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $gte: 'templatename', $lt: 'templatename￿' } }"));
-        (await Filter("""[{ "match": { "number": { "endsWith": "NAME 1", "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: /NAME\\ 1$/i }"));
-        (await Filter("""[{ "match": { "number": { "in": ["templatename 1"], "options": { "ignoreCase": true } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $in: [ 'templatename 1' ] } }"));
-        await Error("""[{ "match": { "number": { "regex": "^templatename", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
+        (await Filter("""[{ "match": { "number": { "startsWith": "templatename", "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $gte: 'templatename', $lt: 'templatename￿' } }"));
+        (await Filter("""[{ "match": { "number": { "endsWith": "NAME 1", "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(new BsonDocument("Number", new BsonRegularExpression(AccentFold.Pattern("NAME 1", new OxQL.Core.Models.CollationOptions()) + "$", "i")));
+        (await Filter("""[{ "match": { "number": { "in": ["templatename 1"], "options": { "caseSensitive": false } } } }]""")).ShouldBeBson(BsonDocument.Parse("{ Number: { $in: [ 'templatename 1' ] } }"));
+        await Error("""[{ "match": { "number": { "regex": "^templatename", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
     }
 
     [Fact]
-    public async Task F13_a_grouped_query_pages_by_offset_behind_the_cursor()
+    public async Task F13_a_grouped_query_pages_by_its_keys_and_by_offset_under_contract_1()
     {
-        var bound = await Bound("""[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        const string Pipeline = """[{ "group": { "by": [{ "path": "state", "as": "type" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 1 } }]""";
+        var bound = await Bound(Pipeline);
         var compiled = MongoCompiler.Compile(bound, Options);
 
-        bound.PagingMode.Should().Be(PagingMode.Offset);
-        compiled.PageStages.Should().ContainSingle(stage => stage.Contains("$sort"), "a grouped page is ordered by its keys or $skip pages an order Mongo never produced")
+        bound.PagingMode.Should().Be(PagingMode.Keyset);
+        compiled.PageStages.Should().ContainSingle(stage => stage.Contains("$sort"), "a grouped page is ordered by its keys")
             .Which["$sort"].AsBsonDocument.Should().BeEquivalentTo(new BsonDocument("type", 1), "the group keys order the page; no key is appended to a grouped shape");
-        MongoQueryEngine.NextCursor(compiled, new BsonDocument("type", 1)).Should().BeEquivalentTo(new CursorPayload(bound.Fingerprint, PagingMode.Offset, [], 1));
+        MongoQueryEngine.NextCursor(compiled, new BsonDocument("type", 1)).Should().BeEquivalentTo(
+            new CursorPayload(bound.Fingerprint, PagingMode.Keyset, [new CursorValue("type", true, new BsonInt32(1))], 0), "the cursor carries the last group's keys, and no record key: a group has none");
+
+        // Contract 1 pages a group by offset, as it always has.
+        var legacy = await BindHost.BoundAsync(BindHost.Probe, Order, Pipeline, BindHost.Context(contract: 1));
+        var written = MongoCompiler.Compile(legacy, Options with { AsWritten = true });
+
+        legacy.PagingMode.Should().Be(PagingMode.Offset);
+        MongoQueryEngine.NextCursor(written, new BsonDocument("type", 1)).Should().BeEquivalentTo(new CursorPayload(legacy.Fingerprint, PagingMode.Offset, [], 1));
     }
 
     [Fact]
     public async Task F14_the_scope_is_engine_owned_and_leads_the_pipeline_whatever_the_caller_writes()
     {
-        var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "id": 1, "number": 1, "flag": 1 } }, { "match": { "flag": { "eq": false } } }, { "page": { "limit": 20, "includeTotalCount": true } }]"""), Options);
+        var compiled = MongoCompiler.Compile(await Bound("""[{ "project": { "id": 1, "number": 1, "flag": 1 } }, { "match": { "flag": { "eq": false } } }, { "page": { "limit": 20, "count": true } }]"""), Options);
 
         compiled.PageStages[0]["$match"].AsBsonDocument.Names.Should().Equal("OrganizationId");
-        compiled.PageStages[1].Contains("$project").Should().BeTrue();
-        compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("{ $match: { Flag: false } }"));
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Flag: false } }"));
+        compiled.PageStages[^1].Contains("$project").Should().BeTrue("the projection cuts the page's rows, after the page is taken");
         compiled.CountStages![0].ShouldBeBson(compiled.PageStages[0]);
 
         // A caller cannot displace it: organizationId in a condition is an ordinary member, the scope stays.

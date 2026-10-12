@@ -1,0 +1,157 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items",
+        "as": "Item",
+        "preserveNull": true
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items.References",
+        "as": "Ref",
+        "preserveNull": true
+      }
+    },
+    {
+      "lookup": {
+        "from": "context_data",
+        "localPath": "Ref.ReferenceId",
+        "foreignPath": "_id",
+        "as": "ContextDatas",
+        "convert": "stringToUuid"
+      }
+    },
+    {
+      "unwind": {
+        "path": "ContextDatas",
+        "as": "ContextData",
+        "preserveNull": true
+      }
+    },
+    {
+      "project": {
+        "Id": 1,
+        "Number": 1,
+        "Reference": 1,
+        "Type": {
+          "Name": 1,
+          "ReportName": 1,
+          "ShortName": 1,
+          "Subtype": {
+            "Number": 1,
+            "Name": 1,
+            "Report": {
+              "Name": 1
+            }
+          }
+        },
+        "Date": 1,
+        "DeliveryDate": 1,
+        "FinancialPartner": {
+          "Id": 1,
+          "AccountNumber": 1,
+          "CompanyName": 1,
+          "FirstName": 1,
+          "LastName": 1,
+          "TaxGroupId": 1,
+          "Address": 1,
+          "VatId": 1
+        },
+        "Item": 1,
+        "Ref": 1,
+        "ContextData": 1,
+        "ConvertState": 1,
+        "FinancialAccountingPeriod": 1,
+        "States": 1,
+        "TaxGroup": 1,
+        "TotalPrice": 1,
+        "TotalPriceGross": 1,
+        "TotalPriceNet": 1,
+        "TotalPriceTax": 1,
+        "TransactionYear": 1,
+        "SignedTotalPriceNet": 1,
+        "SignedTotalPriceGross": 1,
+        "SignedTotalPrice": 1,
+        "SignedTotalPriceTax": 1,
+        "TaxKeyTotalPrices": {
+          "TaxKeyValue": 1,
+          "TotalPriceNet": 1,
+          "TotalPriceGross": 1,
+          "TotalPriceTax": 1
+        },
+        "Sign": 1,
+        "OperationItemCombinationMode": 1,
+        "IsGross": 1,
+        "FinancialExportDisabled": 1,
+        "ValidationResult": 1,
+        "DefaultCostCenters": 1,
+        "DefaultCostObjects": 1,
+        "CreateDateTime": 1,
+        "CreateUserId": 1,
+        "UpdateDateTime": 1,
+        "UpdateUserId": 1,
+        "UpdateUser": 1,
+        "ReferenceNumber": 1,
+        "TermsOfPayment": {
+          "Name": 1,
+          "Number": 1
+        },
+        "PaymentMethod": {
+          "Name": 1,
+          "Number": 1
+        },
+        "Currency": {
+          "Name": 1,
+          "Number": 1,
+          "ShortName": 1,
+          "Symbol": 1
+        },
+        "Description": 1,
+        "DeliveryAddress": 1,
+        "InvoiceRecipient": 1,
+        "Payer": 1,
+        "Creator": 1,
+        "Responsible": 1,
+        "Representative": 1,
+        "IsDeleted": 1,
+        "OrganizationId": 1,
+        "CashDiscountDate": 1,
+        "DraftConvertInformation": 1,
+        "DueDate": 1,
+        "Notes": 1,
+        "ManualVat": 1,
+        "Period": 1,
+        "Document": 1,
+        "CashDiscountTotal": 1,
+        "CashDiscountPercentValue": 1,
+        "BillToText": 1,
+        "Barcode": 1,
+        "Balance": 1,
+        "AlternativePaymentDeadline": 1,
+        "ReportingInformation": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Item.SortNumber": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 500
+      }
+    }
+  ]
+}

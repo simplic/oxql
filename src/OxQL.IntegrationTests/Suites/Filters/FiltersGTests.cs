@@ -245,8 +245,8 @@ public class FiltersGTests
 
         var numbers = string.Join(", ", rows.Select(row => $"\"{Corpus.Text(row, "shipmentNumber")}\""));
         var unwound = await (await TransportClient()).SendAsync(Corpus.Shipment, $$"""
-            [ { "match": { "shipmentNumber": { "in": [{{numbers}}] } } }, { "unwind": { "path": "items" } }, { "project": { "id": 1 } },
-              { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10, "includeTotalCount": true } } ]
+            [ { "match": { "shipmentNumber": { "in": [{{numbers}}] } } }, { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } },
+              { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10, "count": true } } ]
             """);
 
         unwound.ShouldHaveIds(kept).ShouldHaveTotal(kept.Count);

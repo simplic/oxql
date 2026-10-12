@@ -1,0 +1,882 @@
+{
+  "request": {
+    "entityType": "ledger.transaction",
+    "variables": {
+      "transactionId": "7d0e4c1a-3b9e-4d55-9a57-3f1f1b0f2c11"
+    },
+    "strict": true,
+    "pipeline": [
+      {
+        "match": {
+          "id": {
+            "eq": {
+              "$var": "transactionId"
+            }
+          }
+        }
+      },
+      {
+        "unwind": {
+          "path": "items",
+          "flatten": "items",
+          "as": "item",
+          "includeIndex": "position"
+        }
+      },
+      {
+        "match": {
+          "item": {
+            "is": "BillingLineTransactionItem"
+          }
+        }
+      },
+      {
+        "resolve": {
+          "path": "item.billingLineId",
+          "as": "erpLine"
+        }
+      },
+      {
+        "resolve": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "as": "sourceLine",
+          "parentAs": "sourceParent"
+        }
+      },
+      {
+        "lookup": {
+          "from": "transport.delivery_attempt",
+          "path": "shipmentId",
+          "on": "sourceParent",
+          "forTarget": "transport.shipment",
+          "as": "lastAttempt",
+          "first": true,
+          "sort": [
+            {
+              "dateTime": "desc"
+            }
+          ]
+        }
+      },
+      {
+        "project": {
+          "number": 1,
+          "date": 1,
+          "position": 1,
+          "item.text": 1,
+          "item.quantity": 1,
+          "item.totalPriceNet": 1,
+          "erpLine.id": 1,
+          "erpLine.text": 1,
+          "erpLine.sourceBillingLineReference.type": 1,
+          "erpLine.sourceBillingLineReference.id": 1,
+          "sourceLine.id": 1,
+          "sourceLine.type": 1,
+          "sourceLine.status": 1,
+          "sourceLine.singlePrice": 1,
+          "sourceLine.totalPrice": 1,
+          "sourceLine.quantity.value": 1,
+          "sourceLine.quantity.quantityUnit": 1,
+          "sourceParent.id": 1,
+          "sourceParent.shipmentNumber": 1,
+          "sourceParent.referenceNumber": 1,
+          "sourceParent.number": 1,
+          "lastAttempt.id": 1,
+          "lastAttempt.dateTime": 1,
+          "lastAttempt.status": 1
+        }
+      },
+      {
+        "sort": [
+          {
+            "position": "asc"
+          }
+        ]
+      },
+      {
+        "page": {
+          "limit": 5000
+        }
+      }
+    ]
+  },
+  "status": 200,
+  "answer": {
+    "valid": true,
+    "executable": "yes",
+    "contract": 2,
+    "engine": {
+      "contract": 2,
+      "capabilities": ["resolve.remote","semiJoin","resolve.chain","lookup.remote","explain","compat.v1"]
+    },
+    "cache": {
+      "maxAge": 30,
+      "dependsOn": ["transport"],
+      "complete": true
+    },
+    "errors": [],
+    "diagnostics": [],
+    "notes": [
+      {"code":"MISSING_POLICY","message":"A reference of 'erpLine' that resolves to nothing refuses the request (onMissing refuse, strict); not_found lose data and refuse under strict.","stage":3,"path":"item.billingLineId","params":{"alias":"erpLine","onMissing":"refuse","strict":true,"dataLoss":["not_found"]},"basis":"advisory"},
+      {"code":"JOIN_BEFORE_PAGE","message":"'erpLine' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.","stage":3,"path":"erpLine","params":{"alias":"erpLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"'sourceLine' comes from another service; its owner binds the filter and every path under the alias.","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","services":["transport"],"forTarget":null},"basis":"advisory"},
+      {"code":"MISSING_POLICY","message":"A reference of 'sourceLine' that resolves to nothing refuses the request (onMissing refuse, strict); ambiguous, not_found, invalid_key, owner_unanswered lose data and refuse under strict. A key more than one record holds is always reported (RESOLVE_AMBIGUOUS).","stage":4,"path":"erpLine.sourceBillingLineReference.id","params":{"alias":"sourceLine","onMissing":"refuse","strict":true,"dataLoss":["ambiguous","not_found","invalid_key","owner_unanswered"]},"basis":"advisory"},
+      {"code":"JOIN_AFTER_PAGE","message":"'sourceLine' is joined after the page is taken, for the page's rows only.","stage":4,"path":"sourceLine","params":{"alias":"sourceLine","kind":"resolve"},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'number' is not a member of the row owning 'transport.shipment#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"number","params":{"alias":"sourceLine","target":"transport.shipment#billingLines","parent":true},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'referenceNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"referenceNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true},"basis":"advisory"},
+      {"code":"SELECT_PATH_NOT_ON_TARGET","message":"'shipmentNumber' is not a member of the row owning 'transport.tour#billingLines'; the owning row of 'sourceLine' carries it only for the other targets.","stage":4,"path":"shipmentNumber","params":{"alias":"sourceLine","target":"transport.tour#billingLines","parent":true},"basis":"advisory"},
+      {"code":"OWNER_BINDS","message":"This lookup continues under 'sourceLine' at its owner, which binds and runs it for rows resolved to 'transport.shipment' only.","stage":5,"path":"sourceParent","params":{"alias":"sourceLine","services":["transport"],"forTarget":"transport.shipment"},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.quantity' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":6,"path":"item.quantity","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"ONLY_FOR_VARIANTS","message":"'item.totalPriceNet' exists only on the variants ArticleTransactionItem, BillingLineTransactionItem, GeneralLedgerAccountTransactionItem; other rows have no value.","stage":6,"path":"item.totalPriceNet","params":{"variants":["ArticleTransactionItem","BillingLineTransactionItem","GeneralLedgerAccountTransactionItem"]},"basis":"advisory"},
+      {"code":"REPORT_PAGE","message":"A strict request without cursor or offset reads every matching row in its one page of 5000, or refuses (PAGE_INCOMPLETE); the page may be raised up to 5000.","stage":8,"params":{"limit":5000,"max":5000},"basis":"advisory"}
+    ],
+    "entry": {
+      "shape": {
+        "paging": "cursor",
+        "grouped": false,
+        "unwound": [],
+        "roots": {
+          "": "t:ledger.transaction"
+        },
+        "rules": {},
+        "identity": {
+          "kind": "entity",
+          "entity": "ledger.transaction",
+          "key": ["id"]
+        }
+      }
+    },
+    "stages": [
+      {
+        "index": 0,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"id","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": [],
+          "roots": {
+            "": "t:ledger.transaction"
+          },
+          "rules": {}
+        }
+      },
+      {
+        "index": 1,
+        "kind": "unwind",
+        "status": "ok",
+        "reads": [
+          {"path":"items","use":"unwind"}
+        ],
+        "creates": ["item","position"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          },
+          "identity": {
+            "kind": "element",
+            "entity": "ledger.transaction",
+            "key": ["id"],
+            "element": {
+              "collection": "items",
+              "alias": "item",
+              "key": "item.id",
+              "index": "position",
+              "item": {
+                "entity": "ledger.transaction",
+                "path": "items"
+              },
+              "orParent": false,
+              "flatten": true
+            }
+          }
+        }
+      },
+      {
+        "index": 2,
+        "kind": "match",
+        "status": "ok",
+        "reads": [
+          {"path":"item","use":"match"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3"
+          }
+        }
+      },
+      {
+        "index": 3,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "inline",
+          "phase": "beforePage",
+          "host": "ledger"
+        },
+        "reads": [
+          {"path":"item.billingLineId","use":"resolveKey"}
+        ],
+        "creates": ["erpLine"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4"
+          }
+        }
+      },
+      {
+        "index": 4,
+        "kind": "resolve",
+        "status": "ok",
+        "placement": {
+          "executor": "keyed-remote",
+          "phase": "afterPage",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"erpLine.sourceBillingLineReference.id","use":"resolveKey","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"caseCondition","alias":"erpLine"}
+        ],
+        "creates": ["sourceLine","sourceParent"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5"
+          }
+        }
+      },
+      {
+        "index": 5,
+        "kind": "lookup",
+        "status": "ok",
+        "placement": {
+          "executor": "continued",
+          "phase": "owner",
+          "host": "transport",
+          "owner": 0
+        },
+        "reads": [
+          {"path":"sourceParent.id","use":"lookupOn","alias":"sourceParent"}
+        ],
+        "creates": ["lastAttempt"],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "lastAttempt": "r:5"
+          }
+        }
+      },
+      {
+        "index": 6,
+        "kind": "project",
+        "status": "ok",
+        "reads": [
+          {"path":"number","use":"project"},
+          {"path":"date","use":"project"},
+          {"path":"position","use":"project"},
+          {"path":"item.text","use":"project"},
+          {"path":"item.quantity","use":"project"},
+          {"path":"item.totalPriceNet","use":"project"},
+          {"path":"erpLine.id","use":"project","alias":"erpLine"},
+          {"path":"erpLine.text","use":"project","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.type","use":"project","alias":"erpLine"},
+          {"path":"erpLine.sourceBillingLineReference.id","use":"project","alias":"erpLine"},
+          {"path":"sourceLine.id","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.type","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.status","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.singlePrice","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.totalPrice","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.quantity.value","use":"project","alias":"sourceLine"},
+          {"path":"sourceLine.quantity.quantityUnit","use":"project","alias":"sourceLine"},
+          {"path":"sourceParent.id","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.shipmentNumber","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.referenceNumber","use":"project","alias":"sourceParent"},
+          {"path":"sourceParent.number","use":"project","alias":"sourceParent"},
+          {"path":"lastAttempt.id","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.dateTime","use":"project","alias":"lastAttempt"},
+          {"path":"lastAttempt.status","use":"project","alias":"lastAttempt"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["date","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","number","position","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "lastAttempt": "r:5"
+          }
+        }
+      },
+      {
+        "index": 7,
+        "kind": "sort",
+        "status": "ok",
+        "reads": [
+          {"path":"position","use":"sort"}
+        ],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["date","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","number","position","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "lastAttempt": "r:5"
+          }
+        }
+      },
+      {
+        "index": 8,
+        "kind": "page",
+        "status": "ok",
+        "reads": [],
+        "creates": [],
+        "shape": {
+          "paging": "cursor",
+          "grouped": false,
+          "unwound": ["items"],
+          "projection": ["date","erpLine.id","erpLine.sourceBillingLineReference.id","erpLine.sourceBillingLineReference.type","erpLine.text","id","item.quantity","item.text","item.totalPriceNet","lastAttempt.dateTime","lastAttempt.id","lastAttempt.status","number","position","sourceLine.id","sourceLine.quantity.quantityUnit","sourceLine.quantity.value","sourceLine.singlePrice","sourceLine.status","sourceLine.totalPrice","sourceLine.type","sourceParent.id","sourceParent.number","sourceParent.referenceNumber","sourceParent.shipmentNumber"],
+          "roots": {
+            "": "t:ledger.transaction",
+            "item": "t:ledger.transaction#items",
+            "position": "k:int",
+            "erpLine": "t:ledger.billing_line",
+            "sourceLine": "u:sourceLine",
+            "sourceParent": "u:sourceParent",
+            "lastAttempt": "t:transport.delivery_attempt"
+          },
+          "removed": ["items"],
+          "rules": {
+            "": "r:1",
+            "item": "r:2",
+            "position": "r:3",
+            "erpLine": "r:4",
+            "sourceLine": "r:5",
+            "sourceParent": "r:5",
+            "lastAttempt": "r:5"
+          }
+        }
+      }
+    ],
+    "aliases": {
+      "item": {
+        "stage": 1,
+        "node": "element",
+        "entities": ["ledger.transaction"],
+        "source": "items",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "t:ledger.transaction#items"
+      },
+      "position": {
+        "stage": 1,
+        "node": "scalar",
+        "kind": "int",
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": false,
+        "type": "k:int"
+      },
+      "erpLine": {
+        "stage": 3,
+        "node": "entity",
+        "entities": ["ledger.billing_line"],
+        "heldBy": "ledger",
+        "complete": true,
+        "lookupOn": true,
+        "reference": {
+          "path": "item.billingLineId",
+          "name": "billingLine",
+          "cases": [
+            {
+              "targets": [
+                {
+                  "entity": "ledger.billing_line",
+                  "field": "id",
+                  "remote": false
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "values": ["not_found"]
+        },
+        "loads": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "shows": ["id","sourceBillingLineReference.id","sourceBillingLineReference.type","text"],
+        "targets": [
+          {
+            "target": "ledger.billing_line",
+            "service": "ledger",
+            "remote": false,
+            "type": "t:ledger.billing_line"
+          }
+        ],
+        "type": "t:ledger.billing_line"
+      },
+      "sourceLine": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment#billingLines","transport.tour#billingLines"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "reference": {
+          "path": "erpLine.sourceBillingLineReference.id",
+          "name": "sourceBillingLine",
+          "cases": [
+            {
+              "when": {
+                "path": "type",
+                "equals": ["logistics"]
+              },
+              "targets": [
+                {
+                  "entity": "transport.shipment",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                },
+                {
+                  "entity": "transport.tour",
+                  "item": "billingLines",
+                  "field": "id",
+                  "remote": true
+                }
+              ]
+            }
+          ]
+        },
+        "outcome": {
+          "values": ["ambiguous","not_found","invalid_key","owner_unanswered"]
+        },
+        "loads": ["id","quantity.quantityUnit","quantity.value","singlePrice","status","totalPrice","type"],
+        "shows": ["id","quantity.quantityUnit","quantity.value","singlePrice","status","totalPrice","type"],
+        "targets": [
+          {
+            "target": "transport.shipment#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [5],
+            "notApplicable": [],
+            "type": "t:transport.shipment#billingLines"
+          },
+          {
+            "target": "transport.tour#billingLines",
+            "service": "transport",
+            "remote": true,
+            "grouped": true,
+            "owner": 0,
+            "continued": [],
+            "notApplicable": [5],
+            "type": "t:transport.tour#billingLines"
+          }
+        ],
+        "type": "u:sourceLine"
+      },
+      "sourceParent": {
+        "stage": 4,
+        "node": "remote",
+        "entities": ["transport.shipment","transport.tour"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "loads": ["id","number","referenceNumber","shipmentNumber"],
+        "shows": ["id","number","referenceNumber","shipmentNumber"],
+        "parentOf": "sourceLine",
+        "targets": [
+          {
+            "target": "transport.shipment",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.shipment"
+          },
+          {
+            "target": "transport.tour",
+            "service": "transport",
+            "remote": true,
+            "owner": 0,
+            "type": "t:transport.tour"
+          }
+        ],
+        "type": "u:sourceParent"
+      },
+      "lastAttempt": {
+        "stage": 5,
+        "node": "remote",
+        "entities": ["transport.delivery_attempt"],
+        "heldBy": "transport",
+        "complete": true,
+        "lookupOn": true,
+        "continuedFrom": {
+          "alias": "sourceParent",
+          "target": "transport.shipment"
+        },
+        "loads": ["dateTime","id","status"],
+        "shows": ["dateTime","id","status"],
+        "type": "t:transport.delivery_attempt"
+      }
+    },
+    "types": {
+      "t:ledger.transaction": {
+        "entity": "ledger.transaction",
+        "service": "ledger"
+      },
+      "t:transport.shipment": {
+        "entity": "transport.shipment",
+        "service": "transport"
+      },
+      "t:transport.delivery_attempt": {
+        "entity": "transport.delivery_attempt",
+        "service": "transport"
+      },
+      "t:transport.shipment#billingLines": {
+        "entity": "transport.shipment",
+        "item": "billingLines",
+        "service": "transport"
+      },
+      "t:transport.tour": {
+        "entity": "transport.tour",
+        "service": "transport"
+      },
+      "t:transport.tour#billingLines": {
+        "entity": "transport.tour",
+        "item": "billingLines",
+        "service": "transport"
+      },
+      "t:ledger.transaction#items": {
+        "entity": "ledger.transaction",
+        "item": "items",
+        "service": "ledger"
+      },
+      "t:ledger.billing_line": {
+        "entity": "ledger.billing_line",
+        "service": "ledger"
+      },
+      "u:sourceLine": {
+        "of": ["t:transport.shipment#billingLines","t:transport.tour#billingLines"]
+      },
+      "u:sourceParent": {
+        "of": ["t:transport.shipment","t:transport.tour"]
+      }
+    },
+    "rules": {
+      "r:1": {
+        "unwound": ["items"]
+      },
+      "r:2": {
+        "self": "42800"
+      },
+      "r:3": {
+        "self": "588ff"
+      },
+      "r:4": {
+        "self": "40800"
+      },
+      "r:5": {
+        "self": "40000",
+        "under": "owner"
+      }
+    },
+    "result": {
+      "paging": "cursor",
+      "identity": {
+        "kind": "element",
+        "entity": "ledger.transaction",
+        "key": ["id"],
+        "element": {
+          "collection": "items",
+          "alias": "item",
+          "key": "item.id",
+          "index": "position",
+          "item": {
+            "entity": "ledger.transaction",
+            "path": "items"
+          },
+          "orParent": false,
+          "flatten": true
+        }
+      },
+      "subjects": [
+        {
+          "root": "",
+          "entity": "ledger.transaction",
+          "key": "id",
+          "nullable": false,
+          "many": false
+        },
+        {
+          "root": "erpLine",
+          "entity": "ledger.billing_line",
+          "key": "erpLine.id",
+          "nullable": true,
+          "many": false
+        },
+        {
+          "root": "sourceParent",
+          "entities": ["transport.shipment","transport.tour"],
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        },
+        {
+          "root": "lastAttempt",
+          "entity": "transport.delivery_attempt",
+          "key": null,
+          "nullable": true,
+          "many": false,
+          "remote": true
+        }
+      ],
+      "order": [
+        {
+          "path": "position",
+          "direction": "asc"
+        },
+        {
+          "path": "id",
+          "direction": "asc",
+          "tieBreak": true
+        }
+      ],
+      "columns": [
+        {"path":"id","kind":"guid","nullable":false,"root":"","present":"always","can":"c:1"},
+        {"path":"number","kind":"string","nullable":true,"root":"","present":"ifStored","can":"c:2"},
+        {"path":"date","kind":"dateTime","nullable":true,"root":"","present":"ifStored","can":"c:3"},
+        {"path":"item.text","kind":"string","nullable":true,"stage":1,"root":"item","present":"ifStored","can":"c:2"},
+        {"path":"item.totalPriceNet","kind":"decimal","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:4"},
+        {"path":"item.quantity","kind":"object","nullable":true,"stage":1,"root":"item","present":"ifVariant","can":"c:5"},
+        {"path":"position","kind":"int","nullable":false,"stage":1,"root":"","present":"always","can":"c:4"},
+        {"path":"erpLine.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:1"},
+        {"path":"erpLine.sourceBillingLineReference.id","kind":"guid","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:1"},
+        {"path":"erpLine.sourceBillingLineReference.type","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:2"},
+        {"path":"erpLine.text","kind":"string","nullable":true,"stage":3,"root":"erpLine","present":"ifJoined","can":"c:2"},
+        {"path":"sourceLine.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.quantity.quantityUnit","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.quantity.value","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.singlePrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.status","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.totalPrice","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceLine.type","kind":"unknown","nullable":true,"stage":4,"root":"sourceLine","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.entity","kind":"string","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:7"},
+        {"path":"sourceParent.id","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.number","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.referenceNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"sourceParent.shipmentNumber","kind":"unknown","nullable":true,"stage":4,"root":"sourceParent","present":"ifJoined","can":"c:6"},
+        {"path":"lastAttempt.dateTime","kind":"unknown","nullable":true,"stage":5,"root":"lastAttempt","present":"ifJoined","can":"c:6"},
+        {"path":"lastAttempt.id","kind":"unknown","nullable":true,"stage":5,"root":"lastAttempt","present":"ifJoined","can":"c:6"},
+        {"path":"lastAttempt.status","kind":"unknown","nullable":true,"stage":5,"root":"lastAttempt","present":"ifJoined","can":"c:6"}
+      ],
+      "capabilities": {
+        "c:1": {
+          "can": {
+            "filter": ["eq","neq","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:2": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","contains","startsWith","endsWith","exists","regex"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:3": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:4": {
+          "can": {
+            "filter": ["eq","neq","gt","gte","lt","lte","in","nin","exists"],
+            "sort": true,
+            "group": true,
+            "aggregate": ["count","countDistinct","sum","avg","min","max","first","last","push"],
+            "values": true
+          }
+        },
+        "c:5": {
+          "can": {
+            "filter": ["exists"],
+            "sort": false,
+            "group": false,
+            "aggregate": ["count","countDistinct","min","max","first","last","push"],
+            "values": false
+          },
+          "why": {
+            "sort": "notScalar",
+            "group": "notScalar",
+            "values": "notScalar"
+          }
+        },
+        "c:6": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "owner",
+            "sort": "owner",
+            "group": "owner",
+            "values": "owner",
+            "aggregate": "owner"
+          }
+        },
+        "c:7": {
+          "can": {
+            "filter": [],
+            "sort": false,
+            "group": false,
+            "aggregate": [],
+            "values": false
+          },
+          "why": {
+            "filter": "notInRow",
+            "sort": "notInRow",
+            "group": "notInRow",
+            "values": "notInRow",
+            "aggregate": "notInRow"
+          }
+        }
+      }
+    },
+    "owners": [
+      {
+        "service": "transport",
+        "remote": true,
+        "route": {
+          "apiName": "transport-api"
+        },
+        "answered": true,
+        "engine": {
+          "contract": 2
+        }
+      }
+    ],
+    "catalog": []
+  }
+}

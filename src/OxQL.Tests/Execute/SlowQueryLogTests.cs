@@ -24,7 +24,7 @@ public class SlowQueryLogTests
     private const string Order = "probe.order";
     private const string Operand = "needle-7f3a";
 
-    private static readonly string Regex = $$"""[{ "match": { "number": { "contains": "{{Operand}}" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "includeTotalCount": true } }]""";
+    private static readonly string Regex = $$"""[{ "match": { "number": { "contains": "{{Operand}}" } } }, { "sort": [{ "number": "asc" }] }, { "page": { "limit": 5, "count": true } }]""";
     private const string Plain = """[{ "match": { "flag": { "eq": true } } }, { "page": { "limit": 5 } }]""";
     private const string SortedBeforeAGroup = """[{ "sort": [{ "number": "asc" }] }, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 5 } }]""";
     private const string Remote = """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "page": { "limit": 5 } }]""";

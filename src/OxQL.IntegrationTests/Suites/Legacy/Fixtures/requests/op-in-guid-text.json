@@ -1,0 +1,19 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "GlobalTourId": {
+          "in": [
+            "1e9ac700-0000-4000-8000-000000001101"
+          ]
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

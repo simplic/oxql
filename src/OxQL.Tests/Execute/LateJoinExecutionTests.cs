@@ -40,7 +40,14 @@ public class LateJoinExecutionTests
 
         var kinds = compiled.PageStages.Select(stage => stage.GetElement(0).Name).ToList();
 
-        kinds.IndexOf("$lookup").Should().BeGreaterThan(kinds.IndexOf("$limit"), $"the join is display-only and runs after the page ({because})");
+        // A join written before an unwind runs before it, once per parent; every other one after the page, once per page row.
+        var written = JsonNode.Parse(pipeline)!.AsArray().Select(stage => stage!.AsObject().First().Key).ToList();
+
+        if (written.IndexOf("unwind") > written.FindIndex(kind => kind is "lookup" or "resolve"))
+            kinds.IndexOf("$lookup").Should().BeLessThan(kinds.IndexOf("$unwind"), $"the join is written before the unwind and runs once per parent ({because})");
+        else
+            kinds.IndexOf("$lookup").Should().BeGreaterThan(kinds.LastIndexOf("$limit"), $"the join is display-only and runs after the page ({because})");
+
         rows.Should().Be(JsonNode.Parse(expected)!.ToJsonString(), because);
     }
 
@@ -83,6 +90,12 @@ public class LateJoinExecutionTests
         private static bool Matches(BsonDocument row, BsonDocument filter) => filter.All(element => element.Name switch
         {
             "$and" => element.Value.AsBsonArray.All(inner => Matches(row, inner.AsBsonDocument)),
+            // What an unwind answers a row for: an array that holds something, or a value that is no array; not a null, not a missing member.
+            // Written as "neither no element nor no value": $nor [ $and [ { c: { $not: { $elemMatch: { $exists: true } } } }, { c: { $not: { $type: [...] } } } ] ].
+            "$nor" when element.Value is BsonArray { Count: 1 } none && none[0] is BsonDocument { ElementCount: 1 } both && both.GetValue("$and", null) is BsonArray { Count: 2 } neither
+                && neither[0] is BsonDocument { ElementCount: 1 } noElement && noElement.GetElement(0) is { Name: var collection, Value: BsonDocument first } && first.GetValue("$not", null) is BsonDocument holds && holds.Contains("$elemMatch")
+                && neither[1] is BsonDocument { ElementCount: 1 } noValue && noValue.GetElement(0).Name == collection && noValue.GetElement(0).Value is BsonDocument second && second.GetValue("$not", null) is BsonDocument typed && typed.Contains("$type")
+                => Get(row, collection) switch { BsonArray array => array.Count > 0, null or BsonNull or BsonUndefined => false, _ => true },
             _ when element.Name.StartsWith('$') || element.Value is BsonDocument => throw new NotSupportedException($"The evaluator does not match {element.ToJson()}."),
             _ => Get(row, element.Name) == element.Value,
         });
@@ -145,6 +158,10 @@ public class LateJoinExecutionTests
 
                 if (below.Count > 0 && element.Value is BsonDocument inner)
                     result[element.Name] = Include(inner, below);
+
+                // A projection reaches into every document of an array, as the server's does.
+                if (below.Count > 0 && element.Value is BsonArray inners)
+                    result[element.Name] = new BsonArray(inners.OfType<BsonDocument>().Select(each => Include(each, below)));
             }
 
             return result;
@@ -196,17 +213,49 @@ public class LateJoinExecutionTests
         {
             var copy = row.DeepClone().AsBsonDocument;
 
+            // Every expression reads the row as it came in, as the server's $set does.
             foreach (var field in set)
             {
-                var elementAt = field.Value.AsBsonDocument["$arrayElemAt"].AsBsonArray;
-                var array = Get(copy, elementAt[0].AsString[1..]) as BsonArray;
-                var index = elementAt[1].ToInt32();
+                // A field path copies the value, as an unwind's alias does; a path the row lacks leaves the field out.
+                if (field.Value is BsonString reference)
+                {
+                    if (Get(row, reference.Value[1..]) is { } value)
+                        Set(copy, field.Name, value.DeepClone());
 
-                // An index past the end leaves the field out, as the server does.
-                if (array is not null && index < array.Count)
-                    Set(copy, field.Name, array[index].DeepClone());
-                else
-                    Remove(copy, field.Name);
+                    continue;
+                }
+
+                var expression = field.Value.AsBsonDocument.GetElement(0);
+                var operands = expression.Value.AsBsonArray;
+
+                switch (expression.Name)
+                {
+                    case "$arrayElemAt":
+                    {
+                        var array = Get(row, operands[0].AsString[1..]) as BsonArray;
+                        var index = operands[1].ToInt32();
+
+                        // An index past the end leaves the field out, as the server does.
+                        if (array is not null && index < array.Count)
+                            Set(copy, field.Name, array[index].DeepClone());
+                        else
+                            Remove(copy, field.Name);
+                        break;
+                    }
+
+                    // A lookup's cut to its limit.
+                    case "$slice":
+                        Set(copy, field.Name, new BsonArray(((BsonArray)Get(row, operands[0].AsString[1..])!).Take(operands[1].ToInt32()).Select(item => item.DeepClone())));
+                        break;
+
+                    // A lookup's truncation flag: { $gt: [ { $size: "$alias" }, limit ] }.
+                    case "$gt":
+                        Set(copy, field.Name, ((BsonArray)Get(row, operands[0].AsBsonDocument["$size"].AsString[1..])!).Count > operands[1].ToInt32());
+                        break;
+
+                    default:
+                        throw new NotSupportedException($"The evaluator does not set {expression.Name}.");
+                }
             }
 
             return copy;

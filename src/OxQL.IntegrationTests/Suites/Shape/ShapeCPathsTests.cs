@@ -18,7 +18,7 @@ namespace OxQL.IntegrationTests.Suites.Shape;
 [Trait("Category", "Integration")]
 public class ShapeCPathsTests
 {
-    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } }""";
+    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } }""";
 
     private static Task<LabClient> Transport() => Lab.ClientAsync(LabService.Transport);
 
@@ -121,14 +121,29 @@ public class ShapeCPathsTests
     }
 
     [Fact]
-    public async Task C11_an_unstored_member_is_projectable_and_simply_absent_from_the_row()
+    public async Task C11_a_projection_of_an_unstored_member_is_refused_by_name_and_no_row_carries_the_member()
     {
         var target = Corpus.Rows(Corpus.Conformance)[0].Id;
 
-        var answer = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1, "computed": 1 } }, { "page": { "limit": 5 } } ]""");
+        // No row can carry what is not stored: a projection that asks for it says so, once per member.
+        var asked = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "id": 1, "scratch": 1, "computed": 1 } }, { "page": { "limit": 5 } } ]""");
 
-        answer.ShouldHaveIds([target]);
-        answer.Items[0]!.AsObject().Select(member => member.Key).Should().Equal("id");
+        asked.StatusCode.Should().Be(400, asked.ToString());
+        asked.ErrorCodes.Should().Equal("NOT_STORED", "NOT_STORED");
+        asked.Body!["errors"]!.AsArray().Select(error => error!["path"]!.GetValue<string>()).Should().Equal("scratch", "computed");
+        asked.Body["errors"]![0]!["params"]!["reason"]!.GetValue<string>().Should().Be("notStored");
+        asked.Body["errors"]![0]!["message"]!.GetValue<string>().Should().Contain("no row can carry it");
+
+        // The whole row, and a projection that leaves the members out by name, are without them.
+        var whole = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "page": { "limit": 5 } } ]""");
+
+        whole.ShouldHaveIds([target]);
+        whole.Items[0]!.AsObject().Select(member => member.Key).Should().NotContain(["scratch", "computed"]);
+
+        var excluded = await Send(Corpus.Conformance, $$"""[ { "match": { "id": { "eq": "{{target}}" } } }, { "project": { "scratch": 0, "computed": 0 } }, { "page": { "limit": 5 } } ]""");
+
+        excluded.ShouldHaveIds([target]);
+        excluded.Items[0]!.ToJsonString().Should().Be(whole.Items[0]!.ToJsonString(), "an exclusion of what no row carries asks for nothing");
     }
 
     [Fact]
@@ -291,7 +306,7 @@ public class ShapeCPathsTests
         var answer = await Send(Corpus.Shipment, """[ { "group": { "by": [ { "path": "status.name", "as": "status" } ], "fields": { "n": { "count": true } } } }, { "sort": [ { "status": "asc" } ] }, { "page": { "limit": 50 } } ]""");
 
         answer.ShouldBeOk("the alias reuses a root member name of the pre-group shape");
-        answer.Items.Select(row => (row!["status"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(buckets);
+        answer.Items.Select(row => (row!["status"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(buckets);
 
         // …and the alias is addressable after the group, on the grouped shape.
         var afterGroup = await Send(Corpus.Shipment, """[ { "group": { "by": [ { "path": "status.name", "as": "status" } ], "fields": { "n": { "count": true } } } }, { "match": { "status": { "eq": "Open" } } }, { "page": { "limit": 50 } } ]""");
@@ -306,7 +321,7 @@ public class ShapeCPathsTests
     [Fact]
     public async Task C24_a_path_under_an_unwind_index_alias_is_refused_the_index_is_a_scalar()
     {
-        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "includeIndex": "position" } }, { "match": { "position.x": { "eq": 1 } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "position.x", 1);
+        Refused(await Send(Corpus.Shipment, $$"""[ { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "match": { "position.x": { "eq": 1 } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "position.x", 1);
     }
 
     [Fact]
@@ -322,7 +337,7 @@ public class ShapeCPathsTests
     [Theory]
     [InlineData("""{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item.orderNumber": { "eq": 1 } } }""", "item.orderNumber")]
     [InlineData("""{ "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "item.orderNumber": "asc" } ] }""", "item.orderNumber")]
-    [InlineData("""{ "unwind": { "path": "items", "includeIndex": "at" } }, { "match": { "at": { "eq": 0 } } }""", "at")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "match": { "at": { "eq": 0 } } }""", "at")]
     public async Task Cfold2_an_inclusion_projection_before_an_unwind_makes_the_aliases_it_writes_unaddressable(string stages, string path)
     {
         Refused(await Send(Corpus.Shipment, $$"""[ { "project": { "items.orderNumber": 1 } }, {{stages}}, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", path, 2);
@@ -334,7 +349,7 @@ public class ShapeCPathsTests
         var expected = Corpus.Rows(Corpus.Shipment).SelectMany(row => Corpus.Elements(row, "items").Select((_, index) => (row.Id, index)))
             .OrderBy(entry => entry.index).ThenBy(entry => entry.Id.ToString("D"), StringComparer.Ordinal).Take(3).ToList();
 
-        var works = await Send(Corpus.Shipment, """[ { "unwind": { "path": "items", "includeIndex": "at" } }, { "project": { "at": 1, "items.orderNumber": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 3 } } ]""");
+        var works = await Send(Corpus.Shipment, """[ { "unwind": { "path": "items", "as": "item", "includeIndex": "at" } }, { "project": { "at": 1, "item.orderNumber": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 3 } } ]""");
 
         works.ShouldHaveIds(expected.Select(entry => entry.Id));
         works.Values("at").Select(value => value!.GetValue<int>()).Should().Equal(expected.Select(entry => entry.index));
@@ -345,11 +360,11 @@ public class ShapeCPathsTests
     {
         var expected = Corpus.Rows(Corpus.Shipment).SelectMany(row => Corpus.Elements(row, "items").Select(_ => row.Id)).Take(3).ToList();
 
-        var kept = await Send(Corpus.Shipment, """[ { "project": { "items.orderNumber": 1 } }, { "unwind": { "path": "items" } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3 } } ]""");
+        var kept = await Send(Corpus.Shipment, """[ { "project": { "items.orderNumber": 1 } }, { "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3 } } ]""");
         kept.ShouldHaveIds(expected);
 
         foreach (var stage in new[] { """{ "project": { "status.name": 1 } }""", """{ "project": { "items": 0 } }""" })
-            Refused(await Send(Corpus.Shipment, $$"""[ {{stage}}, { "unwind": { "path": "items" } }, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", "items", 1);
+            Refused(await Send(Corpus.Shipment, $$"""[ {{stage}}, { "unwind": { "path": "items", "as": "item" } }, { "page": { "limit": 3 } } ]"""), "UNKNOWN_PATH", "items", 1);
     }
 
     [Fact]

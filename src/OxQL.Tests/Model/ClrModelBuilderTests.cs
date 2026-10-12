@@ -272,10 +272,42 @@ public class ClrModelBuilderTests
     {
         Order.Path("tree.name").Should().NotBeNull();
         Order.Path("tree.next").Should().NotBeNull();
-        Order.Path("tree.next.name").Should().BeNull();
+        Order.PathIndex.Should().NotContainKey("tree.next.name");
         Order.Path("tree.children").Should().NotBeNull();
-        Order.Path("tree.children.name").Should().BeNull();
+        Order.PathIndex.Should().NotContainKey("tree.children.name");
         Model.Findings.Should().NotContain(finding => finding.Code == BuildCodes.PathDepthExceeded);
+    }
+
+    [Fact]
+    public void A_path_below_a_type_that_holds_its_own_kind_is_described_from_where_the_index_describes_the_type()
+    {
+        var name = Order.Path("tree.name")!;
+        var next = Order.Path("tree.next.name")!;
+
+        next.Wire.Should().Be("tree.next.name");
+        next.Storage.Should().Be(Order.Path("tree.next")!.Storage + name.Storage![Order.Path("tree")!.Storage!.Length..]);
+        next.Member.Should().BeSameAs(name.Member);
+        next.Kind.Should().Be(name.Kind);
+        next.Depth.Should().Be(2);
+        next.CollectionAncestors.Should().Be(0);
+        next.Filterable.Should().BeTrue();
+        next.Sortable.Should().BeTrue();
+
+        var child = Order.Path("tree.children.name")!;
+
+        child.CollectionAncestors.Should().Be(1, "the collection that holds the element lies above its member");
+        child.Sortable.Should().BeFalse();
+
+        var deep = Order.Path("tree.children.next.children.name")!;
+
+        deep.Storage.Should().Be(Order.Path("tree.children")!.Storage + ".Next.Children.Name");
+        deep.CollectionAncestors.Should().Be(2);
+        deep.Depth.Should().Be(4);
+
+        Order.Path("tree.next.nope").Should().BeNull("a name the type does not have is no path at any depth");
+        Order.Path("tree.name.name").Should().BeNull("a scalar holds nothing");
+        Order.Path(string.Join('.', Enumerable.Repeat("tree.next", 1).Concat(Enumerable.Repeat("next", OxQL.Model.EntityDef.MaxPathSegments)))).Should().BeNull("no path is described deeper than the index goes");
+        Order.Paths.Should().NotContain(path => path.Wire == "tree.next.name", "the index stays what the walk reached");
     }
 
     [Fact]
@@ -329,7 +361,6 @@ public class ClrModelBuilderTests
         reference.TargetField.Should().Be("id");
         reference.DeclaredBy.Should().Be(ReferenceSource.Attribute);
         reference.IsRemote.Should().BeFalse();
-        reference.Direction.Should().Be(ReferenceDirection.Forward);
     }
 
     [Fact]
@@ -344,7 +375,7 @@ public class ClrModelBuilderTests
     }
 
     /// <summary>
-    /// F-ENT-001. A remote target's key cannot be read on this host, and defaulting the field
+    /// A remote target's key cannot be read on this host, and defaulting the field
     /// to <c>"id"</c> was a guess: asked for the ids of an owner keyed on something else, the
     /// owner answered rows keyed by whatever member happens to be called <c>id</c>, and every
     /// row of the join was wrong with a 200 and no diagnostic. Proven on the lab's

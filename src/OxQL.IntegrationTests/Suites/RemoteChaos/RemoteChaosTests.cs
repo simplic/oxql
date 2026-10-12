@@ -196,7 +196,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     {
         Owner.Set(ChaosMode.DuplicateKeys);
 
-        var answer = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("A-17", """["name", "code"]"""));
+        var answer = await Conformance().SendAsync(Corpus.Conformance, OwnerFleet.Resolve("A-17", """ "w.name": 1, "w.code": 1 """));
 
         answer.ShouldHaveIds(RowIds());
 
@@ -368,15 +368,18 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
-    public async Task C11_TOTAL_COUNT_CAPPED_with_a_cap_of_two_a_three_row_count_reports_the_cap_and_says_so()
+    public async Task C11_with_a_count_cap_of_two_a_count_of_more_rows_is_a_lower_bound_stopped_by_the_cap()
     {
         RowCount.Should().BeGreaterThan(2);
 
-        var answer = await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 10, "includeTotalCount": true } } ]""");
+        // A page that holds every row proves the count by itself, whatever the cap.
+        (await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 10, "count": true } } ]""")).ShouldCount("exact", RowCount).ShouldHaveNoDiagnostics();
 
-        answer.ShouldHaveTotal(2, capped: true);
-        answer.ShouldHaveDiagnostic("TOTAL_COUNT_CAPPED")["params"]!["cap"]!.GetValue<int>().Should().Be(2);
-        answer.DiagnosticCodes.Should().Equal("TOTAL_COUNT_CAPPED");
+        // The count step stops at the host's cap and says so; no diagnostic repeats it.
+        var answer = await LoweredPosture().SendAsync(Corpus.Conformance, """[ { "page": { "limit": 1, "count": true } } ]""");
+
+        answer.ShouldCount("atLeast", 2, "cap").ShouldHaveNoDiagnostics();
+        (await LoweredPosture().CountOnlyAsync(Corpus.Conformance, "[]")).ShouldCount("atLeast", 2, "cap");
     }
 
     [Fact]
@@ -391,14 +394,14 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     // ── leg E: the release-train switches ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task E01_the_default_posture_carries_the_contract_1_binder_and_no_explain_route()
+    public async Task E01_the_default_posture_carries_the_contract_1_binder_and_the_explain_route()
     {
         var client = Conformance();
 
         OwnerFleet.Capabilities(await client.HealthAsync(shallow: true)).Should().Contain("compat.v1");
         (await client.Contract(null).SendAsync(Corpus.Conformance, """[ { "match": { "_id": { "neq": null } } }, { "page": { "limit": 1 } } ]""")).StatusCode
             .Should().Be(200, "a header-less request binds as contract 1, where _id is the key");
-        (await client.ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "page": { "limit": 1 } } ]"""))).StatusCode.Should().Be(404, "explain is off unless a host turns it on");
+        (await client.ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "page": { "limit": 1 } } ]"""))).StatusCode.Should().Be(200, "explain is on unless a host turns it off");
     }
 
     [Fact]
@@ -414,12 +417,17 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
     }
 
     [Fact]
-    public async Task E03_with_explain_on_the_explain_route_answers_the_stages_and_an_advisory()
+    public async Task E03_the_explain_route_answers_the_stages_and_the_advisory_only_when_asked_for_it()
     {
-        var answer = await LoweredPosture().ExplainHereAsync(Json.Request(Corpus.Conformance, """[ { "match": { "name": { "eq": "Alpha" } } }, { "page": { "limit": 5 } } ]"""));
+        var query = Json.Request(Corpus.Conformance, """[ { "match": { "name": { "eq": "Alpha" } } }, { "page": { "limit": 5 } } ]""");
 
-        answer.StatusCode.Should().Be(200, answer.ToString());
-        answer.Body!.AsObject().Select(pair => pair.Key).Should().Contain(["stages", "advisory"]);
+        var plain = await LoweredPosture().ExplainHereAsync(query);
+        plain.StatusCode.Should().Be(200, plain.ToString());
+        plain.Body!.AsObject().Select(pair => pair.Key).Should().Contain("stages").And.NotContain("advisory");
+
+        var asked = await LoweredPosture().ExplainHereAsync(new JsonObject { ["query"] = query.DeepClone(), ["include"] = new JsonArray("indexes") });
+        asked.StatusCode.Should().Be(200, asked.ToString());
+        asked.Body!.AsObject().Select(pair => pair.Key).Should().Contain(["stages", "advisory"]);
     }
 
     [Fact]
@@ -432,7 +440,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         lowered["maxResolveKeys"]!.GetValue<int>().Should().Be(2);
         lowered["resolveKeyChunk"]!.GetValue<int>().Should().Be(1);
         lowered["countCap"]!.GetValue<int>().Should().Be(2);
-        standard["maxResolveKeys"]!.GetValue<int>().Should().Be(2_000);
+        standard["maxResolveKeys"]!.GetValue<int>().Should().Be(10_000);
         standard["countCap"]!.GetValue<int>().Should().Be(100_000);
     }
 

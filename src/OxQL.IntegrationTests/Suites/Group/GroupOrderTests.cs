@@ -35,11 +35,11 @@ public class GroupOrderTests
         var atLeastTen = ShipmentStatuses().Where(entry => entry.Count >= 10).ToList();
         atLeastTen.Should().NotBeEmpty().And.HaveCountLessThan(ShipmentStatuses().Count);
 
-        var havingCount = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "match": { "total": { "gte": 10 } } }, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 10, "includeTotalCount": true } }]""");
+        var havingCount = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "match": { "total": { "gte": 10 } } }, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
         havingCount.ShouldHaveTotal(atLeastTen.Count);
         havingCount.Items.Select(item => $"{item!["status"]}:{Number(item["total"])}").Should().Equal(atLeastTen.Select(entry => $"{entry.Status}:{entry.Count}"));
 
-        var havingKey = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "match": { "status": { "in": ["Open", "Planned"] } } }, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 10, "includeTotalCount": true } }]""");
+        var havingKey = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "match": { "status": { "in": ["Open", "Planned"] } } }, { "sort": [{ "status": "asc" }] }, { "page": { "limit": 10, "count": true } }]""");
         havingKey.ShouldHaveTotal(2);
         havingKey.Strings("status").Should().Equal("Open", "Planned");
 
@@ -112,7 +112,7 @@ public class GroupOrderTests
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "total": { "count": true }, "weight": { "sum": "actualWeight.value" } } } },
               { "match": { "total": { "gte": 6, "lt": 25 } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
         numeric.ShouldBeOk();
         numeric.Strings("status").Should().Equal(statuses.Where(entry => entry.Count >= 6 && entry.Count < 25).Select(entry => entry.Status));
@@ -125,7 +125,7 @@ public class GroupOrderTests
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "latest": { "max": "loadStart" } } } },
               { "match": { "latest": { "gte": "2027-01-01T00:00:00Z" } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
         temporal.ShouldHaveTotal(1);
         temporal.Strings("status").Should().Equal(latest[0].Status);
@@ -153,7 +153,7 @@ public class GroupOrderTests
             [ {{First}},
               { "group": { "by": [{ "path": "status", "as": "status" }], "fields": { "buckets": { "count": true }, "documents": { "sum": "total" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -177,25 +177,25 @@ public class GroupOrderTests
 
         foreach (var limit in new[] { 1, 2, groups, 100 })
         {
-            var answer = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "sort": [{ "status": "asc" }] }, { "page": { "limit": {{limit}}, "includeTotalCount": true } }]""");
+            var answer = await client.SendAsync(Corpus.Shipment, $$"""[{{ByStatus}}, { "sort": [{ "status": "asc" }] }, { "page": { "limit": {{limit}}, "count": true } }]""");
 
             answer.ShouldHaveTotal(groups, because: $"limit {limit}");
             answer.Items.Should().HaveCount(Math.Min(limit, groups));
             answer.HasNextPage.Should().Be(limit < groups);
         }
 
-        var many = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [{ "path": "id", "as": "key" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "key": "asc" }] }, { "page": { "limit": 4, "includeTotalCount": true } }]""");
+        var many = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [{ "path": "id", "as": "key" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "key": "asc" }] }, { "page": { "limit": 4, "count": true } }]""");
         many.ShouldHaveTotal(Corpus.Counts(Corpus.Shipment).A);
         many.Items.Should().HaveCount(4);
 
         var modes = Corpus.Rows(Corpus.Template).Select(row => Corpus.ValueAt(row, "timeMode")!.AsInt32).Distinct().Count();
-        var volume = await (await Transport()).SendAsync(Corpus.Template, """[{ "group": { "by": [{ "path": "timeMode", "as": "mode" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "mode": "asc" }] }, { "page": { "limit": 1, "includeTotalCount": true } }]""");
+        var volume = await (await Transport()).SendAsync(Corpus.Template, """[{ "group": { "by": [{ "path": "timeMode", "as": "mode" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "mode": "asc" }] }, { "page": { "limit": 1, "count": true } }]""");
         volume.ShouldHaveTotal(modes);
         volume.Items.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task N53_AC29_grouped_output_pages_by_offset_behind_the_cursor_with_no_group_repeated_and_none_dropped()
+    public async Task N53_AC29_grouped_output_pages_behind_the_cursor_with_no_group_repeated_and_none_dropped()
     {
         var expected = Truncation.Buckets(Corpus.Rows(Corpus.Shipment).Select(row => Corpus.Date(row, "loadStart")!.Value), "day", "Europe/Berlin").Select(bucket => $"{bucket.Key}:{bucket.Count}").ToList();
         expected.Should().HaveCountGreaterThan(6);
@@ -206,14 +206,6 @@ public class GroupOrderTests
 
         walk.Pages.Should().Be((expected.Count + 2) / 3);
         walk.Items.Select(item => $"{item["day"]}:{Number(item["total"])}").Should().Equal(expected);
-
-        // The cursor carries an offset: the same slices come back from a bare offset.
-        for (var offset = 0; offset < expected.Count; offset += 3)
-        {
-            var sliced = await client.SendAsync(Corpus.Shipment, $$"""[{{BerlinDays}}, { "sort": [{ "day": "asc" }] }, { "page": { "limit": 3, "offset": {{offset}} } }]""");
-            sliced.ShouldBeOk();
-            sliced.Items.Select(item => $"{item!["day"]}:{Number(item["total"])}").Should().Equal(expected.Skip(offset).Take(3), $"offset {offset}");
-        }
     }
 
     [Fact]
@@ -273,7 +265,7 @@ public class GroupOrderTests
         for (var page = 1; page <= 3; page++)
         {
             var watch = Stopwatch.StartNew();
-            var pageStage = new JsonObject { ["limit"] = 10, ["includeTotalCount"] = page == 1 };
+            var pageStage = new JsonObject { ["limit"] = 10, ["count"] = page == 1 };
 
             if (cursor is not null)
                 pageStage["cursor"] = cursor;
@@ -287,7 +279,9 @@ public class GroupOrderTests
 
             if (page == 1)
             {
-                answer.ShouldHaveTotal(groups);
+                // Beside a page the count is one step of 1 000 groups; alone it runs to the exact number.
+                answer.ShouldCount("atLeast", 1_000, "step");
+                (await client.CountOnlyAsync(Corpus.Template, Stages)).ShouldCount("exact", groups);
                 answer.Items[0]!["name"].Should().BeNull();
             }
 
@@ -307,7 +301,7 @@ public class GroupOrderTests
             [ { "match": { "loadingTimeType": { "in": ["None", "Fixed", "FixedWithBooking"] } } },
               { "group": { "by": [{ "path": "loadingTimeType", "as": "timeType" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "timeType": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -317,7 +311,7 @@ public class GroupOrderTests
         var filtered = await client.SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "loadingTimeType", "as": "timeType" }], "fields": { "total": { "count": true } } } },
               { "match": { "timeType": { "eq": "Fixed" } } },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
         filtered.ShouldHaveTotal(1);
         filtered.Values("timeType").Select(value => value!.GetValue<int>()).Should().Equal(1);
@@ -345,7 +339,7 @@ public class GroupOrderTests
                   "lowest": { "min": "item.orderNumber" }, "highest": { "max": "item.orderNumber" },
                   "firstText": { "first": "item.text" }, "lastText": { "last": "item.text" }, "everyText": { "push": "item.text" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -367,15 +361,15 @@ public class GroupOrderTests
     }
 
     [Fact]
-    public async Task AC25b_after_an_unwind_the_collection_path_names_the_element_and_push_is_flat()
+    public async Task AC25b_after_an_unwind_the_alias_names_the_element_and_push_is_flat()
     {
         var expected = Items().GroupBy(item => item.Status).OrderBy(group => group.Key, Comparer<string>.Create(Order.CompareCollated)).ToList();
 
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
-            [ { "unwind": { "path": "items" } },
-              { "group": { "by": [{ "path": "items.status.name", "as": "status" }], "fields": { "total": { "count": true }, "quantity": { "sum": "items.quantity.value" }, "everyText": { "push": "items.text" } } } },
+            [ { "unwind": { "path": "items", "as": "item" } },
+              { "group": { "by": [{ "path": "item.status.name", "as": "status" }], "fields": { "total": { "count": true }, "quantity": { "sum": "item.quantity.value" }, "everyText": { "push": "item.text" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -422,7 +416,7 @@ public class GroupOrderTests
     public async Task D03b_the_same_grouped_page_over_tied_values_answers_the_same_groups_every_time()
     {
         var client = await Transport();
-        const string Query = """[{ "group": { "by": [{ "path": "templateName", "as": "name" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "total": "desc" }] }, { "page": { "limit": 50, "offset": 1000 } }]""";
+        const string Query = """[{ "group": { "by": [{ "path": "templateName", "as": "name" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "total": "desc" }] }, { "page": { "limit": 50 } }]""";
 
         var first = await client.SendAsync(Corpus.Template, Query);
         var second = await client.SendAsync(Corpus.Template, Query);

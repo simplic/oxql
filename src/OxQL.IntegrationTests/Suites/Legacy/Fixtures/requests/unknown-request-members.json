@@ -1,0 +1,42 @@
+{
+  "entityType": "transport.tour",
+  "timing": true,
+  "maxTimeMs": 1,
+  "strict": true,
+  "filter": [
+    {
+      "where": {
+        "Number": {
+          "eq": "none"
+        }
+      }
+    }
+  ],
+  "pipeline": [
+    {
+      "match": {
+        "IsDeleted": {
+          "eq": false
+        }
+      }
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 2,
+        "includeTotalCount": true
+      }
+    }
+  ]
+}

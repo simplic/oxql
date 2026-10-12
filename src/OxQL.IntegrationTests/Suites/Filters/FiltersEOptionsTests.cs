@@ -46,18 +46,18 @@ public class FiltersEOptionsTests
 
         foreach (var condition in new[]
         {
-            """{ "eq": "DUP", "options": { "ignoreCase": true } }""",
-            """{ "neq": "DUP", "options": { "ignoreCase": true } }""",
-            """{ "in": ["DUP"], "options": { "ignoreCase": true } }""",
-            """{ "nin": ["DUP"], "options": { "ignoreCase": true } }""",
-            """{ "contains": "UP", "options": { "ignoreCase": true } }""",
-            """{ "startsWith": "DU", "options": { "ignoreCase": true } }""",
-            """{ "endsWith": "UP", "options": { "ignoreCase": true } }""",
+            """{ "eq": "DUP", "options": { "caseSensitive": false } }""",
+            """{ "neq": "DUP", "options": { "caseSensitive": false } }""",
+            """{ "in": ["DUP"], "options": { "caseSensitive": false } }""",
+            """{ "nin": ["DUP"], "options": { "caseSensitive": false } }""",
+            """{ "contains": "UP", "options": { "caseSensitive": false } }""",
+            """{ "startsWith": "DU", "options": { "caseSensitive": false } }""",
+            """{ "endsWith": "UP", "options": { "caseSensitive": false } }""",
         })
             (await staff.MatchRawAsync(Corpus.Employee, $$"""{ "matchCode": {{condition}} }""")).ShouldBeOk(condition);
 
         foreach (var condition in new[] { "\"gt\": \"A\"", "\"gte\": \"A\"", "\"lt\": \"A\"", "\"lte\": \"A\"", "\"exists\": true", "\"regex\": \"^DUP$\"" })
-            (await staff.MatchRawAsync(Corpus.Employee, $$"""{ "matchCode": { {{condition}}, "options": { "ignoreCase": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE");
+            (await staff.MatchRawAsync(Corpus.Employee, $$"""{ "matchCode": { {{condition}}, "options": { "caseSensitive": false } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE");
     }
 
     [Fact]
@@ -68,16 +68,16 @@ public class FiltersEOptionsTests
 
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller", "options": { "ignoreCase": true } } }""")).Should().Equal(expected);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller", "options": { "caseSensitive": false } } }""")).Should().Equal(expected);
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller" } }""")).Should().Equal(expected, "the option is the default");
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "ülle", "options": { "ignoreCase": true } } }""")).Should().BeEmpty("eq is anchored");
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "ülle", "options": { "caseSensitive": false } } }""")).Should().BeEmpty("eq is anchored");
 
         Codes(code => code.Contains('.', StringComparison.Ordinal)).Should().BeEmpty();
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "ALPHA.01", "options": { "ignoreCase": true } } }""")).Should().BeEmpty("a dot is no wildcard");
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "ALPHA.01", "options": { "caseSensitive": false } } }""")).Should().BeEmpty("a dot is no wildcard");
 
         // ignoreCase: false is the alias of caseSensitive: true. E-ic-agree: so is the typed opt-out.
         Exact("müller").Should().Equal(Employee("case-lower"));
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller", "options": { "ignoreCase": false } } }""")).Should().Equal(Exact("müller"));
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller", "options": { "caseSensitive": true } } }""")).Should().Equal(Exact("müller"));
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "müller", "options": { "caseSensitive": true } } }""")).Should().Equal(Exact("müller"));
     }
 
@@ -87,7 +87,7 @@ public class FiltersEOptionsTests
         var expected = AllBut(Corpus.Employee, Folded("dup"));
         Folded("dup").Should().Equal(Keys(Corpus.Employee, "dup-a", "dup-b", "dup-c"));
 
-        var answered = await (await StaffClient()).Ids(Corpus.Employee, """{ "matchCode": { "neq": "dup", "options": { "ignoreCase": true } } }""");
+        var answered = await (await StaffClient()).Ids(Corpus.Employee, """{ "matchCode": { "neq": "dup", "options": { "caseSensitive": false } } }""");
 
         answered.Should().Equal(expected);
         answered.Should().Contain([Employee("matchcode-null"), Employee("matchcode-missing"), Employee("matchcode-empty")]);
@@ -101,7 +101,7 @@ public class FiltersEOptionsTests
 
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "in": ["MÜLLER", "dup"], "options": { "ignoreCase": true } } }""")).Should().Equal(expected);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "in": ["MÜLLER", "dup"], "options": { "caseSensitive": false } } }""")).Should().Equal(expected);
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "in": ["MÜLLER", "dup"] } }""")).Should().Equal(expected);
     }
 
@@ -110,7 +110,7 @@ public class FiltersEOptionsTests
     {
         var expected = AllBut(Corpus.Employee, FoldedIn("MÜLLER", "dup"));
 
-        var answered = await (await StaffClient()).Ids(Corpus.Employee, """{ "matchCode": { "nin": ["MÜLLER", "dup"], "options": { "ignoreCase": true } } }""");
+        var answered = await (await StaffClient()).Ids(Corpus.Employee, """{ "matchCode": { "nin": ["MÜLLER", "dup"], "options": { "caseSensitive": false } } }""");
 
         answered.Should().Equal(expected);
         answered.Should().NotContain(Employee("accent-plain"), "under the collation Muller is MÜLLER");
@@ -118,24 +118,25 @@ public class FiltersEOptionsTests
     }
 
     [Fact]
-    public async Task E61_contains_and_endsWith_fold_case_only_and_startsWith_folds_case_and_accents()
+    public async Task E61_contains_endsWith_and_startsWith_fold_case_and_accents()
     {
-        IReadOnlyList<Guid> CaseOnly(Func<string, bool> test) => Codes(code => test(Order.FoldCaseOnly(code)));
+        IReadOnlyList<Guid> CaseOnly(Func<string, bool> test) => Codes(code => test(Order.FoldCi(code)));
 
-        var contains = CaseOnly(code => code.Contains(Order.FoldCaseOnly("ÜLL"), StringComparison.Ordinal));
-        contains.Should().Equal(Keys(Corpus.Employee, MullerCased), "Muller has no Ü, and a regex folds no accent");
+        // The pattern of contains and endsWith folds accents as the collation does.
+        var contains = CaseOnly(code => code.Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
+        contains.Should().Contain(Keys(Corpus.Employee, MullerFolded), "Muller has no Ü, and the pattern folds the accent");
 
         var prefix = Codes(code => Order.FoldCi(code).StartsWith(Order.FoldCi("mÜ"), StringComparison.Ordinal));
         prefix.Should().Equal(Keys(Corpus.Employee, MullerFolded), "the prefix range runs under the collation");
 
-        var suffix = CaseOnly(code => code.EndsWith(Order.FoldCaseOnly("LLER"), StringComparison.Ordinal));
+        var suffix = CaseOnly(code => code.EndsWith(Order.FoldCi("LLER"), StringComparison.Ordinal));
         suffix.Should().Equal(Keys(Corpus.Employee, MullerFolded));
 
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "contains": "ÜLL", "options": { "ignoreCase": true } } }""")).Should().Equal(contains);
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "startsWith": "mÜ", "options": { "ignoreCase": true } } }""")).Should().Equal(prefix);
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "endsWith": "LLER", "options": { "ignoreCase": true } } }""")).Should().Equal(suffix);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "contains": "ÜLL", "options": { "caseSensitive": false } } }""")).Should().Equal(contains);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "startsWith": "mÜ", "options": { "caseSensitive": false } } }""")).Should().Equal(prefix);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "endsWith": "LLER", "options": { "caseSensitive": false } } }""")).Should().Equal(suffix);
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "contains": "ÜLL" } }""")).Should().Equal(contains);
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "startsWith": "mÜ" } }""")).Should().Equal(prefix);
     }
@@ -144,26 +145,26 @@ public class FiltersEOptionsTests
     public async Task E62_ignoreCase_on_a_non_string_path_is_refused_with_the_kind_and_the_operator_in_the_message()
     {
         // E-ic-agree and E62-client: the body the client refuses to send, sent by hand, is refused whole.
-        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "isDeleted": { "eq": true, "options": { "ignoreCase": true } } }""");
+        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "isDeleted": { "eq": true, "options": { "caseSensitive": false } } }""");
 
         answer.StatusCode.Should().Be(400);
         answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be(
-            "'ignoreCase' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; 'isDeleted' is a bool under 'eq'.");
+            "'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; 'isDeleted' is a bool under 'eq'.");
     }
 
     [Fact]
     public async Task E63_ignoreCase_on_gt_is_refused_because_an_ordered_comparison_cannot_opt_out_of_the_collation()
     {
-        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "gt": "A", "options": { "ignoreCase": true } } }""");
+        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "gt": "A", "options": { "caseSensitive": false } } }""");
 
         answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be(
-            "'ignoreCase' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; 'gt' on 'matchCode' orders under the collation of the whole request and cannot opt out of it.");
+            "'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; 'gt' on 'matchCode' orders under the collation of the whole request and cannot opt out of it.");
     }
 
     [Fact]
     public async Task E64_ignoreCase_on_regex_is_refused_by_the_binder()
     {
-        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "regex": "^dup$", "options": { "ignoreCase": true } } }""");
+        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "regex": "^dup$", "options": { "caseSensitive": false } } }""");
 
         answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Contain("'matchCode' is a string under 'regex'");
     }
@@ -171,7 +172,7 @@ public class FiltersEOptionsTests
     [Fact]
     public async Task E65_ignoreCase_on_exists_is_refused()
     {
-        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "exists": true, "options": { "ignoreCase": true } } }""");
+        var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "exists": true, "options": { "caseSensitive": false } } }""");
 
         answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Contain("under 'exists'");
     }
@@ -200,9 +201,9 @@ public class FiltersEOptionsTests
 
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "istanbul", "options": { "ignoreCase": true } } }""")).Should().Equal(turkish);
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "istanbul", "options": { "caseSensitive": false } } }""")).Should().Equal(turkish);
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "İSTANBUL" } }""")).Should().Equal(turkish);
-        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "Muller", "options": { "ignoreCase": true } } }""")).Should().Equal(Folded("Muller"));
+        (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "Muller", "options": { "caseSensitive": false } } }""")).Should().Equal(Folded("Muller"));
 
         // Opted out, each spelling is its own row again.
         (await staff.Ids(Corpus.Employee, """{ "matchCode": { "eq": "istanbul", "options": { "caseSensitive": true } } }""")).Should().Equal(Employee("turkish-lower"));
@@ -213,7 +214,7 @@ public class FiltersEOptionsTests
     public async Task E44_notContains_arrives_as_not_contains_and_answers_the_complement_either_way()
     {
         // The client's half (the bytes) is a client spec; the engine half is what the two bodies answer.
-        var folded = Codes(code => Order.FoldCaseOnly(code).Contains(Order.FoldCaseOnly("ÜLL"), StringComparison.Ordinal));
+        var folded = Codes(code => Order.FoldCi(code).Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
         var exact = Codes(code => code.Contains("ÜLL", StringComparison.Ordinal));
         exact.Should().Equal(Employee("case-upper"));
         folded.Count.Should().BeGreaterThan(exact.Count);

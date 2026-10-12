@@ -22,7 +22,7 @@ public static class WireNames
     public const string AddonWire = "addon";
 
     /// <summary>The properties that name an instance, in preference order.</summary>
-    public static readonly string[] DisplayCandidates = ["name", "matchCode", "number"];
+    public static readonly IReadOnlyList<string> DisplayCandidates = ["name", "matchCode", "number"];
 
     /// <summary>Suffixes stripped from a type name before it becomes a label.</summary>
     private static readonly string[] LabelSuffixes = ["Model", "Response", "Dto"];
@@ -41,10 +41,6 @@ public static class WireNames
     /// </summary>
     public static string DerivedStorage(string wireName) =>
         wireName == IdWire ? IdStorage : Pascalize(wireName);
-
-    /// <summary>The published storage name of a property: null where it equals the derivation from the wire name.</summary>
-    public static string? PublishedStorageName(string clrName, string wireName) =>
-        clrName == Pascalize(wireName) ? null : clrName;
 
     /// <summary>The label of a property, or null when it equals the one a consumer derives from the wire name.</summary>
     public static string? PropertyLabelOf(string clrName, string wireName)

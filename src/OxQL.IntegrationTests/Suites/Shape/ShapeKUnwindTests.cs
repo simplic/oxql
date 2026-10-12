@@ -19,7 +19,7 @@ namespace OxQL.IntegrationTests.Suites.Shape;
 [Trait("Category", "Integration")]
 public class ShapeKUnwindTests
 {
-    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "includeTotalCount": true } }""";
+    private const string FullPage = """{ "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500, "count": true } }""";
 
     private static Guid Id(string key) => Corpus.IdOf(Corpus.Shipment, key);
 
@@ -60,24 +60,24 @@ public class ShapeKUnwindTests
     }
 
     [Fact]
-    public async Task K01_an_unwind_replaces_the_document_with_one_per_element_under_the_same_member_name()
+    public async Task K01_an_unwind_replaces_the_document_with_one_per_element_under_its_alias()
     {
         var expected = Unwound(row => Items(row).Count);
         expected.Count.Should().BeGreaterThan(Corpus.Counts(Corpus.Shipment).A);
 
-        var answer = await Send($$"""[ { "unwind": { "path": "items" } }, { "project": { "id": 1, "items.orderNumber": 1 } }, {{FullPage}} ]""");
+        var answer = await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1, "item.orderNumber": 1 } }, {{FullPage}} ]""");
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
 
-        // …and the member is the element, not the array.
+        // …and the alias is the element; the array has left the row.
         var three = answer.Items.Where(row => Guid.Parse(row!["id"]!.GetValue<string>()) == Id("items-three")).ToList();
         three.Should().HaveCount(3);
-        three.Should().OnlyContain(row => row!["items"] is JsonObject);
-        three.Select(row => row!["items"]!["orderNumber"]!.GetValue<int>()).Should().Equal(Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32));
+        three.Should().OnlyContain(row => row!["item"] is JsonObject && !row.AsObject().ContainsKey("items"));
+        three.Select(row => row!["item"]!["orderNumber"]!.GetValue<int>()).Should().Equal(Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32));
     }
 
     [Fact]
-    public async Task K02_after_an_unwind_the_written_path_means_the_element_not_some_element()
+    public async Task K02_the_alias_means_the_element_and_the_collection_path_some_element_before_the_unwind_only()
     {
         var after = Unwound(row => Items(row).Count(item => Status(item) == "Open" && Quantity(item) > 0));
         var before = Corpus.IdsWhere(Corpus.Shipment, row => Items(row).Any(item => Status(item) == "Open") && Items(row).Any(item => Quantity(item) > 0));
@@ -85,22 +85,52 @@ public class ShapeKUnwindTests
         after.Should().NotContain(Id("items-split"));
 
         const string condition = """{ "and": [ { "items.status.name": { "eq": "Open" } }, { "items.quantity.value": { "gt": 0 } } ] }""";
+        const string element = """{ "and": [ { "item.status.name": { "eq": "Open" } }, { "item.quantity.value": { "gt": 0 } } ] }""";
 
-        (await Send($$"""[ { "unwind": { "path": "items" } }, { "match": {{condition}} }, { "project": { "id": 1 } }, {{FullPage}} ]""")).ShouldHaveIds(after);
+        (await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": {{element}} }, { "project": { "id": 1 } }, {{FullPage}} ]""")).ShouldHaveIds(after);
         (await Send($$"""[ { "match": {{condition}} }, { "project": { "id": 1 } }, {{FullPage}} ]""")).ShouldHaveIds(before);
+
+        // One path, one meaning: after the unwind the collection is not in the row, and the refusal says where its element went.
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "items.status.name": { "eq": "Open" } } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "items.status.name", 1);
     }
 
     [Fact]
-    public async Task K03_as_writes_a_copy_and_the_original_member_still_carries_the_element()
+    public async Task K03_as_holds_the_element_and_the_original_member_leaves_the_row()
     {
-        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1, "items.orderNumber": 1, "item.orderNumber": 1 } }, {{FullPage}} ]""");
+        var stored = Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32).ToList();
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 50, "count": true } } ]""");
 
-        answer.ShouldHaveIds(Enumerable.Repeat(Id("items-three"), 3));
+        answer.ShouldHaveIds(Enumerable.Repeat(Id("items-three"), 3)).ShouldHaveTotal(3);
+        answer.Items.Should().OnlyContain(row => !row!.AsObject().ContainsKey("items"), "the unwound collection left the row");
+        answer.Values("item.orderNumber").Select(value => value!.GetValue<int>()).Should().Equal(stored);
 
-        foreach (var row in answer.Items)
+        // Naming the collection in the projection after the unwind names nothing that is there.
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1, "items.orderNumber": 1 } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "items.orderNumber", 1);
+    }
+
+    [Fact]
+    public async Task K26_after_an_unwind_a_path_under_the_collection_is_refused_with_where_the_element_went()
+    {
+        var answer = await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "match": { "items.orderNumber": { "eq": 1 } } }, {{FullPage}} ]""");
+
+        Refused(answer, "UNKNOWN_PATH", "items.orderNumber", 1);
+        answer.Body!["errors"]![0]!["params"]!.ToJsonString().Should().Be("""{"reason":"unwound","collection":"items","alias":"item"}""");
+    }
+
+    [Fact]
+    public async Task K27_an_unwind_needs_as_and_has_no_keepPath()
+    {
+        var bare = await Send($$"""[ { "unwind": { "path": "items" } }, {{FullPage}} ]""");
+
+        Refused(bare, "INVALID_ALIAS", "items", 0);
+        bare.Body!["errors"]![0]!["params"]!.ToJsonString().Should().Be("""{"stage":"unwind","member":"as","reason":"required"}""");
+
+        foreach (var value in new[] { "true", "false" })
         {
-            row!["items"].Should().BeOfType<JsonObject>("the original member keeps the element (v1 dropped it, VAL U2)");
-            row["item"]!["orderNumber"]!.GetValue<int>().Should().Be(row["items"]!["orderNumber"]!.GetValue<int>());
+            var kept = await Send($$"""[ { "unwind": { "path": "items", "as": "item", "keepPath": {{value}} } }, {{FullPage}} ]""");
+
+            kept.ShouldRefuse("UNKNOWN_STAGE_MEMBER", 400);
+            kept.Body!["errors"]![0]!["params"]!.ToJsonString().Should().Be("""{"stage":"unwind","member":"keepPath","reason":"removed"}""");
         }
     }
 
@@ -120,7 +150,7 @@ public class ShapeKUnwindTests
     [Fact]
     public async Task K05_the_index_member_is_filterable_and_sortable()
     {
-        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "includeIndex": "position" } }, { "match": { "position": { "gte": 1 } } }, { "sort": [ { "position": "desc" } ] }, { "page": { "limit": 50, "includeTotalCount": true } } ]""");
+        var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "match": { "position": { "gte": 1 } } }, { "sort": [ { "position": "desc" } ] }, { "page": { "limit": 50, "count": true } } ]""");
 
         answer.ShouldHaveTotal(2);
         answer.Values("position").Select(value => value!.GetValue<int>()).Should().Equal(2, 1);
@@ -155,7 +185,7 @@ public class ShapeKUnwindTests
     {
         var ids = new[] { "items-none", "items-missing", "items-one" }.Select(Id);
 
-        var answer = await Send($$"""[ { "match": { "id": { "in": {{Json.Ids(ids)}} } } }, { "unwind": { "path": "items" } }, { "project": { "id": 1 } }, {{FullPage}} ]""");
+        var answer = await Send($$"""[ { "match": { "id": { "in": {{Json.Ids(ids)}} } } }, { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } }, {{FullPage}} ]""");
 
         answer.ShouldHaveIds([Id("items-one")]).ShouldHaveTotal(1);
     }
@@ -163,13 +193,13 @@ public class ShapeKUnwindTests
     [Fact]
     public async Task K08_an_unwind_on_a_non_collection_is_refused()
     {
-        Refused(await Send($$"""[ { "unwind": { "path": "status" } }, {{FullPage}} ]"""), "NOT_A_COLLECTION", "status", 0);
+        Refused(await Send($$"""[ { "unwind": { "path": "status", "as": "statu" } }, {{FullPage}} ]"""), "NOT_A_COLLECTION", "status", 0);
     }
 
     [Fact]
     public async Task K09_an_inner_collection_before_its_outer_one_is_refused_where_v1_answered_an_empty_page()
     {
-        Refused(await Send($$"""[ { "unwind": { "path": "billingLines.references" } }, {{FullPage}} ]"""), "UNWIND_ORDER", "billingLines.references", 0);
+        Refused(await Send($$"""[ { "unwind": { "path": "billingLines.references", "as": "reference" } }, {{FullPage}} ]"""), "UNWIND_ORDER", "billingLines.references", 0);
     }
 
     [Fact]
@@ -184,10 +214,10 @@ public class ShapeKUnwindTests
         var answer = await Send($$"""
             [ { "match": { "id": { "eq": "{{nested.Id}}" } } },
               { "unwind": { "path": "billingLines", "as": "bl", "includeIndex": "bi" } },
-              { "unwind": { "path": "billingLines.references", "as": "ref", "includeIndex": "ri" } },
+              { "unwind": { "path": "bl.references", "as": "ref", "includeIndex": "ri" } },
               { "project": { "id": 1, "bi": 1, "ri": 1, "ref.referenceId": 1 } },
               { "sort": [ { "id": "asc" }, { "bi": "asc" }, { "ri": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -210,13 +240,14 @@ public class ShapeKUnwindTests
     [Fact]
     public async Task K11_an_unwind_of_an_already_unwound_path_is_refused()
     {
-        Refused(await Send($$"""[ { "unwind": { "path": "items" } }, { "unwind": { "path": "items" } }, {{FullPage}} ]"""), "NOT_A_COLLECTION", "items", 1);
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item", "as": "itemRow" } }, {{FullPage}} ]"""), "NOT_A_COLLECTION", "item", 1);
+        Refused(await Send($$"""[ { "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "items", "as": "again" } }, {{FullPage}} ]"""), "UNKNOWN_PATH", "items", 1);
     }
 
     [Fact]
     public async Task K12_an_unwind_after_a_group_is_refused_the_grouped_shape_has_no_collections()
     {
-        Refused(await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "st" } ], "fields": { "n": { "count": true } } } }, { "unwind": { "path": "st" } }, { "page": { "limit": 50 } } ]"""),
+        Refused(await Send("""[ { "group": { "by": [ { "path": "status.name", "as": "st" } ], "fields": { "n": { "count": true } } } }, { "unwind": { "path": "st", "as": "stRow" } }, { "page": { "limit": 50 } } ]"""),
             "NOT_A_COLLECTION", "st", 1);
     }
 
@@ -242,12 +273,11 @@ public class ShapeKUnwindTests
     }
 
     [Theory]
-    [InlineData("items.orderNumber", null)]
     [InlineData("item.orderNumber", "item")]
-    public async Task K16_the_elements_paths_become_sortable_under_the_original_name_and_under_the_alias(string path, string? alias)
+    public async Task K16_the_elements_paths_become_sortable_under_the_alias(string path, string alias)
     {
         var expected = Items(Corpus.Row(Corpus.Shipment, "items-three")).Select(item => item["OrderNumber"].AsInt32).OrderDescending().ToList();
-        var unwind = alias is null ? """{ "path": "items" }""" : $$"""{ "path": "items", "as": "{{alias}}" }""";
+        var unwind = $$"""{ "path": "items", "as": "{{alias}}" }""";
 
         var answer = await Send($$"""[ { "match": { "id": { "eq": "{{Id("items-three")}}" } } }, { "unwind": {{unwind}} }, { "sort": [ { "{{path}}": "desc" } ] }, { "page": { "limit": 50 } } ]""");
 
@@ -258,23 +288,25 @@ public class ShapeKUnwindTests
     [Fact]
     public async Task K17_a_sibling_collection_that_was_not_unwound_stays_unsortable()
     {
-        Refused(await Send("""[ { "unwind": { "path": "items" } }, { "sort": [ { "tags.name": "asc" } ] }, { "page": { "limit": 5 } } ]"""), "NOT_SORTABLE", "tags.name", 1);
+        Refused(await Send("""[ { "unwind": { "path": "items", "as": "item" } }, { "sort": [ { "tags.name": "asc" } ] }, { "page": { "limit": 5 } } ]"""), "NOT_SORTABLE", "tags.name", 1);
     }
 
     [Fact]
-    public async Task K18_an_unwind_switches_the_query_to_offset_paging_behind_the_cursor()
+    public async Task K18_unwound_rows_page_by_value_the_cursor_carries_the_key_and_the_position()
     {
         var expected = Unwound(row => Items(row).Count);
-        const string stages = """{ "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }""";
+        const string stages = """{ "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }""";
         var client = await Lab.ClientAsync(LabService.Transport);
 
-        var first = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "includeTotalCount": true } } ]""");
+        var first = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "count": true } } ]""");
 
         first.ShouldHaveIds(Corpus.PageOf(expected, limit: 3));
         first.HasNextPage.Should().BeTrue();
         var payload = Cursors.Payload(first.NextCursor!);
-        payload["m"]!.GetValue<string>().Should().Be("o", "the offset mode: " + payload.ToJsonString());
-        payload["o"]!.GetValue<int>().Should().Be(3);
+        payload["m"]!.GetValue<string>().Should().Be("k", "unwound rows page by value: " + payload.ToJsonString());
+        payload["o"]!.GetValue<int>().Should().Be(0);
+        ((JsonArray)payload["v"]!).Select(leg => leg!["p"]!.GetValue<string>()).Should().Equal(["id", "_id", "__oxIx0"], "the sort, the key, the position of the unwind");
+        Cursors.Guid(payload["v"]![1]!["b"]!.GetValue<string>()).Should().Be(expected[2]);
 
         var second = await client.SendAsync(Corpus.Shipment, $$"""[ {{stages}}, { "page": { "limit": 3, "cursor": "{{first.NextCursor}}" } } ]""");
         second.ShouldHaveIds(Corpus.PageOf(expected, limit: 3, offset: 3));
@@ -286,7 +318,7 @@ public class ShapeKUnwindTests
         var expected = Corpus.Rows(Corpus.Shipment).Sum(row => Items(row).Count);
         expected.Should().NotBe(Corpus.Counts(Corpus.Shipment).A);
 
-        (await Send("""[ { "unwind": { "path": "items" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3, "includeTotalCount": true } } ]""")).ShouldHaveTotal(expected, capped: false);
+        (await Send("""[ { "unwind": { "path": "items", "as": "item" } }, { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 3, "count": true } } ]""")).ShouldHaveTotal(expected, capped: false);
     }
 
     [Fact]
@@ -305,44 +337,43 @@ public class ShapeKUnwindTests
         var values = Corpus.Texts(states, "states");
         values.Should().HaveCount(3);
 
-        var scalars = await Send($$"""[ { "match": { "id": { "eq": "{{states.Id}}" } } }, { "unwind": { "path": "states", "includeIndex": "at" } }, { "project": { "id": 1, "states": 1, "at": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 50 } } ]""", Corpus.Transaction);
+        var scalars = await Send($$"""[ { "match": { "id": { "eq": "{{states.Id}}" } } }, { "unwind": { "path": "states", "as": "state", "includeIndex": "at" } }, { "project": { "id": 1, "state": 1, "at": 1 } }, { "sort": [ { "at": "asc" } ] }, { "page": { "limit": 50 } } ]""", Corpus.Transaction);
         scalars.ShouldBeOk();
-        scalars.Strings("states").Should().Equal(values);
+        scalars.Strings("state").Should().Equal(values);
 
         // Legacy: the dictionary half was unreachable (the fleet's one ArrayOfDocuments dictionary
         // was not published). conformance.entity carries both dictionary forms. A dictionary stored
         // as a document is not a collection; one stored as an array of key/value documents is, and
         // unwinds to one row per entry with the entry under the member's name as { k, v }.
-        Refused(await Send($$"""[ { "unwind": { "path": "labels" } }, {{FullPage}} ]""", Corpus.Conformance), "NOT_A_COLLECTION", "labels", 0);
+        Refused(await Send($$"""[ { "unwind": { "path": "labels", "as": "label" } }, {{FullPage}} ]""", Corpus.Conformance), "NOT_A_COLLECTION", "labels", 0);
 
         var rows = Corpus.Rows(Corpus.Conformance).Order(Comparer<CorpusRow>.Create(Corpus.CompareIds)).ToList();
         var entries = rows.SelectMany(row => Corpus.Elements(row, "quantities").OfType<BsonDocument>()
             .Select(entry => (row.Id, Key: entry["k"].AsGuid, Value: entry["v"].AsInt32))).ToList();
         entries.Should().NotBeEmpty();
 
-        var unwound = await Send("""[ { "unwind": { "path": "quantities" } }, { "project": { "id": 1, "quantities": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500 } } ]""", Corpus.Conformance);
+        var unwound = await Send("""[ { "unwind": { "path": "quantities", "as": "quantity" } }, { "project": { "id": 1, "quantity": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 500 } } ]""", Corpus.Conformance);
 
         unwound.ShouldHaveIds(entries.Select(entry => entry.Id));
-        unwound.Items.Select(row => (Guid.Parse(row!["quantities"]!["k"]!.GetValue<string>()), row["quantities"]!["v"]!.GetValue<int>()))
+        unwound.Items.Select(row => (Guid.Parse(row!["quantity"]!["k"]!.GetValue<string>()), row["quantity"]!["v"]!.GetValue<int>()))
             .Should().Equal(entries.Select(entry => (entry.Key, entry.Value)));
     }
 
     [Fact]
     public async Task K21_more_than_max_unwind_stages_is_refused()
     {
-        const string five = """{ "unwind": { "path": "items" } }, { "unwind": { "path": "items.weightNotes" } }, { "unwind": { "path": "tags" } }, { "unwind": { "path": "billingLines" } }, { "unwind": { "path": "billingLines.references" } }""";
+        const string five = """{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.weightNotes", "as": "weightNote" } }, { "unwind": { "path": "tags", "as": "tag" } }, { "unwind": { "path": "billingLines", "as": "billingLine" } }, { "unwind": { "path": "billingLine.references", "as": "reference" } }""";
 
         (await Send($$"""[ {{five}}, {{FullPage}} ]""")).ShouldBeOk("five unwind stages are within the limit");
 
-        var six = await Send($$"""[ {{five}}, { "unwind": { "path": "documents" } }, {{FullPage}} ]""");
+        var six = await Send($$"""[ {{five}}, { "unwind": { "path": "documents", "as": "document" } }, {{FullPage}} ]""");
         six.StatusCode.Should().Be(400, six.ToString());
         six.ErrorCodes.Should().Contain("MAX_UNWIND_STAGES_EXCEEDED");
     }
 
     [Theory]
     [InlineData("item.quantity.value")]
-    [InlineData("items.quantity.value")]
-    public async Task K22_a_filter_on_the_alias_root_and_on_the_original_path_select_the_same_rows(string path)
+    public async Task K22_a_filter_on_the_alias_root_selects_the_element_rows(string path)
     {
         var expected = Unwound(row => Items(row).Count(item => Quantity(item) == 5));
         expected.Should().Equal([Id("items-split")]);
@@ -378,14 +409,14 @@ public class ShapeKUnwindTests
 
         var answer = await Send($$"""
             [ { "match": { "id": { "in": {{Json.Ids(wanted.Select(row => row.Id))}} } } },
-              { "unwind": { "path": "items" } },
+              { "unwind": { "path": "items", "as": "item" } },
               { "group": { "by": [ { "path": "shipmentNumber", "as": "number" } ], "fields": { "n": { "count": true } } } },
               { "sort": [ { "number": "asc" } ] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
-        answer.Items.Select(row => (row!["number"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(expected);
+        answer.Items.Select(row => (row!["number"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(expected);
     }
 
     [Fact]
@@ -394,7 +425,7 @@ public class ShapeKUnwindTests
         var three = Corpus.Row(Corpus.Shipment, "items-three");
         var stored = Items(three).Select(item => item["OrderNumber"].AsInt32).ToList();
 
-        var answer = await Send($$"""[ { "match": { "shipmentNumber": { "eq": "{{Corpus.Text(three, "shipmentNumber")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 20, "includeTotalCount": true } } ]""");
+        var answer = await Send($$"""[ { "match": { "shipmentNumber": { "eq": "{{Corpus.Text(three, "shipmentNumber")}}" } } }, { "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }, { "sort": [ { "position": "asc" } ] }, { "page": { "limit": 20, "count": true } } ]""");
 
         answer.ShouldHaveTotal(stored.Count);
         answer.Values("position").Select(value => value!.GetValue<int>()).Should().Equal(0, 1, 2);
@@ -417,12 +448,12 @@ public class ShapeKUnwindTests
               { "group": { "by": [ { "path": "item.article.name", "as": "article" } ], "fields": { "n": { "count": true } } } },
               { "match": { "n": { "gte": 1 } } },
               { "sort": [ { "article": "asc" } ] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         // v1 answered a post-group match with nothing unless a match {} led the pipeline (VAL G4/G5).
         answer.ShouldHaveTotal(expected.Count);
-        answer.Items.Select(row => (row!["article"]!.GetValue<string>(), long.Parse(row["n"]!.GetValue<string>()))).Should().Equal(expected);
+        answer.Items.Select(row => (row!["article"]!.GetValue<string>(), row["n"]!.GetValue<long>())).Should().Equal(expected);
     }
 
     [Fact]
@@ -452,7 +483,7 @@ public class ShapeKUnwindTests
     }
 
     [Fact]
-    public async Task VALL3b_a_lookup_alias_unwound_without_as_is_addressed_under_its_own_name()
+    public async Task VALL3b_a_lookup_alias_unwound_is_addressed_under_the_unwinds_alias_and_leaves_the_row()
     {
         var parents = Corpus.Rows(Corpus.Conformance).ToDictionary(row => row.Id);
         var expected = Corpus.Rows(Corpus.ConformanceChild)
@@ -465,13 +496,14 @@ public class ShapeKUnwindTests
 
         var answer = await Send($$"""
             [ { "lookup": { "from": "conformance.child", "path": "parentId", "as": "peers" } },
-              { "unwind": { "path": "peers" } },
-              { "match": { "peers.name": { "eq": "{{first}}" } } },
-              { "project": { "id": 1, "peers.id": 1 } },
+              { "unwind": { "path": "peers", "as": "peer" } },
+              { "match": { "peer.name": { "eq": "{{first}}" } } },
+              { "project": { "id": 1, "peer.id": 1 } },
               {{FullPage}} ]
             """, Corpus.Conformance);
 
         answer.ShouldHaveIds(matching.Select(entry => entry.Parent));
-        answer.Ids("peers.id").Should().Equal(matching.Select(entry => entry.Child));
+        answer.Ids("peer.id").Should().Equal(matching.Select(entry => entry.Child));
+        answer.Items.Should().OnlyContain(row => !row!.AsObject().ContainsKey("peers"), "the lookup's alias left the row with the unwind");
     }
 }

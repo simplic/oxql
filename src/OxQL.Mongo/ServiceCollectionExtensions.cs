@@ -66,8 +66,18 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<IEntityModelProvider>(_ => new LazyEntityModelProvider(() => ClrModelBuilder.Build(mongoOptions.AssembliesToScan)));
         services.TryAddSingleton<IAggregateRunner>(provider => new MongoAggregateRunner(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
-        services.TryAddSingleton<IIndexSource>(provider => new MongoIndexSource(provider.GetRequiredService<IMongoClient>(), mongoOptions.DatabaseName));
-        services.TryAddSingleton(provider => new ResolveCache(provider.GetRequiredService<OxQLOptions>()));
+        services.TryAddSingleton<IIndexSource>(provider => new MongoIndexSource(
+            provider.GetRequiredService<IMongoClient>(),
+            mongoOptions.DatabaseName,
+            maxTime: TimeSpan.FromMilliseconds(Math.Max(1, provider.GetRequiredService<OxQLOptions>().Explain.TimeoutMs))));
+        services.TryAddSingleton(provider => new OwnerFetchCache(provider.GetRequiredService<OxQLOptions>()));
+
+        // LEGACY(compat.v1): the legacy pipeline of contract 1 compatibility; remove with src/OxQL.Mongo/Legacy.
+        services.TryAddSingleton<Core.Legacy.ILegacyPipeline>(provider => new Legacy.LegacyPipeline(
+            provider.GetRequiredService<IEntityModelProvider>(),
+            provider.GetRequiredService<IAggregateRunner>(),
+            provider.GetRequiredService<OxQLOptions>(),
+            provider.GetService<ILogger<Legacy.LegacyPipeline>>()));
 
         services.AddSingleton<IQueryEngine>(provider =>
         {
@@ -86,7 +96,7 @@ public static class ServiceCollectionExtensions
                 logger,
                 mongoOptions.IncludeErrorDetails,
                 provider.GetService<IIndexSource>(),
-                provider.GetRequiredService<ResolveCache>());
+                provider.GetRequiredService<OwnerFetchCache>());
         });
 
         return services;

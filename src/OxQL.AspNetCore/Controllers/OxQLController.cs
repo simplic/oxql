@@ -15,12 +15,15 @@ namespace OxQL.AspNetCore.Controllers;
 [ApiController]
 [Route("[controller]")]
 [TypeFilter(typeof(RequestSizeFilter))]
+// LEGACY(compat.v1): keeps a contract 1 body readable for the legacy pipeline; remove with src/OxQL.AspNetCore/Legacy.
+[TypeFilter(typeof(Legacy.LegacyBodyFilter))]
 public class OxQLController : ControllerBase
 {
     private readonly IOxQLQueryService queryService;
     private readonly OxQLOptions options;
     private readonly ILogger<OxQLController> logger;
 
+    /// <summary>The public routes over <paramref name="queryService"/>, publishing <paramref name="options"/>' limits on health.</summary>
     public OxQLController(IOxQLQueryService queryService, OxQLOptions options, ILogger<OxQLController> logger)
     {
         this.queryService = queryService ?? throw new ArgumentNullException(nameof(queryService));
@@ -28,7 +31,16 @@ public class OxQLController : ControllerBase
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    /// <summary>Executes one query.</summary>
+    /// <summary>
+    /// Executes one query. The rows are written in the content coding the caller accepts
+    /// (<c>Accept-Encoding</c>: Brotli, else gzip) when the body is at least
+    /// <see cref="WireCompression.MinBytes"/>, with <c>Vary: Accept-Encoding</c> either way: a page of
+    /// rows repeats its member names in every row and shrinks to about a tenth. A refusal is not coded.
+    /// <para>
+    /// A contract 1 request is answered as it always was (<see cref="Contract1"/>): through the host's
+    /// own JSON formatter, with no content coding, no length, and no header the engine adds.
+    /// </para>
+    /// </summary>
     [HttpPost("query")]
     [ProducesResponseType(typeof(QueryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
@@ -42,7 +54,8 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            QueryOutcome.Success success => Ok(success.Result),
+            QueryOutcome.Success success when Contract1 => Ok(success.Result),
+            QueryOutcome.Success success => Timed(success.Result.Measured is { } measured ? [measured] : [], new CompressedJsonResult(success.Result)),
             QueryOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -51,6 +64,7 @@ public class OxQLController : ControllerBase
     /// <summary>
     /// Executes several queries in order under one time ceiling; always 200, each entry carries
     /// its own outcome. More queries than <c>Limits:MaxBatchQueries</c> is <c>BATCH_TOO_LARGE</c>.
+    /// The answer is content-coded as a query's is, and a contract 1 batch is answered as it always was.
     /// </summary>
     [HttpPost("batch")]
     [ProducesResponseType(typeof(BatchResponse), StatusCodes.Status200OK)]
@@ -62,7 +76,8 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            BatchOutcome.Success success => Ok(success.Response),
+            BatchOutcome.Success success when Contract1 => Ok(success.Response),
+            BatchOutcome.Success success => Timed(success.Response.Measured, new CompressedJsonResult(success.Response)),
             BatchOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -77,6 +92,14 @@ public class OxQLController : ControllerBase
     /// measurement has finished. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
     /// starts no measurement; that is the form one host asks of another, so a probe never sets off
     /// the probed service's own probes.
+    /// <para>
+    /// <c>capabilities</c> and <c>limits</c> are read per caller and say what holds for that caller's
+    /// requests. A request without the contract header on a host that answers contract 1 by the
+    /// compatibility rewrite gets the names the published engine listed before contract 2 (batches,
+    /// paging after a group and by offset, <c>any</c>) ahead of the host's own, since that host does all
+    /// of them for that caller. Where the legacy pipeline answers such a caller (the default), the two
+    /// members list what that pipeline honours: no paging by offset, and its limits only.
+    /// </para>
     /// </summary>
     [HttpGet("health")]
     [AllowAnonymous]
@@ -92,47 +115,85 @@ public class OxQLController : ControllerBase
         var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
         var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
 
+        // LEGACY(compat.v1): a caller the legacy pipeline answers reads what that pipeline honours; remove with src/OxQL.AspNetCore/Legacy.
+        var legacy = Legacy.LegacyHealth.For(options, HttpContext);
+
         return Ok(new
         {
             status = degraded ? "degraded" : "healthy",
             service = "oxql",
             engine = new
             {
-                version = typeof(OxQLController).Assembly.GetName().Version?.ToString(),
+                version = EngineCapabilities.Version,
                 contract = EngineCapabilities.Contract,
             },
-            capabilities = EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled),
-            limits = Limits(options.Limits),
+            capabilities = legacy?.Capabilities ?? EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
+            limits = legacy?.Limits ?? Limits(options),
             remote = services,
         });
     }
 
     /// <summary>
     /// Every limit the engine enforces. The schema document publishes the ones a caller checks a
-    /// request against before sending it; this is the whole set, for diagnosis.
+    /// request against before sending it; this is the whole set, for diagnosis, the chain
+    /// budget and the negative cache lifetime among them.
     /// </summary>
-    private static object Limits(Core.Models.LimitOptions limits) => new
+    private static object Limits(Core.Models.OxQLOptions options)
     {
-        maxPageSize = limits.MaxPageSize,
-        defaultPageSize = limits.DefaultPageSize,
-        maxPipelineStages = limits.MaxPipelineStages,
-        maxLookupStages = limits.MaxLookupStages,
-        maxUnwindStages = limits.MaxUnwindStages,
-        maxResolveStages = limits.MaxResolveStages,
-        maxGroupFields = limits.MaxGroupFields,
-        maxProjectionFields = limits.MaxProjectionFields,
-        maxConditions = limits.MaxConditions,
-        maxVariables = limits.MaxVariables,
-        maxOffset = limits.MaxOffset,
-        countCap = limits.CountCap,
-        maxSemiJoinIds = limits.MaxSemiJoinIds,
-        resolveKeyChunk = limits.ResolveKeyChunk,
-        maxResolveKeys = limits.MaxResolveKeys,
-        maxRequestBytes = limits.MaxRequestBytes,
-        maxBatchQueries = limits.MaxBatchQueries,
-        regexMaxLength = limits.RegexMaxLength,
-        maxLookupLimit = limits.MaxLookupLimit,
-    };
+        var limits = options.Limits;
+
+        return new
+        {
+            maxPageSize = limits.MaxPageSize,
+            defaultPageSize = limits.DefaultPageSize,
+            maxPipelineStages = limits.MaxPipelineStages,
+            maxLookupStages = limits.MaxLookupStages,
+            maxUnwindStages = limits.MaxUnwindStages,
+            maxResolveStages = limits.MaxResolveStages,
+            maxGroupFields = limits.MaxGroupFields,
+            maxProjectionFields = limits.MaxProjectionFields,
+            maxConditions = limits.MaxConditions,
+            maxFilterEntries = limits.MaxFilterEntries,
+            maxVariables = limits.MaxVariables,
+            maxOffset = limits.MaxOffset,
+            countCap = limits.CountCap,
+            maxSemiJoinIds = limits.MaxSemiJoinIds,
+            resolveKeyChunk = limits.ResolveKeyChunk,
+            maxResolveKeys = limits.MaxResolveKeys,
+            maxRequestBytes = limits.MaxRequestBytes,
+            maxBatchQueries = limits.MaxBatchQueries,
+            regexMaxLength = limits.RegexMaxLength,
+            maxLookupLimit = limits.MaxLookupLimit,
+            maxFlattenDepth = limits.MaxFlattenDepth,
+            maxContinuedStages = limits.MaxContinuedStages,
+            maxReportPageSize = limits.MaxReportPageSize,
+            maxReportedRows = limits.MaxReportedRows,
+            maxValuesLimit = limits.MaxValuesLimit,
+            valuesScanRows = options.Values.EffectiveScanRows,
+            valuesDefaultLimit = Math.Min(options.Values.DefaultLimit, limits.MaxValuesLimit),
+            chainTimeoutMs = options.Execution.EffectiveChainTimeoutMs,
+            negativeResolveTtlSeconds = options.Cache.NegativeResolveTtlSeconds,
+            explainRemoteTimeoutMs = options.Explain.RemoteTimeoutMs,
+            explainTimeoutMs = options.Explain.TimeoutMs,
+            explainMaxRequestBytes = Math.Min(limits.MaxRequestBytes, options.Explain.MaxRequestBytes),
+            explainMaxStages = options.Explain.MaxStages,
+            explainMaxCatalogEntries = options.Explain.MaxCatalogEntries,
+            explainMaxShapeDepth = options.Explain.MaxShapeDepth,
+            explainDefaultShapeDepth = options.Explain.DefaultShapeDepth,
+            explainMaxTypeMembers = options.Explain.MaxTypeMembers,
+            explainMaxAnswerBytes = options.Explain.MaxAnswerBytes,
+            explainMaxOwnerServices = options.Explain.MaxOwnerServices,
+            explainMaxOwnerCalls = options.Explain.MaxOwnerCalls,
+            explainMaxBatchChecks = options.Explain.MaxBatchChecks,
+            explainRatePerMinute = options.Explain.RatePerMinute,
+            explainRateBurst = options.Explain.RateBurst,
+            explainOwnerRatePerMinute = options.Explain.OwnerRatePerMinute,
+            explainOwnerRateBurst = options.Explain.OwnerRateBurst,
+            explainMaxConcurrentPerUser = options.Explain.MaxConcurrentPerUser,
+            explainMaxConcurrentPerHost = options.Explain.MaxConcurrentPerHost,
+            explainMaxConcurrentPerCaller = options.Explain.MaxConcurrentPerCaller,
+        };
+    }
 
     private static Model.EntityModel? ModelOrNull(IEntityModelProvider models)
     {
@@ -147,15 +208,35 @@ public class OxQLController : ControllerBase
     }
 
     /// <summary>
-    /// The bound pipeline, the emitted stages, the count stages and the index advisory; 404 unless
-    /// <c>Explain:Enabled</c>. No rows are returned and the count never runs, but for a pipeline
-    /// with a lookup the advisory reads the server's own explain, which executes the page pipeline
-    /// once under the query's time ceiling.
+    /// Everything about a query without running it: the body is a plain query or the
+    /// envelope <c>{ query, include?, shape?, remote?, catalog? }</c>. A query that does not bind is 200
+    /// with <c>valid: false</c> and every error; the plan (the bound form and the emitted stages) comes
+    /// with a valid one that asks for it. Explain never executes the query; the index advisory reads only
+    /// the index lists, and only with <c>include: ["indexes"]</c>. On by default; 404 while
+    /// <c>Explain:Enabled</c> is off. A malformed body is 400, no organisation 403, a body over
+    /// <c>Explain:MaxRequestBytes</c> 413, and a body past the other explain bounds 400
+    /// <c>EXPLAIN_LIMIT</c>, both before anything is bound. More explains than one user may send
+    /// (<c>Explain:RatePerMinute</c>, <c>RateBurst</c>) or have in flight (<c>MaxConcurrentPerUser</c>,
+    /// <c>MaxConcurrentPerHost</c>) is 429 with <c>Retry-After</c>, before the body is read.
+    /// <para>
+    /// An answer carries its validator as <c>ETag</c> (the answer's <c>etag</c>). A caller that holds an
+    /// answer sends that value as <c>If-None-Match</c> and gets 304 without a body while the answer
+    /// still stands: the same request by the same organisation and user, answered the same in
+    /// everything but what the owners cost this time. The body is written in
+    /// the content coding the caller accepts (<c>Accept-Encoding</c>: Brotli, else gzip).
+    /// </para>
     /// </summary>
     [HttpPost("explain")]
+    [ExplainBody]
+    [TypeFilter(typeof(ExplainRateFilter), Order = -1)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(ExplainResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status304NotModified)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Explain([FromBody] QueryRequest request, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(Refusal), StatusCodes.Status413PayloadTooLarge)]
+    public async Task<IActionResult> Explain([FromBody] ExplainRequest request, CancellationToken cancellationToken)
     {
         if (!options.Explain.Enabled)
             return NotFound();
@@ -164,10 +245,62 @@ public class OxQLController : ControllerBase
 
         return outcome switch
         {
-            ExplainOutcome.Success success => Ok(success.Result),
+            ExplainOutcome.Success success => Answered(success.Result),
             ExplainOutcome.Refused refused => Log(refused.Refusal).ToActionResult(),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
+    }
+
+    /// <summary>
+    /// The explain answer under its validator: 304 when the caller's <c>If-None-Match</c> names it (weak
+    /// comparison, as the header requires; <c>*</c> matches any), else the answer in the coding the caller accepts.
+    /// </summary>
+    private IActionResult Answered(ExplainResult result)
+    {
+        if (result.Etag is { } etag && Microsoft.Net.Http.Headers.EntityTagHeaderValue.TryParse(etag, out var tag))
+        {
+            Response.Headers.ETag = etag;
+            // The answer is one identity's (its organisation's addons, what its owners answer it): never a shared cache's.
+            Response.Headers.CacheControl = "private, no-cache";
+
+            if (Request.GetTypedHeaders().IfNoneMatch.Any(candidate => candidate.Equals(Microsoft.Net.Http.Headers.EntityTagHeaderValue.Any) || candidate.Compare(tag, useStrongComparison: false)))
+                return StatusCode(StatusCodes.Status304NotModified);
+        }
+
+        return new CompressedJsonResult(result);
+    }
+
+    /// <summary>
+    /// Whether the request was written for contract 1 (<see cref="OxQLQueryService.ContractOf(OxQLOptions, HttpContext?)"/>).
+    /// What such a caller receives is frozen: the status, the headers and the body bytes of the
+    /// engine that first answered it. Everything the engine has since added to an answer on the wire
+    /// (the content coding and with it <c>Vary</c> and <c>Content-Length</c>, <c>X-Content-Type-Options</c>,
+    /// <c>Server-Timing</c>, <c>Access-Control-Expose-Headers</c>, the <c>timing</c> member) is a
+    /// contract 2 answer's alone, and so is whatever is added next: it goes behind this.
+    /// </summary>
+    private bool Contract1 => OxQLQueryService.ContractOf(options, HttpContext) == 1;
+
+    /// <summary>
+    /// The answer under its <c>Server-Timing</c> header: where the time went up to here, the first
+    /// byte of the body (total, the database with its commands and round trips, this host's own
+    /// share and its parts). A browser on another origin reads the header only when it is exposed:
+    /// the header is named in <c>Access-Control-Expose-Headers</c> for a request that carries an
+    /// <c>Origin</c>, beside what the host's CORS policy exposes. Contract 2 only.
+    /// </summary>
+    private IActionResult Timed(IReadOnlyList<QueryTiming> measured, IActionResult answer)
+    {
+        if (measured.Count == 0)
+            return answer;
+
+        foreach (var timing in measured)
+            timing.Stop();
+
+        Response.Headers[QueryTiming.ServerTimingHeader] = QueryTiming.ServerTiming(measured);
+
+        if (Request.Headers.ContainsKey(Microsoft.Net.Http.Headers.HeaderNames.Origin))
+            Response.Headers.Append(Microsoft.Net.Http.Headers.HeaderNames.AccessControlExposeHeaders, QueryTiming.ServerTimingHeader);
+
+        return answer;
     }
 
     private Refusal Log(Refusal refusal)

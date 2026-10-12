@@ -21,6 +21,12 @@ public sealed class OxQLOptions
     /// <summary>Time and memory bounds on the aggregate.</summary>
     public ExecutionOptions Execution { get; set; } = new();
 
+    /// <summary>How far and how long a contract 2 page counts (<c>page.count</c>).</summary>
+    public CountOptions Count { get; set; } = new();
+
+    /// <summary>How many rows a <c>values</c> stage reads and how many values it answers by default.</summary>
+    public ValuesOptions Values { get; set; } = new();
+
     /// <summary>How operands are encoded for members whose storage is not uniform.</summary>
     public RepresentationOptions Representation { get; set; } = new();
 
@@ -82,6 +88,7 @@ public sealed class OxQLOptions
         Limits.MaxGroupFields = AtLeast(1, Limits.MaxGroupFields, nameof(LimitOptions.MaxGroupFields), adjustments);
         Limits.MaxProjectionFields = AtLeast(1, Limits.MaxProjectionFields, nameof(LimitOptions.MaxProjectionFields), adjustments);
         Limits.MaxConditions = AtLeast(1, Limits.MaxConditions, nameof(LimitOptions.MaxConditions), adjustments);
+        Limits.MaxFilterEntries = AtLeast(1, Limits.MaxFilterEntries, nameof(LimitOptions.MaxFilterEntries), adjustments);
         Limits.MaxVariables = AtLeast(1, Limits.MaxVariables, nameof(LimitOptions.MaxVariables), adjustments);
         Limits.MaxOffset = AtLeast(0, Limits.MaxOffset, nameof(LimitOptions.MaxOffset), adjustments);
         Limits.CountCap = AtLeast(1, Limits.CountCap, nameof(LimitOptions.CountCap), adjustments);
@@ -92,17 +99,72 @@ public sealed class OxQLOptions
         Limits.MaxBatchQueries = AtLeast(1, Limits.MaxBatchQueries, nameof(LimitOptions.MaxBatchQueries), adjustments);
         Limits.RegexMaxLength = AtLeast(1, Limits.RegexMaxLength, nameof(LimitOptions.RegexMaxLength), adjustments);
         Limits.MaxLookupLimit = AtLeast(1, Limits.MaxLookupLimit, nameof(LimitOptions.MaxLookupLimit), adjustments);
+        Limits.MaxFlattenDepth = AtLeast(1, Limits.MaxFlattenDepth, nameof(LimitOptions.MaxFlattenDepth), adjustments);
+        Limits.MaxContinuedStages = AtLeast(1, Limits.MaxContinuedStages, nameof(LimitOptions.MaxContinuedStages), adjustments);
+        Limits.MaxReportPageSize = AtLeast(1, Limits.MaxReportPageSize, nameof(LimitOptions.MaxReportPageSize), adjustments);
+        Limits.MaxReportedRows = AtLeast(1, Limits.MaxReportedRows, nameof(LimitOptions.MaxReportedRows), adjustments);
+        Limits.MaxValuesLimit = AtLeast(1, Limits.MaxValuesLimit, nameof(LimitOptions.MaxValuesLimit), adjustments);
+        Values.ScanRows = AtLeast(1, Values.ScanRows, nameof(ValuesOptions.ScanRows), adjustments, "Values");
+        Values.DefaultLimit = AtLeast(1, Values.DefaultLimit, nameof(ValuesOptions.DefaultLimit), adjustments, "Values");
+        Execution.ChainTimeoutMs = AtLeast(1, Execution.ChainTimeoutMs, nameof(ExecutionOptions.ChainTimeoutMs), adjustments, "Execution");
+        Cache.NegativeResolveTtlSeconds = AtLeast(0, Cache.NegativeResolveTtlSeconds, nameof(CacheOptions.NegativeResolveTtlSeconds), adjustments, "Cache");
+        Explain.RemoteTimeoutMs = AtLeast(1, Explain.RemoteTimeoutMs, nameof(ExplainOptions.RemoteTimeoutMs), adjustments, "Explain");
+        Explain.TimeoutMs = AtLeast(1, Explain.TimeoutMs, nameof(ExplainOptions.TimeoutMs), adjustments, "Explain");
+        Explain.MaxRequestBytes = AtLeast(1, Explain.MaxRequestBytes, nameof(ExplainOptions.MaxRequestBytes), adjustments, "Explain");
+        Explain.MaxStages = AtLeast(1, Explain.MaxStages, nameof(ExplainOptions.MaxStages), adjustments, "Explain");
+        Explain.MaxCatalogEntries = AtLeast(0, Explain.MaxCatalogEntries, nameof(ExplainOptions.MaxCatalogEntries), adjustments, "Explain");
+        Explain.MaxShapeDepth = AtLeast(1, Explain.MaxShapeDepth, nameof(ExplainOptions.MaxShapeDepth), adjustments, "Explain");
+        Explain.DefaultShapeDepth = AtLeast(1, Explain.DefaultShapeDepth, nameof(ExplainOptions.DefaultShapeDepth), adjustments, "Explain");
+        Explain.MaxTypeMembers = AtLeast(1, Explain.MaxTypeMembers, nameof(ExplainOptions.MaxTypeMembers), adjustments, "Explain");
+        Explain.MaxAnswerBytes = AtLeast(1_024, Explain.MaxAnswerBytes, nameof(ExplainOptions.MaxAnswerBytes), adjustments, "Explain");
+        Explain.MaxOwnerServices = AtLeast(0, Explain.MaxOwnerServices, nameof(ExplainOptions.MaxOwnerServices), adjustments, "Explain");
+        Explain.MaxOwnerCalls = AtLeast(0, Explain.MaxOwnerCalls, nameof(ExplainOptions.MaxOwnerCalls), adjustments, "Explain");
+        Explain.MaxBatchChecks = AtLeast(1, Explain.MaxBatchChecks, nameof(ExplainOptions.MaxBatchChecks), adjustments, "Explain");
+        Explain.RatePerMinute = AtLeast(1, Explain.RatePerMinute, nameof(ExplainOptions.RatePerMinute), adjustments, "Explain");
+        Explain.RateBurst = AtLeast(1, Explain.RateBurst, nameof(ExplainOptions.RateBurst), adjustments, "Explain");
+        Explain.OwnerRatePerMinute = AtLeast(1, Explain.OwnerRatePerMinute, nameof(ExplainOptions.OwnerRatePerMinute), adjustments, "Explain");
+        Explain.OwnerRateBurst = AtLeast(1, Explain.OwnerRateBurst, nameof(ExplainOptions.OwnerRateBurst), adjustments, "Explain");
+        Explain.MaxConcurrentPerUser = AtLeast(1, Explain.MaxConcurrentPerUser, nameof(ExplainOptions.MaxConcurrentPerUser), adjustments, "Explain");
+        Explain.MaxConcurrentPerHost = AtLeast(1, Explain.MaxConcurrentPerHost, nameof(ExplainOptions.MaxConcurrentPerHost), adjustments, "Explain");
+        Explain.MaxConcurrentPerCaller = AtLeast(1, Explain.MaxConcurrentPerCaller, nameof(ExplainOptions.MaxConcurrentPerCaller), adjustments, "Explain");
 
-        if (Limits.MaxSemiJoinIds > Limits.MaxOffset)
+        if (Explain.DefaultShapeDepth > Explain.MaxShapeDepth)
         {
-            adjustments.Add($"OxQL:Limits:MaxSemiJoinIds was {Limits.MaxSemiJoinIds}, above MaxOffset ({Limits.MaxOffset}); it is clamped to MaxOffset, because a semi-join reads the owner's ids by offset and cannot reach past it. Raise MaxOffset to raise it.");
-            Limits.MaxSemiJoinIds = Limits.MaxOffset;
+            adjustments.Add($"OxQL:Explain:DefaultShapeDepth was {Explain.DefaultShapeDepth}, above MaxShapeDepth {Explain.MaxShapeDepth}; it is clamped to it.");
+            Explain.DefaultShapeDepth = Explain.MaxShapeDepth;
+        }
+
+        if (Limits.MaxFlattenDepth > LimitOptions.MaxFlattenDepthCeiling)
+        {
+            adjustments.Add($"OxQL:Limits:MaxFlattenDepth was {Limits.MaxFlattenDepth}, above {LimitOptions.MaxFlattenDepthCeiling}; it is clamped, because every level is one more nested expression in each flattening stage.");
+            Limits.MaxFlattenDepth = LimitOptions.MaxFlattenDepthCeiling;
+        }
+
+        // A semi-join reads its first ids without an offset, so one id is in reach whatever MaxOffset is.
+        var reach = Math.Max(1, Limits.MaxOffset);
+
+        if (Limits.MaxSemiJoinIds > reach)
+        {
+            adjustments.Add($"OxQL:Limits:MaxSemiJoinIds was {Limits.MaxSemiJoinIds}, above MaxOffset ({Limits.MaxOffset}); it is clamped to {reach}, because a semi-join reads the owner's ids by offset and cannot reach past it. Raise MaxOffset to raise it.");
+            Limits.MaxSemiJoinIds = reach;
         }
 
         if (Limits.ResolveKeyChunk > Limits.MaxPageSize)
         {
             adjustments.Add($"OxQL:Limits:ResolveKeyChunk was {Limits.ResolveKeyChunk}, above MaxPageSize ({Limits.MaxPageSize}); it is clamped, because a resolve chunk is asked for as one page of the owner.");
             Limits.ResolveKeyChunk = Limits.MaxPageSize;
+        }
+
+        if (Limits.MaxContinuedStages > Limits.MaxPipelineStages)
+        {
+            adjustments.Add($"OxQL:Limits:MaxContinuedStages was {Limits.MaxContinuedStages}, above MaxPipelineStages ({Limits.MaxPipelineStages}); it is clamped, because no pipeline carries more stages to continue.");
+            Limits.MaxContinuedStages = Limits.MaxPipelineStages;
+        }
+
+        if (Values.DefaultLimit > Limits.MaxValuesLimit)
+        {
+            adjustments.Add($"OxQL:Values:DefaultLimit was {Values.DefaultLimit}, above Limits:MaxValuesLimit ({Limits.MaxValuesLimit}); it is clamped, because a values stage that names no limit would otherwise be refused for the host's own default.");
+            Values.DefaultLimit = Limits.MaxValuesLimit;
         }
 
         if (Limits.DefaultPageSize > Limits.MaxPageSize)
@@ -130,12 +192,12 @@ public sealed class OxQLOptions
         return adjustments;
     }
 
-    private static int AtLeast(int minimum, int value, string name, List<string> adjustments)
+    private static int AtLeast(int minimum, int value, string name, List<string> adjustments, string section = "Limits")
     {
         if (value >= minimum)
             return value;
 
-        adjustments.Add($"OxQL:Limits:{name} was {value}; it is raised to {minimum}, the least the engine can work with.");
+        adjustments.Add($"OxQL:{section}:{name} was {value}; it is raised to {minimum}, the least the engine can work with.");
 
         return minimum;
     }
@@ -146,13 +208,111 @@ public sealed class CompatOptions
 {
     /// <summary>Whether a request without the contract header is treated as contract 1. On for the compat release.</summary>
     public bool Enabled { get; set; } = true;
+
+    // LEGACY(compat.v1): the legacy pipeline's options; remove with src/OxQL.Core/Legacy.
+    /// <summary>The legacy pipeline: what contract 1 answered and contract 2 has no form for (<c>src/docs/LEGACY.md</c>).</summary>
+    public Legacy.LegacyOptions Legacy { get; set; } = new();
 }
 
 /// <summary>The explain endpoint.</summary>
 public sealed class ExplainOptions
 {
-    /// <summary>Whether <c>POST /oxql/explain</c> answers; 404 otherwise.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>
+    /// Whether <c>POST /oxql/explain</c> answers; 404 otherwise. On by default: explain
+    /// never executes the query and reads the index list only when a request asks for it.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// How long, in milliseconds, one explain waits for the owners' internal explain in all:
+    /// the remote check of continued parts and the describes of remote entities. An owner
+    /// that does not answer in time leaves a <c>REMOTE_UNCHECKED</c> note, never an error.
+    /// </summary>
+    public int RemoteTimeoutMs { get; set; } = 1_500;
+
+    /// <summary>
+    /// How long, in milliseconds, one explain may take in all, its owners included
+    /// (<c>Explain.Timeout</c>): once it is spent no further owner is asked, the answer says what is
+    /// known with <c>cache.complete: false</c> and an <c>EXPLAIN_LIMIT</c> note, and nothing is retried.
+    /// </summary>
+    public int TimeoutMs { get; set; } = 2_000;
+
+    /// <summary>With <c>include: "types"</c>, the member rows one type lists; a type with more is <c>truncated</c>, and a <c>catalog</c> entry reads the rest. An answer by reference lists no member.</summary>
+    public int MaxTypeMembers { get; set; } = 300;
+
+    /// <summary>With <c>include: "types"</c>, how many levels of member rows below each root are listed when the request names no <c>shape.depth</c>.</summary>
+    public int DefaultShapeDepth { get; set; } = 2;
+
+    /// <summary>
+    /// The largest answer, in bytes. A larger one is trimmed: first the types keep their first level
+    /// only, then the plan goes; the answer says so with <c>cache.complete: false</c> and an
+    /// <c>EXPLAIN_TRIMMED</c> note.
+    /// </summary>
+    public int MaxAnswerBytes { get; set; } = 262_144;
+
+    /// <summary>The most distinct owner services one explain asks; the parts of a further one are not checked (<c>EXPLAIN_LIMIT</c>).</summary>
+    public int MaxOwnerServices { get; set; } = 4;
+
+    /// <summary>
+    /// The most owner calls one explain causes in all, transitive ones included: one per owner
+    /// service and round (a first ask, and each ask-again of a union target). An internal explain
+    /// carries what is left, so an owner never spends more than its origin has.
+    /// </summary>
+    public int MaxOwnerCalls { get; set; } = 8;
+
+    /// <summary>
+    /// The most checks one internal explain carries (<c>POST internal/oxql/explain</c>, <c>checks</c>):
+    /// what one round of an origin's explain asks one owner. An origin leaves what exceeds it unchecked
+    /// (<c>EXPLAIN_LIMIT</c>); an owner refuses a larger batch 400 <c>EXPLAIN_LIMIT</c> before anything is bound.
+    /// </summary>
+    public int MaxBatchChecks { get; set; } = 64;
+
+    /// <summary>
+    /// The explains one user of one organisation may send per minute on the public route (a token
+    /// bucket refilled evenly); more is 429 with <c>Retry-After</c> before any work. It admits; what an
+    /// explain costs beyond its own bind, the calls to owners, is charged apart (<see cref="OwnerRatePerMinute"/>).
+    /// </summary>
+    public int RatePerMinute { get; set; } = 120;
+
+    /// <summary>The explains one user may send at once before the rate applies: the token bucket's size.</summary>
+    public int RateBurst { get; set; } = 30;
+
+    /// <summary>
+    /// The explains of one user of one organisation that may call owners, per minute (a token bucket
+    /// refilled evenly), charged when an explain is about to make its first owner call. An explain that
+    /// finds the bucket empty is never refused: it is answered as <c>remote: "cached"</c> answers,
+    /// from what is kept, with <c>cache.complete: false</c> and the note <c>EXPLAIN_LIMIT</c>
+    /// (<c>params.limit: "ownerRate"</c>, <c>retryAfter</c>).
+    /// </summary>
+    public int OwnerRatePerMinute { get; set; } = 20;
+
+    /// <summary>The explains one user may send at once that call owners before <see cref="OwnerRatePerMinute"/> applies: that bucket's size.</summary>
+    public int OwnerRateBurst { get; set; } = 5;
+
+    /// <summary>The explains of one user in flight at once on the public route; one more is 429.</summary>
+    public int MaxConcurrentPerUser { get; set; } = 2;
+
+    /// <summary>The explains in flight at once on the public route of one host, whoever sends them; one more is 429.</summary>
+    public int MaxConcurrentPerHost { get; set; } = 8;
+
+    /// <summary>The internal explains of one calling service in flight at once on the internal route (the base package enforces it); one more is 429.</summary>
+    public int MaxConcurrentPerCaller { get; set; } = 4;
+
+    /// <summary>
+    /// The largest explain body, in bytes; a larger one is 413 <c>REQUEST_TOO_LARGE</c> before it is
+    /// read (<c>Limits:MaxRequestBytes</c> still applies when it is lower). Explain is rare and cheap
+    /// to refuse, so its bounds are tight: none of them is a way to load a service.
+    /// </summary>
+    public int MaxRequestBytes { get; set; } = 65_536;
+
+    /// <summary>The most pipeline stages an explained query may carry; more is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxStages { get; set; } = 30;
+
+    /// <summary>The most <c>catalog</c> entries one explain may ask for; more is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxCatalogEntries { get; set; } = 10;
+
+    /// <summary>The deepest <c>shape.depth</c> an explain may ask for; deeper is 400 <c>EXPLAIN_LIMIT</c> before anything is bound.</summary>
+    public int MaxShapeDepth { get; set; } = 3;
 }
 
 /// <summary>Every cap a request is checked against. All are published on <c>/oxql/health</c>; the schema publishes the ones a caller can act on in advance.</summary>
@@ -173,11 +333,11 @@ public sealed class LimitOptions
     /// <summary>How many unwind stages one pipeline may carry.</summary>
     public int MaxUnwindStages { get; set; } = 5;
 
-    /// <summary>How many resolve stages one pipeline may carry.</summary>
-    public int MaxResolveStages { get; set; } = 2;
+    /// <summary>How many resolve stages one pipeline may carry on this host; stages continued at an owner count there.</summary>
+    public int MaxResolveStages { get; set; } = 8;
 
-    /// <summary>How many keys and aggregates one group stage may carry.</summary>
-    public int MaxGroupFields { get; set; } = 20;
+    /// <summary>How many keys and aggregates one group stage may carry: a grid derives one aggregate per column it sums, counts or ranges.</summary>
+    public int MaxGroupFields { get; set; } = 40;
 
     /// <summary>How many fields one projection may name.</summary>
     public int MaxProjectionFields { get; set; } = 500;
@@ -187,6 +347,13 @@ public sealed class LimitOptions
 
     /// <summary>How many variables one request may bind.</summary>
     public int MaxVariables { get; set; } = 64;
+
+    /// <summary>
+    /// How many entries the <c>filter</c> of one request may carry (contract 2): a grid sends one per
+    /// filtered column, per preset and for its fixed conditions. Checked before an entry is read; the
+    /// conditions of all entries together are bounded by <see cref="MaxConditions"/>, also before any is placed.
+    /// </summary>
+    public int MaxFilterEntries { get; set; } = 64;
 
     /// <summary>The largest <c>offset</c> a page may skip to; beyond it a cursor is needed.</summary>
     public int MaxOffset { get; set; } = 5_000;
@@ -209,15 +376,17 @@ public sealed class LimitOptions
     public int ResolveKeyChunk { get; set; } = 500;
 
     /// <summary>
-    /// The most keys one request resolves remotely; chunks beyond it are not fetched and the
-    /// page carries a <c>RESOLVE_PARTIAL</c> diagnostic.
+    /// The most keys one request asks owners for, over every keyed stage of the request; keys
+    /// beyond it are not fetched, their rows are <c>owner_unanswered</c>, and the page carries a
+    /// <c>RESOLVE_PARTIAL</c> diagnostic. A key counts once per stage, whichever targets of a union it
+    /// is asked of, and a key the cache answers costs nothing.
     /// <para>
-    /// One resolve stage cannot need more distinct keys than the page has rows, so while this
-    /// is at or above <see cref="MaxPageSize"/> the cap — and its diagnostic — cannot be
-    /// reached. Raising <c>MaxPageSize</c> past it is what brings it into play.
+    /// The budget is per request, not per stage: several keyed stages over a report page of
+    /// <see cref="MaxReportPageSize"/> rows, or <c>elements: "all"</c> with several keys per row,
+    /// reach it at the defaults.
     /// </para>
     /// </summary>
-    public int MaxResolveKeys { get; set; } = 2_000;
+    public int MaxResolveKeys { get; set; } = 10_000;
 
     /// <summary>The largest request body.</summary>
     public int MaxRequestBytes { get; set; } = 262_144;
@@ -230,6 +399,92 @@ public sealed class LimitOptions
 
     /// <summary>The most rows one lookup returns per parent.</summary>
     public int MaxLookupLimit { get; set; } = 100;
+
+    /// <summary>
+    /// The ceiling <see cref="MaxFlattenDepth"/> is clamped to. Every level nests the flattening
+    /// expression deeper; at 16 the pipeline no longer serializes (the driver stops at 100 levels),
+    /// so the ceiling keeps a margin below the 15 that still does.
+    /// </summary>
+    public const int MaxFlattenDepthCeiling = 12;
+
+    /// <summary>
+    /// How many levels an <c>unwind</c> with <c>flatten</c> descends: the collection itself is
+    /// level 1. Elements nested deeper are not in the rows, and the response carries an
+    /// <c>UNWIND_DEPTH_TRUNCATED</c> diagnostic when a row had any.
+    /// </summary>
+    public int MaxFlattenDepth { get; set; } = 5;
+
+    /// <summary>How many stages one keyed alias may continue at its owner, counting every stage forwarded under it.</summary>
+    public int MaxContinuedStages { get; set; } = 8;
+
+    /// <summary>
+    /// The largest page a strict request without <c>cursor</c> or <c>offset</c> may ask for: a
+    /// report reads its rows in one page and refuses rather than cut them. A value below
+    /// <see cref="MaxPageSize"/> gives strict requests no larger page, never a smaller one;
+    /// every other request stays under <see cref="MaxPageSize"/>.
+    /// </summary>
+    public int MaxReportPageSize { get; set; } = 5_000;
+
+    /// <summary>How many rows one diagnostic lists (a missing or ambiguous reference names the rows it met, up to this many).</summary>
+    public int MaxReportedRows { get; set; } = 50;
+
+    /// <summary>
+    /// The most distinct values one <c>values</c> stage answers (its <c>limit</c>); one more is
+    /// refused. A list longer than this is no list a person reads: the caller narrows it with <c>search</c>.
+    /// </summary>
+    public int MaxValuesLimit { get; set; } = 500;
+}
+
+/// <summary>
+/// The bounds of a <c>values</c> stage, which answers the distinct values of one path among the rows
+/// that reach it. It groups rows, so what it costs is the rows it reads: <see cref="ScanRows"/> bounds
+/// them, whatever the request matches.
+/// </summary>
+public sealed class ValuesOptions
+{
+    /// <summary>
+    /// The most rows a <c>values</c> stage reads, and what it reads when the request names no
+    /// <c>scan</c>; a request may lower it, one that asks for more is refused. When that many rows
+    /// were read the answer says so (<c>VALUES_SCAN_CAPPED</c>): its values are those among them.
+    /// </summary>
+    public int ScanRows { get; set; } = 50_000;
+
+    /// <summary>How many values a <c>values</c> stage answers when it names no <c>limit</c>, under <c>Limits:MaxValuesLimit</c>.</summary>
+    public int DefaultLimit { get; set; } = 100;
+
+    /// <summary>The effective bound on the rows read: the configured value, at least 1.</summary>
+    public int EffectiveScanRows => Math.Max(1, ScanRows);
+}
+
+/// <summary>
+/// The bounds of the count a contract 2 page asks for with <c>page.count</c>. The count is one
+/// bounded step that runs beside the page: it stops at <see cref="StepRows"/> rows and at
+/// <see cref="BudgetMs"/>, and its failure never fails the rows. <c>Limits:CountCap</c> stays the
+/// ceiling of every count.
+/// </summary>
+public sealed class CountOptions
+{
+    /// <summary>How many rows the count step that runs beside a page counts before it stops; above it the answer is a lower bound.</summary>
+    public int StepRows { get; set; } = 1_000;
+
+    /// <summary>
+    /// The time the count step has, from the moment it is sent: its own <c>maxTimeMS</c>, and the
+    /// longest an answer waits for it once its rows are ready. A step that does not finish in it is
+    /// stopped and the count is <c>unknown</c>.
+    /// </summary>
+    public int BudgetMs { get; set; } = 500;
+
+    /// <summary>The longest budget a request may ask for with <c>page.count.budgetMs</c>; a larger one is clamped to it.</summary>
+    public int MaxBudgetMs { get; set; } = 5_000;
+
+    /// <summary>The effective step: the configured value, at least 1.</summary>
+    public int EffectiveStepRows => Math.Max(1, StepRows);
+
+    /// <summary>The effective ceiling of a request's budget: the configured value, at least 1.</summary>
+    public int EffectiveMaxBudgetMs => Math.Max(1, MaxBudgetMs);
+
+    /// <summary>The effective default budget: the configured value between 1 and <see cref="EffectiveMaxBudgetMs"/>.</summary>
+    public int EffectiveBudgetMs => Math.Clamp(BudgetMs, 1, EffectiveMaxBudgetMs);
 }
 
 /// <summary>Time and memory bounds on the aggregate.</summary>
@@ -243,6 +498,9 @@ public sealed class ExecutionOptions
 
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;
+
+    /// <summary>The budget of one owner call that carries continued stages or typed/item targets, which the owner may pass on.</summary>
+    public int ChainTimeoutMs { get; set; } = 6_000;
 
     /// <summary>
     /// <c>allowDiskUse</c> on every aggregate. True by default: a sort or a group that outgrows
@@ -260,11 +518,39 @@ public sealed class ExecutionOptions
     /// </summary>
     public int SlowQueryMs { get; set; } = 1_000;
 
+    /// <summary>
+    /// Whether a contract 2 caller may ask for the breakdown of a request's time: the <c>timing</c>
+    /// member of the answer, asked for by <c>"timing": true</c> or the header <c>X-OxQL-Timing</c>. It
+    /// names the entities read, the documents and bytes each command returned, the owners asked with
+    /// their own breakdown, and the build. On by default; off, both ways of asking are accepted and
+    /// answer no member, on the public route and for another service's origin alike. The
+    /// <c>Server-Timing</c> header (durations and counts, no name) is sent either way.
+    /// </summary>
+    public bool TimingDetail { get; set; } = true;
+
+    /// <summary>The ceiling <see cref="BatchConcurrency"/> is clamped to.</summary>
+    public const int MaxBatchConcurrency = 16;
+
+    /// <summary>
+    /// How many queries of one internal batch run at once: the owner queries a caller's keyed fetch
+    /// sends this host over the internal batch route, and the ones this host sends itself for its own
+    /// targets. They answer in the order they were asked and share the batch's one <c>maxTimeMs</c>;
+    /// each holds a connection while it runs. 1 runs them one after another. A batch on the public
+    /// route always runs one query after another.
+    /// </summary>
+    public int BatchConcurrency { get; set; } = 4;
+
+    /// <summary>The effective batch concurrency: the configured value between 1 and <see cref="MaxBatchConcurrency"/>.</summary>
+    public int EffectiveBatchConcurrency => Math.Clamp(BatchConcurrency, 1, MaxBatchConcurrency);
+
     /// <summary>The effective <c>maxTimeMS</c>: the configured value under the ceiling.</summary>
     public int EffectiveMaxTimeMs => Math.Clamp(MaxTimeMs, 1, MaxTimeCeilingMs);
 
     /// <summary>The effective resolve budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
     public int EffectiveResolveTimeoutMs => Math.Clamp(ResolveTimeoutMs, 1, EffectiveMaxTimeMs);
+
+    /// <summary>The effective chain budget: the configured value under <see cref="EffectiveMaxTimeMs"/>.</summary>
+    public int EffectiveChainTimeoutMs => Math.Clamp(ChainTimeoutMs, 1, EffectiveMaxTimeMs);
 
     /// <summary>The effective slow-query threshold: the configured value, never negative; 0 is off.</summary>
     public int EffectiveSlowQueryMs => Math.Max(0, SlowQueryMs);
@@ -316,8 +602,14 @@ public sealed class CacheOptions
     /// <summary>How long a resolved remote row stays cached.</summary>
     public int ResolveTtlSeconds { get; set; } = 60;
 
-    /// <summary>The most resolved rows the cache holds.</summary>
-    public int ResolveCacheMaxEntries { get; set; } = 50_000;
+    /// <summary>How long a key the owner answered as missing stays cached; a strict request bypasses such entries. 0 caches no missing key.</summary>
+    public int NegativeResolveTtlSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// The owner-fetch cache's budget per mode: the most resolved remote rows it holds, and the most
+    /// semi-join ids (one unit per id).
+    /// </summary>
+    public int OwnerFetchCacheMaxEntries { get; set; } = 50_000;
 
     /// <summary>How long an organisation's addon definitions stay cached on replicas that did not write them.</summary>
     public int AddonDefinitionTtlSeconds { get; set; } = 30;

@@ -75,7 +75,16 @@ public sealed class FleetHost : IAsyncDisposable
 
         builder.WebHost.UseTestServer();
         builder.Configuration.Sources.Clear();
-        builder.Configuration.AddInMemoryCollection(Defaults(fleet).Concat(configuration ?? new Dictionary<string, string?>()));
+        // A variant's keys replace the defaults of the same name.
+        var settings = new Dictionary<string, string?>(Defaults(fleet), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (key, value) in fleet.Configuration)
+            settings[key] = value;
+
+        foreach (var (key, value) in configuration ?? new Dictionary<string, string?>())
+            settings[key] = value;
+
+        builder.Configuration.AddInMemoryCollection(settings);
 
         var logs = new LogCapture();
         builder.Logging.ClearProviders();
@@ -92,6 +101,11 @@ public sealed class FleetHost : IAsyncDisposable
         // service's own entities, built once per run and shared by the service's variants.
         services.AddSingleton<IEntityModelProvider>(new LazyEntityModelProvider(() => service.Model));
         services.AddSingleton(client);
+
+        // A fleet that slows its aggregates down registers the runner itself; the engine's own is the default.
+        if (fleet.AggregateDelay > TimeSpan.Zero)
+            services.AddSingleton<IAggregateRunner>(new DelayedRunner(new MongoAggregateRunner(client, databaseName), fleet, service.Key));
+
         services.AddOxQLMongo(options =>
         {
             options.DatabaseName = databaseName;
@@ -113,6 +127,18 @@ public sealed class FleetHost : IAsyncDisposable
     private static IEnumerable<KeyValuePair<string, string?>> Defaults(LabFleet fleet) =>
     [
         new("OxQL:Cursor:SigningKey", fleet.SigningKey),
+        // LEGACY(compat.v1): the suites' contract 1 cases hold the compatibility rewrite (the published 2.0 behaviour of
+        // contract 1), so a fleet's hosts answer contract 1 by the rewrite first. What a host that sets nothing answers,
+        // every contract 1 request on the legacy pipeline, is held by Suites/Legacy, whose fleet leaves the key unset.
+        // Remove the entry with the legacy pipeline: the rewrite is then the only path.
+        .. fleet.Contract1AsShipped ? Array.Empty<KeyValuePair<string, string?>>() : [new KeyValuePair<string, string?>("OxQL:Compat:Legacy:Always", "false")],
+        // The suites explain in bursts as one user; the limits of explain have tests of their own.
+        new("OxQL:Explain:RatePerMinute", "600000"),
+        new("OxQL:Explain:RateBurst", "100000"),
+        new("OxQL:Explain:OwnerRatePerMinute", "600000"),
+        new("OxQL:Explain:OwnerRateBurst", "100000"),
+        new("OxQL:Explain:MaxConcurrentPerUser", "1000"),
+        new("OxQL:Explain:MaxConcurrentPerHost", "1000"),
     ];
 
     /// <summary>A client for one organisation (organisation A when null) under the given contract; an anonymous client sends no identity.</summary>
@@ -145,6 +171,31 @@ public sealed class FleetHost : IAsyncDisposable
     public async ValueTask DisposeAsync() => await app.DisposeAsync();
 
     public override string ToString() => Variant.Length == 0 ? Service.Key : $"{Service.Key}#{Variant}";
+}
+
+/// <summary>
+/// The engine's runner with every aggregate taking at least <see cref="LabFleet.AggregateDelay"/>, and
+/// recorded with its start and end (<see cref="LabFleet.Aggregates"/>). A local server answers in
+/// well under a millisecond, which hides what a hosted one makes plain: aggregates sent one after
+/// another add up, aggregates sent together do not.
+/// </summary>
+internal sealed class DelayedRunner(IAggregateRunner inner, LabFleet fleet, string service) : IAggregateRunner
+{
+    public async Task<IReadOnlyList<MongoDB.Bson.BsonDocument>> AggregateAsync(OxQL.Model.EntityDef entity, IReadOnlyList<MongoDB.Bson.BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        try
+        {
+            await Task.Delay(fleet.AggregateDelay, cancellationToken);
+
+            return await inner.AggregateAsync(entity, stages, options, cancellationToken);
+        }
+        finally
+        {
+            fleet.Aggregates.Enqueue((service, entity.Id, started, System.Diagnostics.Stopwatch.GetTimestamp()));
+        }
+    }
 }
 
 /// <summary>A host's answer: the status, the parsed body and the raw text for failure messages.</summary>

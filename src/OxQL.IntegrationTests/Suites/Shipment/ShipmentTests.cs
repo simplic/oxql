@@ -42,7 +42,7 @@ public class ShipmentTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "match": { "status.name": { "eq": "Planned" } } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count, capped: false);
@@ -79,7 +79,7 @@ public class ShipmentTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "match": { "shipmentNumber": { "startsWith": "S-00" } } },
               { "project": { "id": 1 } },
-              { "page": { "limit": 1, "includeTotalCount": true } } ]
+              { "page": { "limit": 1, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected, capped: false);
@@ -127,7 +127,7 @@ public class ShipmentTests
         var expected = Corpus.IdsOf(Corpus.ShipmentsWithStatus("Planned"));
 
         var answer = await (await Transport()).QueryAsync(
-            """{"entityType":"transport.shipment","pipeline":[{"match":{"status.name":{"eq":"Planned"}}},{"sort":[{"id":"asc"}]},{"page":{"limit":500,"includeTotalCount":true}}]}""");
+            """{"entityType":"transport.shipment","pipeline":[{"match":{"status.name":{"eq":"Planned"}}},{"sort":[{"id":"asc"}]},{"page":{"limit":500,"count":true}}]}""");
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
     }
@@ -138,10 +138,11 @@ public class ShipmentTests
         var expected = Corpus.PageOf(Corpus.SortedIds(Corpus.Shipment, "id", descending: true, filter: row => Corpus.Text(row, "status.name") is "Planned" or "Closed"), limit: 5);
 
         var answer = await (await Transport()).QueryAsync(
-            """{"entityType":"transport.shipment","pipeline":[{"match":{"status.name":{"in":["Planned","Closed"]}}},{"sort":[{"id":"desc"}]},{"page":{"limit":5,"includeTotalCount":false}}]}""");
+            """{"entityType":"transport.shipment","pipeline":[{"match":{"status.name":{"in":["Planned","Closed"]}}},{"sort":[{"id":"desc"}]},{"page":{"limit":5,"count":false}}]}""");
 
         answer.ShouldHaveIds(expected);
-        answer.TotalCount.Should().BeNull("a count nobody asked for is not computed");
+        // A count nobody asked for is not computed: the answer says what the page itself proves.
+        answer.ShouldCount("atLeast", 6, "page");
         answer.PageInfo.ContainsKey("totalCount").Should().BeFalse(answer.ToString());
     }
 }

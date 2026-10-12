@@ -1,0 +1,27 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "unwind": {
+        "path": "Actions",
+        "as": "Action",
+        "preserveNull": true
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Action": {
+          "OrderId": 1
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

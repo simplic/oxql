@@ -1,0 +1,13 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "unwind": {}
+    },
+    {
+      "project": {
+        "Number": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000002"
+        }
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items",
+        "as": "Item"
+      }
+    },
+    {
+      "unwind": {
+        "path": "Items.References",
+        "as": "Ref"
+      }
+    },
+    {
+      "lookup": {
+        "from": "context_data",
+        "localPath": "Ref.ReferenceId",
+        "foreignPath": "_id",
+        "as": "ContextDatas",
+        "convert": "stringToUuid"
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Ref": {
+          "ReferenceId": 1
+        },
+        "ContextDatas": {
+          "ShipmentNumber": 1,
+          "_t": 1
+        }
+      }
+    }
+  ]
+}

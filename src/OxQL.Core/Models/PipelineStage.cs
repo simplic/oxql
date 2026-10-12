@@ -20,6 +20,9 @@ public sealed record PipelineStage
     public IReadOnlyList<SortField>? Sort { get; init; }
     public PageStage? Page { get; init; }
 
+    /// <summary>The distinct values of one path, in place of the page (contract 2; contract 1 knows no such stage).</summary>
+    public ValuesStage? Values { get; init; }
+
     /// <summary>Every key the stage object carried, as written.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Keys { get; init; } = [];
@@ -30,7 +33,7 @@ public sealed record PipelineStage
 
     /// <summary>The keys a stage may carry.</summary>
     public static readonly IReadOnlySet<string> KnownKeys =
-        new HashSet<string>(StringComparer.Ordinal) { "match", "lookup", "resolve", "unwind", "group", "project", "sort", "page" };
+        new HashSet<string>(StringComparer.Ordinal) { "match", "lookup", "resolve", "unwind", "group", "project", "sort", "page", "values" };
 }
 
 internal sealed class PipelineStageConverter : JsonConverter<PipelineStage>
@@ -74,6 +77,9 @@ internal sealed class PipelineStageConverter : JsonConverter<PipelineStage>
                     break;
                 case "page":
                     stage = stage with { Page = JsonSerializer.Deserialize<PageStage>(property.Value.GetRawText(), options) };
+                    break;
+                case "values":
+                    stage = stage with { Values = property.Value.ValueKind == JsonValueKind.Null ? null : JsonSerializer.Deserialize<ValuesStage>(property.Value.GetRawText(), options) };
                     break;
             }
         }
@@ -131,6 +137,12 @@ internal sealed class PipelineStageConverter : JsonConverter<PipelineStage>
         {
             writer.WritePropertyName("page");
             JsonSerializer.Serialize(writer, value.Page, options);
+        }
+
+        if (value.Values is not null)
+        {
+            writer.WritePropertyName("values");
+            JsonSerializer.Serialize(writer, value.Values, options);
         }
 
         writer.WriteEndObject();

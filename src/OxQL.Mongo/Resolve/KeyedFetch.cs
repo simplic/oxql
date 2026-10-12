@@ -1,0 +1,3291 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
+using OxQL.Core.Binding;
+using OxQL.Core.Engine;
+using OxQL.Core.Models;
+using OxQL.Model;
+
+namespace OxQL.Mongo.Resolve;
+
+/// <summary>What a resolve pass produced: the objects per row and alias, the diagnostics, and the counters for the log line.</summary>
+internal sealed record ResolveResult
+{
+    /// <summary>A refusal that aborts the request: the owner refused, or a semi-join could not be answered.</summary>
+    public Refusal? Refusal { get; init; }
+
+    /// <summary>Per row (same order as the page), the resolved object per alias; null when the owner has no such key or did not answer.</summary>
+    public IReadOnlyList<IReadOnlyDictionary<string, JsonNode?>> Rows { get; init; } = [];
+
+    /// <summary>What did not change the rows.</summary>
+    public IReadOnlyList<Diagnostic> Diagnostics { get; init; } = [];
+
+    /// <summary>
+    /// Every row (or element, under <c>elements: "all"</c>) whose keyed resolve did not simply
+    /// resolve, with its outcome; an <c>ambiguous</c> one resolved to its first
+    /// target. What the outcomes report or refuse is the caller's policy.
+    /// </summary>
+    public IReadOnlyList<KeyedRowOutcome> Outcomes { get; init; } = [];
+
+    /// <summary>The rows whose <c>elements: "all"</c> alias holds only the first <c>MaxLookupLimit</c> of more targets.</summary>
+    public IReadOnlyList<KeyedTruncation> Truncations { get; init; } = [];
+
+    /// <summary>
+    /// The paths under the alias and under the owning row that remote owners said one target of a union
+    /// lacks, dropped for that target; what explain's
+    /// <c>SELECT_PATH_NOT_ON_TARGET</c> note names for a remote target. A local target's are on its bound target.
+    /// </summary>
+    public IReadOnlyList<DroppedSelectPath> Dropped { get; init; } = [];
+
+    /// <summary>How many calls went to remote owners.</summary>
+    public int Calls { get; init; }
+
+    /// <summary>How many keys were answered from the cache.</summary>
+    public int CacheHits { get; init; }
+}
+
+/// <summary>What became of one reference value of a keyed resolve.</summary>
+internal enum KeyedOutcome
+{
+    /// <summary>The key selects a case and exactly one target record or element.</summary>
+    Resolved,
+
+    /// <summary>As resolved, but more than one record or element holds the key; the alias holds the first by target order, then record key.</summary>
+    Ambiguous,
+
+    /// <summary>The reference is null or absent, or <c>elements</c> found no element.</summary>
+    ReferenceNull,
+
+    /// <summary>No case matches the stored values, <c>target</c> narrowed the case away, or the target's filter left the record out (the existence probe found it).</summary>
+    Excluded,
+
+    /// <summary>The key selects a case and no target holds a record for it.</summary>
+    NotFound,
+
+    /// <summary>A case converts the key (<c>KeyAs</c>) and the stored value does not convert.</summary>
+    InvalidKey,
+
+    /// <summary>The owner did not answer for the key: timeout, unreachable, the key budget left it out, or the owner answered its chunk only in part.</summary>
+    OwnerUnanswered,
+
+    /// <summary>A continued stage with <c>forTarget</c> on a row its keyed stage resolved to another target: its alias is null, which loses nothing.</summary>
+    NotApplicable,
+}
+
+/// <summary>
+/// The outcome of one row of a keyed resolve: the caller's <paramref name="Stage"/> index, the
+/// alias, the page row, the element index under <c>elements</c>, and the key (in the form sent to
+/// the owner) where there is one.
+/// </summary>
+internal sealed record KeyedRowOutcome(int? Stage, string Alias, int Row, int? Element, string? Key, KeyedOutcome Outcome);
+
+/// <summary>
+/// A path asked under the alias (<paramref name="Parent"/>: under the owning row) that one target of a union's keyed stage lacks, dropped for it.
+/// With <paramref name="Branch"/> the alias is a union join's (<c>byTarget</c>) and the path is one the branch of that target of the anchor
+/// does not reach: <paramref name="Stage"/> is the union join's stage and <paramref name="Target"/> the branch's target.
+/// </summary>
+internal sealed record DroppedSelectPath(int? Stage, string Alias, string Target, string Path, bool Parent, bool Branch = false);
+
+/// <summary>
+/// One target's owner query of a keyed stage as explain shows it: the target (<c>entity</c> or
+/// <c>entity#item</c>), whether it is remote and the service owning it, whether the query is grouped
+/// per key, the query with its keys elided, the continued stages it carries and those that do not
+/// apply to its rows.
+/// </summary>
+internal sealed record ExplainedOwnerQuery(string Target, bool Remote, string Service, bool Grouped, QueryRequest Query, IReadOnlyList<ContinuedStage> Continued, IReadOnlyList<ContinuedStage> NotApplicable);
+
+/// <summary>
+/// One owner query of a keyed stage checked at its owner's internal explain:
+/// the target (<c>entity</c> or <c>entity#item</c>), the owner's service, the query with the
+/// check key, the caller index of its first continued stage, and the mapping of an owner error back
+/// to the caller (null for an error at the owner query's own stages).
+/// <para>
+/// A target is checked for its continued stages and for the paths asked under its aliases: the
+/// output set a run asks for (the paths the projection names under them; kept whole, the
+/// <c>select</c> hint), which the query projects at <see cref="ProjectAt"/> so the owner says which
+/// it lacks. The check query is the run's query with the check key, nothing beside it.
+/// <see cref="Stage"/> is the resolve's caller index, <see cref="ProjectStage"/> the projection's.
+/// </para>
+/// </summary>
+internal sealed record OwnerCheck(string Target, string Service, QueryRequest Query, int FirstContinued, Func<JsonObject, QueryValidationError?> Map)
+{
+    /// <summary>The resolve this target belongs to.</summary>
+    public BoundStage.Resolve? Resolve { get; init; }
+
+    /// <summary>The target as bound.</summary>
+    public BoundResolveTarget? Bound { get; init; }
+
+    /// <summary>The resolve's caller index.</summary>
+    public int? Stage { get; init; }
+
+    /// <summary>The caller index of the last projection after the resolve, when it names paths under its aliases.</summary>
+    public int? ProjectStage { get; init; }
+
+    /// <summary>The aliases the stages continued at this target's owner add; a path under one is that stage's, not the target's.</summary>
+    public IReadOnlyList<string> ContinuedAliases { get; init; } = [];
+
+    /// <summary>The stages continued at this target's owner, in the order the owner query carries them from <see cref="ContinuedAt"/>.</summary>
+    public IReadOnlyList<ContinuedStage> Continued { get; init; } = [];
+
+    /// <summary>The owner query's stage index of the first continued stage.</summary>
+    public int ContinuedAt { get; init; }
+
+    /// <summary>The check query's projection stage, where an owner reports a path the target lacks.</summary>
+    public int ProjectAt { get; init; } = -1;
+
+    /// <summary>Whether the target is an item: its members travel under <see cref="BoundKeyedBy.Element"/>.</summary>
+    public bool Item { get; init; }
+
+    /// <summary>The continued stage an owner's stage index of the check query names; null for a stage of the query itself.</summary>
+    public Func<int?, ContinuedStage?> OriginOf { get; init; } = _ => null;
+
+    /// <summary>
+    /// The check query asked again after an owner's answer to the query it was sent, as a run asks a
+    /// remote union target again: when the answer refuses only paths the
+    /// target lacks at the projection, the query without them, which binds its continued stages as
+    /// the run's does; null when a run would not ask again.
+    /// </summary>
+    public Func<JsonObject, QueryRequest, QueryRequest?> Again { get; init; } = (_, _) => null;
+
+    /// <summary>
+    /// The paths an earlier request learned this target lacks, which the check query therefore does not
+    /// ask (as a run does not): under the alias, under the owning row (<c>Parent</c>), or, as
+    /// <c>alias.path</c>, under the alias of a union join whose branch for this target does not reach them.
+    /// </summary>
+    public IReadOnlyList<(string Path, bool Parent)> Learned { get; init; } = [];
+
+    /// <summary>
+    /// Where the query asks a path of the target: its place among the paths under the alias, then those
+    /// under the owning row (<c>Parent</c>), then everything else. What is said of the paths a target
+    /// lacks is said in this order, whether an owner refused them now or an earlier request learned them.
+    /// </summary>
+    public Func<string, bool, int> Rank { get; init; } = (_, _) => 0;
+
+    /// <summary>Keeps what this check's answers said the target lacks, as a run keeps it: the next request asks without it.</summary>
+    public Action<OwnerFetchCache> Keep { get; init; } = _ => { };
+}
+
+/// <summary>
+/// One semi-join condition checked at its owner's internal explain (explain is what a run does): the
+/// path the caller wrote (<c>&lt;alias&gt;.&lt;member&gt;</c>), the alias, the owner's service and
+/// target entity, the query a run sends the owner first for it, and where the caller wrote the
+/// condition: the caller's stage, or the label of the entry of the request's <c>filter</c> (its id, or
+/// its index), which has no stage.
+/// </summary>
+internal sealed record ConditionCheck(string Path, string Alias, string Service, string Target, QueryRequest Query, int? Stage, object? Filter);
+
+/// <summary>A row whose <c>elements: "all"</c> alias resolved <paramref name="Count"/> targets, more than it holds.</summary>
+internal sealed record KeyedTruncation(int? Stage, string Alias, int Row, int Count);
+
+/// <summary>What the outcomes of a page's resolves say: the diagnostics, and those of them the request refuses on.</summary>
+internal sealed record OutcomeReport(IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<Diagnostic> Refusing)
+{
+    /// <summary>A report with nothing to say.</summary>
+    public static readonly OutcomeReport Empty = new([], []);
+}
+
+/// <summary>
+/// The policy over per-row join outcomes: the outcomes of a resolve, keyed
+/// or inline, become at most one diagnostic per stage and kind, and the diagnostics that lose
+/// data refuse the request under <c>strict</c> or <c>onMissing: "refuse"</c>.
+/// <list type="bullet">
+///   <item><c>RESOLVE_AMBIGUOUS</c>, always: the rows whose key more than one record holds;</item>
+///   <item><c>RESOLVE_MISSING</c>, under an effective <c>onMissing</c> of <c>report</c> or
+///   <c>refuse</c>: the rows whose outcome is <c>not_found</c>, <c>invalid_key</c> or
+///   <c>owner_unanswered</c>; refused under <c>refuse</c>;</item>
+///   <item><c>RESOLVE_TRUNCATED</c>, always: the rows whose <c>elements: "all"</c> alias holds only the first targets.</item>
+/// </list>
+/// The rows a diagnostic lists are capped at <c>MaxReportedRows</c>; <c>count</c> is every one.
+/// </summary>
+internal static class OutcomePolicy
+{
+    /// <summary>The diagnostics a strict request refuses on; <c>RESOLVE_MISSING</c> refuses by its stage's effective <c>onMissing</c>.</summary>
+    public static readonly IReadOnlySet<string> StrictCodes = new HashSet<string>(StringComparer.Ordinal)
+    {
+        Codes.ResolveAmbiguous, Codes.ResolveTimeout, Codes.ResolveUnreachable, Codes.ResolvePartial,
+        Codes.LookupTruncated, Codes.ResolveTruncated, Codes.UnwindDepthTruncated, Codes.PageIncomplete,
+    };
+
+    /// <summary>The wire name of an outcome, as <c>params.rows[].outcome</c> carries it.</summary>
+    public static string WireName(KeyedOutcome outcome) => outcome switch
+    {
+        KeyedOutcome.Resolved => "resolved",
+        KeyedOutcome.Ambiguous => "ambiguous",
+        KeyedOutcome.ReferenceNull => "reference_null",
+        KeyedOutcome.Excluded => "excluded",
+        KeyedOutcome.NotFound => "not_found",
+        KeyedOutcome.InvalidKey => "invalid_key",
+        KeyedOutcome.OwnerUnanswered => "owner_unanswered",
+        KeyedOutcome.NotApplicable => "not_applicable",
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null),
+    };
+
+    /// <summary>Whether an outcome is a missing reference: data loss that <c>onMissing</c> governs.</summary>
+    public static bool IsMissing(KeyedOutcome outcome) => outcome is KeyedOutcome.NotFound or KeyedOutcome.InvalidKey or KeyedOutcome.OwnerUnanswered;
+
+    /// <summary>
+    /// The diagnostics of the outcomes and truncations of <paramref name="bound"/>'s resolves, in
+    /// stage order, and those that refuse: a <c>RESOLVE_MISSING</c> of a stage whose effective
+    /// <c>onMissing</c> is <c>refuse</c>, and under <paramref name="strict"/> every other one.
+    /// </summary>
+    public static OutcomeReport Report(BoundPipeline bound, IEnumerable<KeyedRowOutcome> outcomes, IEnumerable<KeyedTruncation> truncations, bool strict, OxQLOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var byAlias = bound.Stages.OfType<BoundStage.Resolve>().ToDictionary(stage => stage.As, StringComparer.Ordinal);
+        var cap = Math.Max(1, options.Limits.MaxReportedRows);
+        var diagnostics = new List<Diagnostic>();
+        var refusing = new List<Diagnostic>();
+        var outcomeGroups = outcomes.GroupBy(outcome => (outcome.Stage, outcome.Alias)).ToDictionary(group => group.Key, group => group.ToList());
+        var truncationGroups = truncations.GroupBy(truncation => (truncation.Stage, truncation.Alias)).ToDictionary(group => group.Key, group => group.ToList());
+        var keys = outcomeGroups.Keys.Concat(truncationGroups.Keys).Distinct().OrderBy(key => key.Stage ?? int.MaxValue).ThenBy(key => key.Alias, StringComparer.Ordinal);
+
+        foreach (var key in keys)
+        {
+            byAlias.TryGetValue(key.Alias, out var stage);
+            var path = stage?.Reference.Wire;
+            var rows = outcomeGroups.GetValueOrDefault(key) ?? [];
+
+            var ambiguous = rows.Where(row => row.Outcome == KeyedOutcome.Ambiguous).ToList();
+
+            if (ambiguous.Count > 0)
+            {
+                var diagnostic = Rows(Codes.ResolveAmbiguous, key.Stage, key.Alias, path, ambiguous, cap,
+                    $"{ambiguous.Count} {Rows(ambiguous.Count)} a key that more than one record holds ('{key.Alias}'); the first by target order, then key, is taken.");
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+
+            var missing = rows.Where(row => IsMissing(row.Outcome)).ToList();
+            var onMissing = stage?.EffectiveOnMissing ?? ResolveOnMissing.Null;
+
+            if (missing.Count > 0 && onMissing != ResolveOnMissing.Null)
+            {
+                var diagnostic = Rows(Codes.ResolveMissing, key.Stage, key.Alias, path, missing, cap,
+                    missing.All(row => row.Outcome == KeyedOutcome.NotFound)
+                        ? $"{missing.Count} {Rows(missing.Count)} a record that does not exist ('{key.Alias}')."
+                        : $"{missing.Count} {Rows(missing.Count)} a record that does not exist, by a key that does not convert, or that its owner did not answer ('{key.Alias}').");
+
+                diagnostics.Add(diagnostic);
+
+                if (onMissing == ResolveOnMissing.Refuse)
+                    refusing.Add(diagnostic);
+            }
+
+            // A remote lookup over its limit is the lookup's truncation, as a local lookup reports it.
+            if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } cut && stage?.RemoteLookup is { } lookup)
+            {
+                var diagnostic = new Diagnostic
+                {
+                    Code = Codes.LookupTruncated,
+                    Message = $"'{key.Alias}' holds the first {lookup.Limit} children of a parent that has more ({cut.Count} {(cut.Count == 1 ? "row" : "rows")} of this page affected).",
+                    Stage = key.Stage,
+                    Path = key.Alias,
+                    Params = new Dictionary<string, object?> { ["alias"] = key.Alias, ["limit"] = lookup.Limit, ["rows"] = cut.Count },
+                };
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+            else if (truncationGroups.GetValueOrDefault(key) is { Count: > 0 } truncated)
+            {
+                var limit = options.Limits.MaxLookupLimit;
+                var diagnostic = new Diagnostic
+                {
+                    Code = Codes.ResolveTruncated,
+                    Message = $"'{key.Alias}' holds the first {limit} targets of a row that references more ({truncated.Count} {(truncated.Count == 1 ? "row" : "rows")} of this page affected).",
+                    Stage = key.Stage,
+                    Path = path,
+                    Params = new Dictionary<string, object?> { ["alias"] = key.Alias, ["limit"] = limit, ["rows"] = truncated.Count },
+                };
+
+                diagnostics.Add(diagnostic);
+
+                if (strict)
+                    refusing.Add(diagnostic);
+            }
+        }
+
+        return new OutcomeReport(diagnostics, refusing);
+    }
+
+    /// <summary>
+    /// The diagnostics of a page that refuse under <paramref name="strict"/> by their code alone:
+    /// owner failures and truncations (the outcome diagnostics refuse through <see cref="Report"/>).
+    /// </summary>
+    public static IEnumerable<Diagnostic> StrictLosses(IEnumerable<Diagnostic> diagnostics, bool strict) =>
+        strict ? diagnostics.Where(diagnostic => StrictCodes.Contains(diagnostic.Code) && diagnostic.Code is not (Codes.ResolveAmbiguous or Codes.ResolveTruncated)) : [];
+
+    private static string Rows(int count) => count == 1 ? "row references" : "rows reference";
+
+    /// <summary>A diagnostic listing rows: <c>{ alias, count, truncated, rows: [{ row, element?, key, outcome }] }</c>, rows by row then element, at most <paramref name="cap"/>.</summary>
+    private static Diagnostic Rows(string code, int? stage, string alias, string? path, IReadOnlyList<KeyedRowOutcome> outcomes, int cap, string message)
+    {
+        var listed = outcomes
+            .OrderBy(outcome => outcome.Row)
+            .ThenBy(outcome => outcome.Element ?? -1)
+            .Take(cap)
+            .Select(outcome =>
+            {
+                var entry = new Dictionary<string, object?> { ["row"] = outcome.Row };
+
+                if (outcome.Element is { } element)
+                    entry["element"] = element;
+
+                entry["key"] = outcome.Key;
+                entry["outcome"] = WireName(outcome.Outcome);
+
+                return entry;
+            })
+            .ToList();
+
+        return new Diagnostic
+        {
+            Code = code,
+            Message = message,
+            Stage = stage,
+            Path = path,
+            Params = new Dictionary<string, object?>
+            {
+                ["alias"] = alias,
+                ["count"] = outcomes.Count,
+                ["truncated"] = outcomes.Count > cap,
+                ["rows"] = listed,
+            },
+        };
+    }
+}
+
+/// <summary>
+/// The one cross-record fetch through an owner, in two modes that share the
+/// owner query builder (<see cref="OwnerQueryBuilder"/>), the owner client, batching at
+/// <c>MaxBatchQueries</c>, budgeting, error mapping and the cache (<see cref="OwnerFetchCache"/>):
+/// <list type="bullet">
+///   <item><b>by keys</b> (<see cref="ByKeysAsync"/>): after the page is fixed, one batch per owning
+///   service carrying one query per target and key chunk — plain for an entity keyed by its own
+///   key, grouped per key (<c>keyedBy</c>) otherwise — and this host's own targets answered by its
+///   <see cref="SelfOwner"/>; cached per key for a TTL;</item>
+///   <item><b>by condition</b> (<see cref="ByConditionCountedAsync"/>): before the page runs, the semi-join
+///   that asks an owner for the ids a condition on its rows selects, refusing above the cap rather
+///   than truncating.</item>
+/// </list>
+/// </summary>
+internal sealed class KeyedFetch
+{
+    private readonly IRemoteQueryClient? client;
+    private readonly IQueryEngine self;
+    private readonly OwnerFetchCache cache;
+    private readonly OxQLOptions options;
+    private readonly ILogger logger;
+
+    /// <summary>
+    /// A keyed fetch whose remote targets go through <paramref name="client"/> (none when null: the
+    /// engine refuses such a request before it gets here) and whose local targets this host's own
+    /// <paramref name="self"/> answers through a <see cref="SelfOwner"/>, caching owner answers in
+    /// <paramref name="cache"/>. A call that faults is written to <paramref name="logger"/>.
+    /// </summary>
+    public KeyedFetch(IRemoteQueryClient? client, IQueryEngine self, OwnerFetchCache cache, OxQLOptions options, ILogger? logger = null)
+    {
+        this.client = client;
+        this.self = self ?? throw new ArgumentNullException(nameof(self));
+        this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.logger = logger ?? NullLogger.Instance;
+    }
+
+    /// <summary>The service key a target entity is owned by: its namespace, the host's <c>InternalHosts</c> key.</summary>
+    public static string ServiceKeyOf(string targetEntity) => targetEntity.Split('.')[0];
+
+    // ---- by condition: the semi-join, before the page ---------------------------------------
+
+    /// <summary>
+    /// Fills every semi-join slot with the ids the owner selects for the leaf's condition.
+    /// <para>
+    /// The first call asks the owner for page 0 <b>and the count</b>, so a condition selecting
+    /// more than <c>MaxSemiJoinIds</c> is refused after one round trip instead of after walking
+    /// every page to find out. The remaining pages are addressed by <c>offset</c> and sent
+    /// together, which is why the cap is kept within what the owner's own <c>MaxOffset</c> can
+    /// reach. Every call is bounded by one deadline for the whole phase rather than a fresh
+    /// timeout each: without the ids the filter cannot be evaluated, and the engine never
+    /// executes something else instead.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// The refusal, if any, and how many batches went to owners (none for slots the cache answers, a
+    /// split batch counted per part), for the log line.
+    /// </returns>
+    public async Task<(Refusal? Refusal, int Calls)> ByConditionCountedAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        var calls = new StrongBox(0);
+        var refusal = await ByConditionCoreAsync(compiled, context, remaining, calls, cancellationToken).ConfigureAwait(false);
+
+        return (refusal, calls.Value);
+    }
+
+    /// <summary>A counter the semi-join's calls add to.</summary>
+    private sealed class StrongBox(int value)
+    {
+        public int Value = value;
+    }
+
+    private async Task<Refusal?> ByConditionCoreAsync(CompiledQuery compiled, RequestContext context, TimeSpan remaining, StrongBox calls, CancellationToken cancellationToken)
+    {
+        var slots = compiled.SemiJoins;
+
+        if (slots.Count == 0)
+            return null;
+
+        var organisation = context.Organisation!.Value;
+        var cap = options.Limits.MaxSemiJoinIds;
+        var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+
+        // An answer already in hand costs the owner nothing, and a grid asks the same question
+        // again on every block of the same filter.
+        var pending = new List<SemiJoinSlot>();
+
+        await ReadOwnersAsync(slots.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))), remaining, cancellationToken).ConfigureAwait(false);
+
+        // One page size for the phase: the smallest page any owner asked answers, so no owner
+        // refuses a page as too large.
+        var pageSize = ConditionPage(slots, options, client);
+        var lastOffset = (cap / pageSize) * pageSize;
+
+        foreach (var slot in slots)
+        {
+            if (cache.TryGetKeys(CacheKeyOf(slot, organisation, pageSize), out var cached))
+                Fill(slot, cached);
+            else
+                pending.Add(slot);
+        }
+
+        if (pending.Count == 0)
+            return null;
+
+        var plans = pending.ToDictionary(slot => slot, slot => new SlotPlan(ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))));
+
+        // Round one: the first page of every pending slot, with the count that decides whether
+        // asking for the rest is worth a round trip at all; owners in parallel.
+        var firsts = pending.GroupBy(slot => plans[slot].Service, StringComparer.Ordinal).Select(async group =>
+        {
+            var members = group.ToList();
+            var queries = members.Select(slot => OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true)).ToList();
+
+            return (Service: group.Key, Members: members, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, context, cancellationToken).ConfigureAwait(false));
+        }).ToList();
+
+        await Task.WhenAll(firsts).ConfigureAwait(false);
+
+        foreach (var (service, members, outcome) in firsts.Select(task => task.Result))
+        {
+            calls.Value += outcome.Calls;
+
+            if (outcome.Failure is not null)
+                return Unanswered(service, outcome);
+
+            for (var index = 0; index < members.Count; index++)
+            {
+                var slot = members[index];
+                var plan = plans[slot];
+                var result = index < outcome.Results.Count ? outcome.Results[index] : null;
+
+                if (result is null || !Succeeded(result))
+                    return Refused(result, slot, compiled.Bound, context);
+
+                var total = CountOf(result);
+
+                // A capped count says "at least this many", so either form refuses once what it
+                // reports is already past the cap; below that a capped count is indeterminate.
+                if (total is { Value: var reported } && reported > cap)
+                    return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
+
+                var full = Take(plan, result, slot, pageSize);
+
+                if (full is null)
+                    return WithoutKey(OwnerQueryBuilder.TargetOf(slot), OwnerQueryBuilder.TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+
+                if (full == false)
+                    continue;
+
+                if (total is { Capped: false, Value: var exact })
+                {
+                    // The count is exact, so every remaining page is known and goes out together.
+                    for (var offset = pageSize; offset < exact && offset <= lastOffset; offset += pageSize)
+                        plan.Queue.Enqueue(offset);
+                }
+                else
+                {
+                    // No usable count: ask one page at a time and stop at the first short one.
+                    plan.Indeterminate = true;
+                    plan.Queue.Enqueue(pageSize);
+                }
+            }
+        }
+
+        // Round two: the remaining pages, batched per owner, owners in parallel. A slot with an
+        // exact count empties its queue in one wave; an indeterminate one takes a wave per page.
+        while (plans.Values.Any(plan => plan.Queue.Count > 0))
+        {
+            var wave = new List<(SemiJoinSlot Slot, int Offset)>();
+
+            foreach (var (slot, plan) in plans)
+                while (plan.Queue.Count > 0)
+                {
+                    wave.Add((slot, plan.Queue.Dequeue()));
+
+                    if (plan.Indeterminate)
+                        break;
+                }
+
+            var waves = wave.GroupBy(entry => plans[entry.Slot].Service, StringComparer.Ordinal).Select(async group =>
+            {
+                var entries = group.ToList();
+                var queries = entries.Select(entry => OwnerQueryBuilder.ByCondition(entry.Slot, pageSize, entry.Offset, count: false)).ToList();
+
+                return (Entries: entries, Service: group.Key, Outcome: await CallInBatchesAsync(client!, group.Key, queries, deadline, chain: false, context, cancellationToken).ConfigureAwait(false));
+            }).ToList();
+
+            await Task.WhenAll(waves).ConfigureAwait(false);
+
+            foreach (var call in waves.Select(task => task.Result))
+            {
+                calls.Value += call.Outcome.Calls;
+
+                if (call.Outcome.Failure is not null)
+                    return Unanswered(call.Service, call.Outcome);
+
+                for (var index = 0; index < call.Entries.Count; index++)
+                {
+                    var (slot, offset) = call.Entries[index];
+                    var plan = plans[slot];
+                    var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
+
+                    if (result is null || !Succeeded(result))
+                        return Refused(result, slot, compiled.Bound, context);
+
+                    if (plan.Ids.Count > cap)
+                        return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
+
+                    var full = Take(plan, result, slot, pageSize);
+
+                    if (full is null)
+                        return WithoutKey(OwnerQueryBuilder.TargetOf(slot), OwnerQueryBuilder.TargetFieldOf(slot), StageIndexOf(compiled.Bound, slot));
+
+                    if (full == true && plan.Indeterminate && offset + pageSize <= lastOffset)
+                        plan.Queue.Enqueue(offset + pageSize);
+                }
+            }
+        }
+
+        foreach (var (slot, plan) in plans)
+        {
+            if (plan.Ids.Count > cap)
+                return TooLarge(slot, cap, StageIndexOf(compiled.Bound, slot));
+
+            Fill(slot, plan.Ids);
+            cache.SetKeys(CacheKeyOf(slot, organisation, pageSize), plan.Ids);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The page a semi-join asks its owners for: the smallest page any owner of <paramref name="slots"/>
+    /// answers (this host's <c>MaxPageSize</c>, or an owner's own when its facts say it is smaller), and
+    /// no more than <c>MaxSemiJoinIds</c>. One size for the phase, so no owner refuses a page as too large.
+    /// </summary>
+    public static int ConditionPage(IReadOnlyList<SemiJoinSlot> slots, OxQLOptions options, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(options);
+
+        return Math.Max(1, Math.Min(
+            slots.Select(slot => PageOf(options, client, ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot)))).DefaultIfEmpty(options.Limits.MaxPageSize).Min(),
+            options.Limits.MaxSemiJoinIds));
+    }
+
+    /// <summary>
+    /// The semi-joins of a compiled request as explain checks them at their owners (explain is what a
+    /// run does): per condition under another service's alias, the owner's service and the very query a
+    /// run sends first (<see cref="OwnerQueryBuilder.ByCondition"/>: the condition relative to the
+    /// target, the target field projected, the first page with its count, at the page size a run takes,
+    /// <see cref="ConditionPage"/>), and where the caller wrote the condition: the caller's stage, or
+    /// the entry of the request's <c>filter</c>. Nothing is sent here; an owner binds the query and
+    /// never runs it.
+    /// </summary>
+    public static IReadOnlyList<ConditionCheck> ConditionChecks(CompiledQuery compiled, OxQLOptions options, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (compiled.SemiJoins.Count == 0)
+            return [];
+
+        var pageSize = ConditionPage(compiled.SemiJoins, options, client);
+
+        return compiled.SemiJoins.Select(slot =>
+        {
+            var target = OwnerQueryBuilder.TargetOf(slot);
+            var written = WrittenAt(compiled.Bound, slot);
+
+            return new ConditionCheck(slot.Leaf.Path.Wire, slot.Leaf.Path.Root.StoragePrefix, ServiceKeyOf(target), target,
+                OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true), written.Stage, written.Filter);
+        }).ToList();
+    }
+
+    /// <summary>
+    /// An owner's error about a semi-join's query as the caller's (explain and a run say the same):
+    /// the owner's code, message and params, <c>params.owner</c> saying where the owner saw it, at
+    /// the caller's match stage or, for a condition of the request's <c>filter</c>, at its entry
+    /// (<c>filter</c>, no stage). An error at the owner query's match (its stage 0) lies under the
+    /// path the caller wrote, <c>&lt;alias&gt;.&lt;owner path&gt;</c>; one at the stages this host
+    /// added (the projection of the target field, the page) at the condition's path.
+    /// </summary>
+    public static QueryValidationError MapCondition(ConditionCheck condition, JsonObject error)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        ArgumentNullException.ThrowIfNull(error);
+
+        var ownerStage = error["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : (int?)null;
+        var ownerPath = error["path"] is JsonValue named && named.TryGetValue<string>(out var text) ? text : null;
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = condition.Service,
+            ["entity"] = condition.Target,
+            ["target"] = condition.Target,
+            ["stage"] = ownerStage,
+            ["path"] = ownerPath,
+        };
+
+        return new QueryValidationError
+        {
+            Code = error["code"]?.ToString() ?? Codes.InternalError,
+            Message = error["message"]?.ToString() ?? "",
+            Stage = condition.Stage,
+            Filter = condition.Stage is null ? condition.Filter : null,
+            Path = ownerStage is null or 0 && ownerPath is { Length: > 0 } ? condition.Alias + "." + ownerPath : condition.Path,
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// An owner's refusal of a semi-join's query as this host's 422 <c>RESOLVE_REFUSED</c>. Under
+    /// contract 2 the owner's errors are the caller's, as explain says them (<see cref="MapCondition"/>),
+    /// and the head lies where they lie: at the match stage, or at the entry of the request's
+    /// <c>filter</c>. Contract 1 keeps the owner's errors as the owner wrote them.
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, SemiJoinSlot slot, BoundPipeline bound, RequestContext context)
+    {
+        var written = WrittenAt(bound, slot);
+        var target = OwnerQueryBuilder.TargetOf(slot);
+
+        if (context.Contract != 2)
+            return Refused(result, target, written.Stage);
+
+        var condition = new ConditionCheck(slot.Leaf.Path.Wire, slot.Leaf.Path.Root.StoragePrefix, ServiceKeyOf(target), target,
+            new QueryRequest { EntityType = target, Pipeline = [] }, written.Stage, written.Filter);
+
+        return Refused(result, target, written.Stage, (error, _) => MapCondition(condition, error), written.Stage is null ? written.Filter : null, unwrap: true);
+    }
+
+    /// <summary>The services a compiled request's semi-joins ask.</summary>
+    public static IEnumerable<string> ConditionServices(CompiledQuery compiled)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+
+        return compiled.SemiJoins.Select(slot => ServiceKeyOf(OwnerQueryBuilder.TargetOf(slot))).Distinct(StringComparer.Ordinal);
+    }
+
+    /// <summary>What is still to fetch for one slot and what has arrived.</summary>
+    private sealed class SlotPlan(string service)
+    {
+        public string Service { get; } = service;
+
+        /// <summary>The owner's wire values of the target field, in the order they arrived.</summary>
+        public List<string> Ids { get; } = [];
+
+        public Queue<int> Queue { get; } = new();
+
+        /// <summary>The owner gave no usable count, so the pages are walked one wave at a time.</summary>
+        public bool Indeterminate { get; set; }
+    }
+
+    /// <summary>Adds the owner's page of ids to the plan; true when the page was full, null when a row lacks the target field.</summary>
+    private static bool? Take(SlotPlan plan, JsonNode result, SemiJoinSlot slot, int pageSize)
+    {
+        var page = IdsOf(result, slot);
+
+        if (page is null)
+            return null;
+
+        plan.Ids.AddRange(page);
+
+        return page.Count >= pageSize;
+    }
+
+    /// <summary>
+    /// The cache key of a slot: the organisation and the first-page query the owner is sent, which
+    /// between them determine every wire value the owner answers with.
+    /// </summary>
+    private static string CacheKeyOf(SemiJoinSlot slot, Guid organisation, int pageSize) =>
+        OwnerFetchCache.KeyOf(organisation, OwnerQueryBuilder.ByCondition(slot, pageSize, offset: 0, count: true));
+
+    /// <summary>Fills a slot with the owner's wire values, encoded as this slot's reference member is stored.</summary>
+    private static void Fill(SemiJoinSlot slot, IReadOnlyList<string> values)
+    {
+        var reference = ((ShapeNode.Remote)slot.Leaf.Path.Root).Reference;
+
+        foreach (var value in values)
+            slot.Ids.Add(OwnerValueToBson(value, reference));
+    }
+
+    private static Refusal Unanswered(string service, CallOutcome outcome) =>
+        Refusal.NotExecutable(Codes.ResolveUnavailable, outcome.Status is { } status
+            ? $"The owner of '{service}' answered the semi-join with HTTP {status}; the condition cannot be evaluated."
+            : $"The owner of '{service}' did not answer the semi-join ({outcome.Failure}); the condition cannot be evaluated.");
+
+    private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
+        Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{OwnerQueryBuilder.TargetOf(slot)}'; narrow it.", stage);
+
+    /// <summary>The count an owner reported for a page, when one was asked for.</summary>
+    private static (long Value, bool Capped)? CountOf(JsonNode result)
+    {
+        if (result["pageInfo"] is not JsonObject info || info["totalCount"] is not { } total)
+            return null;
+
+        return (total.GetValue<long>(), info["totalCountCapped"]?.GetValue<bool>() == true);
+    }
+
+    /// <summary>The owner's ids in wire form, or null when a row does not carry the target field the host projected.</summary>
+    private static List<string>? IdsOf(JsonNode result, SemiJoinSlot slot)
+    {
+        var field = OwnerQueryBuilder.TargetFieldOf(slot);
+        var values = new List<string>();
+
+        foreach (var item in result["items"]!.AsArray())
+        {
+            if (item is not JsonObject row || !row.ContainsKey(field))
+                return null;
+
+            if (row[field] is { } value)
+                values.Add(WireEncoder.KeyText(value)!);
+        }
+
+        return values;
+    }
+
+    // ---- by keys: the resolve, after the page -----------------------------------------------
+
+    /// <summary>
+    /// Resolves every keyed stage over the trimmed page rows: per row the keys of
+    /// the selected cases (one per row, or one per element under <c>elements</c>), converted per
+    /// <c>KeyAs</c>; at most <c>MaxResolveKeys</c> keys asked of owners for the whole request, the
+    /// rest <c>RESOLVE_PARTIAL</c>; one owner query per target and key chunk, a remote target's
+    /// batched per service at the owner's own batch cap and a local target's run by this host's own
+    /// <see cref="SelfOwner"/>; the answers assigned per row by case and target order. A plain key
+    /// match serves an entity target keyed by its own key, where no key can have two rows; every
+    /// other target is asked grouped per key (<c>keyedBy</c>), at most <see cref="PerKey"/> rows per
+    /// key, so a key with two rows is <c>ambiguous</c> and no key cuts another key's rows from the
+    /// page. An owner answer with a next page is <c>RESOLVE_PARTIAL</c> for its chunk: the chunk's
+    /// keys without rows are <c>owner_unanswered</c>, never <c>not_found</c>. A target with a filter
+    /// under an effective <c>onMissing</c> other than <c>null</c> asks the keys its filtered query did
+    /// not return once more without the filter (the existence probe): found there is
+    /// <c>excluded</c>, found nowhere <c>not_found</c>. A <paramref name="strict"/> request reads no
+    /// negative cache entry.
+    /// </summary>
+    public async Task<ResolveResult> ByKeysAsync(CompiledQuery compiled, IReadOnlyList<BsonDocument> rows, RequestContext context, TimeSpan remaining, bool strict, CancellationToken cancellationToken)
+    {
+        var organisation = context.Organisation!.Value;
+        var diagnostics = new List<Diagnostic>();
+        var budget = new KeyBudget(options.Limits.MaxResolveKeys);
+
+        // The deadline is taken first: reading the owners' facts is part of the phase's time.
+        var deadline = DateTime.UtcNow + (remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
+
+        // The owners' facts gate and size what is sent them, so they are read before the plan.
+        await ReadOwnersAsync(compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), remaining, cancellationToken).ConfigureAwait(false);
+        var stages = compiled.KeyedResolves.Select(stage => Plan(compiled.Bound, stage, Continuation.Of(compiled.Bound, stage), rows, organisation, strict, budget, diagnostics)).ToList();
+        var targets = stages.SelectMany(stage => stage.Targets).ToList();
+        var cacheHits = targets.Sum(target => target.CacheHits);
+        var calls = 0;
+
+        // Round one: the filtered owner queries of every chunk. A remote target of a union whose
+        // owner refuses only paths it lacks is asked again without them (the paths of a union are flat).
+        var pending = targets.SelectMany(target => target.Chunks.Select(chunk => new Sent(target, chunk, target.Query(chunk)))).ToList();
+        var fromOwners = new List<OwnerDiagnostic>();
+
+        // What an owner reported with rows the cache now answers for, said again with them.
+        foreach (var target in targets)
+            fromOwners.AddRange(target.Replayed.Select(replayed => new OwnerDiagnostic(target, target.Service, replayed.Reported, replayed.Rows)));
+
+        for (var attempt = 0; pending.Count > 0; attempt++)
+        {
+            var retry = new List<Sent>();
+            var round = await SendAsync(pending, context, deadline, cancellationToken).ConfigureAwait(false);
+
+            foreach (var call in round)
+            {
+                calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
+
+                if (Failed(call, diagnostics))
+                    continue;
+
+                for (var index = 0; index < call.Sent.Count; index++)
+                {
+                    var (target, keys, query) = call.Sent[index];
+                    var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
+                    var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
+
+                    if (result is null || !Succeeded(result))
+                    {
+                        if (attempt < MaxDropRounds && target.DropUnknown(result, query))
+                        {
+                            retry.Add(new Sent(target, keys, target.Query(keys)));
+                            continue;
+                        }
+
+                        return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, query, filter: context.Contract == 2), Calls = calls, CacheHits = cacheHits };
+                    }
+
+                    var items = result["items"]!.AsArray();
+
+                    foreach (var item in items)
+                    {
+                        if (item is not JsonObject row || target.KeyOf(row) is not { } key)
+                            return new ResolveResult { Refusal = WithoutKey(target.Entity, target.KeyWire, stageIndex), Calls = calls, CacheHits = cacheHits };
+
+                        target.Hit(key, row);
+                    }
+
+                    if (HasNextPage(result))
+                        Partial(call.Service, target, keys.Where(key => !target.Hits.ContainsKey(key)).ToList(), keys, diagnostics);
+
+                    // What the owner reported about the continued stages comes back to the caller. A
+                    // report that names its rows and says what the data says of them is kept with the
+                    // rows, so the next page is answered from the cache with the same report; any other
+                    // (an owner that did not answer, a list the owner cut) leaves the chunk unkept.
+                    if (!target.Continued.IsEmpty && result["diagnostics"] is JsonArray { Count: > 0 } reported)
+                    {
+                        fromOwners.AddRange(reported.OfType<JsonObject>().Select(diagnostic => new OwnerDiagnostic(target, call.Service, diagnostic, items)));
+
+                        if (!target.Report(reported, items))
+                            target.Uncached.UnionWith(keys);
+                    }
+                }
+            }
+
+            pending = retry;
+        }
+
+        // A path asked under the alias is refused only when no target of the stage has it; one asked
+        // under a union join's alias only when no branch reaches it.
+        foreach (var stage in stages)
+            if ((NoTargetHas(stage) ?? NoBranchHas(stage)) is { } refusal)
+                return new ResolveResult { Refusal = refusal, Calls = calls, CacheHits = cacheHits };
+
+        // Round two: the existence probe of the keys a filtered query did not return.
+        var probes = targets.Where(target => target.Probed).SelectMany(target => target.ProbeChunks(ChunkOf(target)).Select(chunk => new Sent(target, chunk, target.Probe(chunk)))).ToList();
+
+        foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline, cancellationToken).ConfigureAwait(false))
+        {
+            calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
+
+            if (Failed(call, diagnostics))
+                continue;
+
+            for (var index = 0; index < call.Sent.Count; index++)
+            {
+                var (target, keys, _) = call.Sent[index];
+                var result = index < call.Outcome.Results.Count ? call.Outcome.Results[index] : null;
+                var stageIndex = StageIndexOf(compiled.Bound, target.Stage);
+
+                if (result is null || !Succeeded(result))
+                    return new ResolveResult { Refusal = Refused(result, target, call.Service, stageIndex, filter: context.Contract == 2), Calls = calls, CacheHits = cacheHits };
+
+                foreach (var item in result["items"]!.AsArray())
+                {
+                    if (item is not JsonObject row || target.KeyOf(row) is not { } key)
+                        return new ResolveResult { Refusal = WithoutKey(target.Entity, target.KeyWire, stageIndex), Calls = calls, CacheHits = cacheHits };
+
+                    target.Excluded.Add(key);
+                }
+
+                if (HasNextPage(result))
+                    Partial(call.Service, target, keys.Where(key => !target.Excluded.Contains(key)).ToList(), keys, diagnostics);
+            }
+        }
+
+        // What the owners answered in full is kept for the next page, and so is what an owner said a
+        // union target lacks.
+        foreach (var target in targets)
+        {
+            foreach (var key in target.Chunks.SelectMany(chunk => chunk))
+                if (!target.Unanswered.Contains(key) && !target.Uncached.Contains(key))
+                    cache.Set(target.CacheKey(key), target.Cached(key));
+
+            target.Keep(cache);
+        }
+
+        var perRow = rows.Select(_ => new Dictionary<string, JsonNode?>(StringComparer.Ordinal)).ToList();
+        var outcomes = new List<KeyedRowOutcome>();
+        var truncations = new List<KeyedTruncation>();
+
+        var liftedRows = new Dictionary<JsonObject, List<int>>(ReferenceEqualityComparer.Instance);
+
+        foreach (var stage in stages)
+            Assign(stage, perRow, outcomes, truncations, liftedRows);
+
+        diagnostics.AddRange(MapOwnerDiagnostics(fromOwners, liftedRows));
+
+        var dropped = targets
+            .SelectMany(target => target.DroppedSelect.Select(path => (Target: target, Path: path, Parent: false))
+                .Concat(target.DroppedParent.Select(path => (Target: target, Path: path, Parent: true))))
+            .Select(drop => new DroppedSelectPath(StageIndexOf(compiled.Bound, drop.Target.Stage), drop.Target.Stage.As, drop.Target.TargetName, drop.Path, drop.Parent))
+            .Concat(targets.SelectMany(target => target.DroppedContinued.Order(StringComparer.Ordinal).Select(path => (Target: target, Alias: path.Split('.')[0], Path: path[(path.IndexOf('.', StringComparison.Ordinal) + 1)..])))
+                .Where(drop => drop.Target.UnionJoinOf(drop.Alias) is not null)
+                .Select(drop => new DroppedSelectPath(drop.Target.UnionJoinOf(drop.Alias)!.OriginIndex, drop.Alias, drop.Target.Entity, drop.Path, Parent: false, Branch: true)))
+            .ToList();
+
+        // What each owner cost, for the request's timing: the keys asked, the keys the cache answered, the time of the calls.
+        if (context.Timing is { } timing)
+            foreach (var target in targets.Where(target => target.OwnerKeys > 0 || target.CacheHits > 0))
+                timing.Called(target.Service == SelfService ? compiled.Bound.Entity.Namespace : target.Service, target.TargetName, target.Service != SelfService,
+                    target.OwnerKeys, target.CacheHits, target.OwnerMs, target.OwnerTimings);
+
+        return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Dropped = dropped, Calls = calls, CacheHits = cacheHits };
+    }
+
+    /// <summary>One owner query of a round: the target it asks for, the keys it carries, and the query.</summary>
+    private sealed record Sent(TargetPlan Target, IReadOnlyList<string> Keys, QueryRequest Query);
+
+    /// <summary>The queries one owner was sent in a round, and what came back.</summary>
+    private sealed record OwnerCall(string Service, IReadOnlyList<Sent> Sent, CallOutcome Outcome);
+
+    /// <summary>
+    /// Sends a round's queries, batched per owner, owners in parallel; a local target's to this host's
+    /// own <see cref="SelfOwner"/>. An owner's batch carries a chain (continued stages, or a target
+    /// form) under the chain ceiling, any other under the per-resolve one.
+    /// </summary>
+    private async Task<IReadOnlyList<OwnerCall>> SendAsync(IReadOnlyList<Sent> sends, RequestContext context, DateTime deadline, CancellationToken cancellationToken)
+    {
+        var tasks = sends.GroupBy(sent => sent.Target.Service, StringComparer.Ordinal).Select(async group =>
+        {
+            var sent = group.ToList();
+            var owner = group.Key == SelfService ? new SelfOwner(self, context) : client!;
+
+            var isRemote = group.Key != SelfService;
+
+            // Another service's owner is asked for its own timing when this request's was asked for:
+            // the database's share at the owner is then known here. This host's own targets are
+            // measured in this request's collector as they run.
+            var queries = isRemote && context.Timing is { Detailed: true }
+                ? sent.Select(entry => entry.Query with { Timing = QueryRequest.TimingAsked }).ToList()
+                : sent.Select(entry => entry.Query).ToList();
+            var since = QueryTiming.Now;
+            var outcome = await CallSharedAsync(owner, group.Key, queries, deadline, sent.Any(entry => entry.Target.Chain), context, cancellationToken).ConfigureAwait(false);
+            var took = System.Diagnostics.Stopwatch.GetElapsedTime(since).TotalMilliseconds;
+
+            if (isRemote)
+                context.Timing?.Remote(since);
+
+            lock (sends)
+            {
+                foreach (var target in sent.Select(entry => entry.Target).Distinct())
+                    target.OwnerMs += took;
+
+                for (var index = 0; index < sent.Count; index++)
+                {
+                    sent[index].Target.OwnerKeys += sent[index].Keys.Count;
+
+                    if (index < outcome.Results.Count && outcome.Results[index] is JsonObject answered && answered["timing"] is JsonObject measured)
+                        sent[index].Target.OwnerTimings.Add(measured);
+                }
+            }
+
+            return new OwnerCall(group.Key, sent, outcome);
+        }).ToList();
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        return tasks.Select(task => task.Result).ToList();
+    }
+
+    /// <summary>
+    /// An owner that did not answer a round: <c>RESOLVE_TIMEOUT</c> or <c>RESOLVE_UNREACHABLE</c>
+    /// naming the aliases, and every key it was sent unanswered. True when the call failed.
+    /// </summary>
+    private bool Failed(OwnerCall call, List<Diagnostic> diagnostics)
+    {
+        if (call.Outcome.Failure is not { } failure)
+            return false;
+
+        var aliases = call.Sent.Select(entry => entry.Target.Stage.As).Distinct().ToList();
+        var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
+
+        diagnostics.Add(new Diagnostic
+        {
+            Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
+            Message = failure == Failure.Timeout
+                ? $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; '{string.Join("', '", aliases)}' is null on this page."
+                : call.Outcome.Status is { } status
+                    ? $"{owner} answered with HTTP {status}; '{string.Join("', '", aliases)}' is null on this page."
+                    : $"{owner} could not be reached; '{string.Join("', '", aliases)}' is null on this page.",
+            Params = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases },
+        });
+
+        foreach (var (target, keys, _) in call.Sent)
+            target.Unanswered.UnionWith(keys);
+
+        return true;
+    }
+
+    /// <summary>
+    /// An owner answer with a next page: the owner cut rows, so the chunk's
+    /// <paramref name="open"/> keys are <c>owner_unanswered</c>, never <c>not_found</c>, and none of
+    /// the chunk's <paramref name="keys"/> is cached; <c>RESOLVE_PARTIAL</c> names the alias.
+    /// </summary>
+    private static void Partial(string service, TargetPlan target, IReadOnlyList<string> open, IReadOnlyList<string> keys, List<Diagnostic> diagnostics)
+    {
+        target.Unanswered.UnionWith(open);
+        target.Uncached.UnionWith(keys);
+
+        var owner = service == SelfService ? "This host" : $"The owner of '{service}'";
+
+        diagnostics.Add(new Diagnostic
+        {
+            Code = Codes.ResolvePartial,
+            Message = $"{owner} answered '{target.Stage.As}' with more rows than one page of '{target.Entity}' holds; {open.Count} of its {keys.Count} keys are not resolved on this page.",
+            Params = new Dictionary<string, object?> { ["alias"] = target.Stage.As, ["keys"] = keys.Count, ["unanswered"] = open.Count, ["service"] = service == SelfService ? null : service },
+        });
+    }
+
+    /// <summary>Whether an owner answer says a next page exists: rows it did not return.</summary>
+    private static bool HasNextPage(JsonNode result) =>
+        result["pageInfo"]?["hasNextPage"] is JsonValue next && next.TryGetValue<bool>(out var more) && more;
+
+    /// <summary>The owner key of this host's own targets in a call plan; no service namespace is empty.</summary>
+    private const string SelfService = "";
+
+    /// <summary>How many times a union target's query is asked again without the paths its owner lacks.</summary>
+    internal const int MaxDropRounds = 2;
+
+    /// <summary>A diagnostic an owner reported with its answer for a target that carried continued stages, and the answer's rows.</summary>
+    private sealed record OwnerDiagnostic(TargetPlan Target, string Service, JsonObject Reported, IList<JsonNode?> Items);
+
+    /// <summary>
+    /// A path asked under the alias that no target of a union has: refused. A local target lacks
+    /// what it dropped at bind time, a remote one what its owner refused; a remote target not asked
+    /// on this page is taken to have every path.
+    /// </summary>
+    private static Refusal? NoTargetHas(StagePlan plan)
+    {
+        if (!plan.Targets.Any(target => target.Target.IsRemote && target.Union))
+            return null;
+
+        foreach (var parent in new[] { false, true })
+        {
+            IReadOnlyCollection<string> Lacks(TargetPlan target) => target.Target.IsRemote
+                ? parent ? target.DroppedParent : target.DroppedSelect
+                : parent ? target.Target.DroppedParentSelect ?? [] : target.Target.DroppedSelect;
+
+            foreach (var path in plan.Targets.SelectMany(Lacks).Distinct(StringComparer.Ordinal).ToList())
+            {
+                if (!plan.Targets.All(target => Lacks(target).Contains(path, StringComparer.Ordinal)))
+                    continue;
+
+                var message = $"'{path}' is not a path of any {(parent ? "row that owns a target" : "target")} of '{plan.Stage.As}' ({string.Join(", ", plan.Targets.Select(target => target.TargetName).Distinct(StringComparer.Ordinal))}).";
+                var head = new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = plan.Index };
+
+                return Refusal.NotExecutable(Codes.ResolveRefused, message, plan.Index,
+                    [head, new QueryValidationError { Code = Codes.UnknownPath, Message = message, Stage = plan.Index, Path = path }]);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A path asked under a union join's alias that no branch reaches: refused,
+    /// as a path no target of a union has is. A branch drops what its owner said its join lacks; a
+    /// branch not asked on this page is taken to reach every path.
+    /// </summary>
+    private static Refusal? NoBranchHas(StagePlan plan)
+    {
+        foreach (var union in plan.Continued.Where(stage => stage.Branches is not null))
+        {
+            var branches = plan.Targets.Where(target => target.Continued.Origins.Contains(union)).ToList();
+
+            foreach (var path in branches.SelectMany(target => target.DroppedContinued).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList())
+            {
+                if (path.Split('.')[0] != union.Aliases[0] || branches.Count < union.Branches!.Count || !branches.All(target => target.DroppedContinued.Contains(path)))
+                    continue;
+
+                var message = $"'{path}' is not a path of what any branch of '{union.Aliases[0]}' joins ({string.Join(", ", branches.Select(target => target.Entity).Distinct(StringComparer.Ordinal))}).";
+                var head = new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = union.OriginIndex };
+
+                // The path is the projection's, under the alias.
+                return Refusal.NotExecutable(Codes.ResolveRefused, message, union.OriginIndex,
+                    [head, new QueryValidationError { Code = Codes.UnknownPath, Message = message, Stage = union.OriginIndex, Path = path }]);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The owners' diagnostics about continued stages as this host's: each at the
+    /// caller's stage and path with <c>params.owner</c> saying where the owner saw it, its rows moved
+    /// from the owner's answer rows to the page rows that took them, one diagnostic per code, stage and
+    /// alias however many owners and chunks reported it, its rows capped at <c>MaxReportedRows</c>. A
+    /// diagnostic that names no continued stage or alias stays the owner's.
+    /// </summary>
+    private List<Diagnostic> MapOwnerDiagnostics(IReadOnlyList<OwnerDiagnostic> reported, Dictionary<JsonObject, List<int>> liftedRows)
+    {
+        var merged = new List<(string Key, Diagnostic First, Dictionary<string, object?> Params, List<Dictionary<string, object?>>? Rows, long Count, long? RowCount, bool Truncated)>();
+
+        foreach (var (target, service, diagnostic, items) in reported)
+        {
+            var ownerStage = diagnostic["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : (int?)null;
+            var ownerPath = diagnostic["path"]?.ToString();
+            var written = diagnostic["params"] as JsonObject;
+            var aliases = new List<string>();
+
+            if (written?["alias"] is JsonValue alias && alias.TryGetValue<string>(out var name))
+                aliases.Add(name);
+
+            if (written?["aliases"] is JsonArray named)
+                aliases.AddRange(named.OfType<JsonValue>().Select(value => value.ToString()));
+
+            if ((target.OriginOf(ownerStage) ?? target.Continued.Origins.FirstOrDefault(origin => origin.Aliases.Any(aliases.Contains))) is not { } continued)
+                continue;
+
+            var parameters = written?.Where(pair => pair.Key is not ("rows" or "count" or "truncated"))
+                .ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal) ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+
+            parameters["owner"] = new Dictionary<string, object?>
+            {
+                ["service"] = service == SelfService ? null : service,
+                ["entity"] = target.Entity,
+                ["target"] = target.TargetName,
+                ["stage"] = ownerStage,
+                ["path"] = ownerPath,
+            };
+
+            List<Dictionary<string, object?>>? rows = null;
+            long? rowCount = null;
+            var count = written?["count"] is JsonValue counted && counted.TryGetValue<long>(out var total) ? total : 0;
+            var truncated = written?["truncated"] is JsonValue flag && flag.TryGetValue<bool>(out var cut) && cut;
+
+            if (written?["rows"] is JsonArray entries)
+            {
+                rows = [];
+
+                foreach (var entry in entries.OfType<JsonObject>())
+                {
+                    if (entry["row"] is not JsonValue row || !row.TryGetValue<int>(out var ownerRow) || ownerRow < 0 || ownerRow >= items.Count
+                        || items[ownerRow] is not JsonObject answer || !liftedRows.TryGetValue(answer, out var pageRows))
+                        continue;
+
+                    foreach (var pageRow in pageRows)
+                    {
+                        var mapped = new Dictionary<string, object?>(StringComparer.Ordinal) { ["row"] = pageRow };
+
+                        foreach (var (key, value) in entry)
+                            if (key != "row")
+                                mapped[key] = value?.DeepClone();
+
+                        rows.Add(mapped);
+                    }
+                }
+
+                // What the owner counted beyond the rows it listed stays counted.
+                count = rows.Count + Math.Max(0, count - entries.Count);
+            }
+            else if (written?["rows"] is JsonValue listed && listed.TryGetValue<long>(out var affected))
+            {
+                rowCount = affected;
+            }
+
+            var mergeKey = $"{diagnostic["code"]}|{continued.OriginIndex}|{string.Join(",", aliases)}";
+            var index = merged.FindIndex(entry => entry.Key == mergeKey);
+
+            if (index < 0)
+            {
+                merged.Add((mergeKey, new Diagnostic
+                {
+                    Code = diagnostic["code"]?.ToString() ?? Codes.InternalError,
+                    Message = diagnostic["message"]?.ToString() ?? "",
+                    Stage = continued.OriginIndex,
+                    Path = ownerPath is null ? null : Continuation.ToOrigin(ownerPath, continued, target.Stage, target.Target.Declared.Item is not null, target.Entity),
+                }, parameters, rows, count, rowCount, truncated));
+                continue;
+            }
+
+            var existing = merged[index];
+
+            existing.Rows?.AddRange(rows ?? []);
+            merged[index] = existing with
+            {
+                Count = existing.Count + count,
+                RowCount = existing.RowCount is null && rowCount is null ? null : (existing.RowCount ?? 0) + (rowCount ?? 0),
+                Truncated = existing.Truncated || truncated,
+            };
+        }
+
+        var cap = Math.Max(1, options.Limits.MaxReportedRows);
+
+        return merged.Select(entry =>
+        {
+            var parameters = new Dictionary<string, object?>(entry.Params, StringComparer.Ordinal);
+
+            if (entry.Rows is not null)
+            {
+                var rows = entry.Rows.OrderBy(row => (int)row["row"]!).ThenBy(row => row.TryGetValue("element", out var element) && element is JsonValue value && value.TryGetValue<int>(out var at) ? at : -1).ToList();
+
+                parameters["count"] = entry.Count;
+                parameters["truncated"] = entry.Truncated || rows.Count > cap;
+                parameters["rows"] = rows.Take(cap).ToList();
+            }
+            else if (entry.RowCount is { } affected)
+            {
+                parameters["rows"] = affected;
+            }
+
+            return entry.First with { Params = parameters };
+        }).ToList();
+    }
+
+    /// <summary>The rows a grouped owner query returns per key at most: two tell a resolved key from an ambiguous one.</summary>
+    public const int PerKey = 2;
+
+    /// <summary>The placeholder an explained owner query carries where the page's keys would be.</summary>
+    public const string ElidedKey = "…";
+
+    /// <summary>
+    /// The owner queries a keyed stage would send, one per distinct target, as explain shows them
+    /// (<c>owner</c> in the explain answer): built by the very plan a run builds, the page's keys elided to
+    /// <see cref="ElidedKey"/>, with the continued stages that target's owner runs and those it does
+    /// not (<c>not_applicable</c> for its rows). Nothing is sent and nothing is cached.
+    /// </summary>
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Explain(bound, stage, strict, null);
+
+    /// <summary><see cref="Explain(BoundPipeline, BoundStage.Resolve, bool)"/>, with the remote client whose owner facts a run plans by.</summary>
+    public static IReadOnlyList<ExplainedOwnerQuery> Explain(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(stage);
+
+        var continued = Continuation.Of(bound, stage);
+
+        return PlansOf(bound, stage, strict, continued, client).Select(plan => new ExplainedOwnerQuery(
+            plan.TargetName,
+            plan.Target.IsRemote,
+            plan.Target.Declared.Entity.Split('.')[0],
+            plan.Grouped,
+            plan.Query([ElidedKey]),
+            plan.Continued.Origins,
+            continued.Where(other => !plan.Continued.Origins.Any(origin => ReferenceEquals(origin, other))).ToList())).ToList();
+    }
+
+    /// <summary>The key an owner query checked at its owner's internal explain carries in place of the page's keys: of a key's form, naming nothing.</summary>
+    public const string CheckKey = "00000000-0000-0000-0000-000000000000";
+
+    /// <summary>
+    /// The owner queries of a keyed stage that a remote owner continues:
+    /// per remote target with continued stages (and per local target with continued stages, service
+    /// empty: this host checks them in process), its service, the query a run sends with one
+    /// <see cref="CheckKey"/> in place of the page's keys, and how an owner error maps back — one at
+    /// a continued stage to the caller's stage and path with <c>params.owner</c>, as a run maps a
+    /// refusal; one at the owner query's own stages to null, since those are this host's making.
+    /// Nothing is sent here.
+    /// </summary>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict) => Checks(bound, stage, strict, null);
+
+    /// <summary>
+    /// <see cref="Checks(BoundPipeline, BoundStage.Resolve, bool)"/>, planned by the remote client's owner facts as a run plans.
+    /// With <paramref name="everyRemoteTarget"/> every remote target is checked, also one the caller
+    /// wrote nothing under: its owner's answer to the query the run sends is where explain reads the
+    /// target's type from, so there is nothing to check only when nothing is asked.
+    /// </summary>
+    /// <param name="bound">The bound request.</param>
+    /// <param name="stage">The keyed stage.</param>
+    /// <param name="strict">Whether the request is strict.</param>
+    /// <param name="client">The remote client whose owner facts a run plans by.</param>
+    /// <param name="everyRemoteTarget">Whether every remote target is checked.</param>
+    /// <param name="drops">
+    /// The cache a run keeps what owners said a target lacks in: what it holds is dropped from the check
+    /// query before it is asked, as a run drops it (<see cref="OwnerCheck.Learned"/>), so a warm explain
+    /// needs no second round. Null: nothing is known beforehand.
+    /// </param>
+    public static IReadOnlyList<OwnerCheck> Checks(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IRemoteQueryClient? client, bool everyRemoteTarget = false, OwnerFetchCache? drops = null)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(stage);
+
+        var index = StageIndexOf(bound, stage);
+        var position = PositionOf(bound, stage);
+        var continued = Continuation.Of(bound, stage);
+
+        // Where the paths asked under the stage's aliases were written, when a projection names them:
+        // the last projection after the stage.
+        var projects = new[] { stage.As, stage.ParentAs }.Concat(continued.SelectMany(each => each.Aliases))
+            .Any(alias => alias is not null && RootOutput.Of(bound.FinalShape, alias) is { Carried: true, Whole: false });
+        var project = position is { } at ? bound.Stages.Skip(at + 1).OfType<BoundStage.Project>().LastOrDefault() : null;
+        var projectStage = project is null || !projects ? null : StageIndexOf(bound, project);
+
+        // A local target is checked only for the stages continued under it: this host binds the paths
+        // asked of it itself, but the continued stages are bound by its own SelfOwner when the query runs,
+        // with its own model and, for a join there that reaches another service, that owner's.
+        return PlansOf(bound, stage, strict, continued, client, drops)
+            .Where(plan => plan.Target.IsRemote
+                ? everyRemoteTarget || !plan.Continued.IsEmpty || Writes(plan.Target) || stage.RemoteLookup is not null
+                : !plan.Continued.IsEmpty)
+            .Select(plan =>
+            {
+                // What an earlier request learned the target lacks, before this check learns more.
+                var learned = plan.Dropped();
+
+                // The query a run sends, with the check key: what explain says of an owner is what the
+                // owner answers to the run's own query.
+                var query = plan.Query([CheckKey]);
+                var projectAt = query.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
+
+                return new OwnerCheck(plan.TargetName, plan.Service, query, plan.Continued.IsEmpty ? index ?? 0 : plan.Continued.Origins[0].OriginIndex, error => MapBack(error, plan, plan.Service))
+                {
+                    Resolve = stage,
+                    Bound = plan.Target,
+                    Stage = index,
+                    ProjectStage = projectStage,
+                    ProjectAt = projectAt,
+                    Item = plan.Target.Declared.Item is not null,
+                    OriginOf = plan.OriginOf,
+                    ContinuedAliases = plan.Continued.Aliases,
+                    Continued = plan.Continued.Origins,
+                    ContinuedAt = plan.ContinuedAt,
+                    // What a run does with the refusal (DropUnknown) is done to the check: the paths the
+                    // target lacks leave the query, which is asked again.
+                    Again = (answer, sent) => plan.DropUnknown(answer, sent) ? plan.Query([CheckKey]) : null,
+                    Learned = learned,
+                    Rank = plan.Rank,
+                    Keep = plan.Keep,
+                };
+            })
+            .ToList();
+
+        static bool Writes(BoundResolveTarget target) =>
+            target.RemoteSelect is { Count: > 0 } || target.RemoteParentSelect is { Count: > 0 };
+    }
+
+    /// <summary>One plan per distinct target (entity, field, item) of a keyed stage, as a run builds them.</summary>
+    private static List<TargetPlan> PlansOf(BoundPipeline bound, BoundStage.Resolve stage, bool strict, IReadOnlyList<ContinuedStage> continued, IRemoteQueryClient? client = null, OwnerFetchCache? drops = null)
+    {
+        var cases = CasesOf(stage);
+        var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
+        var plans = new List<TargetPlan>();
+
+        foreach (var target in cases.SelectMany(selected => selected.Targets))
+            if (!plans.Any(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item))
+            {
+                var plan = new TargetPlan(stage, target, continued, bound.Organisation, strict, union, bound.FinalShape);
+
+                if (drops is not null)
+                    plan.Learn(drops);
+
+                plans.Add(plan);
+            }
+
+        return plans;
+    }
+
+    /// <summary>One keyed stage over the page: its targets, the stages continued under it, and per row the keys its cases select.</summary>
+    private sealed class StagePlan(BoundStage.Resolve stage, int? index, IReadOnlyList<ContinuedStage> continued)
+    {
+        public BoundStage.Resolve Stage { get; } = stage;
+
+        /// <summary>The caller's stage index, for the outcomes.</summary>
+        public int? Index { get; } = index;
+
+        /// <summary>Every stage continued under the stage's aliases, whichever target it applies to.</summary>
+        public IReadOnlyList<ContinuedStage> Continued { get; } = continued;
+
+        public List<TargetPlan> Targets { get; } = [];
+
+        /// <summary>Per bound target, its plan; targets of different cases with the same entity, field and item share one.</summary>
+        public Dictionary<BoundResolveTarget, TargetPlan> ByTarget { get; } = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Per row its slots: one for a single value, one per element under <c>elements</c>; empty when there is nothing to resolve.</summary>
+        public List<List<Slot>> Rows { get; } = [];
+    }
+
+    /// <summary>One reference value of a row: the case it selects, its key, or the outcome it already has without a call.</summary>
+    private sealed record Slot(BoundResolveCase? Case, string? Key, KeyedOutcome? Outcome);
+
+    /// <summary>
+    /// One target of a keyed stage: the keys it is asked for, what the cache and the owner answered
+    /// per key (up to <see cref="PerKey"/> rows, first by record key), the keys the existence probe
+    /// found although the filter left them out, and the keys the owner did not answer. The stages
+    /// continued under the keyed stage for this target ride in its owner query.
+    /// </summary>
+    private sealed class TargetPlan
+    {
+        private readonly Guid organisation;
+        private readonly bool strict;
+        private string? planHash;
+        private readonly HashSet<string> readBack = new(StringComparer.Ordinal);
+        private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+        private readonly HashSet<string> lifted;
+        private readonly Shape? final;
+        private readonly IReadOnlyList<string>? shown;
+        private readonly IReadOnlyList<string>? parentShown;
+
+        /// <summary>
+        /// The plan of one target. <paramref name="final"/> is the request's final shape: what the row
+        /// shows under the stage's aliases and under those its continued stages add, which is what the
+        /// owner is asked for and what its answer is cut to.
+        /// </summary>
+        public TargetPlan(BoundStage.Resolve stage, BoundResolveTarget target, IReadOnlyList<ContinuedStage> continued, Guid organisation, bool strict,
+            bool union = false, Shape? final = null)
+        {
+            Stage = stage;
+            Target = target;
+            this.organisation = organisation;
+            this.strict = strict;
+            this.final = final;
+            // An alias the projection names paths under shows those paths and nothing else; kept whole it
+            // shows what its owner answers.
+            shown = final is not null && RootOutput.Of(final, stage.As) is { Carried: true, Whole: false } own ? own.Projected : null;
+            parentShown = final is not null && stage.ParentAs is { } parentAs && RootOutput.Of(final, parentAs) is { Carried: true, Whole: false } parent ? parent.Projected : null;
+            Union = union;
+            Continued = Continuation.For(stage, target.Declared.Entity, target.Declared.Item is not null, continued);
+            lifted = new HashSet<string>(Continued.Aliases, StringComparer.Ordinal);
+
+            // An entity keyed by its own key has one row per key, which a plain key match serves;
+            // every other target is grouped per key. A target onto a member that
+            // is not the key is grouped also where the stage itself needs no keyed fetch but the request
+            // reads the outcomes (strict, an onMissing other than null, outcomeAs): a plain query sees a
+            // second row under a key only when the owner's page happens to hold it, so the ambiguity
+            // would depend on the page and on the cache.
+            var nonKey = target.Declared.Item is not null || !target.Declared.FieldIsKey;
+            var readsOutcomes = strict || stage.ReadsOutcomes;
+
+            Grouped = nonKey && (stage.NeedsKeyedFetch || readsOutcomes);
+            Service = target.IsRemote ? ServiceKeyOf(target.Declared.Entity) : SelfService;
+
+            // The probe tells a key the filter left out from a missing one, which only a stage
+            // that reports or refuses missing references needs.
+            Probed = target.RemoteFilter is { ValueKind: JsonValueKind.Object } && stage.ReadsOutcomes;
+
+            planHash = OwnerFetchCache.PlanHashOf(Query([]), Probed);
+        }
+
+        /// <summary>
+        /// The plan: the owner query as it is sent now, without its keys, so without the
+        /// paths dropped for the target. An answer is kept under the query that produced it: once what
+        /// was learned of the target is forgotten, the query asks those paths again and is another plan,
+        /// so no row fetched without a path answers a request that no longer knows the path was dropped.
+        /// </summary>
+        private string PlanHash => planHash ??= OwnerFetchCache.PlanHashOf(Query([]), Probed);
+
+        public BoundStage.Resolve Stage { get; }
+
+        public BoundResolveTarget Target { get; }
+
+        /// <summary>The stages continued under the keyed stage that this target's owner runs.</summary>
+        public OwnerContinuation Continued { get; }
+
+        /// <summary>
+        /// Whether the owner query carries a chain: continued stages, or a target form beyond the plain one (typed,
+        /// item, converted, element-wise); it runs under the chain ceiling.
+        /// </summary>
+        public bool Chain => !Continued.IsEmpty || Stage.NeedsKeyedFetch;
+
+        /// <summary>The owner's stage index of the first continued stage: where the query as built had its projection.</summary>
+        public int ContinuedAt { get; private set; }
+
+        public bool Grouped { get; }
+
+        /// <summary>Whether the keys the filtered query does not return are probed without the filter.</summary>
+        public bool Probed { get; }
+
+        /// <summary>The service the target's owner query goes to; <see cref="SelfService"/> for a local target.</summary>
+        public string Service { get; }
+
+        public string Entity => Target.Declared.Entity;
+
+        /// <summary>The target as a note or an owner mapping names it: the entity, or <c>entity#item</c>.</summary>
+        public string TargetName => Target.Declared.Item is { } item ? $"{Entity}#{item}" : Entity;
+
+        /// <summary>The member of an answer row the rows are keyed by, as the owner writes it.</summary>
+        public string KeyWire => Stage.RemoteLookup is { Rows: true } ? BoundKeyedBy.Key
+            : Target.Declared.Item is null ? Target.Declared.Field : BoundKeyedBy.Element + "." + Target.Declared.Field;
+
+        /// <summary>
+        /// The rows a grouped owner query answers per key: <see cref="PerKey"/> for a resolve, which tells one
+        /// record from several; a remote lookup's own (one under <c>first</c>, else one more than its limit).
+        /// </summary>
+        public int RowsPerKey => Stage.RemoteLookup?.PerKey ?? PerKey;
+
+        /// <summary>Whether the keys are guids, compared in their normalised form.</summary>
+        public bool GuidKeys { get; set; }
+
+        public Dictionary<string, List<JsonObject>> Hits { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The keys the filter left out and the probe found: <c>excluded</c>.</summary>
+        public HashSet<string> Excluded { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> Unanswered { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The keys of a chunk the owner answered only in part; their answers are not kept.</summary>
+        public HashSet<string> Uncached { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The time the owner calls that carried this target's queries took, in milliseconds; the keys they asked; the owner's own timing of each query where it was asked for.</summary>
+        public double OwnerMs { get; set; }
+
+        /// <inheritdoc cref="OwnerMs"/>
+        public int OwnerKeys { get; set; }
+
+        /// <inheritdoc cref="OwnerMs"/>
+        public List<JsonObject> OwnerTimings { get; } = [];
+
+        public List<string> Misses { get; } = [];
+
+        public List<IReadOnlyList<string>> Chunks { get; } = [];
+
+        public int CacheHits { get; private set; }
+
+        public string CacheKey(string key) => OwnerFetchCache.KeyOf(Entity, Target.Declared.Item, Target.Declared.Field, organisation, key, PlanHash);
+
+        /// <summary>
+        /// The owner query of some keys: the key match, the target's filter, the continued stages, the
+        /// projection and the page. Of an alias a continued stage adds the projection asks what the
+        /// row shows: the paths the caller's projection names under it, as paths, or the alias itself
+        /// where the row keeps it whole; the owner binds the stage and infers what its join loads. A
+        /// query with continued stages carries <c>strict</c> when the request is strict, so the owner
+        /// refuses the chain's data loss as this host would; without them strict changes
+        /// nothing the owner does.
+        /// </summary>
+        public QueryRequest Query(IReadOnlyList<string> keys)
+        {
+            var query = OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? RowsPerKey : null);
+
+            if (Continued.IsEmpty)
+                return query;
+
+            var pipeline = query.Pipeline.ToList();
+            var at = pipeline.FindLastIndex(stage => stage.Project is not null);
+            var projection = new Dictionary<string, int>(pipeline[at].Project!.Fields, StringComparer.Ordinal);
+
+            foreach (var alias in Continued.Aliases)
+            {
+                var kept = final is null ? new RootOutput(true, true, []) : RootOutput.Of(final, alias);
+
+                if (kept.Whole && kept.Carried)
+                    projection[alias] = 1;
+
+                // What this target's branch of a union join does not reach is not asked of it.
+                foreach (var path in kept is { Carried: true, Whole: false } ? kept.Projected : [])
+                    if (!DroppedContinued.Contains(alias + "." + path))
+                        projection[alias + "." + path] = 1;
+
+                // A branch that reaches none of the paths asked under the alias is asked for the alias
+                // itself, so its owner still joins and says whether the record is there; what comes
+                // back is cut to nothing here (Lifted), since none of it was asked for.
+                if (Emptied(alias))
+                    projection[alias] = 1;
+            }
+
+            pipeline[at] = pipeline[at] with { Project = pipeline[at].Project! with { Fields = projection } };
+            pipeline.InsertRange(at, Continued.Stages);
+            ContinuedAt = at;
+
+            return query with { Pipeline = pipeline, Strict = strict ? true : null };
+        }
+
+        /// <summary>
+        /// Whether an owner error names a path the caller's projection asked under this stage's alias
+        /// or its owning row: it lies at the owner query's projection, and the path is one the
+        /// projection named. Such a path is written in the projection, not in the join (a contract 2
+        /// join has no <c>select</c>), so it is judged like any other path a target may lack: dropped
+        /// where another target has it, <c>UNKNOWN_PATH</c> at the projection where none has.
+        /// </summary>
+        public bool AskedByProjection(int? ownerStage, string? ownerPath)
+        {
+            if (ownerStage is null || ownerPath is null || (shown is null && parentShown is null))
+                return false;
+
+            if (ownerStage != Query([CheckKey]).Pipeline.ToList().FindLastIndex(stage => stage.Project is not null))
+                return false;
+
+            if (Target.Declared.Item is null)
+                return shown?.Contains(ownerPath, StringComparer.Ordinal) == true;
+
+            var element = BoundKeyedBy.Element + ".";
+
+            return ownerPath.StartsWith(element, StringComparison.Ordinal)
+                ? shown?.Contains(ownerPath[element.Length..], StringComparer.Ordinal) == true
+                : parentShown?.Contains(ownerPath, StringComparer.Ordinal) == true;
+        }
+
+        /// <summary>
+        /// The owner query's stage that carries a remote resolve's own <c>filter</c>: right after the key
+        /// match of a plain query, the first stage of a grouped one (its keys travel in <c>keyedBy</c>);
+        /// null without a filter, for a local target (this host binds its filter) and for a remote
+        /// lookup (whose every own stage is the lookup's).
+        /// </summary>
+        public int? FilterAt => Target.IsRemote && Stage.RemoteLookup is null && Target.RemoteFilter is { ValueKind: JsonValueKind.Object } ? (Grouped ? 0 : 1) : null;
+
+        /// <summary>The continued stage an owner's stage index names, or null for a stage of the query itself.</summary>
+        public ContinuedStage? OriginOf(int? ownerStage) =>
+            ownerStage is { } index && index >= ContinuedAt && index - ContinuedAt < Continued.Origins.Count ? Continued.Origins[index - ContinuedAt] : null;
+
+        /// <summary>
+        /// Whether this target's branch reaches none of the paths the row shows under
+        /// <paramref name="alias"/>: every one of them was dropped for it. The alias then holds an
+        /// empty object on the rows of this target whose record exists, and null only where it does not.
+        /// </summary>
+        public bool Emptied(string alias) =>
+            final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false, Projected: { Count: > 0 } projected }
+            && projected.All(path => DroppedContinued.Contains(alias + "." + path));
+
+        /// <summary>The value a continued stage's alias has on an owner row of this target, as the origin row carries it.</summary>
+        public JsonNode? LiftedOf(JsonObject row, string alias) =>
+            Emptied(alias) ? Shown(Lifted(row, alias), []) : Lifted(row, alias);
+
+        /// <summary>What a continued stage added to an owner row, lifted to the origin row.</summary>
+        public static JsonNode? Lifted(JsonObject row, string alias) =>
+            row.TryGetPropertyValue(alias, out var value) ? value?.DeepClone() : null;
+
+        /// <summary>The existence probe of some keys: the query without the filter, one row per key is enough.</summary>
+        public QueryRequest Probe(IReadOnlyList<string> keys) => OwnerQueryBuilder.ByKeys(Stage, Sending(), keys, Grouped ? 1 : null, probe: true);
+
+        /// <summary>Whether the keyed stage has more than one target entity: a path asked under its alias that one of them lacks is dropped for it.</summary>
+        public bool Union { get; }
+
+        /// <summary>The paths under the alias the owner said this remote target lacks, dropped from its query.</summary>
+        public HashSet<string> DroppedSelect { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The paths under the owning row the owner said this remote target's entity lacks.</summary>
+        public HashSet<string> DroppedParent { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The paths under a union join's alias (<c>alias.path</c>) that this target's branch does not
+        /// reach, as its owner said: dropped from this target's query, so the alias carries them on the
+        /// rows of the other branches only.
+        /// </summary>
+        public HashSet<string> DroppedContinued { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The union join (<c>byTarget</c>) this target's owner runs a branch of that adds <paramref name="alias"/>; null for any other alias.</summary>
+        public ContinuedStage? UnionJoinOf(string alias) =>
+            Continued.Origins.FirstOrDefault(origin => origin.Branches is not null && origin.Aliases.Contains(alias, StringComparer.Ordinal));
+
+        /// <summary>
+        /// The cache key of what this target's branch of the union join adding <paramref name="alias"/>
+        /// does not reach: per target, the branch as sent, and the stages continued at the owner before
+        /// it. A branch may root at an alias one of those stages adds, and what it reaches then depends
+        /// on how that alias was joined, so two requests share what was learned only when they define
+        /// everything upstream of the branch alike.
+        /// </summary>
+        public string? BranchDropsKey(string alias)
+        {
+            if (UnionJoinOf(alias) is not { } union)
+                return null;
+
+            var at = Continued.Origins.ToList().IndexOf(union);
+            var upstream = JsonSerializer.SerializeToUtf8Bytes(Continued.Stages.Take(Math.Max(0, at)).ToList(), OxQLJson.Wire);
+            var branch = JsonSerializer.SerializeToUtf8Bytes(Continuation.BranchOf(union, Entity), OxQLJson.Wire);
+
+            return DropsKey + "|" + alias + "|" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData([.. upstream, 0x0A, .. branch]))[..16];
+        }
+
+        /// <summary>Takes what an earlier request learned this target's branch does not reach, as far as this plan asks it.</summary>
+        public void LearnedContinued(string alias, IEnumerable<string> paths)
+        {
+            // What this plan asks under the alias: the paths the projection names there.
+            var asked = final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected.ToList() : [];
+
+            DroppedContinued.UnionWith(paths.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal) && asked.Contains(path[(alias.Length + 1)..], StringComparer.Ordinal)));
+            planHash = null;
+        }
+
+        /// <summary>
+        /// The target as its owner query carries it: the paths the binder inferred for it,
+        /// less what the owner said this target lacks. A local target's are bound, and
+        /// already without what it lacks.
+        /// </summary>
+        private BoundResolveTarget Sending() => Target.IsRemote
+            ? Target with
+            {
+                RemoteSelect = Target.RemoteSelect?.Where(path => !DroppedSelect.Contains(path)).ToList(),
+                RemoteParentSelect = Target.RemoteParentSelect?.Where(path => !DroppedParent.Contains(path)).ToList(),
+            }
+            : Target;
+
+        /// <summary>
+        /// The owner refused this target's query only because paths it was asked do not exist there, and
+        /// a run drops them for the target and asks again: for a remote target of a union, paths asked
+        /// under the alias or its owning row that are not paths of this target; for any target that runs
+        /// a branch of a union join (<c>byTarget</c>), paths asked under that join's alias that the branch
+        /// does not reach, said by the owner at its projection or, where the branch is a join the owner
+        /// sends on, inside its refusal of that join. Anything else in the refusal is the refusal. True
+        /// when the query as sent projected every refused path, so the query asked again does not: newly
+        /// learned, or learned from another chunk of the same round that was sent before the drop.
+        /// </summary>
+        public bool DropUnknown(JsonNode? result, QueryRequest sent)
+        {
+            if (result?["errors"] is not JsonArray { Count: > 0 } errors)
+                return false;
+
+            var projectAt = sent.Pipeline.ToList().FindLastIndex(stage => stage.Project is not null);
+
+            if (projectAt < 0)
+                return false;
+
+            var sentFields = sent.Pipeline[projectAt].Project!.Fields;
+            var element = BoundKeyedBy.Element + ".";
+            var select = new List<string>();
+            var parent = new List<string>();
+            var continued = new List<string>();
+
+            // The union join whose branch the owner refused to run: the paths its own owner lacked follow it.
+            (string Alias, int Stage)? refused = null;
+
+            foreach (var error in errors)
+            {
+                var code = error?["code"]?.ToString();
+                int? stage = error?["stage"] is JsonValue at && at.TryGetValue<int>(out var number) ? number : null;
+
+                if (code == Codes.ResolveRefused)
+                {
+                    // A branch of a union join that is a join of its own at the owner: the owner's owner
+                    // refused it; whether only for paths the branch lacks, the errors after it say.
+                    if (stage is { } index && OriginOf(index) is { Branches: not null } union)
+                    {
+                        refused = (union.Aliases[0], index);
+                        continue;
+                    }
+
+                    if (refused is not null && stage is null)
+                        continue;
+
+                    return false;
+                }
+
+                if (code != Codes.UnknownPath || error!["path"]?.ToString() is not { Length: > 0 } path)
+                    return false;
+
+                // A path asked under a union join's alias that this target's branch does not reach.
+                if (stage == projectAt && UnionJoinOf(path.Split('.')[0]) is not null)
+                {
+                    continued.Add(path);
+                    continue;
+                }
+
+                if (refused is { } branch && (stage is null || stage == branch.Stage))
+                {
+                    continued.Add(branch.Alias + "." + path);
+                    continue;
+                }
+
+                // A path of a union join's select hint that this target's branch does not reach, said at the branch's own stage.
+                // (An owner that sends the join on names the path under the alias, as its own explain does.)
+                if (stage is { } hinted && OriginOf(hinted) is { Branches: not null } hinting)
+                {
+                    continued.Add(path.StartsWith(hinting.Aliases[0] + ".", StringComparison.Ordinal) ? path : hinting.Aliases[0] + "." + path);
+                    continue;
+                }
+
+                if (stage != projectAt || !Target.IsRemote || !Union)
+                    return false;
+
+                if (Target.Declared.Item is null)
+                    select.Add(path);
+                else if (path.StartsWith(element, StringComparison.Ordinal))
+                    select.Add(path[element.Length..]);
+                else
+                    parent.Add(path);
+            }
+
+            if (select.Count + parent.Count + continued.Count == 0)
+                return false;
+
+            var sentSelect = Target.RemoteSelect ?? [];
+            var sentParent = Target.RemoteParentSelect ?? [];
+
+            if (!select.All(path => sentSelect.Contains(path, StringComparer.Ordinal)) || !parent.All(path => sentParent.Contains(path, StringComparer.Ordinal)))
+                return false;
+
+            // The query asked again leaves every refused path out, so asking again cannot loop.
+            if (!select.All(path => sentFields.ContainsKey(Target.Declared.Item is null ? path : element + path)) || !parent.All(sentFields.ContainsKey))
+                return false;
+
+            // A path under a union join's alias was asked by the projection.
+            if (!continued.All(sentFields.ContainsKey))
+                return false;
+
+            DroppedSelect.UnionWith(select);
+            DroppedParent.UnionWith(parent);
+            DroppedContinued.UnionWith(continued);
+            planHash = null;
+
+            // What the owner says now is its own word again, whatever was read before.
+            readBack.ExceptWith(select.Select(path => "s:" + path));
+            readBack.ExceptWith(parent.Select(path => "p:" + path));
+            readBack.ExceptWith(continued.Select(path => "c:" + path));
+
+            return true;
+        }
+
+        /// <summary>
+        /// Whether one owner error is a path this remote union target lacks at the projection of the
+        /// query <paramref name="sent"/>, or one a branch of a union join does not reach there: what
+        /// <see cref="DropUnknown"/> drops for the target.
+        /// </summary>
+        public bool Droppable(JsonObject error, QueryRequest sent)
+        {
+            ArgumentNullException.ThrowIfNull(error);
+            ArgumentNullException.ThrowIfNull(sent);
+
+            if (error["code"]?.ToString() != Codes.UnknownPath
+                || error["stage"] is not JsonValue at || !at.TryGetValue<int>(out var stage)
+                || error["path"]?.ToString() is not { Length: > 0 } path)
+                return false;
+
+            if (!(Target.IsRemote && Union) && UnionJoinOf(path.Split('.')[0]) is null)
+                return false;
+
+            var projectAt = sent.Pipeline.ToList().FindLastIndex(each => each.Project is not null);
+
+            return projectAt >= 0 && stage == projectAt && sent.Pipeline[projectAt].Project!.Fields.ContainsKey(path);
+        }
+
+        /// <summary>
+        /// The cache key of the paths an owner said this target lacks, per organisation, service and
+        /// target: a lacked path is a fact about the target, so every plan that asks the target learns it.
+        /// </summary>
+        public string DropsKey => OwnerFetchCache.DropsKeyOf(organisation, Service, TargetName);
+
+        /// <summary>
+        /// Takes the paths an owner said this target lacks, learned by an earlier request: those this
+        /// plan asks are not sent again, and are reported as dropped as if this request had learned them.
+        /// </summary>
+        public void Learned(IEnumerable<string> select, IEnumerable<string> parent)
+        {
+            DroppedSelect.UnionWith(select.Where(path => Target.RemoteSelect?.Contains(path, StringComparer.Ordinal) == true));
+            DroppedParent.UnionWith(parent.Where(path => Target.RemoteParentSelect?.Contains(path, StringComparer.Ordinal) == true));
+            planHash = null;
+        }
+
+        /// <summary>
+        /// Takes what earlier requests learned this target lacks from <paramref name="cache"/>: for a
+        /// remote target of a union the paths under the alias and the owning row, for any target that
+        /// runs a branch of a union join the paths that branch does not reach.
+        /// </summary>
+        /// <remarks>
+        /// What is read here is remembered as read: <see cref="Keep"/> does not write it back, so a path
+        /// lives as long as the owner's word for it and is asked again after that, however many requests
+        /// read it in between.
+        /// </remarks>
+        public void Learn(OwnerFetchCache cache)
+        {
+            if (Target.IsRemote && Union && cache.TryGetDrops(DropsKey, out var select, out var parent))
+            {
+                Learned(select, parent);
+                readBack.UnionWith(select.Select(path => "s:" + path));
+                readBack.UnionWith(parent.Select(path => "p:" + path));
+            }
+
+            foreach (var joined in Continued.Origins.Where(origin => origin.Branches is not null).Select(origin => origin.Aliases[0]))
+                if (cache.TryGetDrops(BranchDropsKey(joined)!, out var unreached, out _))
+                {
+                    LearnedContinued(joined, unreached);
+                    readBack.UnionWith(unreached.Select(path => "c:" + path));
+                }
+        }
+
+        /// <summary>
+        /// The paths dropped for this target so far (under the alias, under the owning row, and as
+        /// <c>alias.path</c> under a union join's alias), in the order the owner query would have asked
+        /// them: the order an owner refuses them in, so what is said of them does not depend on whether
+        /// an owner said it now or an earlier request learned it.
+        /// </summary>
+        public List<(string Path, bool Parent)> Dropped()
+        {
+            var dropped = new List<(string, bool)>();
+
+            dropped.AddRange((Target.RemoteSelect ?? []).Where(DroppedSelect.Contains).Select(path => (path, false)));
+            dropped.AddRange((Target.RemoteParentSelect ?? []).Where(DroppedParent.Contains).Select(path => (path, true)));
+
+            foreach (var alias in Continued.Aliases)
+            {
+                var asked = final is not null && RootOutput.Of(final, alias) is { Carried: true, Whole: false } kept ? kept.Projected.ToList() : [];
+
+                dropped.AddRange(DroppedContinued.Where(path => path.StartsWith(alias + ".", StringComparison.Ordinal))
+                    .OrderBy(path => asked.IndexOf(path[(alias.Length + 1)..]) is >= 0 and var at ? at : int.MaxValue).ThenBy(path => path, StringComparer.Ordinal)
+                    .Select(path => (path, false)));
+            }
+
+            return dropped;
+        }
+
+        /// <summary>The place the owner query asks a path at: under the alias, then under the owning row, then under an alias a continued stage adds.</summary>
+        public int Rank(string path, bool parent)
+        {
+            var asked = parent ? Target.RemoteParentSelect : Target.RemoteSelect;
+            var at = asked is null ? -1 : asked.ToList().IndexOf(path);
+
+            return at < 0 ? 2_000_000 : (parent ? 1_000_000 : 0) + at;
+        }
+
+        /// <summary>
+        /// Keeps what the owners said to this request this target lacks in <paramref name="cache"/>, for
+        /// the requests after this one. What this plan only read from the cache (<see cref="Learn"/>) is
+        /// not written back: it keeps the time it has left.
+        /// </summary>
+        public void Keep(OwnerFetchCache cache)
+        {
+            var select = DroppedSelect.Where(path => !readBack.Contains("s:" + path)).ToList();
+            var parent = DroppedParent.Where(path => !readBack.Contains("p:" + path)).ToList();
+
+            if (select.Count > 0 || parent.Count > 0)
+                cache.SetDrops(DropsKey, select, parent);
+
+            // What a branch of a union join does not reach is a fact of that branch: kept by its stage.
+            foreach (var group in DroppedContinued.Where(path => !readBack.Contains("c:" + path)).GroupBy(path => path.Split('.')[0], StringComparer.Ordinal))
+                if (BranchDropsKey(group.Key) is { } key)
+                    cache.SetDrops(key, group.ToList(), []);
+        }
+
+        /// <summary>The keys the filtered query was sent and answered without a row, in chunks of <paramref name="size"/>.</summary>
+        public IEnumerable<IReadOnlyList<string>> ProbeChunks(int size)
+        {
+            var open = Chunks.SelectMany(chunk => chunk).Where(key => !Hits.ContainsKey(key) && !Unanswered.Contains(key)).ToList();
+
+            for (var start = 0; start < open.Count; start += size)
+                yield return open.Skip(start).Take(size).ToList();
+        }
+
+        /// <summary>Asks for a key once: from the cache when it holds the answer, otherwise from the owner.</summary>
+        public void Want(string key, OwnerFetchCache cache)
+        {
+            if (!seen.Add(key))
+                return;
+
+            if (!cache.TryGet(CacheKey(key), strict, out var cached) || cached is null)
+            {
+                Misses.Add(key);
+                return;
+            }
+
+            CacheHits++;
+
+            if (cached.Rows.Count > 0)
+                Hits[key] = cached.Rows.ToList();
+
+            // The report the owner's answer carried about these rows, over the rows as they are held now.
+            foreach (var report in cached.Reported)
+                Replayed.Add((report, cached.Rows.Cast<JsonNode?>().ToList()));
+
+            if (cached.Excluded)
+                Excluded.Add(key);
+        }
+
+        /// <summary>
+        /// What the cache keeps for a key: its rows, up to <see cref="PerKey"/> as they arrived, so a
+        /// repeat answers the ambiguity the first answer saw; or whether it was excluded.
+        /// </summary>
+        public OwnerAnswer Cached(string key)
+        {
+            Hits.TryGetValue(key, out var rows);
+
+            var kept = (rows ?? []).Take(RowsPerKey).ToList();
+
+            return new OwnerAnswer(kept, rows is not { Count: > 0 } && Excluded.Contains(key)) { Reported = ReportedOf(kept) };
+        }
+
+        /// <summary>The reports the cache replays: each an owner's diagnostic cut to the rows of one cached answer, with those rows.</summary>
+        public List<(JsonObject Reported, IList<JsonNode?> Rows)> Replayed { get; } = [];
+
+        /// <summary>What an owner reported about a row of its answer: the diagnostic and the row's entry in it.</summary>
+        private readonly Dictionary<JsonObject, List<(JsonObject Diagnostic, JsonObject Entry)>> reports = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>The outcomes a report states of the data; an owner that did not answer is not one, and is asked again.</summary>
+        private static readonly HashSet<string> Stated = new(StringComparer.Ordinal)
+        {
+            OutcomePolicy.WireName(KeyedOutcome.NotFound), OutcomePolicy.WireName(KeyedOutcome.Excluded), OutcomePolicy.WireName(KeyedOutcome.Ambiguous),
+            OutcomePolicy.WireName(KeyedOutcome.InvalidKey), OutcomePolicy.WireName(KeyedOutcome.ReferenceNull),
+        };
+
+        /// <summary>
+        /// Takes in what an owner reported with <paramref name="items"/>, so the rows can be kept with
+        /// it: true when every diagnostic lists its rows in full, each by its place in the answer and
+        /// with an outcome the data states. False leaves nothing recorded: the answer is not kept.
+        /// </summary>
+        public bool Report(JsonArray reported, JsonArray items)
+        {
+            var taken = new List<(JsonObject Row, JsonObject Diagnostic, JsonObject Entry)>();
+
+            foreach (var node in reported)
+            {
+                if (node is not JsonObject diagnostic || diagnostic["params"] is not JsonObject written || written["rows"] is not JsonArray entries
+                    || (written["truncated"] is JsonValue cut && cut.TryGetValue<bool>(out var truncated) && truncated)
+                    || (written["count"] is JsonValue counted && counted.TryGetValue<long>(out var count) && count != entries.Count))
+                    return false;
+
+                foreach (var listed in entries)
+                {
+                    if (listed is not JsonObject entry || entry["row"] is not JsonValue at || !at.TryGetValue<int>(out var index) || index < 0 || index >= items.Count
+                        || items[index] is not JsonObject row || entry["outcome"]?.ToString() is not { } outcome || !Stated.Contains(outcome))
+                        return false;
+
+                    taken.Add((row, diagnostic, entry));
+                }
+            }
+
+            foreach (var (row, diagnostic, entry) in taken)
+            {
+                if (!reports.TryGetValue(row, out var about))
+                    reports[row] = about = [];
+
+                about.Add((diagnostic, entry));
+            }
+
+            return true;
+        }
+
+        /// <summary>The reports about <paramref name="rows"/>, one per diagnostic, its entries naming each row by its place among them.</summary>
+        private List<JsonObject> ReportedOf(List<JsonObject> rows)
+        {
+            var cut = new List<(JsonObject Diagnostic, JsonArray Entries)>();
+
+            for (var index = 0; index < rows.Count; index++)
+            {
+                if (!reports.TryGetValue(rows[index], out var about))
+                    continue;
+
+                foreach (var (diagnostic, entry) in about)
+                {
+                    var at = cut.FindIndex(each => ReferenceEquals(each.Diagnostic, diagnostic));
+
+                    if (at < 0)
+                    {
+                        cut.Add((diagnostic, []));
+                        at = cut.Count - 1;
+                    }
+
+                    var moved = (JsonObject)entry.DeepClone();
+
+                    moved["row"] = index;
+                    cut[at].Entries.Add(moved);
+                }
+            }
+
+            return cut.Select(each =>
+            {
+                var report = (JsonObject)each.Diagnostic.DeepClone();
+                var written = (JsonObject)report["params"]!;
+
+                written["count"] = each.Entries.Count;
+                written["truncated"] = false;
+                written["rows"] = each.Entries;
+
+                return report;
+            }).ToList();
+        }
+
+        public void Hit(string key, JsonObject row)
+        {
+            if (!Hits.TryGetValue(key, out var rows))
+                Hits[key] = rows = [];
+
+            if (rows.Count < RowsPerKey)
+                rows.Add(row);
+        }
+
+        /// <summary>The key of an answer row, or null when the row does not carry the member it was keyed by.</summary>
+        public string? KeyOf(JsonObject row)
+        {
+            JsonNode? at = row;
+
+            foreach (var segment in KeyWire.Split('.'))
+            {
+                if (at is not JsonObject inner || !inner.TryGetPropertyValue(segment, out var next))
+                    return null;
+
+                at = next;
+            }
+
+            // The digits of a number and the text of a string: an owner of an earlier build wrote a long or a decimal as text.
+            var text = WireEncoder.KeyText(at) ?? "";
+
+            return GuidKeys && Guid.TryParse(text, out var guid) ? guid.ToString("D") : text;
+        }
+
+        /// <summary>
+        /// An answer row as the alias holds it: the element of an item target, the row of an entity
+        /// target without what continued stages added. Where the projection names paths under the
+        /// alias, the row shows those and nothing else: the key the owner query carries beside them is
+        /// this host's to match by, not the caller's to see.
+        /// </summary>
+        public JsonNode? AliasOf(JsonObject row)
+        {
+            if (Target.Declared.Item is not null)
+                return Shown(row[BoundKeyedBy.Element]?.DeepClone(), shown);
+
+            var keyed = Stage.RemoteLookup is { Rows: true };
+
+            if (lifted.Count == 0 && !keyed)
+                return Shown(row.DeepClone(), shown);
+
+            var alias = new JsonObject();
+
+            // A whole row answered per key carries that key for this host alone.
+            foreach (var (name, value) in row)
+                if (!lifted.Contains(name) && !(keyed && name == BoundKeyedBy.Key))
+                    alias[name] = value?.DeepClone();
+
+            return Shown(alias, shown);
+        }
+
+        /// <summary>
+        /// The owning row of an item target's answer: its entity and the parent members the owner
+        /// projected; where the projection names paths under <c>parentAs</c>, those members only. The
+        /// entity is this host's to write and is always there: it says which target a union's row is.
+        /// </summary>
+        public JsonObject ParentOf(JsonObject row)
+        {
+            var parent = new JsonObject();
+
+            foreach (var (name, value) in row)
+                if (name != BoundKeyedBy.Element && name != "entity" && !lifted.Contains(name))
+                    parent[name] = value?.DeepClone();
+
+            var cut = (JsonObject)Shown(parent, parentShown)!;
+            var owning = new JsonObject { ["entity"] = Entity };
+
+            foreach (var (name, value) in cut.ToList())
+            {
+                cut.Remove(name);
+                owning[name] = value;
+            }
+
+            return owning;
+        }
+
+        /// <summary>
+        /// A value cut to the paths <paramref name="paths"/> names below it (null: as it is): a member is
+        /// kept when a path names it or lies below it, and a member a path lies below is cut in turn;
+        /// the elements of an array are cut alike.
+        /// </summary>
+        private static JsonNode? Shown(JsonNode? value, IReadOnlyList<string>? paths)
+        {
+            if (paths is null)
+                return value;
+
+            switch (value)
+            {
+                case JsonArray elements:
+                    for (var index = 0; index < elements.Count; index++)
+                    {
+                        var element = elements[index];
+
+                        elements[index] = null;
+                        elements[index] = Shown(element, paths);
+                    }
+
+                    return elements;
+
+                // The members keep the order their owner answered them in.
+                case JsonObject members:
+                    var kept = new JsonObject();
+
+                    foreach (var (name, member) in members.ToList())
+                    {
+                        members.Remove(name);
+
+                        if (paths.Contains(name, StringComparer.Ordinal))
+                        {
+                            kept[name] = member;
+                            continue;
+                        }
+
+                        var below = paths.Where(path => path.StartsWith(name + ".", StringComparison.Ordinal)).Select(path => path[(name.Length + 1)..]).ToList();
+
+                        if (below.Count > 0)
+                            kept[name] = Shown(member, below);
+                    }
+
+                    return kept;
+
+                default:
+                    return value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The keys one request may ask owners for: <c>MaxResolveKeys</c> over
+    /// every keyed stage, in stage order, a key counted once per stage however many targets of a
+    /// union it is asked of; keys the cache answers cost nothing.
+    /// </summary>
+    private sealed class KeyBudget(int max)
+    {
+        public int Max { get; } = Math.Max(0, max);
+
+        public int Left { get; private set; } = Math.Max(0, max);
+
+        /// <summary>Takes up to <paramref name="wanted"/> keys from what is left; returns how many were granted.</summary>
+        public int Take(int wanted)
+        {
+            var granted = Math.Min(wanted, Left);
+
+            Left -= granted;
+
+            return granted;
+        }
+    }
+
+    /// <summary>
+    /// The keys one owner query of a target carries: the key chunk, and no more than the owner's page
+    /// holds, at <see cref="PerKey"/> rows per key for a grouped query. The page is the smaller of this
+    /// host's <c>MaxPageSize</c> and the owner's own, when its shallow health said it: an owner
+    /// configured smaller would refuse the page as too large.
+    /// </summary>
+    private int ChunkOf(TargetPlan target) =>
+        KeysPerQuery(options, client, target.Service, target.Grouped ? target.RowsPerKey : 1);
+
+    /// <summary>
+    /// The keys one owner query of <paramref name="service"/> carries at <paramref name="rowsPerKey"/> rows per
+    /// key: the key chunk, and no more than the owner's page holds (<see cref="ChunkOf"/>); what explain
+    /// names in a remote lookup's <c>REMOTE_LOOKUP</c> note.
+    /// </summary>
+    public static int KeysPerQuery(OxQLOptions options, IRemoteQueryClient? client, string service, int rowsPerKey)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var chunk = Math.Max(1, options.Limits.ResolveKeyChunk);
+        var page = PageOf(options, client, service);
+
+        return rowsPerKey > 1 ? Math.Max(1, Math.Min(chunk, page / rowsPerKey)) : Math.Min(chunk, page);
+    }
+
+    /// <summary>The largest page an owner answers: this host's <c>MaxPageSize</c>, or the owner's own when it is known and smaller.</summary>
+    private static int PageOf(OxQLOptions options, IRemoteQueryClient? client, string service)
+    {
+        var page = Math.Max(1, options.Limits.MaxPageSize);
+
+        return service != SelfService && client is IRemoteOwnerInfo known && known.OwnerOf(service)?.MaxPageSize is { } owner and > 0 && owner < page ? owner : page;
+    }
+
+    /// <summary>
+    /// Plans one keyed stage: per row the slots its reference yields with their case, key or
+    /// provisional outcome; per target the keys to ask for, less what the cache holds and beyond
+    /// what the request's key budget leaves (<c>RESOLVE_PARTIAL</c>), in chunks the owner answers in
+    /// one page each.
+    /// </summary>
+    private StagePlan Plan(BoundPipeline bound, BoundStage.Resolve stage, IReadOnlyList<ContinuedStage> continued, IReadOnlyList<BsonDocument> rows, Guid organisation, bool strict, KeyBudget budget, List<Diagnostic> diagnostics)
+    {
+        var plan = new StagePlan(stage, StageIndexOf(bound, stage), continued);
+        var cases = CasesOf(stage);
+        var union = cases.SelectMany(selected => selected.Targets).Select(target => target.Declared.Entity).Distinct(StringComparer.Ordinal).Count() > 1;
+
+        foreach (var selected in cases)
+            foreach (var target in selected.Targets)
+            {
+                var shared = plan.Targets.FirstOrDefault(other => other.Entity == target.Declared.Entity && other.Target.Declared.Field == target.Declared.Field && other.Target.Declared.Item == target.Declared.Item);
+
+                if (shared is null)
+                {
+                    plan.Targets.Add(shared = new TargetPlan(stage, target, continued, organisation, strict, union, bound.FinalShape));
+
+                    // What an owner said this union target lacks, an earlier request learned: not
+                    // asked again, and reported whether or not this page reaches the owner.
+                    shared.Learn(cache);
+                }
+
+                plan.ByTarget[target] = shared;
+            }
+
+        foreach (var row in rows)
+        {
+            var slots = SlotsOf(stage, cases, row);
+
+            plan.Rows.Add(slots);
+
+            foreach (var slot in slots)
+            {
+                if (slot is not { Case: { } selected, Key: { } key, Outcome: null })
+                    continue;
+
+                foreach (var target in selected.Targets)
+                {
+                    var targetPlan = plan.ByTarget[target];
+
+                    targetPlan.GuidKeys |= selected.KeyAs == KeyAs.Guid || stage.Reference.LeafKind == Kind.Guid;
+                    targetPlan.Want(key, cache);
+                }
+            }
+        }
+
+        // A key counts once per stage, however many targets of a union it is asked of.
+        var granted = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var target in plan.Targets)
+        {
+            var misses = target.Misses;
+            var fresh = misses.Where(key => !granted.Contains(key)).ToList();
+            var allowed = budget.Take(fresh.Count);
+
+            granted.UnionWith(fresh.Take(allowed));
+
+            if (allowed < fresh.Count)
+            {
+                var asked = misses.Where(granted.Contains).ToList();
+
+                diagnostics.Add(new Diagnostic
+                {
+                    Code = Codes.ResolvePartial,
+                    Message = $"'{stage.As}' needs {misses.Count} keys of '{target.Entity}'; the request asks owners for at most {budget.Max} keys, so only {asked.Count} are resolved on this page.",
+                    Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = budget.Max },
+                });
+
+                target.Unanswered.UnionWith(misses.Where(key => !granted.Contains(key)));
+                misses = asked;
+            }
+
+            var chunk = ChunkOf(target);
+
+            for (var start = 0; start < misses.Count; start += chunk)
+                target.Chunks.Add(misses.Skip(start).Take(chunk).ToList());
+        }
+
+        return plan;
+    }
+
+    /// <summary>The bound cases of a stage; a resolve bound without them (the plain form) has its one simple case.</summary>
+    private static IReadOnlyList<BoundResolveCase> CasesOf(BoundStage.Resolve stage)
+    {
+        if (stage.Cases is { Count: > 0 } cases)
+            return cases;
+
+        var declared = new ReferenceTarget(stage.TargetEntity, stage.TargetField, null, stage.IsRemote, stage.TargetField == "id");
+        var target = new BoundResolveTarget(declared, stage.Target, stage.TargetFieldStorage, null, stage.Select, stage.RemoteSelect, stage.Filter, stage.RemoteFilter, stage.TargetScope, null, null, []);
+
+        return [new BoundResolveCase(new ReferenceDef { Targets = [declared], DeclaredBy = ReferenceSource.Declaration }, null, [target])];
+    }
+
+    /// <summary>
+    /// The slots of one row: the reference's value, or under
+    /// <c>elements</c> each element's, with the first case its stored values select and its key
+    /// converted per the case's <c>KeyAs</c>. A value that is null is <c>reference_null</c>, one no
+    /// case selects <c>excluded</c>, one that does not convert <c>invalid_key</c>.
+    /// </summary>
+    private static List<Slot> SlotsOf(BoundStage.Resolve stage, IReadOnlyList<BoundResolveCase> cases, BsonDocument row)
+    {
+        var slots = new List<Slot>();
+
+        if (stage.CollectionStorage is not { } collection)
+        {
+            slots.Add(SlotOf(stage, cases, row, row, stage.Reference.Storage!));
+            return slots;
+        }
+
+        // Under elements the reference and the case conditions are read per element.
+        var relative = stage.Reference.Storage == collection ? "" : stage.Reference.Storage![(collection.Length + 1)..];
+
+        if (ValueAt(row, collection) is BsonArray elements)
+            foreach (var element in elements)
+                slots.Add(element is BsonDocument document
+                    ? SlotOf(stage, cases, document, document, relative)
+                    : relative.Length == 0 ? SlotOf(stage, cases, null, element, "") : new Slot(null, null, KeyedOutcome.ReferenceNull));
+
+        return slots;
+    }
+
+    private static Slot SlotOf(BoundStage.Resolve stage, IReadOnlyList<BoundResolveCase> cases, BsonDocument? holder, BsonValue scope, string storage)
+    {
+        var value = storage.Length == 0 ? scope : scope is BsonDocument document ? ValueAt(document, storage) : null;
+
+        if (value is null || value.IsBsonNull || value.IsBsonUndefined)
+            return new Slot(null, null, KeyedOutcome.ReferenceNull);
+
+        var selected = cases.FirstOrDefault(bound => bound.When is null || (holder is not null && Selects(bound.When, holder)));
+
+        if (selected is null || selected.Targets.Count == 0)
+            return new Slot(null, null, KeyedOutcome.Excluded);
+
+        if (selected.KeyAs == KeyAs.Guid)
+            return value is BsonString text && Guid.TryParse(text.Value, out var guid)
+                ? new Slot(selected, guid.ToString("D"), null)
+                : new Slot(selected, value.ToString(), KeyedOutcome.InvalidKey);
+
+        var key = WireEncoder.KeyText(value, stage.Reference.LeafKind, stage.Reference.Leaf);
+
+        if (key is null)
+            return new Slot(null, null, KeyedOutcome.ReferenceNull);
+
+        // A guid is keyed in one form, whatever form it is stored in, so the owner's answer finds it.
+        return new Slot(selected, stage.Reference.LeafKind == Kind.Guid && Guid.TryParse(key, out var stored) ? stored.ToString("D") : key, null);
+    }
+
+    /// <summary>
+    /// Whether a case's condition holds for a row or element: the stored value is one of the
+    /// declared values; a hierarchical discriminator matches by any of its entries, and an absent
+    /// one when the values admit a value stored without one.
+    /// </summary>
+    private static bool Selects(BoundCaseCondition when, BsonDocument holder)
+    {
+        var stored = ValueAt(holder, when.Storage);
+
+        if (stored is null || stored.IsBsonNull || stored.IsBsonUndefined)
+            return when.Values.Any(value => value.IsBsonNull);
+
+        return stored is BsonArray entries
+            ? entries.Any(entry => when.Values.Contains(entry))
+            : when.Values.Contains(stored);
+    }
+
+    /// <summary>
+    /// Assigns one stage's answers to the rows: per slot the hits of
+    /// its case's targets in target order, the first taken; <c>elements: first</c> takes the first
+    /// slot that resolves, <c>all</c> every one up to <c>MaxLookupLimit</c>. The owning row of an
+    /// item target goes under <c>parentAs</c>.
+    /// </summary>
+    private void Assign(StagePlan plan, List<Dictionary<string, JsonNode?>> perRow, List<KeyedRowOutcome> outcomes, List<KeyedTruncation> truncations, Dictionary<JsonObject, List<int>> liftedRows)
+    {
+        var stage = plan.Stage;
+
+        if (stage.RemoteLookup is { } lookup)
+        {
+            AssignLookup(plan, lookup, perRow, truncations, liftedRows);
+            return;
+        }
+
+        for (var rowIndex = 0; rowIndex < plan.Rows.Count; rowIndex++)
+        {
+            var slots = plan.Rows[rowIndex].Select(slot => Answer(plan, slot)).ToList();
+            var values = perRow[rowIndex];
+
+            if (stage.Elements == ResolveElements.All)
+            {
+                var resolved = slots.Where(slot => slot.Hit is not null).ToList();
+                var limit = options.Limits.MaxLookupLimit;
+
+                if (resolved.Count > limit)
+                {
+                    truncations.Add(new KeyedTruncation(plan.Index, stage.As, rowIndex, resolved.Count));
+                    resolved = resolved.Take(limit).ToList();
+                }
+
+                values[stage.As] = new JsonArray(resolved.Select(slot => slot.Hit!.Value.Target.AliasOf(slot.Hit.Value.Row)).ToArray());
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = new JsonArray(resolved.Select(slot => (JsonNode?)slot.Hit!.Value.Target.ParentOf(slot.Hit.Value.Row)).ToArray());
+
+                for (var element = 0; element < slots.Count; element++)
+                    if (slots[element].Outcome != KeyedOutcome.Resolved)
+                        outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, element, slots[element].Key, slots[element].Outcome));
+
+                // An absent or empty collection has no element to name: the row itself is reference_null.
+                if (slots.Count == 0)
+                    outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, null, null, KeyedOutcome.ReferenceNull));
+
+                // The row's one outcome under its name: that of the elements taken, else the fold of the others.
+                if (stage.OutcomeAs is { } folded)
+                    values[folded] = OutcomePolicy.WireName(
+                        resolved.Count == 0 ? First(slots).Slot.Outcome
+                        : resolved.Any(slot => slot.Outcome == KeyedOutcome.Ambiguous) ? KeyedOutcome.Ambiguous
+                        : KeyedOutcome.Resolved);
+
+                continue;
+            }
+
+            var (chosen, at) = stage.Elements == ResolveElements.First ? First(slots) : (slots.FirstOrDefault() ?? Unresolved.Null, (int?)0);
+
+            values[stage.As] = chosen.Hit is { } hit ? hit.Target.AliasOf(hit.Row) : null;
+
+            if (stage.ParentAs is not null)
+                values[stage.ParentAs] = chosen.Hit is { } parentHit ? parentHit.Target.ParentOf(parentHit.Row) : null;
+
+            if (chosen.Outcome != KeyedOutcome.Resolved)
+                outcomes.Add(new KeyedRowOutcome(plan.Index, stage.As, rowIndex, stage.Elements is null ? null : at, chosen.Key, chosen.Outcome));
+
+            // The outcome under its name, on every row: resolved as well.
+            if (stage.OutcomeAs is { } outcomeAs)
+                values[outcomeAs] = OutcomePolicy.WireName(chosen.Outcome);
+
+            Lift(plan, chosen, rowIndex, values, outcomes, liftedRows);
+        }
+    }
+
+    /// <summary>
+    /// Assigns a remote lookup's answers to the rows: per row the children its key
+    /// has at the owner, in the owner's order (the lookup's sort, then the child key). Under
+    /// <c>first</c> the alias is the first child or null; otherwise the array of the first
+    /// <c>limit</c> children, and a key that brought one more is a truncated parent
+    /// (<c>LOOKUP_TRUNCATED</c>). An element child's owning rows go under <c>parentAs</c>, one per child
+    /// in the same order. A row whose key the owner did not answer holds null, not an empty array:
+    /// the owner's failure (<c>RESOLVE_TIMEOUT</c>, <c>RESOLVE_UNREACHABLE</c>, <c>RESOLVE_PARTIAL</c>)
+    /// is already reported and refuses under <c>strict</c>. Children found or not, a lookup has no
+    /// missing reference: no outcome is recorded.
+    /// </summary>
+    private static void AssignLookup(StagePlan plan, BoundRemoteLookup lookup, List<Dictionary<string, JsonNode?>> perRow, List<KeyedTruncation> truncations, Dictionary<JsonObject, List<int>> liftedRows)
+    {
+        var stage = plan.Stage;
+        var target = plan.Targets[0];
+
+        for (var rowIndex = 0; rowIndex < plan.Rows.Count; rowIndex++)
+        {
+            var values = perRow[rowIndex];
+            var key = plan.Rows[rowIndex].FirstOrDefault()?.Key;
+            var answered = key is not null && !target.Unanswered.Contains(key);
+            var children = key is not null && target.Hits.TryGetValue(key, out var rows) ? rows : [];
+
+            if (lookup.First)
+            {
+                var child = answered && children.Count > 0 ? children[0] : null;
+
+                values[stage.As] = child is null ? null : target.AliasOf(child);
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = child is null ? null : target.ParentOf(child);
+
+                Lift(plan, child is null ? Unresolved.Null : new Unresolved(key, KeyedOutcome.Resolved, (target, child)), rowIndex, values, [], liftedRows);
+                continue;
+            }
+
+            if (!answered && key is not null)
+            {
+                values[stage.As] = null;
+
+                if (stage.ParentAs is not null)
+                    values[stage.ParentAs] = null;
+
+                continue;
+            }
+
+            if (children.Count > lookup.Limit)
+                truncations.Add(new KeyedTruncation(plan.Index, stage.As, rowIndex, children.Count));
+
+            var kept = children.Take(lookup.Limit).ToList();
+
+            values[stage.As] = new JsonArray(kept.Select(child => target.AliasOf(child)).ToArray());
+
+            if (stage.ParentAs is not null)
+                values[stage.ParentAs] = new JsonArray(kept.Select(child => (JsonNode?)target.ParentOf(child)).ToArray());
+        }
+    }
+
+    /// <summary>
+    /// The aliases the continued stages added, lifted from the owner row to the origin row.
+    /// A continued stage the target's owner did not run — its <c>forTarget</c> names
+    /// another target — leaves its aliases null with the outcome <c>not_applicable</c>, which loses
+    /// nothing; a row the keyed stage did not resolve has nothing to continue from.
+    /// </summary>
+    private static void Lift(StagePlan plan, Unresolved chosen, int rowIndex, Dictionary<string, JsonNode?> values, List<KeyedRowOutcome> outcomes, Dictionary<JsonObject, List<int>> liftedRows)
+    {
+        foreach (var continued in plan.Continued)
+        {
+            if (chosen.Hit is { } hit && hit.Target.Continued.Origins.Contains(continued))
+            {
+                if (!liftedRows.TryGetValue(hit.Row, out var origins))
+                    liftedRows[hit.Row] = origins = [];
+
+                if (!origins.Contains(rowIndex))
+                    origins.Add(rowIndex);
+
+                foreach (var alias in continued.Aliases)
+                    values[alias] = hit.Target.LiftedOf(hit.Row, alias);
+
+                continue;
+            }
+
+            foreach (var alias in continued.Aliases)
+                values[alias] = null;
+
+            // The outcome under its name on a row no owner ran the stage for: this host says it. The stage
+            // does not apply to the row's target, or the alias it continues under is null there.
+            if (continued.Stage.Resolve?.OutcomeAs is { } outcomeAs)
+                values[outcomeAs] = OutcomePolicy.WireName(chosen.Hit is null ? KeyedOutcome.ReferenceNull : KeyedOutcome.NotApplicable);
+
+            if (chosen.Hit is not null)
+                outcomes.Add(new KeyedRowOutcome(continued.OriginIndex, continued.Aliases[0], rowIndex, null, chosen.Key, KeyedOutcome.NotApplicable));
+        }
+    }
+
+    /// <summary>A slot with its answer: the first hit by target order and record key, and the outcome.</summary>
+    private sealed record Unresolved(string? Key, KeyedOutcome Outcome, (TargetPlan Target, JsonObject Row)? Hit)
+    {
+        public static readonly Unresolved Null = new(null, KeyedOutcome.ReferenceNull, null);
+    }
+
+    private static Unresolved Answer(StagePlan plan, Slot slot)
+    {
+        if (slot.Outcome is not null || slot.Case is null || slot.Key is null)
+            return new Unresolved(slot.Key, slot.Outcome ?? KeyedOutcome.ReferenceNull, null);
+
+        var hits = new List<(TargetPlan Target, JsonObject Row)>();
+        var unanswered = false;
+        var excluded = false;
+
+        foreach (var target in slot.Case.Targets.Select(bound => plan.ByTarget[bound]).Distinct())
+        {
+            if (target.Hits.TryGetValue(slot.Key, out var rows))
+                hits.AddRange(rows.Select(row => (target, row)));
+            else if (target.Unanswered.Contains(slot.Key))
+                unanswered = true;
+            else if (target.Excluded.Contains(slot.Key))
+                excluded = true;
+        }
+
+        // No row: an owner that did not answer leaves it open; the probe finding the key means the
+        // filter left it out; otherwise no target holds it.
+        return hits.Count switch
+        {
+            0 => new Unresolved(slot.Key, unanswered ? KeyedOutcome.OwnerUnanswered : excluded ? KeyedOutcome.Excluded : KeyedOutcome.NotFound, null),
+            1 => new Unresolved(slot.Key, KeyedOutcome.Resolved, hits[0]),
+            _ => new Unresolved(slot.Key, KeyedOutcome.Ambiguous, hits[0]),
+        };
+    }
+
+    /// <summary>
+    /// <c>elements: first</c>: the first slot that resolves, ambiguous or not; else the
+    /// row folds to <c>owner_unanswered</c>, <c>not_found</c> or <c>invalid_key</c> when any slot had
+    /// it, then <c>excluded</c>, then <c>reference_null</c>.
+    /// </summary>
+    private static (Unresolved Slot, int? Index) First(IReadOnlyList<Unresolved> slots)
+    {
+        for (var index = 0; index < slots.Count; index++)
+            if (slots[index].Hit is not null)
+                return (slots[index], index);
+
+        foreach (var outcome in new[] { KeyedOutcome.OwnerUnanswered, KeyedOutcome.NotFound, KeyedOutcome.InvalidKey, KeyedOutcome.Excluded })
+            for (var index = 0; index < slots.Count; index++)
+                if (slots[index].Outcome == outcome)
+                    return (slots[index], index);
+
+        // No element at all (an absent or empty collection), or none but null ones: the first null
+        // one when there is one, else no element to name.
+        return slots.Count == 0 ? (Unresolved.Null, null) : (Unresolved.Null, 0);
+    }
+
+    // ---- values ---------------------------------------------------------------------------
+
+    /// <summary>An owner's wire value of the target field as the reference member stores it.</summary>
+    private static BsonValue OwnerValueToBson(string text, ResolvedPath reference)
+    {
+        var representation = reference.Leaf?.Representation ?? Representation.None;
+
+        switch (reference.LeafKind)
+        {
+            case Kind.Guid when Guid.TryParse(text, out var guid):
+                return representation.BsonType == BsonType.String
+                    ? new BsonString(guid.ToString())
+                    : new BsonBinaryData(guid, representation.GuidRepresentation is { } declared && declared != GuidRepresentation.Unspecified ? declared : GuidRepresentation.Standard);
+
+            case Kind.Int or Kind.Long when long.TryParse(text, out var integer):
+                return representation.BsonType == BsonType.Int32 ? new BsonInt32((int)integer) : new BsonInt64(integer);
+
+            default:
+                return new BsonString(text);
+        }
+    }
+
+    /// <summary>The value at a dotted storage path, or null.</summary>
+    public static BsonValue? ValueAt(BsonDocument document, string storage)
+    {
+        BsonValue current = document;
+
+        foreach (var segment in storage.Split('.'))
+        {
+            if (current is BsonDocument inner && inner.TryGetValue(segment, out var next))
+                current = next;
+            else
+                return null;
+        }
+
+        return current;
+    }
+
+    // ---- calls ------------------------------------------------------------------------------
+
+    private enum Failure
+    {
+        Timeout,
+        Unreachable,
+    }
+
+    /// <summary>
+    /// The results of a call, or why there are none; <see cref="Status"/> is set when the owner was
+    /// reached and answered with an HTTP error, <see cref="Budget"/> is the time the failing call had.
+    /// </summary>
+    private sealed record CallOutcome(IReadOnlyList<JsonNode?> Results, Failure? Failure, int? Status = null)
+    {
+        public TimeSpan Budget { get; init; }
+
+        /// <summary>How many batches went out for it, a split batch counted per part.</summary>
+        public int Calls { get; init; } = 1;
+    }
+
+    /// <summary>
+    /// What one call carrying a chain may take: the time left less 50 ms, so the
+    /// owner answers before this host's own ceiling, at most <c>Execution.ChainTimeoutMs</c>, never
+    /// less than a millisecond. The owner applies it as its request ceiling and budgets its own
+    /// owner calls from what is left of it, so time bounds the whole chain without a header.
+    /// </summary>
+    private TimeSpan ChainBudget(TimeSpan remaining)
+    {
+        var ceiling = TimeSpan.FromMilliseconds(options.Execution.EffectiveChainTimeoutMs);
+        var left = remaining - TimeSpan.FromMilliseconds(50);
+
+        if (left <= TimeSpan.Zero)
+            return TimeSpan.FromMilliseconds(1);
+
+        return left < ceiling ? left : ceiling;
+    }
+
+    /// <summary>What one call may take: the time left, under the per-call ceiling, never less than a millisecond.</summary>
+    private TimeSpan Budget(TimeSpan remaining)
+    {
+        var ceiling = TimeSpan.FromMilliseconds(options.Execution.EffectiveResolveTimeoutMs);
+
+        if (remaining <= TimeSpan.Zero)
+            return TimeSpan.FromMilliseconds(1);
+
+        return remaining < ceiling ? remaining : ceiling;
+    }
+
+    /// <summary>
+    /// The queries for one owner, in batches no larger than the owner's batch cap,
+    /// results concatenated in order. The batches go out one after another, each under what
+    /// is left before <paramref name="deadline"/> (the chain ceiling for a <paramref name="chain"/>, else the per-resolve one), so split batches share one budget instead of each
+    /// taking the whole of it.
+    /// </summary>
+    private async Task<CallOutcome> CallInBatchesAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, RequestContext context, CancellationToken cancellationToken)
+    {
+        var size = BatchCapOf(owner, service);
+        var results = new List<JsonNode?>(queries.Count);
+        var calls = 0;
+
+        for (var start = 0; start < queries.Count; start += size)
+        {
+            calls++;
+
+            var left = deadline - DateTime.UtcNow;
+            var budget = chain ? ChainBudget(left) : Budget(left);
+            var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
+            var outcome = await CallAsync(owner, service, request, budget, context, cancellationToken).ConfigureAwait(false);
+
+            if (outcome.Failure is not null)
+                return outcome with { Budget = budget, Calls = calls };
+
+            results.AddRange(outcome.Results);
+        }
+
+        return new CallOutcome(results, null) { Calls = calls };
+    }
+
+    /// <summary>One owner query of a batch's queries in flight (<see cref="BatchFlights"/>): what came of it, for the queries of the batch that would have sent the same.</summary>
+    private sealed class Flight
+    {
+        private readonly object gate = new();
+        private JsonNode? answer;
+
+        /// <summary>Ends when the query is answered (null) or the call that carried it failed (its outcome).</summary>
+        public TaskCompletionSource<CallOutcome?> Landed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Keeps a copy of the owner's answer before the one who asked reads it: a node has one parent, and one reader at a time.</summary>
+        public void Answer(JsonNode? result)
+        {
+            lock (gate)
+                answer = result?.DeepClone();
+
+            Landed.TrySetResult(null);
+        }
+
+        /// <summary>The owner's answer, a copy per reader.</summary>
+        public JsonNode? Copy()
+        {
+            lock (gate)
+                return answer?.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// The queries for one owner as <see cref="CallInBatchesAsync"/> sends them, except that a query
+    /// another query of the same batch has already sent that owner is not sent again
+    /// (<see cref="RequestContext.BatchShare"/>): its answer is waited for and copied. Run one after
+    /// another the second would have read the first one's rows from the owner cache; side by side the
+    /// cache is not filled yet, and without this both would ask. A call that failed is the failure of
+    /// those waiting for it too, and is forgotten, so a later query asks for itself.
+    /// </summary>
+    private async Task<CallOutcome> CallSharedAsync(IRemoteQueryClient owner, string service, IReadOnlyList<QueryRequest> queries, DateTime deadline, bool chain, RequestContext context, CancellationToken cancellationToken)
+    {
+        if (context.BatchShare is not { } flights || context.Organisation is not { } organisation)
+            return await CallInBatchesAsync(owner, service, queries, deadline, chain, context, cancellationToken).ConfigureAwait(false);
+
+        var entries = new (string Key, Flight Flight, bool Leads)[queries.Count];
+
+        for (var index = 0; index < queries.Count; index++)
+        {
+            var key = service + "|" + OwnerFetchCache.KeyOf(organisation, queries[index]);
+            var mine = new Flight();
+            var flight = flights.Join(key, mine);
+
+            entries[index] = (key, flight, ReferenceEquals(flight, mine));
+        }
+
+        var leading = Enumerable.Range(0, queries.Count).Where(index => entries[index].Leads).ToList();
+        CallOutcome? sent = null;
+
+        try
+        {
+            sent = leading.Count == 0
+                ? new CallOutcome([], null) { Calls = 0 }
+                : await CallInBatchesAsync(owner, service, leading.Select(index => queries[index]).ToList(), deadline, chain, context, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            for (var position = 0; position < leading.Count; position++)
+            {
+                var (key, flight, _) = entries[leading[position]];
+
+                if (sent is null)
+                {
+                    flights.Leave(key, flight);
+                    flight.Landed.TrySetCanceled(CancellationToken.None);
+                }
+                else if (sent.Failure is not null)
+                {
+                    flights.Leave(key, flight);
+                    flight.Landed.TrySetResult(sent);
+                }
+                else
+                {
+                    flight.Answer(position < sent.Results.Count ? sent.Results[position] : null);
+                }
+            }
+        }
+
+        if (sent.Failure is not null)
+            return sent;
+
+        var results = new JsonNode?[queries.Count];
+
+        for (var position = 0; position < leading.Count; position++)
+            results[leading[position]] = position < sent.Results.Count ? sent.Results[position] : null;
+
+        for (var index = 0; index < queries.Count; index++)
+        {
+            if (entries[index].Leads)
+                continue;
+
+            var left = deadline - DateTime.UtcNow;
+            var budget = chain ? ChainBudget(left) : Budget(left);
+            CallOutcome? failed;
+
+            try
+            {
+                failed = await entries[index].Flight.Landed.Task.WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                return new CallOutcome([], Failure.Timeout) { Budget = budget, Calls = sent.Calls };
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The one that asked was stopped and this one was not: the owner did not answer it.
+                return new CallOutcome([], Failure.Unreachable) { Budget = budget, Calls = sent.Calls };
+            }
+
+            if (failed is not null)
+                return failed with { Calls = sent.Calls };
+
+            results[index] = entries[index].Flight.Copy();
+        }
+
+        return new CallOutcome(results, null) { Calls = sent.Calls };
+    }
+
+    /// <summary>
+    /// The batch ceiling an owner is sent: the call's budget less a margin (a tenth, at most 250 ms),
+    /// so the owner stops and answers before this host stops waiting, never less than a millisecond.
+    /// </summary>
+    public static int OwnerCeilingMs(TimeSpan budget)
+    {
+        var milliseconds = Math.Max(1, (int)budget.TotalMilliseconds);
+
+        return Math.Max(1, milliseconds - Math.Min(250, milliseconds / 10));
+    }
+
+    /// <summary>
+    /// The largest batch an owner takes: its own <c>maxBatchQueries</c> as its client last read it
+    /// off the owner's shallow health (<see cref="IRemoteOwnerInfo"/>), else this host's cap, which
+    /// is also this host's own cap as its <see cref="SelfOwner"/>.
+    /// </summary>
+    private int BatchCapOf(IRemoteQueryClient owner, string service) =>
+        service != SelfService && owner is IRemoteOwnerInfo known && known.OwnerOf(service)?.MaxBatchQueries is { } cap and > 0
+            ? cap
+            : Math.Max(1, options.Limits.MaxBatchQueries);
+
+    /// <summary>
+    /// One call to one owner within the budget; a timeout or a transport fault is an outcome, never an
+    /// exception. Once the caller has given up, whatever the call ends in (a connection the abort
+    /// reset, say) travels as the caller's cancellation, not as a fault of its own. A fault is
+    /// logged with the service, the organisation and the correlation id, never with what was asked:
+    /// this host's own in full, another service's client's by its type alone.
+    /// </summary>
+    private async Task<CallOutcome> CallAsync(IRemoteQueryClient owner, string service, BatchRequest request, TimeSpan budget, RequestContext context, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        timeout.CancelAfter(budget);
+
+        try
+        {
+            var response = await owner.BatchAsync(service, request, budget, timeout.Token).ConfigureAwait(false);
+
+            return new CallOutcome(response.Results, null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new CallOutcome([], Failure.Timeout);
+        }
+        catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested && exception.StatusCode is { } status)
+        {
+            // The owner was reached and said no: a rejected key, a body over its cap, a fault of
+            // its own. The status keeps that apart from a network that is down.
+            logger.LogWarning("OxQL owner call refused. service={Service} status={Status} org={OrganisationId} correlation={CorrelationId}", service, (int)status, context.Organisation, context.CorrelationId);
+
+            return new CallOutcome([], Failure.Unreachable, (int)status);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (service == SelfService)
+                logger.LogError(exception, "OxQL keyed fetch on this host failed. org={OrganisationId} correlation={CorrelationId}", context.Organisation, context.CorrelationId);
+            else
+                logger.LogWarning("OxQL owner call failed. service={Service} fault={Fault} org={OrganisationId} correlation={CorrelationId}", service, exception.GetType().Name, context.Organisation, context.CorrelationId);
+
+            return new CallOutcome([], Failure.Unreachable);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new OperationCanceledException("The caller gave up on the request while an owner was being asked.", exception, cancellationToken);
+        }
+    }
+
+    private static bool Succeeded(JsonNode result) => result is JsonObject success && success["items"] is JsonArray;
+
+    /// <summary>
+    /// The owner's refusal as this host's: 422 <c>RESOLVE_REFUSED</c> wrapping the owner's errors at
+    /// the resolve stage. An owner error at one of the continued stages is mapped back:
+    /// its <c>stage</c> and <c>path</c> become the caller's, <c>params.owner</c> carries
+    /// where the owner saw it (<c>service</c>, <c>entity</c>, <c>target</c>, <c>stage</c>, <c>path</c>),
+    /// and the head points at the first such stage. An owner that continued further maps its own
+    /// owner's errors the same way first, so the mapping composes along the chain.
+    /// <para>
+    /// A remote union target's owner refuses the paths the target lacks at the projection beside the
+    /// refusal that counts. A run drops those for the target and asks again (<c>DropUnknown</c>), so
+    /// they are no error of this request: given the query <paramref name="sent"/>, the refusal
+    /// carries only the other errors.
+    /// </para>
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, TargetPlan target, string service, int? stage, QueryRequest? sent = null, bool filter = false)
+    {
+        if (sent is not null && result?["errors"] is JsonArray errors && errors.OfType<JsonObject>().Any(error => !target.Droppable(error, sent)))
+        {
+            var kept = (JsonObject)result.DeepClone();
+
+            kept["errors"] = new JsonArray(errors.OfType<JsonObject>().Where(error => !target.Droppable(error, sent)).Select(error => (JsonNode)error.DeepClone()).ToArray());
+            result = kept;
+        }
+
+        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service, filter), unwrap: filter);
+    }
+
+    /// <summary>An owner error at one of <paramref name="target"/>'s continued stages as the caller's; null for one at the owner query's own stages.</summary>
+    private static QueryValidationError? MapBack(JsonObject error, TargetPlan target, string service) =>
+        MapBack(error, new QueryValidationError
+        {
+            Code = error["code"]?.ToString() ?? Codes.InternalError,
+            Message = error["message"]?.ToString() ?? "",
+            Path = error["path"]?.ToString(),
+        }, target, service);
+
+    private static QueryValidationError? MapBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service, bool filter = true)
+    {
+        var ownerStage = error["stage"] is JsonValue index && index.TryGetValue<int>(out var number) ? number : (int?)null;
+
+        // A path the projection asked under a lookup's alias is the projection's, as under a resolve's.
+        // A remote resolve's own filter is the caller's, written in the stage: the owner binds it, and
+        // what it refuses there is the resolve's (the key match beside it is this host's making).
+        if (target.OriginOf(ownerStage) is not { } origin)
+            return target.Stage.RemoteLookup is { } lookup && !target.AskedByProjection(ownerStage, mapped.Path) ? MapLookupBack(error, mapped, target, lookup, service, ownerStage)
+                : filter && target.FilterAt is { } filterAt && ownerStage == filterAt ? MapFilterBack(error, mapped, target, service, ownerStage)
+                : null;
+
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.Target.Declared.Item is { } item ? $"{target.Entity}#{item}" : target.Entity,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        return mapped with
+        {
+            Stage = origin.OriginIndex,
+            Path = Continuation.ToOrigin(mapped.Path, origin, target.Stage, target.Target.Declared.Item is not null, target.Entity),
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// An owner error at the filter of a remote resolve's owner query: the stage's <c>filter</c>, which
+    /// the caller wrote and only the owner can bind. It is the resolve's, at its stage, with the path
+    /// as the caller wrote it (relative to the target, or to the element of an item target) and
+    /// <c>params.owner</c> saying where the owner saw it; the owner's own params travel with it.
+    /// </summary>
+    private static QueryValidationError MapFilterBack(JsonObject error, QueryValidationError mapped, TargetPlan target, string service, int? ownerStage)
+    {
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.TargetName,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        var element = BoundKeyedBy.Element + ".";
+
+        return mapped with
+        {
+            Stage = target.Stage.Stage < 0 ? null : target.Stage.Stage,
+            Path = mapped.Path is { } owned && target.Target.Declared.Item is not null && owned.StartsWith(element, StringComparison.Ordinal) ? owned[element.Length..] : mapped.Path,
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// An owner error at a remote lookup's own owner query: its key match, filter, sort
+    /// or <c>keyedBy</c>, all written by the caller in the lookup — the path, the filter, the sort, the
+    /// limit against the owner's own cap — so the error is the lookup's, at its stage, with the path as
+    /// the caller wrote it (relative to the child) and <c>params.owner</c> saying where the owner saw
+    /// it. A path the projection named under the alias is not the lookup's (<see cref="TargetPlan.AskedByProjection"/>).
+    /// </summary>
+    private static QueryValidationError MapLookupBack(JsonObject error, QueryValidationError mapped, TargetPlan target, BoundRemoteLookup lookup, string service, int? ownerStage)
+    {
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service == SelfService ? null : service,
+            ["entity"] = target.Entity,
+            ["target"] = target.TargetName,
+            ["stage"] = ownerStage,
+            ["path"] = mapped.Path,
+        };
+
+        var element = BoundKeyedBy.Element + ".";
+        var keyedPath = lookup.Item is null ? lookup.Path : lookup.Item + "." + lookup.Path;
+        var path = mapped.Path switch
+        {
+            null => null,
+            var owned when owned == keyedPath || owned == BoundKeyedBy.Key => lookup.Path,
+            var owned when lookup.Item is not null && owned.StartsWith(element, StringComparison.Ordinal) => owned[element.Length..],
+            var owned => owned,
+        };
+
+        return mapped with { Stage = target.Stage.Stage < 0 ? null : target.Stage.Stage, Path = path, Params = parameters };
+    }
+
+    /// <summary>
+    /// The owner's refusal of a query for <paramref name="targetEntity"/> as this host's 422
+    /// <c>RESOLVE_REFUSED</c> at <paramref name="stage"/>; <paramref name="map"/> maps an owner error
+    /// back to the caller's stage, or leaves it (null), and the head then points at the first mapped one.
+    /// </summary>
+    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null, object? filter = null, bool unwrap = false)
+    {
+        result = OwnerFaults.Scrubbed(result);
+
+        var inner = new List<QueryValidationError>();
+        int? mappedStage = null;
+
+        if (result?["errors"] is JsonArray errors)
+        {
+            // An owner that was itself refused by an owner of its own answers that owner's errors under a
+            // head of its own. Under contract 2 the chain's errors are said once, as explain says them:
+            // the errors themselves, under this host's one head; a head that wraps nothing stays.
+            var wrapping = unwrap && errors.OfType<JsonObject>().Any(error => error["code"]?.ToString() != Codes.ResolveRefused);
+
+            foreach (var error in errors.OfType<JsonObject>())
+            {
+                // The head lies where the owner's own head lay, mapped back like any error of its.
+                if (wrapping && error["code"]?.ToString() == Codes.ResolveRefused)
+                {
+                    mappedStage ??= map?.Invoke(error, new QueryValidationError { Code = Codes.ResolveRefused, Message = "", Path = error["path"]?.ToString() })?.Stage;
+                    continue;
+                }
+
+                var owner = new QueryValidationError
+                {
+                    Code = error["code"]?.ToString() ?? Codes.InternalError,
+                    Message = error["message"]?.ToString() ?? "",
+                    Path = error["path"]?.ToString(),
+                };
+
+                if (map?.Invoke(error, owner) is { } mapped)
+                {
+                    owner = mapped;
+                    mappedStage ??= mapped.Stage;
+                }
+
+                inner.Add(owner);
+            }
+        }
+
+        var at = mappedStage ?? stage;
+        var head = new QueryValidationError
+        {
+            Code = Codes.ResolveRefused,
+            Message = result is null
+                ? $"The owner of '{targetEntity}' answered without a result for this query."
+                : $"The owner of '{targetEntity}' refused the query: {result["title"]?.ToString() ?? result["type"]?.ToString() ?? "no reason given"}.",
+            Stage = at,
+            Filter = at is null ? filter : null,
+        };
+
+        return Refusal.NotExecutable(Codes.ResolveRefused, head.Message, at, [head, .. inner]);
+    }
+
+    /// <summary>
+    /// Reads the facts of the owners of <paramref name="stages"/>' remote targets within
+    /// <paramref name="slice"/>, as a run reads them before it plans (explain plans by the same facts).
+    /// </summary>
+    public static Task ReadOwnerFactsAsync(IRemoteQueryClient? client, IEnumerable<BoundStage.Resolve> stages, TimeSpan slice, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stages);
+
+        return ReadOwnersAsync(client, stages.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)), slice, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the facts of every owner a run of <paramref name="compiled"/> asks before it plans: those of
+    /// its keyed stages' remote targets and those of its semi-joins, whose page is sized by them
+    /// (<see cref="ConditionPage"/>).
+    /// </summary>
+    public static Task ReadOwnerFactsAsync(IRemoteQueryClient? client, CompiledQuery compiled, TimeSpan slice, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(compiled);
+
+        return ReadOwnersAsync(client, compiled.KeyedResolves.SelectMany(CasesOf).SelectMany(selected => selected.Targets)
+            .Where(target => target.IsRemote).Select(target => ServiceKeyOf(target.Declared.Entity)).Concat(ConditionServices(compiled)), slice, cancellationToken);
+    }
+
+    /// <summary>
+    /// Asks the client for each owner's facts before anything is sized or gated by them: a
+    /// client that has not read an owner's shallow health yet may read it now. Bounded by the time
+    /// left; a client that does not answer in time leaves the facts unknown, as they were.
+    /// </summary>
+    // A small slice of the phase (a tenth, at most 250 ms): an owner whose health is slow leaves
+    // its facts unknown and this host's own caps apply, rather than the probe eating the time
+    // the owner's answer needs.
+    private Task ReadOwnersAsync(IEnumerable<string> services, TimeSpan remaining, CancellationToken cancellationToken) =>
+        ReadOwnersAsync(client, services, OwnerFactsSlice(remaining), cancellationToken);
+
+    private static async Task ReadOwnersAsync(IRemoteQueryClient? client, IEnumerable<string> services, TimeSpan slice, CancellationToken cancellationToken)
+    {
+        if (client is not IRemoteOwnerInfo owners)
+            return;
+
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        bounded.CancelAfter(slice);
+
+        try
+        {
+            await Task.WhenAll(services.Distinct(StringComparer.Ordinal).Select(service => owners.OwnerOfAsync(service, bounded.Token).AsTask())).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Facts are an optimisation of what is sent; without them the owner answers or refuses.
+        }
+    }
+
+    /// <summary>The time the owners' facts may take out of a phase of <paramref name="remaining"/>: a tenth, at most 250 ms, at least a millisecond.</summary>
+    public static TimeSpan OwnerFactsSlice(TimeSpan remaining) =>
+        TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 10, 1, 250));
+
+    /// <summary>
+    /// An owner row without the member the host projected and keys by. The host asked for that member,
+    /// so its absence means the answer cannot be read; it is refused rather than taken as "no such row".
+    /// </summary>
+    private static Refusal WithoutKey(string targetEntity, string field, int? stage)
+    {
+        var message = $"The owner of '{targetEntity}' answered a row without the projected member '{field}'.";
+
+        return Refusal.NotExecutable(Codes.ResolveRefused, message, stage, [new QueryValidationError { Code = Codes.ResolveRefused, Message = message, Stage = stage }]);
+    }
+
+    /// <summary>The caller's index of a bound stage, which diagnostics and refusals name (a caller stage that bound to nothing leaves no position).</summary>
+    private static int? StageIndexOf(BoundPipeline bound, BoundStage stage) => bound.CallerIndexOf(stage);
+
+    /// <summary>The position of a bound stage among the bound stages, for reading the stages after it.</summary>
+    private static int? PositionOf(BoundPipeline bound, BoundStage stage)
+    {
+        for (var position = 0; position < bound.Stages.Count; position++)
+            if (ReferenceEquals(bound.Stages[position], stage))
+                return position;
+
+        return null;
+    }
+
+    /// <summary>The caller's index of the match stage carrying a semi-join leaf.</summary>
+    private static int? StageIndexOf(BoundPipeline bound, SemiJoinSlot slot) => WrittenAt(bound, slot).Stage;
+
+    /// <summary>
+    /// Where the caller wrote a semi-join's condition: the caller's index of the match stage that
+    /// carries it, or, for a condition of the request's <c>filter</c> (which has no stage), the entry's label.
+    /// </summary>
+    private static (int? Stage, object? Filter) WrittenAt(BoundPipeline bound, SemiJoinSlot slot)
+    {
+        for (var position = 0; position < bound.Stages.Count; position++)
+            if (bound.Stages[position] is BoundStage.Match match && Contains(match.Condition, slot.Leaf))
+                return (bound.CallerIndexOf(position), bound.FilterOf(match));
+
+        return (null, null);
+    }
+
+    private static bool Contains(BoundCondition condition, BoundCondition.Leaf leaf) => condition switch
+    {
+        BoundCondition.And and => and.Conditions.Any(inner => Contains(inner, leaf)),
+        BoundCondition.Or or => or.Conditions.Any(inner => Contains(inner, leaf)),
+        BoundCondition.Not not => Contains(not.Condition, leaf),
+        BoundCondition.Any any => Contains(any.Inner, leaf),
+        _ => ReferenceEquals(condition, leaf),
+    };
+}

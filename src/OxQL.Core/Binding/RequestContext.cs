@@ -26,4 +26,50 @@ public sealed record RequestContext
 
     /// <summary>A per-request ceiling on the aggregate, under the configured one; a batch sets it.</summary>
     public int? MaxTimeMs { get; init; }
+
+    /// <summary>
+    /// Whether the request came over an internal call: the internal batch route
+    /// (<c>IOxQLQueryService.BatchAsync(batch, internalCall: true, …)</c>) or this host's own keyed
+    /// fetch in process. Only such a request may carry <c>keyedBy</c>; the route is the signal, no
+    /// header carries it.
+    /// </summary>
+    public bool Internal { get; init; }
+
+    /// <summary>
+    /// Whether this host can send a query to the owner of a service namespace (an
+    /// <c>InternalHosts</c> entry, <see cref="Engine.IRemoteQueryClient.IsConfigured"/>); null when it
+    /// has no remote query client. The engine sets it before binding: a <c>lookup</c> whose
+    /// <c>from</c> is another service's entity binds as a remote lookup only when its owner is one,
+    /// since, unlike a resolve's, its target is written by the caller and declared nowhere
+    /// on this host.
+    /// </summary>
+    public Func<string, bool>? RemoteService { get; init; }
+
+    /// <summary>
+    /// What the explains that belong together share of their owner calls and their time
+    /// (<see cref="Engine.IExplainShare"/>); null for a request that is none of them. The engine sets it: for
+    /// the checks of one internal explain batch, and for an explain it runs at this host for another. A host never sets it.
+    /// </summary>
+    public Engine.IExplainShare? ExplainOwners { get; init; }
+
+    /// <summary>
+    /// Asked once, when an explain is about to make its first call to an owner: whether its caller may
+    /// call owners now (<see cref="Engine.ExplainOwnerAdmission"/>). Null where nothing limits it: an
+    /// internal call, a host without a limiter. An explain that is not admitted asks no owner and
+    /// answers from what is kept, as <c>remote: "cached"</c> does. The host sets it (the public
+    /// explain route); it answers the same for every explain run on behalf of one request.
+    /// </summary>
+    public Func<Engine.ExplainOwnerAdmission>? ExplainOwnerGate { get; init; }
+
+    /// <summary>
+    /// Where the request's time goes (<see cref="Engine.QueryTiming"/>). A host that started the clock
+    /// before it read the body sets it; otherwise the engine starts one when it takes the request.
+    /// </summary>
+    public Engine.QueryTiming? Timing { get; init; }
+
+    /// <summary>
+    /// What the queries of one batch that run side by side share (<see cref="Engine.BatchFlights"/>);
+    /// null for a request that is none of them. The batch that runs them sets it. A host never sets it.
+    /// </summary>
+    public Engine.BatchFlights? BatchShare { get; init; }
 }

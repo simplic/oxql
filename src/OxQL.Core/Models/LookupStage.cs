@@ -5,8 +5,9 @@ namespace OxQL.Core.Models;
 
 /// <summary>
 /// A backward join along a declared reference: <c>from</c> is the child entity, <c>path</c>
-/// the child's member that references the current entity, the result an array under
-/// <c>as</c> ordered by the child's key.
+/// the child's member that references the parent, the result an array under <c>as</c> ordered
+/// by <c>sort</c> (the child's key by default), or with <c>first</c> the first child or null.
+/// The parent is the current entity, or with <c>on</c> an entity alias of the row.
 /// </summary>
 [JsonConverter(typeof(LookupStageConverter))]
 public sealed record LookupStage
@@ -20,7 +21,11 @@ public sealed record LookupStage
     /// <summary>The alias the array is placed under.</summary>
     public string? As { get; init; }
 
-    /// <summary>Wire paths on the child to keep; the child's key and display members by default.</summary>
+    /// <summary>
+    /// What the alias shows when the row keeps it whole: these wire paths of the child with its key; the
+    /// child's key and display members by default. A hint, never a bound: under contract 2 the join loads
+    /// whatever later stages read, and a projection that names paths under the alias decides alone.
+    /// </summary>
     public IReadOnlyList<string>? Select { get; init; }
 
     /// <summary>A condition on the child.</summary>
@@ -28,6 +33,37 @@ public sealed record LookupStage
 
     /// <summary>The most children per parent, under the host cap.</summary>
     public int? Limit { get; init; }
+
+    /// <summary>The order of the children, bound against the child; the child's key completes it. Contract 2.</summary>
+    public IReadOnlyList<SortField>? Sort { get; init; }
+
+    /// <summary>The first child by <see cref="Sort"/> as an object, or null, instead of the array. Contract 2.</summary>
+    public bool? First { get; init; }
+
+    /// <summary>The alias of the parent row; the implicit root when absent. Contract 2.</summary>
+    public string? On { get; init; }
+
+    /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
+    public string? ForTarget { get; init; }
+
+    /// <summary>
+    /// The alias each child's owning row is placed under, when <see cref="From"/> names an item
+    /// collection of another service's entity (<c>entity#item</c>): the child is the element and its
+    /// owning row travels here, as it does for a resolve's item target. Contract 2.
+    /// </summary>
+    public string? ParentAs { get; init; }
+
+    /// <summary>The raw filter, for a remote owner that binds it itself.</summary>
+    [JsonIgnore]
+    public JsonElement? RawFilter { get; init; }
+
+    /// <summary>Members the caller wrote with a value of the wrong JSON kind, such as a <c>first</c> that is not a boolean.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Malformed { get; init; } = [];
+
+    /// <summary>Whether <c>limit</c> was written as something other than a number; it then reads as not written, and contract 2 refuses it.</summary>
+    [JsonIgnore]
+    public bool LimitInvalid { get; init; }
 
     /// <summary>Member names the caller wrote that the stage does not have: the v1 <c>localPath</c>, <c>foreignPath</c>, <c>convert</c> among them.</summary>
     [JsonIgnore]
@@ -44,7 +80,10 @@ public sealed record ResolveStage
     /// <summary>The alias the object is placed under.</summary>
     public string? As { get; init; }
 
-    /// <summary>Wire paths on the target to keep.</summary>
+    /// <summary>
+    /// What the alias shows when the row keeps it whole: these wire paths of the target with its key; its
+    /// key and display members by default. A hint, never a bound (see <see cref="LookupStage.Select"/>).
+    /// </summary>
     public IReadOnlyList<string>? Select { get; init; }
 
     /// <summary>A condition on the target; a non-match yields null.</summary>
@@ -54,10 +93,56 @@ public sealed record ResolveStage
     [JsonIgnore]
     public JsonElement? RawFilter { get; init; }
 
+    /// <summary>
+    /// <c>"first"</c> or <c>"all"</c>: how a path that crosses one collection which is not unwound
+    /// resolves, to the first element whose key resolves or to every resolved target. Contract 2.
+    /// </summary>
+    public string? Elements { get; init; }
+
+    /// <summary>The one target entity of a typed or union reference to resolve to; the others are excluded. Contract 2.</summary>
+    public string? Target { get; init; }
+
+    /// <summary>
+    /// The alias the owning row of an item target is placed under: its key and display members kept
+    /// whole, else the paths the projection names under it. Contract 2.
+    /// </summary>
+    public string? ParentAs { get; init; }
+
+    /// <summary><c>"null"</c>, <c>"report"</c> or <c>"refuse"</c>: what a reference that names nothing does. Contract 2.</summary>
+    public string? OnMissing { get; init; }
+
+    /// <summary>The one target of a union alias the stage belongs to, on a stage continued under it. Contract 2.</summary>
+    public string? ForTarget { get; init; }
+
+    /// <summary>
+    /// The union join: one path per target of the alias the stage continues under, all filling the one
+    /// alias <see cref="As"/>, in place of <see cref="Path"/>. The branches in the order written; a
+    /// target written twice keeps both entries, which the binder refuses. Contract 2.
+    /// </summary>
+    public IReadOnlyList<ResolveBranch>? ByTarget { get; init; }
+
+    /// <summary>
+    /// The name of a row member that carries what became of the reference on every row: the outcome
+    /// as the wire spells it (<c>resolved</c>, <c>not_found</c>, …). A root of the row like
+    /// <see cref="As"/>, named by the caller; nothing carries the outcome unless a stage names one. Contract 2.
+    /// </summary>
+    public string? OutcomeAs { get; init; }
+
+    /// <summary>Members the caller wrote with a value of the wrong JSON kind or outside their values, such as an <c>elements</c> of <c>"some"</c>.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Malformed { get; init; } = [];
+
     /// <summary>Member names the caller wrote that the stage does not have: the v1 <c>source</c>, <c>localPath</c> among them.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
 }
+
+/// <summary>
+/// One branch of a union join (<c>byTarget</c>): for the rows the alias it continues under resolved
+/// to <paramref name="Target"/>, the member carrying the reference, and how a path that crosses one
+/// collection which is not unwound resolves (<c>"first"</c> or <c>"all"</c>).
+/// </summary>
+public sealed record ResolveBranch(string Target, string? Path, string? Elements = null);
 
 internal sealed class LookupStageConverter : JsonConverter<LookupStage>
 {
@@ -67,6 +152,7 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         var root = doc.RootElement;
         var stage = new LookupStage();
         var unknown = new List<string>();
+        var malformed = new List<string>();
 
         foreach (var property in root.EnumerateObject())
         {
@@ -76,13 +162,51 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
                 case "path": stage = stage with { Path = property.Value.GetString() }; break;
                 case "as": stage = stage with { As = property.Value.GetString() }; break;
                 case "select": stage = stage with { Select = StageJson.ReadStrings(property.Value) }; break;
-                case "filter": stage = stage with { Filter = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options) }; break;
-                case "limit": stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null }; break;
+                case "filter":
+                    stage = stage with
+                    {
+                        Filter = JsonSerializer.Deserialize<MatchStage>(property.Value.GetRawText(), options),
+                        RawFilter = property.Value.Clone(),
+                    };
+                    break;
+                case "limit":
+                    stage = stage with { Limit = property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetInt32() : null, LimitInvalid = property.Value.ValueKind is not (JsonValueKind.Number or JsonValueKind.Null) };
+                    break;
+                case "sort":
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                        stage = stage with { Sort = JsonSerializer.Deserialize<IReadOnlyList<SortField>>(property.Value.GetRawText(), options) };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "first":
+                    if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                        stage = stage with { First = property.Value.GetBoolean() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "on":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { On = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "forTarget":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ForTarget = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "parentAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ParentAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Malformed = malformed };
     }
 
     public override void Write(Utf8JsonWriter writer, LookupStage value, JsonSerializerOptions options)
@@ -94,6 +218,11 @@ internal sealed class LookupStageConverter : JsonConverter<LookupStage>
         if (value.Select is not null) { writer.WritePropertyName("select"); JsonSerializer.Serialize(writer, value.Select, options); }
         if (value.Filter is not null) { writer.WritePropertyName("filter"); JsonSerializer.Serialize(writer, value.Filter, options); }
         if (value.Limit is not null) writer.WriteNumber("limit", value.Limit.Value);
+        if (value.Sort is not null) { writer.WritePropertyName("sort"); JsonSerializer.Serialize(writer, value.Sort, options); }
+        if (value.First is not null) writer.WriteBoolean("first", value.First.Value);
+        if (value.On is not null) writer.WriteString("on", value.On);
+        if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
+        if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
         writer.WriteEndObject();
     }
 }
@@ -106,6 +235,7 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         var root = doc.RootElement;
         var stage = new ResolveStage();
         var unknown = new List<string>();
+        var malformed = new List<string>();
 
         foreach (var property in root.EnumerateObject())
         {
@@ -121,11 +251,101 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
                         RawFilter = property.Value.Clone(),
                     };
                     break;
+                case "elements":
+                    if (StageJson.OneOf(property.Value, "first", "all") is { } elements)
+                        stage = stage with { Elements = elements };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "onMissing":
+                    if (StageJson.OneOf(property.Value, "null", "report", "refuse") is { } onMissing)
+                        stage = stage with { OnMissing = onMissing };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "target":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { Target = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "parentAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ParentAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "forTarget":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { ForTarget = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "byTarget":
+                    if (ReadBranches(property.Value) is { } branches)
+                        stage = stage with { ByTarget = branches };
+                    else
+                        malformed.Add(property.Name);
+                    break;
+                case "outcomeAs":
+                    if (property.Value.ValueKind == JsonValueKind.String)
+                        stage = stage with { OutcomeAs = property.Value.GetString() };
+                    else
+                        malformed.Add(property.Name);
+                    break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Malformed = malformed };
+    }
+
+    /// <summary>
+    /// The branches of a <c>byTarget</c>: an object whose members are a path, or <c>{ path, elements }</c>;
+    /// null when it is anything else.
+    /// </summary>
+    private static List<ResolveBranch>? ReadBranches(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var branches = new List<ResolveBranch>();
+
+        foreach (var branch in value.EnumerateObject())
+        {
+            if (branch.Value.ValueKind == JsonValueKind.String)
+            {
+                branches.Add(new ResolveBranch(branch.Name, branch.Value.GetString()));
+                continue;
+            }
+
+            if (branch.Value.ValueKind != JsonValueKind.Object)
+                return null;
+
+            string? path = null, elements = null;
+
+            foreach (var member in branch.Value.EnumerateObject())
+            {
+                switch (member.Name)
+                {
+                    case "path" when member.Value.ValueKind == JsonValueKind.String:
+                        path = member.Value.GetString();
+                        break;
+                    case "elements" when StageJson.OneOf(member.Value, "first", "all") is { } written:
+                        elements = written;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+
+            if (path is null)
+                return null;
+
+            branches.Add(new ResolveBranch(branch.Name, path, elements));
+        }
+
+        return branches;
     }
 
     public override void Write(Utf8JsonWriter writer, ResolveStage value, JsonSerializerOptions options)
@@ -135,6 +355,34 @@ internal sealed class ResolveStageConverter : JsonConverter<ResolveStage>
         if (value.As is not null) writer.WriteString("as", value.As);
         if (value.Select is not null) { writer.WritePropertyName("select"); JsonSerializer.Serialize(writer, value.Select, options); }
         if (value.Filter is not null) { writer.WritePropertyName("filter"); JsonSerializer.Serialize(writer, value.Filter, options); }
+        if (value.Elements is not null) writer.WriteString("elements", value.Elements);
+        if (value.Target is not null) writer.WriteString("target", value.Target);
+        if (value.ParentAs is not null) writer.WriteString("parentAs", value.ParentAs);
+        if (value.OnMissing is not null) writer.WriteString("onMissing", value.OnMissing);
+        if (value.ForTarget is not null) writer.WriteString("forTarget", value.ForTarget);
+
+        if (value.ByTarget is not null)
+        {
+            writer.WriteStartObject("byTarget");
+
+            foreach (var branch in value.ByTarget)
+            {
+                if (branch.Elements is null)
+                {
+                    writer.WriteString(branch.Target, branch.Path);
+                    continue;
+                }
+
+                writer.WriteStartObject(branch.Target);
+                writer.WriteString("path", branch.Path);
+                writer.WriteString("elements", branch.Elements);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        if (value.OutcomeAs is not null) writer.WriteString("outcomeAs", value.OutcomeAs);
         writer.WriteEndObject();
     }
 }
@@ -151,4 +399,8 @@ internal static class StageJson
 
         return element.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : item.GetRawText()).ToList();
     }
+
+    /// <summary>The string when the element is one of <paramref name="values"/>, compared exactly; null otherwise.</summary>
+    public static string? OneOf(JsonElement element, params string[] values) =>
+        element.ValueKind == JsonValueKind.String && element.GetString() is { } text && values.Contains(text, StringComparer.Ordinal) ? text : null;
 }

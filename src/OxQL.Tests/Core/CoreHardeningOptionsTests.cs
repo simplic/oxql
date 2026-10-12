@@ -59,6 +59,18 @@ public class CoreHardeningOptionsTests
             .And.Contain(line => line.Contains("MaxSemiJoinIds"));
     }
 
+    [Fact]
+    public void A_host_that_turns_offset_paging_off_keeps_a_semi_join_of_one_id()
+    {
+        var options = new OxQLOptions { Limits = { MaxOffset = 0 } };
+
+        var adjustments = options.Normalise();
+
+        options.Limits.MaxOffset.Should().Be(0);
+        options.Limits.MaxSemiJoinIds.Should().Be(1, "every limit but MaxOffset is at least 1");
+        adjustments.Should().ContainSingle().Which.Should().Contain("MaxSemiJoinIds").And.Contain("clamped to 1");
+    }
+
     public static TheoryData<string> Limits => new(typeof(LimitOptions).GetProperties().Select(property => property.Name));
 
     [Theory]
@@ -127,6 +139,24 @@ public class CoreHardeningOptionsTests
             .Contain(line => line.Contains("MaxPageSize was 0"))
             .And.Contain(line => line.Contains("CountCap was -10"))
             .And.Contain(line => line.Contains("DefaultPageSize was 100"));
+    }
+
+    [Fact]
+    public void A_host_that_still_sets_the_published_engines_cache_key_is_told_it_was_not_applied()
+    {
+        IConfiguration Section(params (string Key, string Value)[] keys) =>
+            new ConfigurationBuilder().AddInMemoryCollection(keys.Append(("Cursor:SigningKey", BindHost.SigningKey)).ToDictionary(key => "OxQL:" + key.Item1, key => (string?)key.Item2)).Build().GetSection("OxQL");
+
+        using var former = new ServiceCollection().AddOxQLCore(Section(("Cache:ResolveCacheMaxEntries", "111"))).BuildServiceProvider();
+
+        former.GetRequiredService<OxQLOptions>().Cache.OwnerFetchCacheMaxEntries.Should().Be(50_000, "the key is gone: its value is not applied");
+        former.GetServices<OxQLOptionsAdjustment>().Should().ContainSingle()
+            .Which.Message.Should().Be("OxQL:Cache:ResolveCacheMaxEntries was 111; the key is no longer read. The budget of the owner-fetch cache is OxQL:Cache:OwnerFetchCacheMaxEntries, now 50000: rename the key.");
+
+        using var renamed = new ServiceCollection().AddOxQLCore(Section(("Cache:OwnerFetchCacheMaxEntries", "222"))).BuildServiceProvider();
+
+        renamed.GetRequiredService<OxQLOptions>().Cache.OwnerFetchCacheMaxEntries.Should().Be(222);
+        renamed.GetServices<OxQLOptionsAdjustment>().Should().BeEmpty();
     }
 
     [Fact]

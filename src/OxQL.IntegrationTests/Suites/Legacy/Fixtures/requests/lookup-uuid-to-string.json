@@ -1,0 +1,30 @@
+{
+  "entityType": "staff.employee",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000701"
+        }
+      }
+    },
+    {
+      "lookup": {
+        "from": "employee.holiday",
+        "localPath": "_id",
+        "foreignPath": "Employee._id",
+        "as": "Holidays",
+        "convert": "uuidToString"
+      }
+    },
+    {
+      "project": {
+        "MatchCode": 1,
+        "Holidays": {
+          "Year": 1,
+          "Taken": 1
+        }
+      }
+    }
+  ]
+}

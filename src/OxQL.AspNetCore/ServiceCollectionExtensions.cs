@@ -8,6 +8,7 @@ using OxQL.AspNetCore.Authorization;
 using OxQL.AspNetCore.Controllers;
 using OxQL.AspNetCore.Resolve;
 using OxQL.AspNetCore.Scope;
+using OxQL.Core.Models;
 
 namespace OxQL.AspNetCore;
 
@@ -43,6 +44,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddHttpContextAccessor();
         services.AddScoped<IOxQLQueryService, OxQLQueryService>();
+        // LEGACY(compat.v1): the legacy pipeline's route; remove with src/OxQL.AspNetCore/Legacy.
+        services.TryAddScoped<Legacy.LegacyRoute>();
         services.TryAddSingleton<Health.RemoteHealthProbe>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();
@@ -58,6 +61,8 @@ public static class ServiceCollectionExtensions
             {
                 foreach (var converter in converters)
                     opts.SerializerOptions.Converters.Add(converter);
+
+                opts.SerializerOptions.MaxDepth = OxQLJson.MaxDepth;
             });
 
         var mvcBuilder = services.AddControllers()
@@ -66,6 +71,10 @@ public static class ServiceCollectionExtensions
             {
                 opts.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
                 opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+
+                // MVC stops at depth 32: explain's emitted stages of a flatten unwind or a join chain,
+                // and a deeply nested stored row, nest deeper and would fail the 200 while it is written.
+                opts.JsonSerializerOptions.MaxDepth = OxQLJson.MaxDepth;
             });
 
         if (options.RequireAuthorization)

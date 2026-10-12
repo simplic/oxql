@@ -1,0 +1,65 @@
+using System.Text.Json.Nodes;
+using FluentAssertions;
+using Xunit;
+
+namespace OxQL.IntegrationTests.Suites.Report;
+
+/// <summary>
+/// The studio's scenario requests (the request files its describe-plan spec writes) are the
+/// reference requests written in <see cref="ReportScenarios"/>, structurally: parsed JSON, member order not significant. A2b is A1
+/// with the reference lookup appended after the second resolve (and its alias projected); A4, for which
+/// there is no reference request, is A5 without A1/A2b/A3's stages and their projected aliases.
+/// </summary>
+[Trait("Category", "Integration")]
+public class ReportRequestTests
+{
+    private static JsonObject Design(string json) => JsonNode.Parse(json)!.AsObject();
+
+    private static void ShouldEqual(JsonNode actual, JsonNode expected) =>
+        JsonNode.DeepEquals(actual, expected).Should().BeTrue($"the studio's request\n{actual.ToJsonString()}\nequals the reference request\n{expected.ToJsonString()}");
+
+    [Fact]
+    public void R01_A1_the_billing_line_chain_is_the_reference_request() => ShouldEqual(ReportScenarios.Request("A1"), Design(ReportScenarios.DesignA1));
+
+    [Fact]
+    public void R02_A2a_the_latest_entry_on_transport_is_the_reference_request() => ShouldEqual(ReportScenarios.Request("A2"), Design(ReportScenarios.DesignA2a));
+
+    [Fact]
+    public void R03_A2b_is_A1_with_the_latest_attempt_appended_after_the_second_resolve()
+    {
+        var expected = Design(ReportScenarios.DesignA1);
+        var pipeline = expected["pipeline"]!.AsArray();
+
+        pipeline.Insert(ReportScenarios.IndexOf(expected, "sourceLine") + 1, JsonNode.Parse(ReportScenarios.DesignA2bStage));
+
+        // The alias shows what the projection names under it: a join has no select.
+        foreach (var member in new[] { "id", "dateTime", "status" })
+            pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!["lastAttempt." + member] = 1;
+
+        ShouldEqual(ReportScenarios.Request("A2b"), expected);
+    }
+
+    [Fact]
+    public void R04_A3_the_email_of_the_contact_is_the_reference_request() => ShouldEqual(ReportScenarios.Request("A3"), Design(ReportScenarios.DesignA3));
+
+    [Fact]
+    public void R05_A4_the_single_needs_are_A5_without_the_stages_of_A1_A2b_and_A3()
+    {
+        string[] dropped = ["recipientContact", "erpLine", "sourceLine", "lastAttempt"];
+        var expected = Design(ReportScenarios.DesignA5);
+        var pipeline = expected["pipeline"]!.AsArray();
+
+        foreach (var alias in dropped)
+            pipeline.RemoveAt(ReportScenarios.IndexOf(expected, alias));
+
+        var project = pipeline.Single(stage => stage!.AsObject().ContainsKey("project"))!["project"]!.AsObject();
+
+        foreach (var member in project.Select(pair => pair.Key).Where(member => dropped.Append("sourceParent").Any(alias => member.StartsWith(alias + ".", StringComparison.Ordinal))).ToList())
+            project.Remove(member);
+
+        ShouldEqual(ReportScenarios.Request("A4"), expected);
+    }
+
+    [Fact]
+    public void R06_A5_the_full_invoice_is_the_reference_request() => ShouldEqual(ReportScenarios.Request("A5"), Design(ReportScenarios.DesignA5));
+}

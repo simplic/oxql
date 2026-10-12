@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Options;
@@ -33,8 +34,9 @@ public sealed record EntityStorage(string Collection, string? Database = null);
 /// Builds the model from an Ox Schema document (format 1.x). Storage names follow the
 /// document's rule: <c>storageName</c> where published, otherwise the wire name with its first
 /// letter upper-cased and <c>id</c> as <c>_id</c> at every depth. Representations are the
-/// defaults the services store each kind in. Tests, tooling and the Studio use it; a host uses
-/// <see cref="ClrModelBuilder"/>.
+/// defaults the services store each kind in, unless the document says otherwise (<c>storedAs</c>); a
+/// member it marks <c>stored: false</c> is not stored. Tests, tooling and the Studio use it; a host
+/// uses <see cref="ClrModelBuilder"/>.
 /// </summary>
 public sealed class DocumentModelBuilder
 {
@@ -68,7 +70,7 @@ public sealed class DocumentModelBuilder
         new DocumentModelBuilder(options ?? new DocumentModelOptions()).BuildCore(document);
 
     /// <summary>The representation a kind is stored in when nothing pins another.</summary>
-    public static Representation DefaultRepresentation(Kind kind) => kind switch
+    private static Representation DefaultRepresentation(Kind kind) => kind switch
     {
         Kind.String => Representation.Of(BsonType.String),
         Kind.Int => Representation.Of(BsonType.Int32),
@@ -90,7 +92,7 @@ public sealed class DocumentModelBuilder
         if (document.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("A schema document is a JSON object.");
 
-        var version = document.TryGetProperty("schemaVersion", out var versionElement) ? versionElement.GetString() : null;
+        var version = ReadString(document, "schemaVersion");
 
         if (version is null || !version.StartsWith("1.", StringComparison.Ordinal))
             throw new InvalidDataException($"The schema document format '{version ?? "(none)"}' is not one this reader understands (1.x).");
@@ -104,7 +106,10 @@ public sealed class DocumentModelBuilder
 
         foreach (var entry in types.EnumerateObject())
             if (!pool[entry.Name].IsEnum)
+            {
                 pool[entry.Name].Members = DescribeMembers(entry.Name, entry.Value);
+                DescribeVariants(pool[entry.Name], entry.Value);
+            }
 
         var entities = new List<EntityDef>();
         var retired = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -132,7 +137,7 @@ public sealed class DocumentModelBuilder
             if (entry.Value.TryGetProperty("aliases", out var aliases) && aliases.ValueKind == JsonValueKind.Array)
                 retired[entry.Name] = aliases
                     .EnumerateArray()
-                    .Select(alias => alias.GetString())
+                    .Select(alias => alias.ValueKind == JsonValueKind.String ? alias.GetString() : null)
                     .Where(alias => !string.IsNullOrWhiteSpace(alias) && !alias.StartsWith('$'))
                     .Select(alias => alias!)
                     .ToList();
@@ -144,7 +149,10 @@ public sealed class DocumentModelBuilder
     private static TypeDef CreateEntry(string id, JsonElement entry)
     {
         var isEntity = ReadBool(entry, "entity");
-        var type = new TypeDef(id, clrType: null, isEntity);
+        var type = new TypeDef(id, clrType: null, isEntity)
+        {
+            Description = ReadString(entry, "description"),
+        };
 
         if (ReadString(entry, "kind") == Kinds.NameOf(Kind.Enum))
         {
@@ -155,7 +163,8 @@ public sealed class DocumentModelBuilder
                 type.EnumValues = values.EnumerateArray().Select(value => new EnumValueDef(
                     ReadString(value, "name") ?? "",
                     ReadLong(value, "value"),
-                    !value.TryGetProperty("active", out var active) || active.ValueKind != JsonValueKind.False)).ToList();
+                    !value.TryGetProperty("active", out var active) || active.ValueKind != JsonValueKind.False,
+                    ReadString(value, "description"))).ToList();
         }
 
         return type;
@@ -180,12 +189,21 @@ public sealed class DocumentModelBuilder
             {
                 Nullable = ReadBool(descriptor, "nullable"),
                 DisplayName = ReadString(descriptor, "displayName"),
+                Description = ReadString(descriptor, "description"),
+                Deprecated = ReadDeprecation(descriptor),
+                Constraints = ReadConstraints(descriptor),
             };
 
             if (options.MemberStorage is not null && options.MemberStorage.TryGetValue(label, out var overridden))
             {
                 member.Stored = overridden is not null;
                 member.StorageName = overridden;
+            }
+            else if (descriptor.TryGetProperty("stored", out var stored) && stored.ValueKind == JsonValueKind.False)
+            {
+                // The service returns the member and does not store it.
+                member.Stored = false;
+                member.StorageName = null;
             }
             else
             {
@@ -195,11 +213,38 @@ public sealed class DocumentModelBuilder
 
             FillShape(member, descriptor, label);
 
+            if (descriptor.TryGetProperty("onlyFor", out var onlyFor) && onlyFor.ValueKind == JsonValueKind.Array)
+                member.OnlyFor = onlyFor
+                    .EnumerateArray()
+                    .Where(name => name.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(name.GetString()))
+                    .Select(name => name.GetString()!)
+                    .ToList();
+
+            // The value an unstored member holds per variant of its type (format 1.1, additive).
+            if (!member.Stored && member.Kind == Kind.String && descriptor.TryGetProperty("byVariant", out var byVariant) && byVariant.ValueKind == JsonValueKind.Object)
+            {
+                var values = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+                foreach (var held in byVariant.EnumerateObject())
+                    if (held.Value.ValueKind == JsonValueKind.String)
+                        values[held.Name] = held.Value.GetString()!;
+
+                if (values.Count > 0)
+                    member.ByVariant = values;
+            }
+
             if (member.Kind == Kind.Dictionary && options.DictionaryRepresentations is not null
                 && options.DictionaryRepresentations.TryGetValue(label, out var representation))
                 member.DictionaryRepresentation = representation;
 
-            if (descriptor.TryGetProperty("references", out var reference) && reference.ValueKind == JsonValueKind.Object)
+            // An empty or unreadable case list declares nothing, and a simple `references` beside it still counts.
+            if (descriptor.TryGetProperty("referenceCases", out var cases) && cases.ValueKind == JsonValueKind.Array && cases.GetArrayLength() > 0)
+            {
+                // Format 1.1: the typed, item and converted cases. A member publishes either
+                // these or a simple `references`, never both; the cases win if a document does.
+                ReadReferenceCases(member, label, cases);
+            }
+            else if (descriptor.TryGetProperty("references", out var reference) && reference.ValueKind == JsonValueKind.Object)
             {
                 var inferred = ReadBool(reference, "inferred");
                 var target = ReadString(reference, "entity");
@@ -208,10 +253,151 @@ public sealed class DocumentModelBuilder
                     references.Add(new PendingReference(member, label, target, ReadString(reference, "field"), ReferenceSource.Document));
             }
 
+            // The relation name as its publisher derived it (it may know a navigation property this
+            // reader cannot see); a document without one gets the names this engine derives.
+            if (descriptor.TryGetProperty("relation", out var relation) && relation.ValueKind == JsonValueKind.Object
+                && ReadString(relation, "name") is { Length: > 0 } relationName)
+                member.Relation = new RelationDef(relationName, ReadString(relation, "member"));
+
             members.Add(member);
         }
 
         return members;
+    }
+
+    /// <summary>
+    /// A property's <c>referenceCases</c> (format 1.1): per case an optional <c>when</c>
+    /// (<c>{ "path", "equals": [..] }</c> or <c>{ "variant": [..] }</c>), an optional
+    /// <c>"keyAs": "guid"</c> and the <c>targets</c> <c>{ entity, item?, field? }</c>. A case this
+    /// reader cannot read (no targets, a <c>when</c> that is neither form or both, an unknown
+    /// <c>keyAs</c>) is <c>reference-declaration-unresolved</c> and left out.
+    /// </summary>
+    private void ReadReferenceCases(MemberDef member, string label, JsonElement cases)
+    {
+        foreach (var item in cases.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var targets = new List<PendingTarget>();
+
+            if (item.TryGetProperty("targets", out var targetList) && targetList.ValueKind == JsonValueKind.Array)
+                foreach (var target in targetList.EnumerateArray())
+                    if (ReadString(target, "entity") is { Length: > 0 } entity)
+                        targets.Add(new PendingTarget(entity, ReadString(target, "field"), ReadString(target, "item")));
+
+            var keyAsText = ReadString(item, "keyAs");
+            KeyAs? keyAs = keyAsText switch
+            {
+                null => KeyAs.None,
+                "guid" => KeyAs.Guid,
+                _ => null,
+            };
+
+            var when = ReadCondition(item, out var readable);
+
+            if (targets.Count == 0 || keyAs is null || !readable)
+            {
+                findings.Add(new BuildFinding(
+                    BuildCodes.ReferenceDeclarationUnresolved,
+                    label,
+                    "A reference case of the document names no target, an unknown keyAs or a condition that is neither { path, equals } nor { variant }, so the case is left out.",
+                    item.GetRawText()));
+
+                continue;
+            }
+
+            references.Add(new PendingReference(member, label, targets, ReferenceSource.Document, when, keyAs.Value));
+        }
+    }
+
+    /// <summary>A case's <c>when</c>: null when absent; <paramref name="readable"/> false when present and neither form.</summary>
+    private static ReferenceCondition? ReadCondition(JsonElement item, out bool readable)
+    {
+        readable = true;
+
+        if (!item.TryGetProperty("when", out var when) || when.ValueKind == JsonValueKind.Null)
+            return null;
+
+        readable = false;
+
+        if (when.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var path = ReadString(when, "path");
+        var equals = ReadStrings(when, "equals");
+        var variant = ReadStrings(when, "variant");
+
+        if (!string.IsNullOrEmpty(path) && equals is { Count: > 0 } && variant is null)
+        {
+            readable = true;
+            return new ReferenceCondition.PathEquals(path, equals);
+        }
+
+        if (path is null && equals is null && variant is { Count: > 0 })
+        {
+            readable = true;
+            return new ReferenceCondition.Variant(variant);
+        }
+
+        return null;
+    }
+
+    /// <summary>An array of strings, or null when the member is absent or not an array.</summary>
+    private static List<string>? ReadStrings(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+            ? [.. value.EnumerateArray().Where(entry => entry.ValueKind == JsonValueKind.String).Select(entry => entry.GetString()!)]
+            : null;
+
+    /// <summary>
+    /// A polymorphic entry's <c>discriminator</c> and <c>variants</c> (format 1.1). A document
+    /// carries no discriminator value per variant, so the variant's name stands in for it; a
+    /// variant whose pointer has no target is a dangling pointer and left out.
+    /// </summary>
+    private void DescribeVariants(TypeDef type, JsonElement entry)
+    {
+        if (!entry.TryGetProperty("variants", out var variants) || variants.ValueKind != JsonValueKind.Array)
+            return;
+
+        var described = new List<VariantDef>();
+
+        foreach (var variant in variants.EnumerateArray())
+        {
+            var name = ReadString(variant, "name");
+            var pointer = ReadString(variant, "type");
+
+            if (string.IsNullOrEmpty(name))
+                continue;
+
+            if (pointer is null || !pool.TryGetValue(StripPointer(pointer), out var target))
+            {
+                findings.Add(new BuildFinding(
+                    BuildCodes.DanglingTypePointer,
+                    $"{type.PoolId}@{name}",
+                    $"The variant's pointer '{pointer}' has no target in the pool, so the variant is left out."));
+
+                continue;
+            }
+
+            described.Add(new VariantDef(name, name, target));
+        }
+
+        if (described.Count == 0)
+            return;
+
+        type.Variants = described;
+        type.BaseVariant = ReadString(entry, "baseVariant");
+
+        if (entry.TryGetProperty("discriminator", out var discriminator) && discriminator.ValueKind == JsonValueKind.Object)
+        {
+            type.DiscriminatorElement = ReadString(discriminator, "element") ?? "_t";
+            type.DiscriminatorForm = ReadString(discriminator, "form") == "hierarchical" ? DiscriminatorForm.Hierarchical : DiscriminatorForm.Scalar;
+        }
+        else
+        {
+            type.DiscriminatorElement = "_t";
+            type.DiscriminatorForm = DiscriminatorForm.Scalar;
+        }
     }
 
     private void FillShape(ShapeDef shape, JsonElement descriptor, string label)
@@ -221,6 +407,26 @@ public sealed class DocumentModelBuilder
         shape.Kind = kind;
         shape.Representation = DefaultRepresentation(kind);
         shape.SnapshotOf = ReadString(descriptor, "snapshotOf");
+
+        // Where the kind does not say how the value is stored, the document does.
+        switch (ReadString(descriptor, "storedAs"))
+        {
+            case "codePoint" when kind == Kind.String:
+                shape.Representation = Representation.Of(BsonType.Int32);
+                break;
+
+            case "document" when Kinds.IsScalar(kind):
+                shape.Representation = Representation.Of(BsonType.Document);
+                break;
+
+            case "arrayOfDocuments" when kind == Kind.Dictionary:
+                shape.DictionaryRepresentation = DictionaryRepresentation.ArrayOfDocuments;
+                break;
+
+            case "arrayOfArrays" when kind == Kind.Dictionary:
+                shape.DictionaryRepresentation = DictionaryRepresentation.ArrayOfArrays;
+                break;
+        }
 
         switch (kind)
         {
@@ -259,6 +465,34 @@ public sealed class DocumentModelBuilder
         }
     }
 
+    /// <summary>A property's <c>deprecated</c> member: <c>{ since, replacedBy, note }</c>.</summary>
+    private static DeprecationDef? ReadDeprecation(JsonElement descriptor) =>
+        descriptor.TryGetProperty("deprecated", out var deprecated) && deprecated.ValueKind == JsonValueKind.Object
+            ? new DeprecationDef
+            {
+                Since = ReadString(deprecated, "since"),
+                ReplacedBy = ReadString(deprecated, "replacedBy"),
+                Note = ReadString(deprecated, "note"),
+            }
+            : null;
+
+    /// <summary>A property's <c>constraints</c> member: <c>{ maxLength, min, max, pattern }</c>, bounds as strings.</summary>
+    private static ConstraintsDef? ReadConstraints(JsonElement descriptor)
+    {
+        if (!descriptor.TryGetProperty("constraints", out var constraints) || constraints.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return new ConstraintsDef
+        {
+            MaxLength = constraints.TryGetProperty("maxLength", out var maxLength) && maxLength.ValueKind == JsonValueKind.Number && maxLength.TryGetInt32(out var length)
+                ? length
+                : null,
+            Min = ReadString(constraints, "min"),
+            Max = ReadString(constraints, "max"),
+            Pattern = ReadString(constraints, "pattern"),
+        };
+    }
+
     private static string StripPointer(string pointer) =>
         pointer.StartsWith("#/types/", StringComparison.Ordinal) ? pointer["#/types/".Length..] : pointer;
 
@@ -277,7 +511,7 @@ public sealed class DocumentModelBuilder
         return value.ValueKind switch
         {
             JsonValueKind.Number when value.TryGetInt64(out var number) => number,
-            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
             _ => 0,
         };
     }

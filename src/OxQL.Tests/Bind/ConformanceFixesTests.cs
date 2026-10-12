@@ -329,8 +329,8 @@ public class ConformanceFixesTests
     [Theory]
     [InlineData("""{ "page": { "limit": 5, "skip": 10 } }""", "skip")]
     [InlineData("""{ "page": { "limit": 5, "includeCount": true } }""", "includeCount")]
-    [InlineData("""{ "unwind": { "path": "items", "preserveNulls": true } }""", "preserveNulls")]
-    [InlineData("""{ "unwind": { "path": "items", "includeArrayIndex": "i" } }""", "includeArrayIndex")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "preserveNulls": true } }""", "preserveNulls")]
+    [InlineData("""{ "unwind": { "path": "items", "as": "item", "includeArrayIndex": "i" } }""", "includeArrayIndex")]
     [InlineData("""{ "group": { "by": [], "fields": {}, "having": {} } }""", "having")]
     [InlineData("""{ "group": { "by": [{ "path": "state", "as": "s", "trunc": {} }], "fields": {} } }""", "trunc")]
     public async Task C13_a_stage_member_the_engine_does_not_have_is_refused(string stage, string member)
@@ -344,7 +344,7 @@ public class ConformanceFixesTests
     [Fact]
     public async Task C13_the_members_each_stage_does_have_still_bind()
     {
-        var page = await Bound("""[{ "page": { "limit": 5, "offset": 10, "includeTotalCount": true } }]""");
+        var page = await Bound("""[{ "page": { "limit": 5, "offset": 10, "includeTotalCount": true } }]""", BindHost.Context() with { Internal = true });
 
         page.Page.Limit.Should().Be(5);
         page.Page.Offset.Should().Be(10);
@@ -420,14 +420,12 @@ public class ConformanceFixesTests
         (await Error("""[{ "match": { "addon.weight": { "eq": 1 } } }]""", Codes.NotFilterable, BindHost.Context(addons: new OneRetired("weight"))))
             .Path.Should().Be("addon.weight");
 
-    // ---- F-ENT-003 · the remote resolve default select ---------------------------------------
+    // ---- the remote resolve default select ---------------------------------------------------
 
     /// <summary>
-    /// F-ENT-003. A remote resolve with no <c>select</c> sent the owner no projection and got
-    /// whole documents — ~2 KB a row, <c>organizationId</c> included — where the local half of
-    /// the same stage returns the target's key and display. The caller cannot name the owner's
-    /// display member, so the reserved <c>$default</c> key asks the owner to apply the pair
-    /// itself, and the two halves answer the same question.
+    /// A remote resolve with no <c>select</c> answers the target's key and display, as the local
+    /// half of the same stage does. The caller cannot name the owner's display member, so the
+    /// reserved <c>$default</c> key asks the owner to apply the pair itself.
     /// </summary>
     [Fact]
     public async Task F_ENT_003_the_default_select_key_expands_to_the_entitys_key_and_display()
@@ -439,7 +437,7 @@ public class ConformanceFixesTests
         project.Paths.Select(path => path.Wire).Should().BeEquivalentTo("id", "number");
     }
 
-    /// <summary>F-ENT-003. It is the entity's own pair, so it means nothing after a group.</summary>
+    /// <summary>It is the entity's own pair, so it means nothing after a group.</summary>
     [Fact]
     public async Task F_ENT_003_the_default_select_key_is_refused_where_the_shape_is_not_the_entitys() =>
         (await Error("""[{ "group": { "by": [{ "path": "state", "as": "s" }], "fields": {} } }, { "project": { "$default": 1 } }]""", Codes.UnknownPath))

@@ -10,7 +10,7 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// Contract 1 compatibility (design §12): storage and CLR spellings resolved relative to the
+/// Contract 1 compatibility: storage and CLR spellings resolved relative to the
 /// folded shape, alias roots included; the v1 type hints unwrapped; v1 joins refused.
 /// </summary>
 public class CompatBinderTests

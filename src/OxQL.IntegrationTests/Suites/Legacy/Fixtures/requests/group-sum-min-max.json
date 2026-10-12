@@ -1,0 +1,36 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "group": {
+        "by": [
+          {
+            "path": "Status.Name",
+            "as": "Status"
+          }
+        ],
+        "fields": {
+          "Count": {
+            "count": true
+          },
+          "Sum": {
+            "sum": "GeneratedTourNrCounter"
+          },
+          "First": {
+            "min": "Number"
+          },
+          "Last": {
+            "max": "EndDateTime"
+          }
+        }
+      }
+    },
+    {
+      "sort": [
+        {
+          "Status": "asc"
+        }
+      ]
+    }
+  ]
+}

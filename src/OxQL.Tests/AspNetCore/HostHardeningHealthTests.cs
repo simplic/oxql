@@ -92,7 +92,7 @@ public class HostHardeningHealthTests
 
         using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
 
-        var response = await host.CreateClient().GetAsync("/OxQL/health?shallow=true");
+        var response = await host.Client(contract: 2).GetAsync("/OxQL/health?shallow=true");
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);

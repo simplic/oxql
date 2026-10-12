@@ -1,0 +1,803 @@
+using OxQL.Core.Engine;
+using OxQL.Core.Models;
+using OxQL.Model;
+
+namespace OxQL.Core.Binding;
+
+/// <summary>
+/// The engine-behaviour notes of an explain: what the engine does with a request that
+/// binds, said once where it applies, never an error and never a change to the rows. A note has the
+/// form of a diagnostic (<c>{ code, message, stage, path, params }</c>); the studio renders
+/// <c>oxqlStudio.note.&lt;CODE&gt;</c> when it has the key, else the message. The codes are not in
+/// <see cref="Codes"/>: a note is no refusal and no diagnostic of a run, with two exceptions the
+/// diagnostics of a run carry as well: a path under a union's alias that an owner said its target lacks
+/// (<see cref="SelectPathNotOnTarget"/>), which only a run can learn, and a filter entry that ran before
+/// the group that reuses its name (<see cref="FilterBindsEarlier"/>).
+/// </summary>
+public static class Notes
+{
+    /// <summary>A string comparison, sort or group key folds case and accents under the host's collation (params <c>locale</c>, <c>strength</c>, <c>op</c>).</summary>
+    public const string TextFolds = "TEXT_FOLDS";
+
+    /// <summary>A folding comparison that runs as a pattern folds case only, not accents (params <c>op</c>). Contract 1 only: a contract 2 pattern folds what its collation folds (<see cref="PatternFolds"/>).</summary>
+    public const string PatternFoldsCaseOnly = "PATTERN_FOLDS_CASE_ONLY";
+
+    /// <summary>
+    /// <c>contains</c> or <c>endsWith</c> folds case, and accents when the collation does, as a pattern:
+    /// no index bounds it, it reads every candidate row (params <c>op</c>, <c>locale</c>,
+    /// <c>strength</c>, <c>accents</c>).
+    /// </summary>
+    public const string PatternFolds = "PATTERN_FOLDS";
+
+    /// <summary>An exact sort makes every string comparison, sort and group key of the request exact as well (params <c>op</c>).</summary>
+    public const string ExactForcesExact = "EXACT_FORCES_EXACT";
+
+    /// <summary>A condition through a collection that is not unwound matches when some element matches (params <c>op</c>).</summary>
+    public const string SomeElement = "SOME_ELEMENT";
+
+    /// <summary><c>neq</c>/<c>nin</c> also match rows where the member is absent or null (params <c>op</c>).</summary>
+    public const string NeqMatchesAbsent = "NEQ_MATCHES_ABSENT";
+
+    /// <summary>The path exists only on some variants of a polymorphic value (params <c>variants</c>).</summary>
+    public const string OnlyForVariants = "ONLY_FOR_VARIANTS";
+
+    /// <summary>The path lies in an embedded copy of another entity, not its current record (params <c>entity</c>).</summary>
+    public const string SnapshotCopy = "SNAPSHOT_COPY";
+
+    /// <summary>A join runs in the aggregate before the page is taken (params <c>alias</c>, <c>kind</c>).</summary>
+    public const string JoinBeforePage = "JOIN_BEFORE_PAGE";
+
+    /// <summary>A join runs after the page is taken, for the page's rows only (params <c>alias</c>, <c>kind</c>).</summary>
+    public const string JoinAfterPage = "JOIN_AFTER_PAGE";
+
+    /// <summary>What lies under a remote or continued alias is bound by the owner, not here (params <c>alias</c>, <c>services</c>).</summary>
+    public const string OwnerBinds = "OWNER_BINDS";
+
+    /// <summary>A continued part could not be checked at its owner.</summary>
+    public const string RemoteUnchecked = "REMOTE_UNCHECKED";
+
+    /// <summary>A path asked under a union's alias (its select hint, or what the projection names under it) that one target lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>, <c>target</c>, <c>parent</c>: a path of the owning row, <c>parentAs</c>).</summary>
+    public const string SelectPathNotOnTarget = "SELECT_PATH_NOT_ON_TARGET";
+
+    /// <summary>The total count stops at a cap (params <c>cap</c>).</summary>
+    public const string CountCap = "COUNT_CAP";
+
+    /// <summary>A lookup, or a resolve collecting every element, holds at most a number of rows per parent (params <c>alias</c>, <c>limit</c>).</summary>
+    public const string LookupLimit = "LOOKUP_LIMIT";
+
+    /// <summary>The rows page by offset, which may repeat or skip rows between pages and ends at a maximum offset (params <c>maxOffset</c>).</summary>
+    public const string OffsetPaging = "OFFSET_PAGING";
+
+    /// <summary>What a resolve does with data loss (params <c>alias</c>, <c>onMissing</c>, <c>strict</c>, <c>dataLoss</c>).</summary>
+    public const string MissingPolicy = "MISSING_POLICY";
+
+    /// <summary>A strict request that neither continues nor jumps reads every row in one page or refuses (params <c>limit</c>, <c>max</c>).</summary>
+    public const string ReportPage = "REPORT_PAGE";
+
+    /// <summary>
+    /// One index of the opt-in index advisory, at the part of the request it serves first (params
+    /// <c>id</c>, <c>for</c>, <c>collection</c>, <c>existing</c>, <c>used</c>, <c>index</c>); or that
+    /// the index lists could not be read (params <c>reason</c>).
+    /// </summary>
+    public const string IndexAdvice = "INDEX_ADVICE";
+
+    /// <summary>
+    /// A lookup of another service's entity runs at its owner after the page, grouped per key and
+    /// ranked there, within bounds the owner enforces (params <c>alias</c>, <c>service</c>, <c>entity</c>, <c>perKey</c>, <c>keysPerQuery</c>, <c>sorted</c>).
+    /// </summary>
+    public const string RemoteLookup = "REMOTE_LOOKUP";
+
+    /// <summary>
+    /// An explain limit was hit mid-way (more owner services, owner calls or time than an explain may
+    /// spend): the answer says what is known, <c>cache.complete</c> is false, nothing is retried
+    /// (params <c>limit</c>, <c>max</c>, and <c>service</c>/<c>target</c> of the part left out).
+    /// </summary>
+    public const string ExplainLimit = Codes.ExplainLimit;
+
+    /// <summary>The answer was larger than <c>Explain.MaxAnswerBytes</c> and was trimmed (params <c>dropped</c>, <c>bytes</c>, <c>max</c>).</summary>
+    public const string ExplainTrimmed = "EXPLAIN_TRIMMED";
+
+    /// <summary>
+    /// A condition of the top-level <c>filter</c> was placed where its path first exists, and a later
+    /// <c>group</c> gives the same name to another thing (an aggregate, or a key over another path): the
+    /// condition is about the earlier one (params <c>path</c>, <c>alias</c>).
+    /// </summary>
+    public const string FilterBindsEarlier = "FILTER_BINDS_EARLIER";
+
+    /// <summary>
+    /// A projection runs after the page is taken, on the page's rows, wherever the request wrote it: the
+    /// rows and their order are the same, and the database cuts the page to its columns instead of every
+    /// candidate row (no params).
+    /// </summary>
+    public const string ProjectAfterPage = "PROJECT_AFTER_PAGE";
+
+    /// <summary>
+    /// The rows are ordered and cut to what the page can reach before their collection is unwound: the
+    /// page's order is the order of the rows that hold the collection, so the unwind and the page's own
+    /// sort see a page's worth of them instead of every candidate row (params <c>path</c>, <c>alias</c>).
+    /// </summary>
+    public const string SortBeforeUnwind = "SORT_BEFORE_UNWIND";
+
+    /// <summary>
+    /// What the request asks of the element after an unwind is also asked of the collection before it:
+    /// only a row with an element that passes is unwound (params <c>path</c>, <c>alias</c>, <c>paths</c>).
+    /// </summary>
+    public const string UnwindPrefilter = "UNWIND_PREFILTER";
+
+    /// <summary>
+    /// A condition on another service's member is asked of its owner through a reference onto a member
+    /// that is not the target's key: the owner's matching rows are read by that member, and a run
+    /// refuses (422 <c>RESOLVE_REFUSED</c>) when one of them does not carry it. Only a run can tell
+    /// (params <c>alias</c>, <c>target</c>, <c>field</c>, <c>services</c>).
+    /// </summary>
+    public const string SemiJoinNotByKey = "SEMI_JOIN_NOT_BY_KEY";
+
+    /// <summary>
+    /// A group is computed over every row that reaches it, for every page of groups: the page cuts the
+    /// groups it answers, never the rows the database reads for them. Said once, at the first group of
+    /// the request (params <c>keys</c>: how many keys it groups by, 0 for the totals).
+    /// </summary>
+    public const string GroupScans = "GROUP_SCANS";
+
+    /// <summary>
+    /// What a <c>values</c> stage reads: at most <c>scan</c> of the rows that reach it, whatever the
+    /// request matches, and the collections above its path unwound for the values alone (params
+    /// <c>scan</c>, <c>limit</c>, <c>counts</c>, <c>unwinds</c>: how many collections). Said at the stage.
+    /// </summary>
+    public const string ValuesScans = "VALUES_SCANS";
+
+    /// <summary>Every note code, in a fixed order; the studio's key list equals it.</summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        TextFolds, PatternFoldsCaseOnly, ExactForcesExact, SomeElement, NeqMatchesAbsent, OnlyForVariants, SnapshotCopy,
+        JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
+        OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
+        PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans, ValuesScans,
+    ];
+
+    /// <summary>The outcomes that lose data, in the table's order.</summary>
+    public static readonly IReadOnlyList<string> DataLossOutcomes = ["ambiguous", "not_found", "invalid_key", "owner_unanswered"];
+
+    /// <summary>Every outcome a join's row may have, as the wire spells it: what a member named by <c>outcomeAs</c> holds.</summary>
+    public static readonly IReadOnlyList<string> Outcomes = ["resolved", "ambiguous", "reference_null", "excluded", "not_applicable", "not_found", "invalid_key", "owner_unanswered"];
+
+    /// <summary>
+    /// The outcomes a join can have: an inline resolve joins one local entity in the aggregate, so it
+    /// has no <c>owner_unanswered</c>, no <c>invalid_key</c> and no <c>not_applicable</c>, an
+    /// <c>ambiguous</c> only onto a field that is not the key and an <c>excluded</c> only with a
+    /// filter; a keyed or remote one every outcome but <c>not_applicable</c>, which only a stage
+    /// continued at an owner has.
+    /// </summary>
+    public static IReadOnlyList<string> OutcomesOf(bool inline, bool continued, bool nonKey = true, bool filtered = true) =>
+        Outcomes.Where(outcome => outcome switch
+        {
+            "not_applicable" => continued,
+            "invalid_key" or "owner_unanswered" => !inline,
+            "ambiguous" => !inline || nonKey,
+            "excluded" => !inline || filtered,
+            _ => true,
+        }).ToList();
+
+    /// <summary>
+    /// The caller's stage index of each bound stage, by position: as the binder recorded them, or for a
+    /// pipeline built without it the caller's stages in order, except a default sort the binder
+    /// inserted (null, and every later stage one back) and a default page it appended (null).
+    /// </summary>
+    public static IReadOnlyList<int?> CallerIndexes(BoundPipeline bound, QueryRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(request);
+
+        // The binder records each bound stage's caller index, which also holds when a caller stage
+        // bound to no stage (an empty match); a pipeline built elsewhere is read by position.
+        if (bound.CallerIndexes is { } recorded && recorded.Count == bound.Stages.Count)
+            return recorded;
+
+        var written = request.Pipeline.Count;
+        var defaultSort = bound.Sort is not null && !request.Pipeline.Any(stage => stage.Sort is not null) ? bound.Sort : null;
+        var indexes = new List<int?>(bound.Stages.Count);
+        var shift = 0;
+
+        foreach (var stage in bound.Stages)
+        {
+            if (defaultSort is not null && ReferenceEquals(stage, defaultSort))
+            {
+                indexes.Add(null);
+                shift = 1;
+                continue;
+            }
+
+            var index = indexes.Count - shift;
+
+            indexes.Add(index < written ? index : null);
+        }
+
+        return indexes;
+    }
+
+    /// <summary>
+    /// The notes a bound request earns from its bound form alone: folding, element and absence
+    /// semantics of its conditions, variant-only and snapshot paths, what owners bind, dropped select
+    /// paths, caps and limits, paging, the missing policy of each resolve and the report page. The
+    /// join-placement notes (<see cref="Join"/>) and the index advice come from the compile and are
+    /// added by the engine.
+    /// </summary>
+    public static List<Diagnostic> Of(BoundPipeline bound, QueryRequest request, IReadOnlyList<int?> indexes, bool strict, int contract, OxQLOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(indexes);
+        ArgumentNullException.ThrowIfNull(options);
+
+        var collector = new Collector(bound, contract, options);
+
+        for (var position = 0; position < bound.Stages.Count; position++)
+        {
+            var stage = indexes[position];
+
+            // A condition the engine placed for a filter entry is said under that entry, not under a stage.
+            collector.Filter = bound.FilterOf(bound.Stages[position]);
+
+            switch (bound.Stages[position])
+            {
+                case BoundStage.Match match:
+                    collector.Condition(match.Condition, stage);
+                    break;
+
+                case BoundStage.Lookup lookup:
+                    if (lookup.Filter is not null)
+                        collector.Condition(lookup.Filter, stage);
+
+                    foreach (var field in lookup.ChildSort ?? [])
+                        collector.Sort(field, stage);
+
+                    if (!lookup.First)
+                        collector.Add(LookupLimit, stage, null, $"'{lookup.As}' holds at most {lookup.Limit} children per row; a row with more keeps the first {lookup.Limit} and is reported (LOOKUP_TRUNCATED).",
+                            new() { ["alias"] = lookup.As, ["limit"] = lookup.Limit });
+                    break;
+
+                // A lookup of another service's entity: its owner binds the child's members, and the
+                // limit, the placement and the owner's bounds are what the caller should know.
+                case BoundStage.Resolve { RemoteLookup: { } remoteLookup } resolve:
+                    collector.Add(OwnerBinds, stage, resolve.As,
+                        $"'{resolve.As}' comes from another service; its owner binds the path, the filter, the sort and every path under the alias.",
+                        new() { ["alias"] = resolve.As, ["services"] = new List<string> { remoteLookup.Service }, ["forTarget"] = null });
+
+                    if (!remoteLookup.First)
+                        collector.Add(LookupLimit, stage, null, $"'{resolve.As}' holds at most {remoteLookup.Limit} children per row; a row with more keeps the first {remoteLookup.Limit} and is reported (LOOKUP_TRUNCATED).",
+                            new() { ["alias"] = resolve.As, ["limit"] = remoteLookup.Limit });
+                    break;
+
+                case BoundStage.Resolve resolve:
+                    collector.Resolve(resolve, stage, strict);
+                    break;
+
+                case ContinuedStage continued:
+                {
+                    var binds = new Dictionary<string, object?> { ["alias"] = continued.Anchor, ["services"] = collector.ServicesOf(continued.Anchor), ["forTarget"] = continued.ForTarget };
+
+                    // Several targets, not all: the branches of a union join, or a stage under its alias.
+                    if (continued.Targets is { } several)
+                        binds["targets"] = several;
+
+                    collector.Add(OwnerBinds, stage, continued.Root, continued.Stage.Resolve?.ByTarget is not null
+                        ? $"This resolve continues under '{continued.Anchor}' at its owners, each of which binds and runs the branch of its target{(continued.Targets is { } branched ? $" ({string.Join(", ", branched.Select(target => $"'{target}'"))})" : "")}; rows resolved to another target leave the alias null."
+                        : $"This {continued.Kind} continues under '{continued.Anchor}' at its owner, which binds and runs it{(continued.ForTarget is { } only ? $" for rows resolved to '{only}' only" : continued.Targets is { } some ? $" for rows resolved to {string.Join(", ", some.Select(target => $"'{target}'"))} only" : "")}.",
+                        binds);
+
+                    // A continued resolve loses data at its owner as any resolve does.
+                    if (continued.Stage.Resolve is { } written)
+                        collector.Continued(written, continued.Root, stage, strict, continued.OnMissingInherited);
+                    break;
+                }
+
+                case BoundStage.Unwind unwind:
+                    collector.Path(unwind.Path, stage);
+                    break;
+
+                case BoundStage.Group group:
+                    foreach (var key in group.Keys)
+                    {
+                        if (key.Path is { } path)
+                            collector.Path(path, stage);
+
+                        if (contract == 2 && bound.Collated && key.OutputKind == Kind.String && key.Path is { Root: not ShapeNode.Outcome } folded && !OperandCoercer.IsCharRepresented(folded))
+                            collector.Folds(stage, folded.Wire, "groupKey");
+                    }
+                    break;
+
+                case BoundStage.Project project:
+                    foreach (var path in project.Paths)
+                        collector.Path(path, stage);
+                    break;
+
+                // The values of a string fold into one another as a group's keys do, and its search with them.
+                case BoundStage.Values values:
+                    collector.Path(values.Path, stage);
+
+                    if (bound.Collated && values.Path is { LeafKind: Kind.String, Root: not ShapeNode.Outcome } valued && !OperandCoercer.IsCharRepresented(valued))
+                        collector.Folds(stage, valued.Wire, "values");
+
+                    collector.Notes.Add(Scanned(stage, values));
+                    break;
+
+                case BoundStage.Sort sort:
+                    foreach (var field in sort.Fields)
+                        collector.Sort(field, stage);
+                    break;
+            }
+        }
+
+        collector.Filter = null;
+
+        collector.Notes.AddRange(FilterBindsEarlierOf(bound));
+
+        if (bound.Page.IncludeTotalCount)
+        {
+            var cap = bound.Page.CountCap ?? options.Limits.CountCap;
+
+            collector.Add(CountCap, PageIndex(request), null, $"The total count stops at {cap}; above it the count is the cap (TOTAL_COUNT_CAPPED).", new() { ["cap"] = cap });
+        }
+
+        // Contract 2 addresses every page by its cursor; what the cursor hides is not the caller's to plan by.
+        if (bound.PagingMode == PagingMode.Offset && contract != 2)
+        {
+            var reason = bound.Stages.Select((stage, position) => (stage, position)).FirstOrDefault(pair => pair.stage is BoundStage.Unwind or BoundStage.Group);
+
+            collector.Add(OffsetPaging, reason.stage is null ? null : indexes[reason.position], null,
+                $"After an unwind or a group the rows page by offset, up to offset {options.Limits.MaxOffset}; rows written between two pages may repeat or be skipped.",
+                new() { ["maxOffset"] = options.Limits.MaxOffset });
+        }
+
+        if (strict && IsReportPage(request))
+        {
+            var max = Math.Max(options.Limits.MaxPageSize, options.Limits.MaxReportPageSize);
+
+            collector.Add(ReportPage, PageIndex(request), null,
+                $"A strict request without cursor or offset reads every matching row in its one page of {bound.Page.Limit}, or refuses (PAGE_INCOMPLETE); the page may be raised up to {max}.",
+                new() { ["limit"] = bound.Page.Limit, ["max"] = max });
+        }
+
+        return collector.Notes;
+    }
+
+    /// <summary>A projection the engine runs after the page is taken (<see cref="ProjectAfterPage"/>).</summary>
+    public static Diagnostic LateProjection(int? stage) => new()
+    {
+        Code = ProjectAfterPage,
+        Message = "The projection runs after the page is taken, on the page's rows only: the rows and their order are the same wherever it is written.",
+        Stage = stage,
+    };
+
+    /// <summary>What a group reads for every page of groups (<see cref="GroupScans"/>).</summary>
+    public static Diagnostic Scanned(int? stage, int keys) => new()
+    {
+        Code = GroupScans,
+        Message = keys == 0
+            ? "The totals are computed over every row that reaches the group: no page and no cap makes them cheaper, only the conditions before the group do."
+            : "The groups are computed over every row that reaches the group, for every page of groups: the page cuts the groups answered, not the rows read. Only the conditions before the group make it cheaper.",
+        Stage = stage,
+        Params = new Dictionary<string, object?> { ["keys"] = keys },
+    };
+
+    /// <summary>What a values stage reads (<see cref="ValuesScans"/>).</summary>
+    private static Diagnostic Scanned(int? stage, BoundStage.Values values)
+    {
+        var path = values.Path.Wire;
+
+        return new Diagnostic
+        {
+            Code = ValuesScans,
+            Message = $"The values are read off at most {values.Scan} of the rows that reach the stage, whatever the request matches: when that many were read the answer says so (VALUES_SCAN_CAPPED) and lists the values among them."
+                + (values.Collections.Count > 0 ? $" '{path}' lies under {(values.Collections.Count == 1 ? "a collection" : $"{values.Collections.Count} collections")} the stage unwinds for the values: a value is one some element holds{(values.Counts ? ", and a count counts elements, a row without any once under null" : "")}." : "")
+                + " An index that holds the organisation, the path and what the conditions before the stage read, built without a collation, answers it without reading a document.",
+            Stage = stage,
+            Path = path,
+            Params = new Dictionary<string, object?> { ["scan"] = values.Scan, ["limit"] = values.Limit, ["counts"] = values.Counts, ["unwinds"] = values.Collections.Count },
+        };
+    }
+
+    /// <summary>The parents of an unwound page ordered and cut before the unwind (<see cref="SortBeforeUnwind"/>).</summary>
+    public static Diagnostic ParentsFirst(int? stage, string path, string? alias) => new()
+    {
+        Code = SortBeforeUnwind,
+        Message = $"The rows are ordered and cut to what the page can reach before '{path}' is unwound: the page's order is theirs, so only a page's worth of them is unwound.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
+    };
+
+    /// <summary>The element conditions asked of the collection before its unwind (<see cref="UnwindPrefilter"/>).</summary>
+    public static Diagnostic Prefiltered(int? stage, string path, string? alias, IReadOnlyList<string> paths) => new()
+    {
+        Code = UnwindPrefilter,
+        Message = $"Only rows with an element of '{path}' that passes what is asked of '{alias}' after the unwind are unwound.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias, ["paths"] = paths },
+    };
+
+    /// <summary>Where a join runs (<c>phase</c> in the explain answer): in the aggregate before the page, or after it.</summary>
+    public static Diagnostic Join(int? stage, string alias, string kind, bool afterPage) => new()
+    {
+        Code = afterPage ? JoinAfterPage : JoinBeforePage,
+        Message = afterPage
+            ? $"'{alias}' is joined after the page is taken, for the page's rows only."
+            : $"'{alias}' is joined in the aggregate before the page is taken, for every candidate row: a later stage reads it.",
+        Stage = stage,
+        Path = alias,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["kind"] = kind },
+    };
+
+    /// <summary>
+    /// A join only the rows' display reads that still runs before the page, because
+    /// <paramref name="path"/> is unwound after it: after the page it would run once per element of a
+    /// row it was written to read once. With <paramref name="onParents"/> it runs on the rows ordered
+    /// and cut before that unwind (<see cref="SortBeforeUnwind"/>), else where it was written.
+    /// </summary>
+    public static Diagnostic JoinBeforeUnwind(int? stage, string alias, string kind, string path, bool onParents) => new()
+    {
+        Code = JoinBeforePage,
+        Message = onParents
+            ? $"'{alias}' is joined before '{path}' is unwound, on the rows ordered and cut to what the page can reach: once per row, not once per element of the page."
+            : $"'{alias}' is joined where it is written, before '{path}' is unwound: once per row there, not once per element of the page.",
+        Stage = stage,
+        Path = alias,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["kind"] = kind, ["unwind"] = path, ["rows"] = onParents ? "parents" : "written" },
+    };
+
+    /// <summary>
+    /// How a lookup of another service's entity runs: one owner query per
+    /// <paramref name="keysPerQuery"/> parent keys of the page, at most <c>perKey</c> rows per key,
+    /// ranked at the owner by the lookup's sort and the child key over every child of those keys that
+    /// passes the filter. No index serves that per-key ranking, so what bounds it is said: the keys per
+    /// query, the rows per key, the owner's page, its time ceiling and its sort memory
+    /// (<c>QUERY_TOO_EXPENSIVE</c>), each enforced by the owner itself.
+    /// </summary>
+    public static Diagnostic RemoteLookupBounds(int? stage, string alias, BoundRemoteLookup lookup, int keysPerQuery) => new()
+    {
+        Code = RemoteLookup,
+        Message = $"'{alias}' is looked up at '{lookup.Service}' after the page is taken: one owner query per {keysPerQuery} keys, at most {lookup.PerKey} "
+            + $"{(lookup.PerKey == 1 ? "row" : "rows")} per key, ranked there by {(lookup.Sort.Count > 0 ? "the lookup's sort, then the child key" : "the child key")} over every child of those keys"
+            + $"{(lookup.Filter is null ? "" : " that passes the filter")}. No index serves that ranking; the owner bounds it by its page, its time ceiling and its sort memory (QUERY_TOO_EXPENSIVE), and refuses what exceeds its own limits.",
+        Stage = stage,
+        Path = alias,
+        Params = new Dictionary<string, object?>
+        {
+            ["alias"] = alias,
+            ["service"] = lookup.Service,
+            ["entity"] = lookup.From,
+            ["perKey"] = lookup.PerKey,
+            ["keysPerQuery"] = keysPerQuery,
+            ["sorted"] = lookup.Sort.Count > 0,
+        },
+    };
+
+    /// <summary>
+    /// A path asked under a union's alias that one target lacks, dropped for that target: at binding for a local
+    /// target; for a remote one by its owner's internal explain (the remote check), and by a run,
+    /// which keeps what it learned in the cache and reports it from there too.
+    /// </summary>
+    public static Diagnostic SelectPathDropped(int? stage, string alias, string target, string path, bool parent) => new()
+    {
+        Code = SelectPathNotOnTarget,
+        Message = parent
+            ? $"'{path}' is not a member of the row owning '{target}'; the owning row of '{alias}' carries it only for the other targets."
+            : $"'{path}' is not a member of '{target}'; '{alias}' carries it only for the other targets.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["target"] = target, ["parent"] = parent },
+    };
+
+    /// <summary>
+    /// The conditions of the request's <c>filter</c> that read a name a later <c>group</c> gives to
+    /// another thing (an aggregate, or a key over another path): each ran where its path first existed,
+    /// before that group, on the rows that feed it, and not on the group's output of the same name. Said
+    /// by explain as a note and by a run as a diagnostic of the answer, so that a 200 whose rows are not
+    /// what the name suggests after the group is never silent: at the group's stage, with the entry
+    /// (<c>filter</c>: its id or index), the path, and params <c>path</c>, <c>alias</c>.
+    /// </summary>
+    public static IEnumerable<Diagnostic> FilterBindsEarlierOf(BoundPipeline bound)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        foreach (var filter in bound.Filters)
+            foreach (var (path, alias, stage) in filter.BindsEarlier)
+                yield return new Diagnostic
+                {
+                    Code = FilterBindsEarlier,
+                    Message = $"The condition on '{path}' runs before the group of stage {stage}, on the rows that feed it; the group's '{alias}' is another thing of the same name. A match stage after the group filters that one.",
+                    Stage = stage,
+                    Path = path,
+                    Filter = filter.Label,
+                    Params = new Dictionary<string, object?> { ["path"] = path, ["alias"] = alias },
+                };
+    }
+
+    /// <summary>
+    /// A path asked under a union join's alias (<c>byTarget</c>) that the branch of one target does not
+    /// reach, dropped for that branch: the alias carries it on the rows of the other branches only. Said
+    /// by the remote check and by a run, at the union join's stage (params <c>alias</c>, <c>branch</c>:
+    /// the target of the anchor whose branch lacks it, <c>parent</c> false).
+    /// </summary>
+    public static Diagnostic BranchPathDropped(int? stage, string alias, string branch, string path) => new()
+    {
+        Code = SelectPathNotOnTarget,
+        Message = $"'{path}' is not a member of what the branch of '{branch}' joins; '{alias}' carries it only for the other branches.",
+        Stage = stage,
+        Path = path,
+        Params = new Dictionary<string, object?> { ["alias"] = alias, ["branch"] = branch, ["parent"] = false },
+    };
+
+    /// <summary>The effective <c>onMissing</c> as the wire spells it.</summary>
+    public static string WireName(ResolveOnMissing onMissing) => onMissing switch
+    {
+        ResolveOnMissing.Report => "report",
+        ResolveOnMissing.Refuse => "refuse",
+        _ => "null",
+    };
+
+    private static int? PageIndex(QueryRequest request)
+    {
+        var index = request.Pipeline.ToList().FindIndex(stage => stage.Page is not null);
+
+        return index < 0 ? null : index;
+    }
+
+    private static bool IsReportPage(QueryRequest request) =>
+        request.Pipeline.Select(stage => stage.Page).FirstOrDefault(page => page is not null) is not { } page
+        || (page.Cursor is null && page.Offset is null);
+
+    /// <summary>Collects the notes once per (code, stage, path).</summary>
+    private sealed class Collector(BoundPipeline bound, int contract, OxQLOptions options)
+    {
+        private readonly HashSet<(string, int?, string?, object?)> seen = [];
+
+        public List<Diagnostic> Notes { get; } = [];
+
+        /// <summary>The filter entry the notes being collected belong to (its id, or its index); null for a caller stage.</summary>
+        public object? Filter { get; set; }
+
+        public void Add(string code, int? stage, string? path, string message, Dictionary<string, object?> parameters)
+        {
+            if (seen.Add((code, stage, path, Filter)))
+                Notes.Add(new Diagnostic { Code = code, Message = message, Stage = stage, Path = path, Filter = Filter, Params = parameters });
+        }
+
+        /// <summary>The services owning the targets of a keyed or remote alias of this pipeline, in target order.</summary>
+        public List<string> ServicesOf(string alias) =>
+            bound.Stages.OfType<BoundStage.Resolve>().Where(resolve => resolve.As == alias || resolve.ParentAs == alias)
+                .SelectMany(TargetsOf)
+                .Select(target => target.Declared.Entity.Split('.')[0])
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+        public void Resolve(BoundStage.Resolve resolve, int? stage, bool strict)
+        {
+            var targets = TargetsOf(resolve).ToList();
+
+            foreach (var target in targets.Where(target => !target.IsRemote))
+            {
+                if (target.Filter is not null)
+                    Condition(target.Filter, stage);
+
+                foreach (var path in target.DroppedSelect)
+                    Notes.Add(SelectPathDropped(stage, resolve.As, target.Declared.ToString(), path, parent: false));
+
+                foreach (var path in target.DroppedParentSelect ?? [])
+                    Notes.Add(SelectPathDropped(stage, resolve.As, target.Declared.ToString(), path, parent: true));
+            }
+
+            if (resolve.IsRemote)
+                Add(OwnerBinds, stage, resolve.Reference.Wire,
+                    $"'{resolve.As}' comes from another service; its owner binds the filter and every path under the alias.",
+                    new() { ["alias"] = resolve.As, ["services"] = targets.Where(target => target.IsRemote).Select(target => target.Declared.Entity.Split('.')[0]).Distinct(StringComparer.Ordinal).ToList(), ["forTarget"] = null });
+
+            if (resolve.Elements == ResolveElements.All)
+                Add(LookupLimit, stage, resolve.Reference.Wire, $"'{resolve.As}' collects at most {options.Limits.MaxLookupLimit} targets per row; a row with more keeps the first and is reported (RESOLVE_TRUNCATED).",
+                    new() { ["alias"] = resolve.As, ["limit"] = options.Limits.MaxLookupLimit });
+
+            // An inline resolve joins one local entity in the aggregate: no owner, no conversion, so
+            // no owner_unanswered or invalid_key; a second record exists only for a target field that
+            // is not the key, and is seen only when the outcomes are read.
+            var inline = !resolve.IsRemote && resolve.Executor == ResolveExecutor.Inline;
+            var nonKey = (resolve.Cases ?? []).SelectMany(bound => bound.Targets).Any(target => target.Declared.Item is not null || !target.Declared.FieldIsKey);
+
+            Policy(resolve.As, resolve.Reference.Wire, stage, resolve.EffectiveOnMissing, strict, inline, nonKey, resolve.OutcomeAs, resolve.OnMissingInherited);
+        }
+
+        /// <summary>
+        /// The missing policy of a resolve continued at an owner: its <c>onMissing</c> as written,
+        /// else the default the owner binds it with (refuse under strict, which the owner query
+        /// carries; else null). The owner binds and runs it, so every data-loss outcome is possible.
+        /// </summary>
+        public void Continued(ResolveStage resolve, string path, int? stage, bool strict, bool inherited = false)
+        {
+            var effective = resolve.OnMissing switch
+            {
+                "report" => ResolveOnMissing.Report,
+                "refuse" => ResolveOnMissing.Refuse,
+                "null" => ResolveOnMissing.Null,
+                _ => strict ? ResolveOnMissing.Refuse : ResolveOnMissing.Null,
+            };
+
+            // The binder checked the alias before it continued the stage.
+            Policy(resolve.As ?? "", path, stage, effective, strict, inline: false, nonKey: true, resolve.OutcomeAs, inherited);
+        }
+
+        private void Policy(string alias, string path, int? stage, ResolveOnMissing effective, bool strict, bool inline, bool nonKey, string? outcomeAs = null, bool inherited = false)
+        {
+            var onMissing = WireName(effective);
+            var readsOutcomes = strict || effective != ResolveOnMissing.Null || outcomeAs is not null;
+            var ambiguity = inline ? nonKey && readsOutcomes : true;
+            var dataLoss = inline
+                ? DataLossOutcomes.Where(outcome => outcome == "not_found" || (outcome == "ambiguous" && ambiguity)).ToList()
+                : DataLossOutcomes.ToList();
+            var what = effective switch
+            {
+                ResolveOnMissing.Refuse => "refuses the request",
+                ResolveOnMissing.Report => "leaves the alias null and is reported (RESOLVE_MISSING)",
+                _ when inline => "leaves the alias null",
+                _ => "leaves the alias null; only an owner that fails is reported",
+            };
+
+            var parameters = new Dictionary<string, object?> { ["alias"] = alias, ["onMissing"] = onMissing, ["strict"] = strict, ["dataLoss"] = dataLoss };
+
+            // The member is said only where a stage names one, so every other note stays as it was.
+            if (outcomeAs is not null)
+                parameters["outcomeAs"] = outcomeAs;
+
+            // Where the policy is the request's default and not the stage's own word, the note says whose it is.
+            if (inherited)
+                parameters["from"] = "request";
+
+            Add(MissingPolicy, stage, path,
+                $"A reference of '{alias}' that resolves to nothing {what} (onMissing {onMissing}{(inherited ? ", the request's default" : "")}{(strict ? ", strict" : "")}); {string.Join(", ", dataLoss)} lose data{(strict ? " and refuse under strict" : "")}."
+                + (ambiguity ? " A key more than one record holds is always reported (RESOLVE_AMBIGUOUS)." : "")
+                + (outcomeAs is null ? ""
+                    : effective == ResolveOnMissing.Refuse || strict
+                        ? $" '{outcomeAs}' carries the outcome of every row of a page that is answered; a row that loses data refuses the request{(effective == ResolveOnMissing.Refuse ? "" : " (a missing reference only where 'onMissing' does not say \"report\")")}, so no row shows that outcome there."
+                        : $" '{outcomeAs}' carries the outcome of every row."),
+                parameters);
+        }
+
+        public void Condition(BoundCondition condition, int? stage)
+        {
+            switch (condition)
+            {
+                case BoundCondition.And and:
+                    foreach (var inner in and.Conditions)
+                        Condition(inner, stage);
+                    break;
+
+                case BoundCondition.Or or:
+                    foreach (var inner in or.Conditions)
+                        Condition(inner, stage);
+                    break;
+
+                case BoundCondition.Not not:
+                    Condition(not.Condition, stage);
+                    break;
+
+                case BoundCondition.Any any:
+                    Path(any.Path, stage);
+                    Condition(any.Inner, stage);
+                    break;
+
+                case BoundCondition.Leaf { IsSemiJoin: true } semiJoin:
+                    Add(OwnerBinds, stage, semiJoin.Path.Wire,
+                        $"The condition on '{semiJoin.Path.Wire}' is asked of the owner before the page is taken; the owner binds it.",
+                        new() { ["alias"] = semiJoin.Path.Root.StoragePrefix, ["services"] = ServicesOf(semiJoin.Path.Root.StoragePrefix), ["forTarget"] = null });
+
+                    // The owner's rows are matched by a member that is not their key: one without it refuses the run.
+                    if (bound.Stages.OfType<BoundStage.Resolve>().Where(resolve => resolve.As == semiJoin.Path.Root.StoragePrefix).SelectMany(TargetsOf)
+                        .FirstOrDefault(target => !target.Declared.FieldIsKey) is { } byMember)
+                        Add(SemiJoinNotByKey, stage, semiJoin.Path.Wire,
+                            $"The condition on '{semiJoin.Path.Wire}' is asked of the owner of '{byMember.Declared.Entity}', whose matching rows are read by '{byMember.Declared.Field}', which is not their key: a run refuses (RESOLVE_REFUSED) when a matching row does not carry that member. Only a run can tell.",
+                            new() { ["alias"] = semiJoin.Path.Root.StoragePrefix, ["target"] = byMember.Declared.Entity, ["field"] = byMember.Declared.Field, ["services"] = ServicesOf(semiJoin.Path.Root.StoragePrefix) });
+                    break;
+
+                case BoundCondition.Leaf { Path.IsRemote: true }:
+                    break;
+
+                case BoundCondition.Leaf leaf:
+                    Leaf(leaf, stage);
+                    break;
+            }
+        }
+
+        private void Leaf(BoundCondition.Leaf leaf, int? stage)
+        {
+            var wire = leaf.Path.Wire;
+
+            Path(leaf.Path, stage);
+
+            // A contract 2 comparison that folds runs under the collation; a contract 1 one runs as a pattern.
+            if (leaf.IgnoreCase == true && contract == 2)
+            {
+                if (leaf.Op is not ("contains" or "endsWith"))
+                    Folds(stage, wire, leaf.Op);
+                else
+                    PatternFolds(stage, wire, leaf.Op);
+            }
+            else if (leaf.IgnoreCase == true)
+            {
+                Add(PatternFoldsCaseOnly, stage, wire, $"'{leaf.Op}' on '{wire}' runs as a pattern: it folds case but not accents.", new() { ["op"] = leaf.Op });
+            }
+
+            if (leaf.Op != "is" && (leaf.Path.CollectionAncestors > 0 || leaf.Path.Kind == Kind.Array))
+                Add(SomeElement, stage, wire, $"'{wire}' lies in a collection that is not unwound: the row matches when some element matches.", new() { ["op"] = leaf.Op });
+
+            if (leaf.Op is "neq" or "nin" && leaf.Operand is not BoundOperand.Null)
+                Add(NeqMatchesAbsent, stage, wire, $"'{leaf.Op}' on '{wire}' also matches rows where the member is absent or null.", new() { ["op"] = leaf.Op });
+        }
+
+        public void Sort(BoundSortField field, int? stage)
+        {
+            Path(field.Path, stage);
+
+            if (contract != 2 || field.Path.LeafKind != Kind.String || OperandCoercer.IsCharRepresented(field.Path))
+                return;
+
+            if (field.IgnoreCase)
+                Folds(stage, field.Path.Wire, "sort");
+            else
+                Add(ExactForcesExact, stage, field.Path.Wire,
+                    $"The sort on '{field.Path.Wire}' is exact: every other string comparison, sort and group key of the request must be caseSensitive too.",
+                    new() { ["op"] = "sort" });
+        }
+
+        /// <summary>A contract 2 contains or endsWith: what it folds under the collation, and that it is a pattern no index bounds.</summary>
+        public void PatternFolds(int? stage, string wire, string op)
+        {
+            var collation = options.Representation.Collation;
+            var accents = AccentFold.Applies(collation);
+
+            Add(Binding.Notes.PatternFolds, stage, wire,
+                $"'{op}' on '{wire}' folds case{(accents ? " and accents" : "")} (collation {collation.Locale}, strength {collation.Strength}) as a pattern{(accents ? "" : "; this strength tells accents apart")}: no index bounds it, it reads every candidate row.",
+                new() { ["locale"] = collation.Locale, ["strength"] = collation.Strength, ["op"] = op, ["accents"] = accents });
+        }
+
+        public void Folds(int? stage, string wire, string op)
+        {
+            var collation = options.Representation.Collation;
+
+            Add(TextFolds, stage, wire, $"'{op}' on '{wire}' folds case and accents (collation {collation.Locale}, strength {collation.Strength}).",
+                new() { ["locale"] = collation.Locale, ["strength"] = collation.Strength, ["op"] = op });
+        }
+
+        /// <summary>The variant-only and snapshot notes of a path of this host's model.</summary>
+        public void Path(ResolvedPath path, int? stage)
+        {
+            if (path.Entity is not { } entity || path.Path is not { } model)
+                return;
+
+            var segments = model.Wire.Split('.');
+            IReadOnlyList<string>? variants = null;
+            string? snapshot = null;
+
+            for (var length = 1; length <= segments.Length; length++)
+            {
+                if (entity.Path(string.Join('.', segments, 0, length)) is not { } prefix)
+                    continue;
+
+                variants ??= prefix.Member.OnlyFor;
+                snapshot ??= prefix.Shape.SnapshotOf ?? prefix.Shape.Leaf.SnapshotOf;
+            }
+
+            if (variants is { Count: > 0 })
+                Add(OnlyForVariants, stage, path.Wire, $"'{path.Wire}' exists only on the variants {string.Join(", ", variants)}; other rows have no value.",
+                    new() { ["variants"] = variants });
+
+            if (snapshot is not null)
+                Add(SnapshotCopy, stage, path.Wire, $"'{path.Wire}' lies in a copy of '{snapshot}' taken when the record was written, not the current '{snapshot}'.",
+                    new() { ["entity"] = snapshot });
+        }
+
+        private static IEnumerable<BoundResolveTarget> TargetsOf(BoundStage.Resolve resolve) =>
+            resolve.Cases is { Count: > 0 } cases
+                ? cases.SelectMany(selected => selected.Targets)
+                : [new BoundResolveTarget(new ReferenceTarget(resolve.TargetEntity, resolve.TargetField, null, resolve.IsRemote, resolve.TargetField == "id"),
+                    resolve.Target, resolve.TargetFieldStorage, null, resolve.Select, resolve.RemoteSelect, resolve.Filter, resolve.RemoteFilter, resolve.TargetScope, null, null, [])];
+    }
+}

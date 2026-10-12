@@ -8,7 +8,7 @@ namespace OxQL.Mongo.Compat;
 /// The contract 1 output pass: the row as the driver returned it, rendered by the v1
 /// converter, so <c>_id</c> and the storage names come back exactly as they did.
 /// </summary>
-public static class CompatRows
+internal static class CompatRows
 {
     private static readonly JsonSerializerOptions Options = new() { Converters = { new BsonDocumentJsonConverter() } };
 

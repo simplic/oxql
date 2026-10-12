@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Xml;
 using MongoDB.Bson;
 using OxQL.Core.Engine;
@@ -24,18 +25,25 @@ public sealed class OperandCoercer
     private readonly OxQLOptions options;
     private readonly QueryVariables? variables;
     private readonly List<Diagnostic>? diagnostics;
+    private readonly bool contract2;
 
-    public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null)
+    /// <summary>
+    /// The coercer of one request. Under <paramref name="contract2"/> an operand is read as written or
+    /// refused: a decimal is digits with one optional sign, point and exponent, and a member holding a
+    /// single character takes one character.
+    /// </summary>
+    public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null, bool contract2 = true)
     {
         this.options = options;
         this.variables = variables;
         this.diagnostics = diagnostics;
+        this.contract2 = contract2;
     }
 
     /// <summary>The operators, case-sensitive.</summary>
     public static readonly IReadOnlySet<string> Operators = new HashSet<string>(StringComparer.Ordinal)
     {
-        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex",
+        "eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is",
     };
 
     private static readonly IReadOnlySet<string> StringOperators = new HashSet<string>(StringComparer.Ordinal) { "contains", "startsWith", "endsWith", "regex" };
@@ -237,6 +245,154 @@ public sealed class OperandCoercer
         return scalar.Count == 1 ? new BoundOperand.Single(scalar[0]) : new BoundOperand.Tolerant(scalar);
     }
 
+    /// <summary>
+    /// The pooled type whose variant an <c>is</c> tests at <paramref name="path"/>: the object the
+    /// path holds, the element type of a collection of objects, or the entity of a local join
+    /// alias. Null for a scalar, a remote path, or a path whose type is not known here. Whether
+    /// the type has variants is the caller's check.
+    /// </summary>
+    public static TypeDef? VariantHolder(ResolvedPath path)
+    {
+        if (path is null || path.IsRemote)
+            return null;
+
+        // The object a derived member is compared on, named by the member's own description of it.
+        if (path.Derived is { } derived && path.Path?.Derived is null)
+            return derived.Holder;
+
+        if (path.Shape is { } shape)
+            return shape.Leaf is { Kind: Kind.Object, Type: { IsEnum: false } type } ? type : null;
+
+        if (path.Path is not null)
+            return null;
+
+        return path.Root switch
+        {
+            ShapeNode.Entity entity => entity.Def.Root,
+            ShapeNode.Array array => array.Target.Root,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The name <c>is</c> accepts for a polymorphic type's own values: the type's name when it is
+    /// a concrete class, whose values are stored without a discriminator under their own nominal
+    /// type. Null for an abstract class or an interface; for a type the model read from a document,
+    /// the name the document publishes (<c>baseVariant</c>).
+    /// </summary>
+    public static string? ConcreteBaseName(TypeDef type)
+    {
+        if (type.ClrType is null)
+            return type.BaseVariant;
+
+        if (type.ClrType is not { IsAbstract: false, IsInterface: false } clr)
+            return null;
+
+        var arity = clr.Name.IndexOf('`', StringComparison.Ordinal);
+
+        return arity > 0 ? clr.Name[..arity] : clr.Name;
+    }
+
+    /// <summary>
+    /// The operand of an <c>is</c>: the discriminator values of every named variant and of every
+    /// registered descendant of it, in the type's variant order, as a set. A named concrete base
+    /// adds its own discriminator where the stored form is hierarchical, and <see cref="BsonNull"/>,
+    /// which stands for a value stored without a discriminator (the compiler matches it as a
+    /// missing discriminator element on an object). Null with errors added when a name is not
+    /// one of the type's.
+    /// </summary>
+    public BoundOperand? CoerceVariants(JsonElement? raw, ResolvedPath path, TypeDef type, int stage, List<QueryValidationError> errors)
+    {
+        var element = raw ?? JsonNull;
+
+        if (element.ValueKind == JsonValueKind.Object && TryVariable(element, out var variable))
+        {
+            if (!TryResolveVariable(variable!, out element))
+            {
+                errors.Add(Error(Codes.UnboundVariable, $"The variable '{variable}' is not bound.", stage, path.Wire));
+                return null;
+            }
+        }
+
+        var names = new List<string>();
+
+        if (element.ValueKind == JsonValueKind.String)
+            names.Add(element.GetString()!);
+        else if (element.ValueKind == JsonValueKind.Array && element.GetArrayLength() > 0 && element.EnumerateArray().All(item => item.ValueKind == JsonValueKind.String))
+            names.AddRange(element.EnumerateArray().Select(item => item.GetString()!));
+        else
+        {
+            errors.Add(Error(Codes.InvalidOperand, "'is' takes a variant name or a non-empty array of variant names.", stage, path.Wire));
+            return null;
+        }
+
+        var baseName = ConcreteBaseName(type);
+        var selected = new HashSet<string>(StringComparer.Ordinal);
+        var includeBase = false;
+        var failed = false;
+
+        foreach (var name in names)
+        {
+            if (baseName is not null && string.Equals(name, baseName, StringComparison.Ordinal))
+            {
+                includeBase = true;
+                selected.UnionWith(type.Variants.Select(variant => variant.Name));
+                continue;
+            }
+
+            var named = type.Variants.FirstOrDefault(variant => string.Equals(variant.Name, name, StringComparison.Ordinal));
+
+            if (named is null)
+            {
+                var known = type.Variants.Select(variant => variant.Name);
+
+                if (baseName is not null)
+                    known = known.Prepend(baseName);
+
+                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{path.Wire}'; its variants are {string.Join(", ", known)}.", stage, path.Wire));
+                failed = true;
+                continue;
+            }
+
+            selected.Add(named.Name);
+
+            foreach (var descendant in type.Variants.Where(candidate => IsDescendant(candidate, named)))
+                selected.Add(descendant.Name);
+        }
+
+        if (failed)
+            return null;
+
+        var values = new List<BsonValue>();
+
+        if (includeBase && type.DiscriminatorForm == DiscriminatorForm.Hierarchical)
+            values.Add(new BsonString(type.Discriminator ?? baseName!));
+
+        foreach (var variant in type.Variants)
+            if (selected.Contains(variant.Name) && !values.Contains(new BsonString(variant.Discriminator)))
+                values.Add(new BsonString(variant.Discriminator));
+
+        if (includeBase)
+            values.Add(BsonNull.Value);
+
+        return new BoundOperand.Set(values);
+    }
+
+    /// <summary>Whether <paramref name="candidate"/> derives from <paramref name="ancestor"/> (see the private rule <c>is</c> selects by).</summary>
+    public static bool Descends(VariantDef candidate, VariantDef ancestor) => IsDescendant(candidate, ancestor);
+
+    /// <summary>Whether <paramref name="candidate"/> derives from <paramref name="ancestor"/>: by the CLR types, or by the ancestor's own variants when the model came from a document.</summary>
+    private static bool IsDescendant(VariantDef candidate, VariantDef ancestor)
+    {
+        if (ReferenceEquals(candidate, ancestor))
+            return false;
+
+        if (ancestor.Type.ClrType is { } ancestorType && candidate.Type.ClrType is { } candidateType)
+            return candidateType != ancestorType && ancestorType.IsAssignableFrom(candidateType);
+
+        return ancestor.Type.Variants.Any(variant => string.Equals(variant.Name, candidate.Name, StringComparison.Ordinal));
+    }
+
     /// <summary>The literal of a group expression, converted by JSON kind alone: it is not compared against a member.</summary>
     public static BsonValue Literal(JsonElement element) => element.ValueKind switch
     {
@@ -248,6 +404,68 @@ public sealed class OperandCoercer
         JsonValueKind.Array => new BsonArray(element.EnumerateArray().Select(Literal)),
         _ => BsonNull.Value,
     };
+
+    /// <summary>
+    /// A raw JSON value another binder receives — a remote resolve's filter, a continued stage —
+    /// with every variable wrapper <c>{ "$var": name }</c> in it replaced by the bound value:
+    /// the owner never receives <c>variables</c>, so what it is sent must hold
+    /// none. A value without a wrapper comes back as it is, so its render is unchanged. An unbound
+    /// name is <c>UNBOUND_VARIABLE</c>, one holding an object <c>INVALID_VARIABLE</c>, both at
+    /// <paramref name="stage"/> and <paramref name="path"/>; the wrapper then stays in place.
+    /// </summary>
+    public JsonElement SubstituteVariables(JsonElement raw, int stage, string? path, List<QueryValidationError> errors)
+    {
+        ArgumentNullException.ThrowIfNull(errors);
+
+        if (!HoldsVariable(raw))
+            return raw;
+
+        // A filter nests as deep as a request may, which is deeper than the serializer's own default.
+        return JsonSerializer.SerializeToElement(Substituted(raw, stage, path, errors), OxQLJson.Wire);
+    }
+
+    /// <summary>Whether a raw JSON value holds a variable wrapper anywhere.</summary>
+    public static bool HoldsVariable(JsonElement raw) => raw.ValueKind switch
+    {
+        JsonValueKind.Object => TryVariable(raw, out _) || raw.EnumerateObject().Any(property => HoldsVariable(property.Value)),
+        JsonValueKind.Array => raw.EnumerateArray().Any(HoldsVariable),
+        _ => false,
+    };
+
+    private JsonNode? Substituted(JsonElement element, int stage, string? path, List<QueryValidationError> errors)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object when TryVariable(element, out var name):
+                if (!TryResolveVariable(name!, out var value))
+                {
+                    errors.Add(Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path));
+                    return JsonNode.Parse(element.GetRawText());
+                }
+
+                if (value.ValueKind == JsonValueKind.Object)
+                {
+                    errors.Add(Error(Codes.InvalidVariable, $"The variable '{name}' holds an object; a variable holds a value or an array.", stage, path));
+                    return JsonNode.Parse(element.GetRawText());
+                }
+
+                return JsonNode.Parse(value.GetRawText());
+
+            case JsonValueKind.Object:
+                var node = new JsonObject();
+
+                foreach (var property in element.EnumerateObject())
+                    node[property.Name] = Substituted(property.Value, stage, path, errors);
+
+                return node;
+
+            case JsonValueKind.Array:
+                return new JsonArray(element.EnumerateArray().Select(item => Substituted(item, stage, path, errors)).ToArray());
+
+            default:
+                return JsonNode.Parse(element.GetRawText());
+        }
+    }
 
     /// <summary>Resolves a variable for a group expression.</summary>
     public bool TryResolveVariable(string name, out JsonElement value)
@@ -308,6 +526,12 @@ public sealed class OperandCoercer
                 if (representation.BsonType == BsonType.Int32 && text.Length == 1)
                     return [new BsonInt32(text[0])];
 
+                if (representation.BsonType == BsonType.Int32 && contract2)
+                {
+                    failure = "a single character";
+                    break;
+                }
+
                 return [new BsonString(text)];
 
             case Kind.Int:
@@ -326,7 +550,7 @@ public sealed class OperandCoercer
                 break;
 
             case Kind.Decimal:
-                if (TryDecimal(element, out var money))
+                if (TryDecimal(element, contract2, out var money))
                     return Decimal(money, path, op, representation, addon, stage, errors, label);
 
                 failure = "a decimal number";
@@ -629,14 +853,17 @@ public sealed class OperandCoercer
         };
     }
 
-    private static bool TryDecimal(JsonElement element, out decimal value)
+    /// <summary>A decimal as text under contract 2: no group separator, no white space, no trailing sign.</summary>
+    private const NumberStyles StrictDecimal = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent;
+
+    private static bool TryDecimal(JsonElement element, bool contract2, out decimal value)
     {
         value = 0;
 
         return element.ValueKind switch
         {
             JsonValueKind.Number => element.TryGetDecimal(out value),
-            JsonValueKind.String => decimal.TryParse(element.GetString(), NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out value),
+            JsonValueKind.String => decimal.TryParse(element.GetString(), contract2 ? StrictDecimal : NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out value),
             _ => false,
         };
     }

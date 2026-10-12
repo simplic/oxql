@@ -144,7 +144,7 @@ public sealed class CustomHost : IAsyncDisposable
         if (organisation is { } id)
             request.Headers.TryAddWithoutValidation(LabIdentity.OrganisationHeader, id.ToString("D"));
 
-        request.Headers.TryAddWithoutValidation(LabIdentity.CorrelationHeader, "b5-correlation");
+        request.Headers.TryAddWithoutValidation(LabIdentity.CorrelationHeader, "case-correlation");
 
         var watch = Stopwatch.StartNew();
         using var response = await client.SendAsync(request);

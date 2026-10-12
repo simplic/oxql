@@ -37,7 +37,7 @@ public class GroupTypesTests
     private static string Iso(DateTime utc) => utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
     [Fact]
-    public async Task GT1_count_and_count_distinct_count_exactly_whatever_the_counted_kind_and_count_travels_as_a_string()
+    public async Task GT1_count_and_count_distinct_count_exactly_whatever_the_counted_kind_and_a_count_travels_as_a_number()
     {
         var statuses = ShipmentStatuses();
 
@@ -48,19 +48,19 @@ public class GroupTypesTests
                   "distinctDate": { "countDistinct": "loadStart" }, "distinctEnum": { "countDistinct": "loadingTimeType" },
                   "distinctBool": { "countDistinct": "isDeleted" }, "distinctDouble": { "countDistinct": "actualWeight.value" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(statuses.Count);
         answer.Strings("status").Should().Equal(statuses.Select(entry => entry.Status));
-        CountTexts(answer, "total").Should().Equal(statuses.Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)), "a count is a long, and a long travels as a string");
+        CountTexts(answer, "total").Should().Equal(statuses.Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)), "a count is an int: a JSON number, never a string");
 
         foreach (var (alias, path) in new[] { ("distinctString", "shipmentNumber"), ("distinctGuid", "id"), ("distinctDate", "loadStart"), ("distinctEnum", "loadingTimeType"), ("distinctBool", "isDeleted"), ("distinctDouble", "actualWeight.value") })
             Numbers(answer, alias).Should().Equal(statuses.Select(entry => (decimal?)Distinct(Corpus.ShipmentsWithStatus(entry.Status), path)), alias);
     }
 
     [Fact]
-    public async Task GT2_sum_and_avg_over_a_double_or_an_int_are_numbers_and_over_a_decimal_they_are_exact_strings()
+    public async Task GT2_sum_and_avg_are_numbers_over_a_double_or_an_int_and_over_a_decimal_exact_in_every_digit()
     {
         var closed = Corpus.ShipmentsWithStatus("Closed").Select(row => Corpus.Decimal(row, "actualWeight.value")).OfType<decimal>().ToList();
         closed.Should().NotBeEmpty();
@@ -91,10 +91,14 @@ public class GroupTypesTests
         var row = vehicles.Items[0]!;
         row["deleted"]!.GetValue<bool>().Should().BeFalse();
 
-        row["sumDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String, "a decimal is a string everywhere in a row");
-        row["avgDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
-        Number(row["sumDecimal"]).Should().Be(decimal.Parse(ExactSum(mileages), CultureInfo.InvariantCulture));
-        row["sumDecimal"]!.GetValue<string>().Should().NotBe(((double)decimal.Parse(ExactSum(mileages), CultureInfo.InvariantCulture)).ToString("R", CultureInfo.InvariantCulture), "no double sits between the stored decimals and the wire");
+        row["sumDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number, "a decimal is a number everywhere in a row");
+        row["avgDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+        // The number's own text in the body: the exact sum, every digit. It has more significant digits
+        // than the runtime's decimal keeps (the 25-place mileage beside six-figure ones), and the wire
+        // carries the database's own.
+        ExactSum(mileages).Replace(".", "", StringComparison.Ordinal).Length.Should().BeGreaterThan(29);
+        row["sumDecimal"]!.ToJsonString().Should().Be(Canonical(ExactSum(mileages)));
+        row["sumDecimal"]!.ToJsonString().Should().NotBe(((double)decimal.Parse(ExactSum(mileages), CultureInfo.InvariantCulture)).ToString("R", CultureInfo.InvariantCulture), "no double sits between the stored decimals and the wire");
 
         row["sumInt"]!.GetValueKind().Should().Be(JsonValueKind.Number);
         row["avgInt"]!.GetValueKind().Should().Be(JsonValueKind.Number);
@@ -149,7 +153,7 @@ public class GroupTypesTests
     }
 
     [Fact]
-    public async Task GT4_min_max_first_last_and_push_over_a_decimal_and_a_time_span_carry_strings()
+    public async Task GT4_min_max_first_last_and_push_carry_numbers_in_canonical_digits_over_a_decimal_and_strings_over_a_time_span()
     {
         var live = Corpus.Where(Corpus.Vehicle, row => !Corpus.ValueAt(row, "isDeleted")!.AsBoolean);
         // A string-stored decimal sorts above every number, so max is a string-stored row's value.
@@ -167,14 +171,15 @@ public class GroupTypesTests
 
         vehicles.ShouldBeOk();
         var row = vehicles.Items[0]!;
-        row["minDecimal"]!.GetValue<string>().Should().Be(Text(ordered[0]));
-        row["maxDecimal"]!.GetValue<string>().Should().Be(Text(ordered[^1]));
-        row["firstDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
-        row["lastDecimal"]!.GetValueKind().Should().Be(JsonValueKind.String);
+        // Each as the body spells it: a bare number in canonical digits, the string-stored maximum too.
+        row["minDecimal"]!.ToJsonString().Should().Be(Text(ordered[0]));
+        row["maxDecimal"]!.ToJsonString().Should().Be(Text(ordered[^1]));
+        row["firstDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+        row["lastDecimal"]!.GetValueKind().Should().Be(JsonValueKind.Number);
 
         // A pushed element travels in the member's wire form: the Decimal128 125000.00 and the
-        // string-stored 125000.00 render as the same decimal text, and the storage spelling is gone.
-        var pushed = ((JsonArray)row["pushDecimal"]!).Select(value => value!.GetValue<string>()).ToList();
+        // string-stored 125000.00 render as the same number, and the storage spelling is gone.
+        var pushed = ((JsonArray)row["pushDecimal"]!).Select(value => value!.ToJsonString()).ToList();
         pushed.Should().BeEquivalentTo(live.Select(item => Corpus.ValueAt(item, "mileage")).Where(value => value is { IsBsonNull: false }).Select(Text));
         var at125000 = live.Count(item => Corpus.ValueAt(item, "mileage") is { IsBsonNull: false } value && Order.CompareDecimal(value is BsonString text ? text.Value : Order.NumberText(value), "125000") == 0);
         at125000.Should().BeGreaterThan(1, "the string-stored 125000.00 row is among them");
@@ -235,7 +240,7 @@ public class GroupTypesTests
         var numericMileages = Corpus.Rows(Corpus.Vehicle).Select(row => Corpus.Number(row, "mileage")).OfType<string>().Order(Comparer<string>.Create(Order.CompareDecimal)).ToList();
         var byDecimal = await (await Fleet()).SendAsync(Corpus.Vehicle, """[{ "group": { "by": [{ "path": "mileage", "as": "decimalKey" }], "fields": { "total": { "count": true } } } }, { "sort": [{ "decimalKey": "asc" }] }, { "page": { "limit": 10 } }]""");
         byDecimal.ShouldBeOk();
-        byDecimal.Items[0]!["decimalKey"]!.GetValue<string>().Should().Be(Canonical(numericMileages[0]));
+        byDecimal.Items[0]!["decimalKey"]!.ToJsonString().Should().Be(Canonical(numericMileages[0]), "a decimal key is the number a decimal member is, in canonical digits");
     }
 
     [Fact]

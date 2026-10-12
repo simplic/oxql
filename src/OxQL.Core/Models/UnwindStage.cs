@@ -34,12 +34,31 @@ public sealed record UnwindStage
     public string? IncludeIndex { get; init; }
 
     /// <summary>
+    /// A member of the element that nests the same kind of element (a group item's items): the
+    /// unwind then yields one row per element and per descendant, in pre-order, each without
+    /// its nested collection, down to the host's <c>MaxFlattenDepth</c>. Contract 2 only.
+    /// </summary>
+    [JsonPropertyName("flatten")]
+    public string? Flatten { get; init; }
+
+    /// <summary>Whether the caller wrote <c>keepPath</c>, a member no contract has; the binder refuses it by name.</summary>
+    [JsonIgnore]
+    public bool KeepPathWritten { get; init; }
+
+    /// <summary>
     /// Member names the caller wrote that the stage does not have. System.Text.Json skips an
     /// unmapped member by default, so they are recorded here and the binder refuses them:
     /// <c>preserveNulls</c> for <c>preserveNull</c> is an error, not the default applied.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> Unknown { get; init; } = [];
+
+    /// <summary>
+    /// The members the caller wrote with a value of another JSON kind than the member takes. They read
+    /// as not written, and contract 2 refuses them.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Invalid { get; init; } = [];
 }
 
 internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
@@ -49,6 +68,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
         using var doc = JsonDocument.ParseValue(ref reader);
         var stage = new UnwindStage();
         var unknown = new List<string>();
+        var invalid = new List<string>();
 
         if (doc.RootElement.ValueKind != JsonValueKind.Object)
             return stage;
@@ -59,13 +79,22 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
             {
                 case "path": stage = stage with { Path = property.Value.GetString() }; break;
                 case "as": stage = stage with { As = property.Value.GetString() }; break;
-                case "preserveNull": stage = stage with { PreserveNull = property.Value.ValueKind == JsonValueKind.True }; break;
+                case "preserveNull":
+                    stage = stage with { PreserveNull = property.Value.ValueKind == JsonValueKind.True };
+
+                    if (property.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+                        invalid.Add(property.Name);
+
+                    break;
                 case "includeIndex": stage = stage with { IncludeIndex = property.Value.GetString() }; break;
+                // "flatten": null is the member left out, not a member named "null".
+                case "flatten": stage = stage with { Flatten = property.Value.ValueKind switch { JsonValueKind.String => property.Value.GetString(), JsonValueKind.Null => null, _ => property.Value.GetRawText() } }; break;
+                case "keepPath": stage = stage with { KeepPathWritten = true }; break;
                 default: unknown.Add(property.Name); break;
             }
         }
 
-        return stage with { Unknown = unknown };
+        return stage with { Unknown = unknown, Invalid = invalid };
     }
 
     public override void Write(Utf8JsonWriter writer, UnwindStage value, JsonSerializerOptions options)
@@ -75,6 +104,7 @@ internal sealed class UnwindStageConverter : JsonConverter<UnwindStage>
         if (value.As is not null) writer.WriteString("as", value.As);
         if (value.PreserveNull) writer.WriteBoolean("preserveNull", true);
         if (value.IncludeIndex is not null) writer.WriteString("includeIndex", value.IncludeIndex);
+        if (value.Flatten is not null) writer.WriteString("flatten", value.Flatten);
         writer.WriteEndObject();
     }
 }

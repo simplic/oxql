@@ -1,0 +1,13 @@
+{
+  "entityType": "ledger.nope",
+  "pipeline": [
+    {
+      "lookup": {
+        "from": "tour",
+        "localPath": "A",
+        "foreignPath": "B",
+        "as": "X"
+      }
+    }
+  ]
+}

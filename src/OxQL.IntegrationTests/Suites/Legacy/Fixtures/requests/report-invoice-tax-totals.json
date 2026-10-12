@@ -1,0 +1,22 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "id": {
+          "eq": "1e9ac700-0000-4000-8000-000000000001"
+        }
+      }
+    },
+    {
+      "project": {
+        "TaxKeyTotalPrices": 1
+      }
+    },
+    {
+      "page": {
+        "limit": 500
+      }
+    }
+  ]
+}

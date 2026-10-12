@@ -6,6 +6,7 @@ using OxQL.Mongo;
 using OxQL.Mongo.Explain;
 using OxQL.Mongo.Resolve;
 using OxQL.Tests.Bind;
+using OxQL.Tests.Compile;
 using Xunit;
 
 namespace OxQL.Tests.Execute;
@@ -26,7 +27,7 @@ public class CaseInsensitiveEngineTests
         var client = new FakeRemoteClient { Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("id", Vehicle1.ToString())) };
         var options = BindHost.Options(configure);
 
-        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new ResolveCache(options)), runner, client);
+        return (new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options)), runner, client);
     }
 
     private static async Task<QueryResult> Success(MongoQueryEngine engine, string pipeline)
@@ -43,10 +44,11 @@ public class CaseInsensitiveEngineTests
     {
         var (engine, runner, _) = Host();
 
-        await Success(engine, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]""");
+        await Success(engine, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, true, DefaultCollation));
+        runner.Calls.Select(call => call.Options with { BatchSize = null, MaxTimeMs = 0 }).Should().AllBeEquivalentTo(new AggregateRunOptions(0, true, DefaultCollation));
+        runner.Calls.Select(call => call.Options.MaxTimeMs).Should().Equal([10_000, 500], "the page under the request's time, the count step under its budget");
     }
 
     [Fact]
@@ -54,10 +56,10 @@ public class CaseInsensitiveEngineTests
     {
         var (engine, runner, _) = Host();
 
-        await Success(engine, """[{ "match": { "count": { "eq": 1 } } }, { "sort": [{ "when": "desc" }] }, { "page": { "includeTotalCount": true } }]""");
+        await Success(engine, """[{ "match": { "count": { "eq": 1 } } }, { "sort": [{ "when": "desc" }] }, { "page": { "count": true } }]""");
 
         runner.Calls.Should().HaveCount(2);
-        runner.Calls.Should().OnlyContain(call => call.Options == new AggregateRunOptions(10_000, true));
+        runner.Calls.Select(call => call.Options with { BatchSize = null, MaxTimeMs = 0 }).Should().AllBeEquivalentTo(new AggregateRunOptions(0, true));
     }
 
     [Fact]
@@ -74,20 +76,20 @@ public class CaseInsensitiveEngineTests
     public async Task Explain_shows_the_collation_and_the_advisory_names_it()
     {
         var (engine, _, _) = Host();
-        var folded = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }]"""), BindHost.Context());
+        var folded = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }]""").Planned(), BindHost.Context());
 
-        folded.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Collation!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
+        folded.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Plan!.Collation!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
 
-        var plain = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "count": { "eq": 1 } } }]"""), BindHost.Context());
+        var plain = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "count": { "eq": 1 } } }]""").Planned(), BindHost.Context());
 
-        plain.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Collation.Should().BeNull();
+        plain.Should().BeOfType<ExplainOutcome.Success>().Which.Result.Plan!.Collation.Should().BeNull();
 
-        var stages = new[] { new BsonDocument("$match", new BsonDocument("Number", "x")) };
-        var advised = IndexAdvisor.Advise(stages, [], null, DefaultCollation);
+        // The index that serves a folded comparison is built with the collation; one for other kinds has none.
+        var advised = await AspNetCore.IndexAdvisorTests.AdviseAsync("""[{ "match": { "number": { "eq": "x" } } }]""");
 
-        advised.Should().ContainSingle(line => line["field"]!.GetValue<string>() == "collation")
-            .Which["note"]!.GetValue<string>().Should().Contain("de/1").And.Contain("same collation");
-        IndexAdvisor.Advise(stages, [], null).Should().NotContain(line => line["field"]!.GetValue<string>() == "collation");
+        advised["indexes"]![0]!["collation"]!.ToJsonString().Should().Be("""{"locale":"de","strength":1}""");
+        advised["indexes"]![0]!["command"]!.GetValue<string>().Should().Contain("""collation: { locale: "de", strength: 1 }""");
+        (await AspNetCore.IndexAdvisorTests.AdviseAsync("""[{ "match": { "count": { "eq": 1 } } }]"""))["indexes"]![0]!.AsObject().ContainsKey("collation").Should().BeFalse();
     }
 
     [Fact]
@@ -98,18 +100,42 @@ public class CaseInsensitiveEngineTests
 
         await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1" } } }]""");
         await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": true } } } }]""");
-        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": true } } } }]""");
+        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": false } } } }]""");
 
         var sent = client.Calls.Select(call => call.Request.Queries.Single().Pipeline[0].Match!.Condition!.Options).ToList();
 
         sent.Should().HaveCount(3);
         sent[0].Should().BeNull("nothing was written, so the owner applies its own default");
         sent[1].Should().BeEquivalentTo(new FilterConditionOptions { CaseSensitive = true });
-        sent[2].Should().BeEquivalentTo(new FilterConditionOptions { IgnoreCase = true });
+        sent[2].Should().BeEquivalentTo(new FilterConditionOptions { CaseSensitive = false });
 
-        // The alias asks the owner the same question, which the semi-join cache already holds.
-        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "ignoreCase": false } } } }]""");
+        // The same choice asks the owner the same question, which the semi-join cache already holds.
+        await Success(engine, $$"""[{{Resolve}}, { "match": { "veh.matchCode": { "eq": "V-1", "options": { "caseSensitive": true } } } }]""");
 
-        client.Calls.Should().HaveCount(3, "ignoreCase: false is caseSensitive: true, and that owner query is cached");
+        client.Calls.Should().HaveCount(3, "that owner query is cached");
+    }
+
+    [Fact]
+    public async Task A_semi_join_over_a_reference_stored_as_text_takes_the_owners_keys_exactly_inside_a_collated_aggregate()
+    {
+        var (engine, runner, client) = Host();
+        client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows(FakeRemoteClient.Row("number", "c1"));
+
+        await Success(engine, """[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "match": { "contact.name": { "eq": "Alice" } } }, { "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
+
+        runner.Calls.Should().HaveCount(2);
+        runner.Calls.Should().OnlyContain(call => call.Options.Collation != null, "the comparison on the number folds");
+
+        foreach (var call in runner.Calls)
+        {
+            var conditions = call.Stages[1]["$match"]["$and"].AsBsonArray;
+
+            conditions[0].ShouldBeBson(BsonDocument.Parse("""{ "ContactNumber": { "$in": ["c1"] } }"""), "the key set, which an index serves");
+
+            var exact = conditions[1].ToJson();
+
+            exact.Should().Contain("$indexOfBytes").And.Contain("$strLenBytes", "the collation folds the $in, so a key is compared again byte for byte");
+            exact.Should().Contain("""{ "$literal" : ["c1"] }""", "over the keys the owner answered").And.Contain("\"$ContactNumber\"");
+        }
     }
 }

@@ -1,0 +1,117 @@
+{
+  "entityType": "transport.tour",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "IsDeleted": {
+              "eq": false
+            }
+          },
+          {
+            "IsMirroredTour": {
+              "eq": false
+            }
+          },
+          {
+            "or": [
+              {
+                "Status.Name": {
+                  "eq": "planned"
+                }
+              },
+              {
+                "Status.Name": {
+                  "eq": "partially_planned"
+                }
+              }
+            ]
+          },
+          {
+            "StartDateTime": {
+              "gte": {
+                "$date": "2026-05-31T22:00:00.000Z"
+              }
+            }
+          },
+          {
+            "StartDateTime": {
+              "lte": {
+                "$date": "2026-06-30T21:59:59.999Z"
+              }
+            }
+          },
+          {
+            "or": [
+              {
+                "StartAddress.Zipcode": {
+                  "contains": "hamb",
+                  "options": {
+                    "ignoreCase": true
+                  }
+                }
+              },
+              {
+                "StartAddress.City": {
+                  "contains": "hamb",
+                  "options": {
+                    "ignoreCase": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "or": [
+              {
+                "EndAddress.Zipcode": {
+                  "contains": "2045",
+                  "options": {
+                    "ignoreCase": true
+                  }
+                }
+              },
+              {
+                "EndAddress.City": {
+                  "contains": "2045",
+                  "options": {
+                    "ignoreCase": true
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "or": [
+              {
+                "Status._id": {
+                  "eq": "1e9ac700-0000-4000-8000-000000001300"
+                }
+              },
+              {
+                "Status._id": {
+                  "eq": "1e9ac700-0000-4000-8000-000000009999"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "sort": [
+        {
+          "EndDateTime": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 500,
+        "cursor": null,
+        "includeTotalCount": false
+      }
+    }
+  ]
+}

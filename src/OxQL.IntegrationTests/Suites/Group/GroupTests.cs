@@ -43,7 +43,7 @@ public class GroupTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -64,7 +64,7 @@ public class GroupTests
         var keyed = await client.SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "shipmentNumber", "as": "number" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "number": "asc" }] },
-              { "page": { "limit": 500, "includeTotalCount": true } } ]
+              { "page": { "limit": 500, "count": true } } ]
             """);
 
         keyed.ShouldHaveTotal(keys.Count);
@@ -73,7 +73,7 @@ public class GroupTests
         Number(keyed.Items.Single(item => item!["number"]?.GetValue<string>() == "S-DUP")!["total"]).Should().Be(Corpus.Where(Corpus.Shipment, row => Corpus.Text(row, "shipmentNumber") == "S-DUP").Count);
         Numbers(keyed, "total").Sum().Should().Be(Corpus.Counts(Corpus.Shipment).A);
 
-        var total = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [], "fields": { "total": { "count": true } } } }, { "page": { "limit": 5, "includeTotalCount": true } }]""");
+        var total = await client.SendAsync(Corpus.Shipment, """[{ "group": { "by": [], "fields": { "total": { "count": true } } } }, { "page": { "limit": 5, "count": true } }]""");
         total.ShouldHaveTotal(1);
         CountTexts(total, "total").Should().Equal(Corpus.Counts(Corpus.Shipment).A.ToString(CultureInfo.InvariantCulture));
     }
@@ -91,7 +91,7 @@ public class GroupTests
         var answer = await (await Transport()).SendAsync(Corpus.Shipment, """
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }, { "path": "isDeleted", "as": "deleted" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "status": "asc" }, { "deleted": "asc" }] },
-              { "page": { "limit": 20, "includeTotalCount": true } } ]
+              { "page": { "limit": 20, "count": true } } ]
             """);
 
         answer.ShouldHaveTotal(expected.Count);
@@ -148,18 +148,19 @@ public class GroupTests
         var client = await Transport();
         static string Fields(int count) => string.Join(", ", Enumerable.Range(0, count).Select(index => $$""" "f{{index}}": { "count": true } """));
 
-        var at = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(19)}} } } }, { "sort": [{ "k": "asc" }] }, { "page": { "limit": 1 } }]""");
+        var at = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(39)}} } } }, { "sort": [{ "k": "asc" }] }, { "page": { "limit": 1 } }]""");
         at.ShouldBeOk();
-        Number(at.Items[0]!["f18"]).Should().Be(ShipmentStatuses()[0].Count);
+        Number(at.Items[0]!["f38"]).Should().Be(ShipmentStatuses()[0].Count);
 
-        var over = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(20)}} } } }, { "page": { "limit": 1 } }]""");
-        ShouldRefuseOnly(over, "MAX_GROUP_FIELDS_EXCEEDED").Should().Contain("21 fields; the limit is 20");
+        var over = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { {{Fields(40)}} } } }, { "page": { "limit": 1 } }]""");
+        ShouldRefuseOnly(over, "MAX_GROUP_FIELDS_EXCEEDED").Should().Contain("41 fields; the limit is 40");
+        over.Errors[0]["params"]!.ToJsonString().Should().Be("""{"limit":"maxGroupFields","max":40,"count":41}""");
     }
 
     // ── N11–N25 · the nine aggregate functions ───────────────────────────────────────────
 
     [Fact]
-    public async Task N11_N12_count_answers_a_per_group_count_as_a_string_and_count_false_counts_too()
+    public async Task N11_N12_count_answers_a_per_group_count_as_a_number_and_count_false_counts_too()
     {
         var expected = ShipmentStatuses().Select(entry => entry.Count.ToString(CultureInfo.InvariantCulture)).ToList();
         var client = await Transport();
@@ -223,7 +224,9 @@ public class GroupTests
               { "page": { "limit": 5 } } ]
             """);
         deleted.ShouldBeOk();
-        Kinds(deleted, "sum").Should().Equal(JsonValueKind.String);
+        Kinds(deleted, "sum").Should().Equal(JsonValueKind.Number);
+        Kinds(deleted, "mean").Should().Equal(JsonValueKind.Number);
+        deleted.Items[0]!["sum"]!.ToJsonString().Should().Be(ExactSum(deletedMileages), "the body carries the sum digit for digit");
         Number(deleted.Items[0]!["sum"]).Should().Be(decimal.Parse(ExactSum(deletedMileages), CultureInfo.InvariantCulture));
         Number(deleted.Items[0]!["mean"]).Should().Be(decimal.Parse(ExactSum(deletedMileages), CultureInfo.InvariantCulture) / deletedMileages.Count);
 
@@ -236,7 +239,9 @@ public class GroupTests
               { "page": { "limit": 5 } } ]
             """);
         live.ShouldBeOk();
-        var mean = live.Items[0]!["mean"]!.GetValue<string>();
+        // The number's own text in the body, so no digit is read through a double.
+        live.Items[0]!["mean"]!.GetValueKind().Should().Be(JsonValueKind.Number);
+        var mean = live.Items[0]!["mean"]!.ToJsonString();
         Math.Abs(decimal.Parse(mean, CultureInfo.InvariantCulture) - exactMean).Should().BeLessThan(1e-20m, $"{mean} against {exactMean}");
         mean.Replace(".", "", StringComparison.Ordinal).TrimStart('-', '0').Length.Should().BeGreaterThan(17, "more significant digits than a double holds");
     }
@@ -392,18 +397,18 @@ public class GroupTests
     }
 
     [Fact]
-    public async Task N31_N32_a_variable_and_a_literal_argument_bind_and_both_come_back_as_decimal_strings()
+    public async Task N31_N32_a_variable_and_a_literal_argument_bind_and_both_come_back_as_decimal_numbers()
     {
         var client = await Transport();
         var counts = GroupKit.Counts(ShipmentStatuses());
 
         var literal = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "literal": 2 } } """));
         literal.ShouldBeOk();
-        CountTexts(literal, "s").Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)));
+        literal.Values("s").Select(value => value!.ToJsonString()).Should().Equal(counts.Select(count => (count * 2).ToString(CultureInfo.InvariantCulture)), "a sum over a literal is a decimal: a bare number in the body");
 
         var variable = await client.SendAsync(Corpus.Shipment, ByStatusWith(""" "s": { "sum": { "$var": "w" } } """), new { w = 3 });
         variable.ShouldBeOk();
-        CountTexts(variable, "s").Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)));
+        variable.Values("s").Select(value => value!.ToJsonString()).Should().Equal(counts.Select(count => (count * 3).ToString(CultureInfo.InvariantCulture)), "and so is one over a variable");
 
         var unbound = await client.SendAsync(Corpus.Shipment, $$"""[{ "group": { {{ByStatus}}, "fields": { "s": { "sum": { "$var": "nope" } } } } }, { "page": { "limit": 5 } }]""");
         ShouldRefuseOnly(unbound, "UNBOUND_VARIABLE");
@@ -494,7 +499,7 @@ public class GroupTests
             [ { "group": { "by": [{ "path": "status.name", "as": "status" }], "fields": { "total": { "count": true } } } },
               { "match": { "total": { "gte": { "$var": "floor" } } } },
               { "sort": [{ "status": "asc" }] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """, new { floor = Floor });
 
         answer.ShouldHaveTotal(expected.Count);
@@ -507,7 +512,7 @@ public class GroupTests
         var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee, """
             [ { "group": { "by": [{ "path": "isDeleted", "as": "deleted" }], "fields": { "total": { "count": true } } } },
               { "sort": [{ "deleted": "asc" }] },
-              { "page": { "limit": 5, "includeTotalCount": true } } ]
+              { "page": { "limit": 5, "count": true } } ]
             """);
 
         answer.ShouldBeOk();

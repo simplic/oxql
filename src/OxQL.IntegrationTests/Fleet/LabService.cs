@@ -1,3 +1,4 @@
+using OxQL.IntegrationTests.Fleet.Models;
 using OxQL.Model;
 using OxQL.Model.Build;
 
@@ -21,7 +22,10 @@ public sealed class LabService
 
     public static readonly LabService Conformance = new("conformance");
 
-    public static readonly IReadOnlyList<LabService> All = [Staff, Fleet, Transport, Ledger, Conformance];
+    /// <summary>The contact-like service: what a transaction's contact address id names.</summary>
+    public static readonly LabService Directory = new("directory");
+
+    public static readonly IReadOnlyList<LabService> All = [Staff, Fleet, Transport, Ledger, Conformance, Directory];
 
     private readonly Lazy<EntityModel> model;
 
@@ -35,6 +39,9 @@ public sealed class LabService
 
     /// <summary>The service's model; built once per run, after the storage conventions are registered.</summary>
     public EntityModel Model => model.Value;
+
+    /// <summary>The host-side reference declarations the model is built with; null when the service has none.</summary>
+    public ReferenceDeclarations? References => FleetReferences.For(Key);
 
     public static LabService Of(string key) =>
         All.FirstOrDefault(service => service.Key == key) ?? throw new ArgumentException($"'{key}' is not a lab service.", nameof(key));
@@ -51,6 +58,6 @@ public sealed class LabService
         if (declarations.Count == 0)
             throw new InvalidOperationException($"The lab service '{Key}' declares no entities.");
 
-        return ClrModelBuilder.Build(declarations);
+        return ClrModelBuilder.Build(declarations, retiredIds: null, References);
     }
 }

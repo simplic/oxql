@@ -1,0 +1,45 @@
+{
+  "entityType": "transport.tour",
+  "variables": {
+    "n": "TR-2026-0102",
+    "G": "1e9ac700-0000-4000-8000-000000001100"
+  },
+  "pipeline": [
+    {
+      "match": {
+        "or": [
+          {
+            "Number": {
+              "eq": {
+                "$var": "N"
+              }
+            }
+          },
+          {
+            "GlobalTourId": {
+              "eq": {
+                "$var": "g"
+              }
+            },
+            "Number": {
+              "eq": "never read"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "Status": 1
+      }
+    },
+    {
+      "sort": [
+        {
+          "Number": "asc"
+        }
+      ]
+    }
+  ]
+}

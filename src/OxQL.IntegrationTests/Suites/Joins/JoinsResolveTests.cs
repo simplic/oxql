@@ -93,8 +93,8 @@ public class JoinsResolveTests
         var rows = EquipmentById();
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Equipment, """
-            [ { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["location"] } },
-              { "project": { "id": 1, "veh": 1 } },
+            [ { "resolve": { "path": "vehicle.id", "as": "veh" } },
+              { "project": { "id": 1, "veh.id": 1, "veh.location": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 10 } } ]
             """);
@@ -196,7 +196,7 @@ public class JoinsResolveTests
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
               { "project": { "id": 1, "veh": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 10, "includeTotalCount": true } } ]
+              { "page": { "limit": 10, "count": true } } ]
             """);
         filtered.ShouldHaveIds(expectedRows).ShouldHaveTotal(expectedRows.Count, because: "the alias condition reached the count too");
     }
@@ -222,8 +222,8 @@ public class JoinsResolveTests
         expected.Should().OnlyContain(target => target != null, "every corpus vehicle names a department");
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Vehicle, """
-            [ { "resolve": { "path": "department.id", "as": "dep", "select": ["name"] } },
-              { "project": { "id": 1, "dep": 1 } },
+            [ { "resolve": { "path": "department.id", "as": "dep" } },
+              { "project": { "id": 1, "dep.id": 1, "dep.name": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 100 } } ]
             """);
@@ -236,9 +236,9 @@ public class JoinsResolveTests
     [Theory]
     [InlineData("M02", """[ { "resolve": { "path": "createUserId", "as": "x" } }, { "page": { "limit": 1 } } ]""", "RESOLVE_NOT_DECLARED", null)]
     [InlineData("M08", """[ { "resolve": { "path": "vehicle.id", "as": "name" } }, { "page": { "limit": 1 } } ]""", "ALIAS_COLLISION", null)]
-    [InlineData("M49", """[ { "resolve": { "path": "vehicle.id", "as": "veh", "limit": 2 } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_STAGE_MEMBER", "path, as, select, filter")]
+    [InlineData("M49", """[ { "resolve": { "path": "vehicle.id", "as": "veh", "limit": 2 } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_STAGE_MEMBER", "path, as, filter, elements")]
     [InlineData("M07", """[ { "group": { "by": [ { "path": "name", "as": "n" } ], "fields": { "c": { "count": true } } } }, { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "page": { "limit": 1 } } ]""", "UNKNOWN_PATH", "not an output of the group stage")]
-    [InlineData("M47", """[ { "resolve": { "path": "vehicle.id", "as": "a" } }, { "resolve": { "path": "vehicle.id", "as": "b" } }, { "resolve": { "path": "vehicle.id", "as": "c" } }, { "page": { "limit": 1 } } ]""", "MAX_RESOLVE_STAGES_EXCEEDED", null)]
+    [InlineData("M47", """[ { "resolve": { "path": "vehicle.id", "as": "a" } }, { "resolve": { "path": "vehicle.id", "as": "b" } }, { "resolve": { "path": "vehicle.id", "as": "c" } }, { "resolve": { "path": "vehicle.id", "as": "d" } }, { "resolve": { "path": "vehicle.id", "as": "e" } }, { "resolve": { "path": "vehicle.id", "as": "f" } }, { "resolve": { "path": "vehicle.id", "as": "g" } }, { "resolve": { "path": "vehicle.id", "as": "h" } }, { "resolve": { "path": "vehicle.id", "as": "i" } }, { "page": { "limit": 1 } } ]""", "MAX_RESOLVE_STAGES_EXCEEDED", "more than 8 resolve stages")]
     public async Task M02_M07_M08_M47_M49_the_engine_refuses_the_local_resolve_shapes_it_cannot_serve(string caseId, string pipeline, string code, string? contains)
     {
         var answer = await (await FleetClient()).SendAsync(Corpus.Equipment, pipeline);
@@ -280,7 +280,7 @@ public class JoinsResolveTests
 
         var answer = await (await FleetClient()).SendAsync(Corpus.Equipment, $$"""
             [ { "match": { "id": { "in": {{Json.Ids(IdsOf(resolvable))}} } } },
-              { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"] } },
+              { "resolve": { "path": "vehicle.id", "as": "veh" } },
               { "project": { "id": 1, "name": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 10 } } ]
@@ -302,9 +302,9 @@ public class JoinsResolveTests
 
         foreach (var (why, pipeline) in new[]
         {
-            ("the alias projected", $$"""[ {{match}}, { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"] } }, { "project": { "id": 1, "veh": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
-            ("the alias's leaf projected", $$"""[ {{match}}, { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"] } }, { "project": { "id": 1, "veh.matchCode": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
-            ("a projection before the resolve", $$"""[ {{match}}, { "project": { "id": 1, "vehicle.id": 1 } }, { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["matchCode"] } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
+            ("the alias projected", $$"""[ {{match}}, { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "veh": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
+            ("the alias's leaf projected", $$"""[ {{match}}, { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "veh.matchCode": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
+            ("a projection before the resolve", $$"""[ {{match}}, { "project": { "id": 1, "vehicle.id": 1 } }, { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 10 } } ]"""),
         })
         {
             var answer = await client.SendAsync(Corpus.Equipment, pipeline);
@@ -356,7 +356,7 @@ public class JoinsResolveTests
         // employeeId is REMOTE: the owning staff host answers the hit; the dangling key and the
         // null key are both null under the alias, and neither is a diagnostic.
         var remote = await client.SendAsync(Corpus.Conformance, """
-            [ { "resolve": { "path": "employeeId", "as": "e", "select": ["matchCode"] } }, { "project": { "id": 1, "e": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]
+            [ { "resolve": { "path": "employeeId", "as": "e" } }, { "project": { "id": 1, "e.id": 1, "e.matchCode": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]
             """);
         remote.ShouldHaveIds(IdsOf(rows)).ShouldHaveNoDiagnostics();
         remote.Items.Select(row => AliasId(row, "e")).Should().Equal(expectedEmployee.Select(target => target?.Id));
@@ -376,8 +376,8 @@ public class JoinsResolveTests
 
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, """
             [ { "match": { "templateName": { "lte": "T-000024" } } },
-              { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
-              { "project": { "id": 1, "templateName": 1, "veh": 1 } },
+              { "resolve": { "path": "createUserId", "as": "veh" } },
+              { "project": { "id": 1, "templateName": 1, "veh.id": 1, "veh.matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 50 } } ]
             """);
@@ -398,8 +398,8 @@ public class JoinsResolveTests
         expected.Where(target => target is not null).Select(target => target!.Id).Distinct().Should().HaveCount(3, "every department of A is named");
 
         var answer = await (await TransportClient()).SendAsync(Corpus.Shipment, """
-            [ { "resolve": { "path": "department.id", "as": "dep", "select": ["name"] } },
-              { "project": { "id": 1, "dep": 1 } },
+            [ { "resolve": { "path": "department.id", "as": "dep" } },
+              { "project": { "id": 1, "dep.id": 1, "dep.name": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 100 } } ]
             """);
@@ -445,11 +445,11 @@ public class JoinsResolveTests
 
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, $$"""
             [ { "match": { "templateName": { "lte": "T-000024" } } },
-              { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+              { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
-              { "project": { "id": 1, "templateName": 1, "veh": 1 } },
+              { "project": { "id": 1, "templateName": 1, "veh.id": 1, "veh.matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count, because: "M39: the owner's ids reached the count too");
@@ -468,11 +468,11 @@ public class JoinsResolveTests
 
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, $$"""
             [ { "match": { "templateName": { "lte": "T-000024" } } },
-              { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+              { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "{{Wanted}}" } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
         answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
@@ -491,14 +491,14 @@ public class JoinsResolveTests
 
         Task<WireAnswer> Ask(string options) => client.SendAsync(Corpus.Template, $$"""
             [ { "match": { "templateName": { "lte": "T-000024" } } },
-              { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
+              { "resolve": { "path": "createUserId", "as": "veh" } },
               { "match": { "veh.matchCode": { "eq": "{{lowered}}"{{options}} } } },
               { "project": { "id": 1 } },
               { "sort": [ { "id": "asc" } ] },
-              { "page": { "limit": 50, "includeTotalCount": true } } ]
+              { "page": { "limit": 50, "count": true } } ]
             """);
 
-        (await Ask(""", "options": { "ignoreCase": true }""")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
+        (await Ask(""", "options": { "caseSensitive": false }""")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
         (await Ask("")).ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
         (await Ask(""", "options": { "caseSensitive": true }""")).ShouldHaveIds([]).ShouldHaveTotal(0);
     }
@@ -510,8 +510,8 @@ public class JoinsResolveTests
 
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, $$"""
             [ { "match": { "id": { "eq": "{{first.WireId}}" } } },
-              { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"] } },
-              { "project": { "id": 1, "veh": 1 } },
+              { "resolve": { "path": "createUserId", "as": "veh" } },
+              { "project": { "id": 1, "veh.id": 1, "veh.matchCode": 1 } },
               { "page": { "limit": 2 } } ]
             """);
 
@@ -521,10 +521,10 @@ public class JoinsResolveTests
     }
 
     [Fact]
-    public async Task M18_J2_a_join_select_is_bound_locally_as_a_400_and_travels_to_a_remote_owner_whose_refusal_is_a_422()
+    public async Task M18_J2_a_path_projected_under_a_join_is_bound_locally_as_a_400_and_travels_to_a_remote_owner_whose_refusal_is_a_422()
     {
         var local = await (await FleetClient()).SendAsync(Corpus.Equipment, """
-            [ { "resolve": { "path": "vehicle.id", "as": "veh", "select": ["nope"] } }, { "page": { "limit": 2 } } ]
+            [ { "resolve": { "path": "vehicle.id", "as": "veh" } }, { "project": { "id": 1, "veh.nope": 1 } }, { "page": { "limit": 2 } } ]
             """);
         local.ShouldRefuse("UNKNOWN_PATH", 400);
         local.ErrorCodes.Should().Equal("UNKNOWN_PATH");
@@ -532,14 +532,14 @@ public class JoinsResolveTests
         var transport = await TransportClient();
 
         var remote = await transport.SendAsync(Corpus.Template, """
-            [ { "match": { "templateName": { "eq": "T-000001" } } }, { "resolve": { "path": "createUserId", "as": "veh", "select": ["nope.nothing"] } }, { "page": { "limit": 2 } } ]
+            [ { "match": { "templateName": { "eq": "T-000001" } } }, { "resolve": { "path": "createUserId", "as": "veh" } }, { "project": { "id": 1, "veh.nope.nothing": 1 } }, { "page": { "limit": 2 } } ]
             """);
         remote.ShouldRefuse("RESOLVE_REFUSED", 422, "the owner refused, and its refusal became ours");
         remote.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "UNKNOWN_PATH");
         remote.Text.Should().Contain("is not a path of fleet.vehicle");
 
         var remoteFilter = await transport.SendAsync(Corpus.Template, """
-            [ { "match": { "templateName": { "eq": "T-000001" } } }, { "resolve": { "path": "createUserId", "as": "veh", "select": ["matchCode"], "filter": { "nope": { "eq": 1 } } } }, { "page": { "limit": 2 } } ]
+            [ { "match": { "templateName": { "eq": "T-000001" } } }, { "resolve": { "path": "createUserId", "as": "veh", "filter": { "nope": { "eq": 1 } } } }, { "page": { "limit": 2 } } ]
             """);
         remoteFilter.ShouldRefuse("RESOLVE_REFUSED", 422);
         remoteFilter.ErrorCodes.Should().Equal("RESOLVE_REFUSED", "UNKNOWN_PATH");
@@ -560,14 +560,17 @@ public class JoinsResolveTests
     }
 
     [Fact]
-    public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_is_refused()
+    public async Task M06_a_resolve_whose_path_sits_under_a_remote_alias_continues_the_chain_at_the_owner()
     {
+        // The owner of the vehicle runs the department's resolve for the vehicles it was sent:
+        // a local resolve there, lifted here beside 'veh'.
         var answer = await (await TransportClient()).SendAsync(Corpus.Template, """
             [ { "resolve": { "path": "createUserId", "as": "veh" } }, { "resolve": { "path": "veh.department.id", "as": "dep" } }, { "page": { "limit": 1 } } ]
             """);
 
-        answer.ShouldRefuse("RESOLVE_NOT_DECLARED", 400);
-        answer.ErrorCodes.Should().Equal("RESOLVE_NOT_DECLARED");
+        var row = answer.ShouldBeOk().ShouldHaveNoDiagnostics().Items.Should().ContainSingle().Subject!;
+        row["dep"]!["name"]!.GetValue<string>().Should().Be("Fleet");
+        row["veh"]!.AsObject().ContainsKey("dep").Should().BeFalse("the continued alias is the row's, not the vehicle's");
     }
 
     [Fact]
@@ -584,9 +587,9 @@ public class JoinsResolveTests
         var client = await ConformanceClient();
 
         var twoRemote = await client.SendAsync(Corpus.Conformance, """
-            [ { "resolve": { "path": "employeeId", "as": "e", "select": ["matchCode"] } },
-              { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } },
-              { "project": { "id": 1, "e": 1, "w": 1 } },
+            [ { "resolve": { "path": "employeeId", "as": "e" } },
+              { "resolve": { "path": "widgetCodeExplicit", "as": "w" } },
+              { "project": { "id": 1, "e.id": 1, "e.matchCode": 1, "w.code": 1, "w.name": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 5 } } ]
             """);
@@ -597,8 +600,8 @@ public class JoinsResolveTests
 
         var mixed = await client.SendAsync(Corpus.Conformance, """
             [ { "resolve": { "path": "refCode", "as": "r" } },
-              { "resolve": { "path": "employeeId", "as": "e", "select": ["matchCode"] } },
-              { "project": { "id": 1, "r": 1, "e": 1 } },
+              { "resolve": { "path": "employeeId", "as": "e" } },
+              { "project": { "id": 1, "r": 1, "e.id": 1, "e.matchCode": 1 } },
               { "sort": [ { "id": "asc" } ] },
               { "page": { "limit": 5 } } ]
             """);
@@ -613,7 +616,7 @@ public class JoinsResolveTests
         var rows = Corpus.Rows(Corpus.Conformance);
         var client = await ConformanceClient();
 
-        var fieldless = await client.SendAsync(Corpus.Conformance, """[ { "resolve": { "path": "widgetCode", "as": "w", "select": ["name"] } }, { "page": { "limit": 5 } } ]""");
+        var fieldless = await client.SendAsync(Corpus.Conformance, """[ { "resolve": { "path": "widgetCode", "as": "w" } }, { "page": { "limit": 5 } } ]""");
         fieldless.ShouldRefuse("RESOLVE_NOT_DECLARED", 400);
         fieldless.ErrorCodes.Should().Equal("RESOLVE_NOT_DECLARED");
 
@@ -623,7 +626,7 @@ public class JoinsResolveTests
         wrong.Should().NotEqual(expected, "joining on the decoy id names a different widget for every row");
 
         var control = await client.SendAsync(Corpus.Conformance, """
-            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w", "select": ["name"] } }, { "project": { "id": 1, "name": 1, "w": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]
+            [ { "resolve": { "path": "widgetCodeExplicit", "as": "w" } }, { "project": { "id": 1, "name": 1, "w.id": 1, "w.name": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 5 } } ]
             """);
         control.ShouldHaveIds(IdsOf(rows)).Strings("w.name").Should().Equal(expected);
     }

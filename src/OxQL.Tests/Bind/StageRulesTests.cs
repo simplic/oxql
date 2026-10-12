@@ -8,7 +8,7 @@ using Xunit;
 
 namespace OxQL.Tests.Bind;
 
-/// <summary>Every rule of design §2 to §6 and §14, one named case each, on the CLR fixture graph.</summary>
+/// <summary>Every stage rule, one named case each, on the CLR fixture graph.</summary>
 public class StageRulesTests
 {
     private static EntityModel Model => BindHost.Probe;
@@ -23,7 +23,7 @@ public class StageRulesTests
     private static BoundCondition.Leaf Leaf(BoundPipeline bound, int stage = 0) =>
         (BoundCondition.Leaf)((BoundStage.Match)bound.Stages[stage]).Condition;
 
-    // ---- entity and scope (§2, §10) ------------------------------------------------------
+    // ---- entity and scope ------------------------------------------------------
 
     [Fact]
     public async Task Entity_ids_match_exactly_and_a_retired_id_answers_with_a_diagnostic()
@@ -67,7 +67,7 @@ public class StageRulesTests
         bound.Stages.Should().NotContain(stage => stage is BoundStage.Scope, "the scope is not among the caller's stages");
     }
 
-    // ---- paths (§3) --------------------------------------------------------------------------
+    // ---- paths --------------------------------------------------------------------------
 
     [Theory]
     [InlineData("", Codes.InvalidPath)]
@@ -142,7 +142,7 @@ public class StageRulesTests
         ((BoundCondition.Leaf)and.Conditions[1]).Path.Storage.Should().Be("Prices.eur.Currency");
     }
 
-    // ---- operands (§4) -----------------------------------------------------------------------
+    // ---- operands -----------------------------------------------------------------------
 
     [Theory]
     [InlineData("number", "\"abc\"", "\"abc\"")]
@@ -298,7 +298,7 @@ public class StageRulesTests
         await Error("""[]""", Codes.MaxVariablesExceeded, context, """{ "a": 1, "b": 2 }""");
     }
 
-    // ---- conditions (§5) ---------------------------------------------------------------------
+    // ---- conditions ---------------------------------------------------------------------
 
     [Fact]
     public async Task Several_operators_on_one_path_and_several_paths_are_an_and()
@@ -330,23 +330,34 @@ public class StageRulesTests
         await Error("""[{ "match": { "number": { "startswith": "x" } } }]""", Codes.UnknownOperator);
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public async Task A_dateTrunc_is_a_group_key_and_no_operator_of_a_condition_the_rows_of_a_bucket_are_a_range(int contract)
+    {
+        (await Error("""[{ "match": { "when": { "dateTrunc": { "unit": "day", "eq": "2026-03-05T00:00:00Z" } } } }]""", Codes.UnknownOperator, BindHost.Context(contract: contract)))
+            .Message.Should().Be("'dateTrunc' is not an operator.");
+
+        OperandCoercer.Operators.Should().BeEquivalentTo(["eq", "neq", "gt", "gte", "lt", "lte", "in", "nin", "contains", "startsWith", "endsWith", "exists", "regex", "is"]);
+    }
+
     [Fact]
     public async Task IgnoreCase_applies_to_the_listed_operators_on_strings_only()
     {
         foreach (var op in new[] { "eq", "neq", "contains", "startsWith", "endsWith" })
         {
-            var bound = await Bound($$"""[{ "match": { "number": { "{{op}}": "x", "options": { "ignoreCase": true } } } }]""");
+            var bound = await Bound($$"""[{ "match": { "number": { "{{op}}": "x", "options": { "caseSensitive": false } } } }]""");
 
             Leaf(bound).IgnoreCase.Should().BeTrue(op);
         }
 
-        var set = await Bound("""[{ "match": { "number": { "in": ["x"], "options": { "ignoreCase": true } } } }]""");
+        var set = await Bound("""[{ "match": { "number": { "in": ["x"], "options": { "caseSensitive": false } } } }]""");
 
         Leaf(set).IgnoreCase.Should().BeTrue();
 
-        (await Error("""[{ "match": { "count": { "eq": 1, "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable)).Path.Should().Be("count");
-        await Error("""[{ "match": { "number": { "regex": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
-        await Error("""[{ "match": { "number": { "gt": "x", "options": { "ignoreCase": true } } } }]""", Codes.OptionNotApplicable);
+        (await Error("""[{ "match": { "count": { "eq": 1, "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable)).Path.Should().Be("count");
+        await Error("""[{ "match": { "number": { "regex": "x", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
+        await Error("""[{ "match": { "number": { "gt": "x", "options": { "caseSensitive": false } } } }]""", Codes.OptionNotApplicable);
         (await Error("""[{ "match": { "number": { "eq": "x", "options": { "collation": "de" } } } }]""", Codes.OptionNotApplicable)).Message.Should().Contain("collation");
     }
 
@@ -383,11 +394,11 @@ public class StageRulesTests
         (await Error("""[{ "match": { "tags": { "any": { "x": { "eq": 1 } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("scalars");
         (await Error("""[{ "match": { "items.stops": { "any": { "city": { "eq": "x" } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("outer");
         (await Error("""[{ "match": { "shipTo": { "any": { "city": { "eq": "x" } } } } }]""", Codes.AnyNotApplicable)).Message.Should().Contain("not a collection");
-        await Error("""[{ "unwind": { "path": "items" } }, { "match": { "items": { "any": { "quantity": { "gt": 1 } } } } }]""", Codes.AnyNotApplicable);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "match": { "item": { "any": { "quantity": { "gt": 1 } } } } }]""", Codes.AnyNotApplicable);
         await Error("""[{ "match": { "items": { "any": { "nothing": { "gt": 1 } } } } }]""", Codes.UnknownPath);
     }
 
-    // ---- stages (§6) -------------------------------------------------------------------------
+    // ---- stages -------------------------------------------------------------------------
 
     [Fact]
     public async Task A_stage_carries_exactly_one_known_member()
@@ -400,26 +411,25 @@ public class StageRulesTests
     [Fact]
     public async Task Unwind_needs_a_collection_at_the_current_shape_and_the_outer_one_first()
     {
-        var bound = await Bound("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }, { "unwind": { "path": "items.stops" } }, { "match": { "items.quantity": { "gt": 1 }, "it.quantity": { "gt": 2 }, "items.stops.city": { "eq": "x" }, "i": { "gte": 1 }, "it": { "exists": true } } }, { "sort": [{ "items.quantity": "asc" }, { "it.stops.city": "desc" }] }]""");
+        var bound = await Bound("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }, { "unwind": { "path": "it.stops", "as": "stop" } }, { "match": { "it.quantity": { "gt": 1, "lt": 9 }, "stop.city": { "eq": "x" }, "i": { "gte": 1 }, "it": { "exists": true } } }, { "sort": [{ "it.quantity": "asc" }, { "stop.city": "desc" }] }]""");
         var and = (BoundCondition.And)((BoundStage.Match)bound.Stages[2]).Condition;
 
         var leaves = and.Conditions.Cast<BoundCondition.Leaf>().ToList();
 
-        leaves[0].Path.Storage.Should().Be("Items.Quantity");
         leaves[0].Path.CollectionAncestors.Should().Be(0, "the array is unwound");
         leaves[1].Path.Storage.Should().Be("it.Quantity");
-        leaves[2].Path.Storage.Should().Be("Items.Stops.City");
+        leaves[2].Path.Storage.Should().Be("stop.City");
         leaves[2].Path.CollectionAncestors.Should().Be(0);
         leaves[3].Path.Storage.Should().Be("i");
         leaves[3].Path.Kind.Should().Be(Kind.Int);
         leaves[4].Path.Kind.Should().Be(Kind.Object);
-        bound.PagingMode.Should().Be(PagingMode.Offset);
+        bound.PagingMode.Should().Be(PagingMode.Keyset);
 
-        (await Error("""[{ "unwind": { "path": "items.stops" } }]""", Codes.UnwindOrder)).Path.Should().Be("items.stops");
-        await Error("""[{ "unwind": { "path": "shipTo" } }]""", Codes.NotACollection);
-        await Error("""[{ "unwind": { "path": "items" } }, { "unwind": { "path": "items" } }]""", Codes.NotACollection);
+        (await Error("""[{ "unwind": { "path": "items.stops", "as": "stop" } }]""", Codes.UnwindOrder)).Path.Should().Be("items.stops");
+        await Error("""[{ "unwind": { "path": "shipTo", "as": "shipToRow" } }]""", Codes.NotACollection);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item", "as": "itemRow" } }]""", Codes.NotACollection);
         await Error("""[{ "unwind": { "path": "items", "as": "number" } }]""", Codes.AliasCollision);
-        await Error("""[{ "unwind": { "path": "items", "as": "it" } }, { "unwind": { "path": "items.stops", "as": "it" } }]""", Codes.AliasCollision);
+        await Error("""[{ "unwind": { "path": "items", "as": "it" } }, { "unwind": { "path": "it.stops", "as": "it" } }]""", Codes.AliasCollision);
         await Error("""[{ "unwind": { "path": "items", "as": "bad name" } }]""", Codes.InvalidAlias);
         await Error("""[{ "unwind": { "path": "items", "as": "it", "includeIndex": "it" } }]""", Codes.AliasCollision);
     }
@@ -433,9 +443,9 @@ public class StageRulesTests
         group.Keys.Should().HaveCount(2);
         group.Keys[1].Trunc!.WeekStart.Should().Be("monday");
         group.Keys[1].Trunc.Timezone.Should().Be("Europe/Berlin");
-        group.Fields.Select(field => field.OutputKind).Should().Equal(Kind.Long, Kind.Decimal, Kind.Double, Kind.Long, Kind.Double);
+        group.Fields.Select(field => field.OutputKind).Should().Equal(Kind.Int, Kind.Decimal, Kind.Double, Kind.Int, Kind.Double);
         bound.FinalShape.Grouped.Should().BeTrue();
-        bound.PagingMode.Should().Be(PagingMode.Offset);
+        bound.PagingMode.Should().Be(PagingMode.Keyset, "the sort stands after the group and ends in every key of it");
 
         var and = (BoundCondition.And)((BoundStage.Match)bound.Stages[1]).Condition;
 
@@ -481,10 +491,91 @@ public class StageRulesTests
         await Error("""[{ "project": { "a": 1, "b": 1 } }]""", Codes.MaxProjectionFieldsExceeded, BindHost.Context(BindHost.Options(options => options.Limits.MaxProjectionFields = 1)));
     }
 
+    [Theory]
+    [InlineData("""[{ "page": [] }]""", Codes.InvalidPageLimit)]
+    [InlineData("""[{ "page": 5 }]""", Codes.InvalidPageLimit)]
+    [InlineData("""[{ "page": { "limit": "5" } }]""", Codes.InvalidPageLimit)]
+    [InlineData("""[{ "page": { "cursor": 7 } }]""", Codes.CursorInvalid)]
+    [InlineData("""[{ "group": "x" }]""", Codes.UnknownStageMember)]
+    [InlineData("""[{ "group": { "by": [{ "path": "state", "dateTrunc": { "path": "when", "unit": "day" }, "as": "k" }], "fields": {} } }]""", Codes.UnknownStageMember)]
+    [InlineData("""[{ "group": { "by": [], "fields": { "x": { "sum": "amount", "avg": "count" } } } }]""", Codes.InvalidAggregateArgument)]
+    [InlineData("""[{ "group": { "by": [], "fields": { "x": { "count": true, "sum": "amount" } } } }]""", Codes.InvalidAggregateArgument)]
+    [InlineData("""[{ "unwind": { "path": "items", "as": "item", "preserveNull": "true" } }]""", Codes.UnknownStageMember)]
+    [InlineData("""[{ "project": { "note": null } }]""", Codes.MixedProjection)]
+    [InlineData("""[{ "project": { "note": "0" } }]""", Codes.MixedProjection)]
+    public async Task A_stage_member_of_the_wrong_JSON_kind_is_refused_and_not_read_as_left_out(string pipeline, string code)
+    {
+        (await BindHost.RefusedAsync(Model, Order, pipeline)).Errors.Should().ContainSingle().Which.Code.Should().Be(code);
+
+        // Contract 1 reads such a member as not written.
+        await Bound(pipeline, BindHost.Context(contract: 1));
+    }
+
+    [Fact]
+    public async Task A_lookup_limit_that_is_no_number_is_refused_and_null_is_the_member_left_out()
+    {
+        const string lookup = """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "limit": LIMIT } }]""";
+
+        (await BindHost.ErrorAsync(Model, "probe.customer", lookup.Replace("LIMIT", "\"5\""), Codes.UnknownStageMember)).Params!["member"].Should().Be("limit");
+        await BindHost.BoundAsync(Model, "probe.customer", lookup.Replace("LIMIT", "null"));
+        await BindHost.BoundAsync(Model, "probe.customer", lookup.Replace("LIMIT", "\"5\""), BindHost.Context(contract: 1));
+        await Bound("""[{ "page": { "limit": null, "cursor": null } }]""");
+        await Bound("""[{ "unwind": { "path": "items", "as": "item", "preserveNull": null } }]""");
+    }
+
+    [Fact]
+    public async Task A_projection_reads_true_and_false_as_1_and_0()
+    {
+        var excluded = await Bound("""[{ "project": { "note": false } }]""");
+
+        ((BoundStage.Project)excluded.Stages[0]).Inclusion.Should().BeFalse();
+        excluded.FinalShape.IsVisible("note").Should().BeFalse();
+        excluded.FinalShape.IsVisible("number").Should().BeTrue();
+
+        var included = await Bound("""[{ "project": { "note": true } }]""");
+
+        ((BoundStage.Project)included.Stages[0]).Inclusion.Should().BeTrue();
+        included.FinalShape.IsVisible("number").Should().BeFalse();
+
+        // Contract 1 keeps a path whose value is no number.
+        var contract1 = await BindHost.BoundAsync(Model, Order, """[{ "project": { "note": false } }]""", BindHost.Context(contract: 1));
+
+        ((BoundStage.Project)contract1.Stages[0]).Inclusion.Should().BeTrue();
+        contract1.FinalShape.IsVisible("note").Should().BeTrue();
+
+        // A stage sent on travels as it was written.
+        var written = System.Text.Json.JsonSerializer.Serialize(BindHost.Request(Order, """[{ "project": { "note": false, "number": 0 } }]""").Pipeline[0], OxQL.Core.Models.OxQLJson.Wire);
+
+        written.Should().Be("""{"project":{"note":false,"number":0}}""");
+    }
+
+    [Fact]
+    public async Task A_later_projection_narrows_what_the_earlier_ones_left()
+    {
+        await Error("""[{ "project": { "number": 1, "count": 1 } }, { "project": { "count": 0 } }, { "match": { "note": { "eq": "x" } } }]""", Codes.UnknownPath);
+        await Error("""[{ "project": { "number": 1, "count": 1 } }, { "project": { "count": 0 } }, { "match": { "count": { "gt": 1 } } }]""", Codes.UnknownPath);
+        await Error("""[{ "project": { "note": 0 } }, { "project": { "count": 0 } }, { "match": { "note": { "eq": "x" } } }]""", Codes.UnknownPath);
+        await Error("""[{ "project": { "note": 0 } }, { "project": { "number": 1, "shipTo": 1 } }, { "match": { "count": { "gt": 1 } } }]""", Codes.UnknownPath);
+        await Error("""[{ "project": { "number": 1, "shipTo.city": 1 } }, { "project": { "shipTo": 1 } }, { "match": { "number": { "eq": "x" } } }]""", Codes.UnknownPath);
+
+        var kept = await Bound("""[{ "project": { "number": 1, "count": 1 } }, { "project": { "count": 0 } }, { "match": { "number": { "eq": "x" } } }]""");
+
+        kept.FinalShape.IsVisible("number").Should().BeTrue();
+        kept.FinalShape.IsVisible("count").Should().BeFalse();
+        kept.FinalShape.IsVisible("note").Should().BeFalse();
+        kept.FinalShape.Included.Should().BeEquivalentTo(["number", "id"]);
+
+        var narrowed = await Bound("""[{ "project": { "number": 1, "shipTo.city": 1 } }, { "project": { "shipTo": 1 } }, { "match": { "shipTo.city": { "eq": "x" } } }]""");
+
+        narrowed.FinalShape.Included.Should().BeEquivalentTo(["shipTo.city", "id"], "of the earlier inclusion only what lies below the later one's path stays");
+    }
+
     [Fact]
     public async Task Page_is_once_and_last_with_a_default_size()
     {
-        var bound = await Bound("""[{ "page": { "limit": 25, "offset": 50, "includeTotalCount": true } }]""");
+        // An internal call keeps the offset and the boolean count a semi-join walks its owner's ids by.
+        var internalCall = BindHost.Context() with { Internal = true };
+        var bound = await Bound("""[{ "page": { "limit": 25, "offset": 50, "includeTotalCount": true } }]""", internalCall);
 
         bound.Page.Limit.Should().Be(25);
         bound.Page.Offset.Should().Be(50);
@@ -495,12 +586,48 @@ public class StageRulesTests
 
         await Error("""[{ "page": { "limit": 0 } }]""", Codes.InvalidPageLimit);
         await Error("""[{ "page": { "limit": 501 } }]""", Codes.PageSizeExceeded);
-        await Error("""[{ "page": { "offset": 5001 } }]""", Codes.MaxOffsetExceeded);
-        await Error("""[{ "page": { "offset": -1 } }]""", Codes.InvalidPageLimit);
+        await Error("""[{ "page": { "offset": 5001 } }]""", Codes.MaxOffsetExceeded, internalCall);
+        await Error("""[{ "page": { "offset": -1 } }]""", Codes.InvalidPageLimit, internalCall);
         await Error("""[{ "page": {} }, { "page": {} }]""", Codes.MultiplePageStages);
         (await Error("""[{ "page": {} }, { "match": {} }]""", Codes.StageAfterPage)).Stage.Should().Be(1);
         await Error("""[{ "page": { "cursor": "garbage" } }]""", Codes.CursorInvalid);
-        await Error("""[{ "page": { "cursor": "a.b", "offset": 1 } }]""", Codes.InvalidPageLimit);
+        await Error("""[{ "page": { "cursor": "a.b", "offset": 1 } }]""", Codes.InvalidPageLimit, internalCall);
+    }
+
+    /// <summary>A variable name that starts with '$' is the engine's; contract 1 never had the rule.</summary>
+    [Fact]
+    public async Task A_variable_name_starting_with_a_dollar_is_reserved_under_contract_2()
+    {
+        const string pipeline = """[{ "match": { "number": { "eq": { "$var": "n" } } } }]""";
+
+        var refusal = await BindHost.RefusedAsync(BindHost.Probe, Order, pipeline, variablesJson: """{ "n": "x", "$now": "2026-01-01T00:00:00Z", "$$a": 1 }""");
+
+        refusal.Errors!.Select(error => (error.Code, error.Stage, System.Text.Json.JsonSerializer.Serialize(error.Params))).Should().Equal(
+            (Codes.InvalidVariable, null, """{"name":"$$a","reason":"reserved"}"""),
+            (Codes.InvalidVariable, null, """{"name":"$now","reason":"reserved"}"""));
+
+        // Unused or used, the name alone is refused; a reference to a name no request can bind is unbound.
+        await Error("""[]""", Codes.InvalidVariable, variables: """{ "$x": 1 }""");
+        await Error("""[{ "match": { "number": { "eq": { "$var": "$now" } } } }]""", Codes.UnboundVariable);
+
+        await Bound(pipeline, variables: """{ "n": "x", "a$b": 1 }""");
+        await Bound(pipeline, BindHost.Context(contract: 1), """{ "n": "x", "$now": 1 }""");
+    }
+
+    /// <summary>The public contract 2 page is addressed by its cursor alone; contract 1 keeps its offset.</summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("50")]
+    [InlineData("null")]
+    [InlineData("\"x\"")]
+    public async Task An_offset_is_not_a_member_of_a_contract_2_page(string offset)
+    {
+        var error = await Error($$"""[{ "page": { "limit": 25, "offset": {{offset}} } }]""", Codes.UnknownStageMember);
+
+        error.Stage.Should().Be(0);
+        System.Text.Json.JsonSerializer.Serialize(error.Params).Should().Be("""{"stage":"page","member":"offset","reason":"removed","use":"cursor"}""");
+
+        (await Bound("""[{ "page": { "limit": 25, "offset": 50 } }]""", BindHost.Context(contract: 1))).Page.Offset.Should().Be(50, "contract 1 pages by offset as it always has");
     }
 
     [Fact]
@@ -535,21 +662,21 @@ public class StageRulesTests
 
         await Error("""[{ "match": {} }, { "match": {} }, { "match": {} }]""", Codes.MaxPipelineStagesExceeded, context);
         await Error("""[{ "match": { "count": { "gt": 1, "lt": 5 }, "flag": { "eq": true } } }]""", Codes.MaxConditionsExceeded, context);
-        await Error("""[{ "unwind": { "path": "items" } }, { "unwind": { "path": "items.stops" } }]""", Codes.MaxUnwindStagesExceeded, context);
+        await Error("""[{ "unwind": { "path": "items", "as": "item" } }, { "unwind": { "path": "item.stops", "as": "stop" } }]""", Codes.MaxUnwindStagesExceeded, context);
     }
 
-    // ---- joins (§6, §11) ---------------------------------------------------------------------
+    // ---- joins ---------------------------------------------------------------------
 
     [Fact]
     public async Task Lookup_follows_a_declared_backward_reference()
     {
-        var bound = await BindHost.BoundAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "select": ["number", "amount"], "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }]""");
+        var bound = await BindHost.BoundAsync(Model, "probe.customer", """[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders", "filter": { "flag": { "eq": true } }, "limit": 5 } }, { "match": { "orders.number": { "eq": "x" } } }, { "project": { "name": 1, "orders.amount": 1 } }]""");
         var lookup = (BoundStage.Lookup)bound.Stages[0];
 
         lookup.From.Id.Should().Be(Order);
         lookup.ParentKeyStorage.Should().Be("_id");
         lookup.ChildKeyStorage.Should().Be("CustomerId");
-        lookup.Select.Select(path => path.Storage).Should().Equal("_id", "Number", "Amount");
+        lookup.Select.Select(path => path.Storage).Should().Equal(["Amount", "_id", "Number"], "the load set: the key, what the projection names under the alias, what the match reads, in ordinal order of the wire paths");
         lookup.Limit.Should().Be(5);
         lookup.ChildScope.Entity.Id.Should().Be(Order);
 
@@ -573,7 +700,7 @@ public class StageRulesTests
     [Fact]
     public async Task Resolve_follows_a_declared_forward_reference_locally_or_remotely()
     {
-        var local = await Bound("""[{ "resolve": { "path": "customerId", "as": "cust", "select": ["name"] } }, { "match": { "cust.name": { "eq": "x" } } }, { "sort": [{ "cust.name": "asc" }] }]""");
+        var local = await Bound("""[{ "resolve": { "path": "customerId", "as": "cust" } }, { "match": { "cust.name": { "eq": "x" } } }, { "sort": [{ "cust.name": "asc" }] }]""");
         var resolve = (BoundStage.Resolve)local.Stages[0];
 
         resolve.IsRemote.Should().BeFalse();
@@ -588,7 +715,7 @@ public class StageRulesTests
 
         ((BoundStage.Resolve)viaReferenceId.Stages[0]).Target!.Id.Should().Be("probe.supplier");
 
-        var remote = await Bound("""[{ "resolve": { "path": "contactNumber", "as": "contact", "select": ["name"], "filter": { "active": { "eq": true } } } }, { "match": { "contact.name": { "eq": "x" } } }]""");
+        var remote = await Bound("""[{ "resolve": { "path": "contactNumber", "as": "contact", "filter": { "active": { "eq": true } } } }, { "match": { "contact.name": { "eq": "x" } } }, { "project": { "number": 1, "contact.name": 1 } }]""");
         var remoteStage = (BoundStage.Resolve)remote.Stages[0];
 
         remoteStage.IsRemote.Should().BeTrue();
@@ -605,10 +732,14 @@ public class StageRulesTests
         await Error("""[{ "resolve": { "path": "customerId", "as": "customer" } }]""", Codes.AliasCollision);
         await Error("""[{ "resolve": { "path": "contactNumber", "as": "contact" } }, { "sort": [{ "contact.name": "asc" }] }]""", Codes.ResolveNotSortable);
         await Error("""[{ "resolve": { "source": "crm.customer", "localPath": "customerId", "as": "x" } }]""", Codes.UnknownStageMember);
-        await Error("""[{ "resolve": { "path": "customerId", "as": "a" } }, { "resolve": { "path": "supplierId", "as": "b" } }, { "resolve": { "path": "contactNumber", "as": "c" } }]""", Codes.MaxResolveStagesExceeded);
+        // MaxResolveStages is 8 per host.
+        static string Resolves(int count) => "[" + string.Join(", ", Enumerable.Range(1, count).Select(n => $$"""{ "resolve": { "path": "customerId", "as": "a{{n}}" } }""")) + "]";
+
+        (await Bound(Resolves(8))).Stages.OfType<BoundStage.Resolve>().Should().HaveCount(8);
+        (await Error(Resolves(9), Codes.MaxResolveStagesExceeded)).Message.Should().Contain("more than 8 resolve stages");
     }
 
-    // ---- addon paths (§14) -------------------------------------------------------------------
+    // ---- addon paths -------------------------------------------------------------------
 
     private sealed class Definitions : IAddonDefinitionSource
     {
@@ -657,7 +788,8 @@ public class StageRulesTests
         await Error("""[{ "match": { "addon.Undefined": { "eq": 1 } } }]""", Codes.NotFilterable, WithDefinitions());
         await Error("""[{ "match": { "addon.Old": { "eq": "x" } } }]""", Codes.NotFilterable, WithDefinitions());
         await Error("""[{ "match": { "addon.Kunde": { "eq": "x" } } }]""", Codes.NotFilterable, WithDefinitions());
-        await Error("""[{ "match": { "addon.SoloplanNr": { "eq": 1 } } }]""", Codes.NotFilterable, "without definitions every key is unknown" is null ? null : BindHost.Context());
+        // Without definitions every key is unknown.
+        await Error("""[{ "match": { "addon.SoloplanNr": { "eq": 1 } } }]""", Codes.NotFilterable, BindHost.Context());
         await Error("""[{ "match": { "addon.$bad": { "eq": 1 } } }]""", Codes.InvalidPath, WithDefinitions());
 
         var projected = await Bound("""[{ "project": { "addon.Undefined": 1, "addon.Kunde": 1 } }]""", WithDefinitions());

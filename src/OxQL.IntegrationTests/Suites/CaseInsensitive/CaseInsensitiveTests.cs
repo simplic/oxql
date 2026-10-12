@@ -62,7 +62,7 @@ public class CaseInsensitiveTests
     }
 
     [Fact]
-    public async Task CI01_with_no_option_eq_neq_in_nin_and_startsWith_fold_case_and_accents()
+    public async Task CI01_with_no_option_every_string_operator_folds_case_and_accents()
     {
         var staff = await Staff();
 
@@ -79,9 +79,17 @@ public class CaseInsensitiveTests
         (await Ids(staff, """{ "matchCode": { "startsWith": "MU" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("mu", StringComparison.Ordinal)));
         (await Ids(staff, """{ "matchCode": { "startsWith": "arr-" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).StartsWith("arr-", StringComparison.Ordinal)));
 
-        // contains and endsWith are a regex with i: case only, so ÜLL misses Muller.
-        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL" } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code).Contains("üll", StringComparison.Ordinal)));
-        (await Ids(staff, """{ "matchCode": { "endsWith": "ER" } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code).EndsWith("er", StringComparison.Ordinal)));
+        // contains and endsWith are patterns that fold accents as the collation does: ÜLL finds Muller, ull finds MÜLLER.
+        var ull = Codes(code => Order.FoldCi(code).Contains(Order.FoldCi("ÜLL"), StringComparison.Ordinal));
+
+        ull.Should().Contain(Folded("Muller")).And.Contain(Folded("MÜLLER"));
+        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL" } }""")).Should().Equal(ull);
+        (await Ids(staff, """{ "matchCode": { "contains": "ull" } }""")).Should().Equal(ull);
+        (await Ids(staff, """{ "matchCode": { "endsWith": "ER" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).EndsWith("er", StringComparison.Ordinal)));
+        (await Ids(staff, """{ "matchCode": { "endsWith": "üller" } }""")).Should().Equal(Codes(code => Order.FoldCi(code).EndsWith(Order.FoldCi("üller"), StringComparison.Ordinal)));
+
+        // caseSensitive: true is the exact text, accents and case as written.
+        (await Ids(staff, """{ "matchCode": { "contains": "ÜLL", "options": { "caseSensitive": true } } }""")).Should().Equal(Codes(code => code.Contains("ÜLL", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -124,11 +132,11 @@ public class CaseInsensitiveTests
     }
 
     [Fact]
-    public async Task CI04_caseSensitive_true_restores_the_exact_comparison_and_ignoreCase_false_is_the_same_thing()
+    public async Task CI04_caseSensitive_true_restores_the_exact_comparison()
     {
         var staff = await Staff();
 
-        foreach (var options in new[] { """{ "caseSensitive": true }""", """{ "ignoreCase": false }""", """{ "caseSensitive": true, "ignoreCase": false }""" })
+        foreach (var options in new[] { """{ "caseSensitive": true }""" })
         {
             (await Ids(staff, $$"""{ "matchCode": { "eq": "müller", "options": {{options}} } }""")).Should().Equal(Exact("müller"), options);
             (await Ids(staff, $$"""{ "matchCode": { "eq": "MULLER", "options": {{options}} } }""")).Should().BeEmpty(options);
@@ -137,7 +145,7 @@ public class CaseInsensitiveTests
             (await Ids(staff, $$"""{ "matchCode": { "nin": ["DUP"], "options": {{options}} } }""")).Should().Equal(Except(Exact("DUP")), options);
         }
 
-        (await Ids(staff, """{ "matchCode": { "eq": "MULLER", "options": { "ignoreCase": true } } }""")).Should().Equal(Folded("MULLER"), "ignoreCase: true is the default written out");
+        (await Ids(staff, """{ "matchCode": { "eq": "MULLER", "options": { "caseSensitive": false } } }""")).Should().Equal(Folded("MULLER"), "caseSensitive: false is the default written out");
 
         // An exact leaf and a folding leaf in one request each keep their own sense.
         (await Ids(staff, """{ "and": [ { "matchCode": { "startsWith": "m" } }, { "matchCode": { "neq": "müller", "options": { "caseSensitive": true } } } ] }"""))
@@ -167,15 +175,13 @@ public class CaseInsensitiveTests
     }
 
     [Fact]
-    public async Task CI06_the_two_spellings_disagreeing_is_OPTION_NOT_APPLICABLE_either_way_round()
+    public async Task CI06_ignoreCase_is_OPTION_NOT_APPLICABLE_under_contract_2_whatever_it_says()
     {
         var staff = await Staff();
 
-        (await Leaf(staff, """{ "matchCode": { "eq": "x", "options": { "caseSensitive": true, "ignoreCase": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE")
-            .Should().Be("'caseSensitive: true' and 'ignoreCase: true' contradict each other; ignoreCase is the alias of caseSensitive with the opposite sense.");
-        (await Leaf(staff, """{ "matchCode": { "eq": "x", "options": { "caseSensitive": false, "ignoreCase": false } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE")
-            .Should().Contain("contradict each other");
-        (await Leaf(staff, """{ "matchCode": { "eq": "x", "options": { "caseSensitive": false, "ignoreCase": true } } }""")).ShouldBeOk("agreeing spellings are accepted");
+        foreach (var options in new[] { """{ "ignoreCase": true }""", """{ "ignoreCase": false }""", """{ "caseSensitive": true, "ignoreCase": true }""", """{ "caseSensitive": false, "ignoreCase": true }""" })
+            (await Leaf(staff, $$"""{ "matchCode": { "eq": "x", "options": {{options}} } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE")
+                .Should().Be("'ignoreCase' is not an option under contract 2; a string comparison folds case unless it says 'caseSensitive: true'.", options);
     }
 
     [Fact]
@@ -187,7 +193,7 @@ public class CaseInsensitiveTests
         {
             (await Leaf(staff, $$"""{ "matchCode": { "{{op}}": "M", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be(
                 $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; '{op}' on 'matchCode' orders under the collation of the whole request and cannot opt out of it.");
-            (await Leaf(staff, $$"""{ "matchCode": { "{{op}}": "M", "options": { "ignoreCase": false } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE");
+            (await Leaf(staff, $$"""{ "matchCode": { "{{op}}": "M", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE");
         }
 
         (await Leaf(staff, """{ "matchCode": { "regex": "^d", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Contain("'matchCode' is a string under 'regex'");
@@ -278,7 +284,7 @@ public class CaseInsensitiveTests
         // The Turkish pair stays apart under a regex.
         (await V1Ids(v1, """{ "MatchCode": { "eq": "istanbul", "options": { "ignoreCase": true } } }""")).Should().Equal(Codes(code => Order.FoldCaseOnly(code) == "istanbul")).And.Equal([Employee("turkish-lower")]);
 
-        (await Leaf(v1, """{ "MatchCode": { "eq": "x", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'caseSensitive' is not an option.");
+        (await Leaf(v1, """{ "MatchCode": { "eq": "x", "options": { "caseSensitive": true } } }""")).ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'caseSensitive' is not an option under contract 1; it is a contract 2 option. This request was read as contract 1 because it carries no 'X-OxQL-Contract: 2' header.");
     }
 
     [Fact]

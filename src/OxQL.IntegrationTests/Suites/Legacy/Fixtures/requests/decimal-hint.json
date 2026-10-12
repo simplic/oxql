@@ -1,0 +1,36 @@
+{
+  "entityType": "ledger.transaction",
+  "pipeline": [
+    {
+      "match": {
+        "and": [
+          {
+            "TotalPriceNet": {
+              "gte": {
+                "$decimal": "10.00"
+              }
+            }
+          },
+          {
+            "CreateDateTime": {
+              "lt": {
+                "$date": "2026-04-10T07:15:30.124Z"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "project": {
+        "Number": 1,
+        "TotalPriceNet": 1,
+        "ReportingInformation": {
+          "Weight": 1,
+          "Positions": 1,
+          "PrintedAt": 1
+        }
+      }
+    }
+  ]
+}

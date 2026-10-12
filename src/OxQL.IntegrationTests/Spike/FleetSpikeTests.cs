@@ -38,7 +38,7 @@ public class FleetSpikeTests(SpikeFleetFixture fixture) : IClassFixture<SpikeFle
         var response = await transport.QueryAsync("""
             { "entityType": "transport.shipment", "pipeline": [
                 { "sort": [ { "shipmentNumber": "asc" } ] },
-                { "resolve": { "path": "department.id", "as": "owner", "select": ["id", "name"] } },
+                { "resolve": { "path": "department.id", "as": "owner" } },
                 { "page": { "limit": 10 } } ] }
             """);
 
@@ -109,7 +109,7 @@ public class FleetSpikeTests(SpikeFleetFixture fixture) : IClassFixture<SpikeFle
         // organisation travelled with the batch.
         var response = await transport.QueryAsync("""
             { "entityType": "transport.shipment", "pipeline": [
-                { "resolve": { "path": "department.id", "as": "owner", "select": ["name"] } } ] }
+                { "resolve": { "path": "department.id", "as": "owner" } } ] }
             """, LabIdentity.OrganisationB);
 
         response.Status.Should().Be(HttpStatusCode.OK, response.Text);

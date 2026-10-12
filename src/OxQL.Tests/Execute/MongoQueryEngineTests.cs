@@ -90,27 +90,31 @@ public class MongoQueryEngineTests
     }
 
     [Fact]
-    public async Task A_grouped_page_continues_by_offset()
+    public async Task A_grouped_page_continues_after_the_keys_of_its_last_group()
     {
         var (engine, runner) = Host(runner => runner.PageRows = [new BsonDocument("st", 0), new BsonDocument("st", 1), new BsonDocument("st", 2)]);
-        var result = await Success(engine, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true } }]""");
+        var result = await Success(engine, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
 
         result.Items.Should().HaveCount(2);
         result.Items[0]!["st"]!.GetValue<int>().Should().Be(0);
         result.PageInfo.HasNextPage.Should().BeTrue();
 
-        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true } }]""");
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true } }]""");
         var payload = BindHost.Cursors.Decode(result.PageInfo.NextCursor!, bound.Fingerprint)!;
 
-        payload.Mode.Should().Be(PagingMode.Offset);
-        payload.Offset.Should().Be(2);
+        payload.Mode.Should().Be(PagingMode.Keyset);
+        payload.Fields.Should().BeEquivalentTo([new CursorValue("st", true, new BsonInt32(1))], "the last group of the page, by its key; a group has no record key");
 
         runner.PageRows = [new BsonDocument("st", 2)];
-        var next = await Success(engine, $$"""[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "includeTotalCount": true, "cursor": "{{result.PageInfo.NextCursor}}" } }]""");
+        var next = await Success(engine, $$"""[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true } } } }, { "page": { "limit": 2, "count": true, "cursor": "{{result.PageInfo.NextCursor}}" } }]""");
 
         next.Items.Should().ContainSingle();
         next.PageInfo.HasNextPage.Should().BeFalse();
-        runner.Calls.Last(call => !call.Stages[^1].Contains("$count")).Stages.Should().Contain(new BsonDocument("$skip", 2));
+        var continued = runner.Calls.Last(call => !call.Stages[^1].Contains("$count")).Stages;
+
+        continued.Should().NotContain(stage => stage.Contains("$skip"), "the next page starts after the last group by value, not by counting groups");
+        continued[^3].ShouldBeBson(BsonDocument.Parse("{ $match: { st: { $gt: 1 } } }"), "after the group, where its key exists, and before the sort");
+        continued[^2].ShouldBeBson(BsonDocument.Parse("{ $sort: { st: 1 } }"));
     }
 
     [Fact]
@@ -121,8 +125,10 @@ public class MongoQueryEngineTests
             runner.PageRows = [Row(Id1, "a")];
             runner.Count = 42;
         });
-        var result = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""");
+        var internalCall = BindHost.Context() with { Internal = true };
+        var result = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", internalCall);
 
+        // includeTotalCount is contract 1's and an internal call's; PageCountTests has the contract 2 count.
         result.PageInfo.TotalCount.Should().Be(42);
         result.PageInfo.TotalCountCapped.Should().BeFalse();
         result.Diagnostics.Should().BeNull();
@@ -131,14 +137,11 @@ public class MongoQueryEngineTests
         runner.Calls[1].Stages[^2].ShouldBeBson(new BsonDocument("$limit", 100_001));
 
         runner.Count = 100_001;
-        var capped = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""");
+        var capped = await Success(engine, """[{ "page": { "includeTotalCount": true } }]""", internalCall);
 
         capped.PageInfo.TotalCount.Should().Be(100_000);
         capped.PageInfo.TotalCountCapped.Should().BeTrue();
         capped.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == Codes.TotalCountCapped);
-
-        runner.Count = null;
-        (await Success(engine, """[{ "page": { "includeTotalCount": true } }]""")).PageInfo.TotalCount.Should().Be(0, "no count row means no match");
     }
 
     [Fact]
@@ -151,10 +154,34 @@ public class MongoQueryEngineTests
         });
 
         await Success(engine, "[]");
-        runner.Calls[0].Options.Should().Be(new AggregateRunOptions(60_000, false), "the ceiling clamps");
+        runner.Calls[0].Options.Should().Be(new AggregateRunOptions(60_000, false) { BatchSize = 102 }, "the ceiling clamps");
 
         await Success(engine, "[]", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { MaxTimeMs = 500 });
         runner.Calls[1].Options.MaxTimeMs.Should().Be(500, "a batch ceiling narrows");
+    }
+
+    [Fact]
+    public async Task The_page_asks_for_its_rows_in_one_reply_and_the_count_for_the_default_batch()
+    {
+        var (engine, runner) = Host();
+
+        await Success(engine, """[{ "page": { "limit": 250, "count": true } }]""");
+
+        runner.Calls.Should().HaveCount(2);
+        runner.Calls[0].Options.BatchSize.Should().Be(252, "the page's rows and the one that tells whether a next page exists arrive in a reply that also closes the cursor: one above the pipeline's own limit");
+        runner.Calls[1].Options.BatchSize.Should().BeNull("a count returns one row");
+    }
+
+    [Fact]
+    public async Task Every_aggregate_of_a_request_carries_its_correlation_id_as_the_comment()
+    {
+        var (engine, runner) = Host();
+
+        await Success(engine, """[{ "page": { "count": true } }]""", BindHost.Context(BindHost.Options(), organisation: BindHost.Organisation) with { CorrelationId = "corr-41" });
+        await Success(engine, "[]");
+
+        runner.Calls.Take(2).Select(call => call.Options.Comment).Should().Equal("corr-41", "corr-41");
+        runner.Calls[2].Options.Comment.Should().BeNull("a request without a correlation id sends no comment");
     }
 
     [Fact]
@@ -218,17 +245,37 @@ public class MongoQueryEngineTests
     public async Task Explain_returns_the_bound_form_and_the_stages_without_running()
     {
         var (engine, runner) = Host();
-        var outcome = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "includeTotalCount": true } }]"""), BindHost.Context());
+        var query = BindHost.Request(Order, """[{ "match": { "number": { "eq": "x" } } }, { "page": { "count": true } }]""");
+        var outcome = await engine.ExplainAsync(query.Planned(), BindHost.Context());
         var explain = outcome.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
-        explain.Bound["entity"]!.GetValue<string>().Should().Be(Order);
-        explain.Stages.Should().HaveCount(4);
-        explain.Count.Should().HaveCount(4);
+        explain.Valid.Should().BeTrue();
+        explain.Plan!.Bound["entity"]!.GetValue<string>().Should().Be(Order);
+        explain.Plan.Stages.Should().HaveCount(4);
+        explain.Plan.Count.Should().HaveCount(4);
+        explain.Stages.Select(stage => (stage.Index, stage.Kind, stage.Status)).Should().Equal([(0, "match", "ok"), (1, "page", "ok")]);
         runner.Calls.Should().BeEmpty();
 
-        var refused = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]"""), BindHost.Context());
+        // The plan is opt-in: a plain query is answered without it.
+        var unasked = await engine.ExplainAsync(query, BindHost.Context());
 
-        refused.Should().BeOfType<ExplainOutcome.Refused>();
+        unasked.Should().BeOfType<ExplainOutcome.Success>().Subject.Result.Plan.Should().BeNull();
+
+        // A binding failure is an answer, not a refusal: every error, the stages, no plan.
+        var invalid = await engine.ExplainAsync(BindHost.Request(Order, """[{ "match": { "nothing": { "eq": 1 } } }]""").Planned(), BindHost.Context());
+        var answer = invalid.Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+
+        answer.Valid.Should().BeFalse();
+        answer.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.UnknownPath);
+        answer.Errors[0].Params!["reason"].Should().Be(PathReasons.NotAMember);
+        answer.Stages.Should().ContainSingle().Which.Status.Should().Be("error");
+        answer.Plan.Should().BeNull();
+        runner.Calls.Should().BeEmpty();
+
+        // Only what stops binding before the stages stays a refusal.
+        var denied = await engine.ExplainAsync(BindHost.Request(Order, "[]"), BindHost.Context(organisation: Guid.Empty));
+
+        denied.Should().BeOfType<ExplainOutcome.Refused>().Which.Refusal.Status.Should().Be(403);
     }
 
     [Fact]
@@ -277,9 +324,9 @@ public class MongoQueryEngineTests
         item["id"]!.GetValue<string>().Should().Be(Id1.ToString());
         item["number"]!.GetValue<string>().Should().Be("N-1");
         item["count"]!.GetValue<int>().Should().Be(3);
-        item["big"]!.GetValue<string>().Should().Be("9007199254740993", "long is a string on the wire");
+        item["big"]!.ToJsonString().Should().Be("9007199254740993", "a long is a JSON number on the wire, with every digit");
         item["ratio"]!.GetValue<double>().Should().Be(0.5);
-        item["amount"]!.GetValue<string>().Should().Be("12.5", "decimal is a string on the wire");
+        item["amount"]!.ToJsonString().Should().Be("12.5", "a decimal is a JSON number on the wire, in its canonical digits");
         item["flag"]!.GetValue<bool>().Should().BeTrue();
         item["day"]!.GetValue<string>().Should().Be("2024-01-02");
         item["when"]!.GetValue<string>().Should().Be("2024-01-02T03:04:05Z");
@@ -287,19 +334,19 @@ public class MongoQueryEngineTests
         item["initial"]!.GetValue<string>().Should().Be("a", "a char is stored as its code point");
         item["state"]!.GetValue<int>().Should().Be(1, "enum as number");
         item["stateName"]!.GetValue<int>().Should().Be(1, "an enum stored as its name still travels as the number");
-        item["moneyText"]!.GetValue<string>().Should().Be("1.5");
+        item["moneyText"]!.ToJsonString().Should().Be("1.5", "a decimal stored as text is the number it spells");
         item["guidText"]!.GetValue<string>().Should().Be(Id2.ToString());
         item["blob"]!.GetValue<string>().Should().Be("AQID");
         item["shipTo"]!["city"]!.GetValue<string>().Should().Be("Bonn");
         item["items"]![0]!["id"]!.GetValue<string>().Should().Be(Id3.ToString());
-        item["items"]![0]!["price"]!["net"]!.GetValue<string>().Should().Be("3");
+        item["items"]![0]!["price"]!["net"]!.ToJsonString().Should().Be("3");
         item["items"]![0]!["notes"]![0]!.GetValue<string>().Should().Be("a");
         item["tags"]!.AsArray().Should().HaveCount(2);
-        item["prices"]!["eur"]!["net"]!.GetValue<string>().Should().Be("4.5", "a decimal stored as a string stays a string");
-        item["priceList"]!["usd"]!["net"]!.GetValue<string>().Should().Be("5", "the array-of-documents dictionary is an object on the wire");
+        item["prices"]!["eur"]!["net"]!.ToJsonString().Should().Be("4.5", "a decimal stored as a string is a number on the wire too");
+        item["priceList"]!["usd"]!["net"]!.ToJsonString().Should().Be("5", "the array-of-documents dictionary is an object on the wire");
         item["addon"]!["SoloplanNr"]!.GetValue<long>().Should().Be(7, "the bag is verbatim");
         item["addon"]!["When"]!.GetValue<string>().Should().Be("2024-05-06T00:00:00Z");
-        item["addon"]!["Dec"]!["_v"]!.GetValue<string>().Should().Be("1");
+        item["addon"]!["Dec"]!.ToJsonString().Should().Be("1", "the driver's { _t, _v } wrapper of a decimal is read as the decimal: a number");
         item["renamed"]!.GetValue<string>().Should().Be("renamed", "the wire name, not the element name");
         item["qrCode"]!.GetValue<string>().Should().Be("qr");
         item["location"]!.AsArray().Should().HaveCount(2, "unknown members pass through verbatim");
@@ -327,7 +374,8 @@ public class MongoQueryEngineTests
         var result = await Success(engine, """[{ "resolve": { "path": "customerId", "as": "cust" } }, { "unwind": { "path": "items", "as": "it", "includeIndex": "i" } }]""");
         var item = result.Items.Single()!.AsObject();
 
-        item["items"]!["quantity"]!.GetValue<int>().Should().Be(2, "after the unwind the path means the element");
+        item["it"]!["quantity"]!.GetValue<int>().Should().Be(2, "the element is under the alias");
+        item.AsObject().ContainsKey("items").Should().BeFalse("the collection left the row");
         item["it"]!["id"]!.GetValue<string>().Should().Be(Id3.ToString());
         item["i"]!.GetValue<int>().Should().Be(0, "the index is an int");
         item["cust"]!["name"]!.GetValue<string>().Should().Be("Acme");
@@ -342,8 +390,8 @@ public class MongoQueryEngineTests
         var outputs = (await Success(engine2, """[{ "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "n": { "count": true }, "total": { "sum": "amount" } } } }]""")).Items.Single()!.AsObject();
 
         outputs["st"]!.GetValue<int>().Should().Be(1);
-        outputs["n"]!.GetValue<string>().Should().Be("4", "a count is a long, and longs are strings on the wire");
-        outputs["total"]!.GetValue<string>().Should().Be("9.5");
+        outputs["n"]!.ToJsonString().Should().Be("4", "a count is an int: a JSON number on the wire, never a string");
+        outputs["total"]!.ToJsonString().Should().Be("9.5", "a decimal sum is a JSON number");
     }
 
     [Fact]

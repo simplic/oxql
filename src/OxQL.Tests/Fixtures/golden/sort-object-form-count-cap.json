@@ -1,0 +1,32 @@
+{
+  "description": "A sort in both forms with a case-sensitive entry, and a page with a numeric count cap.",
+  "entity": "probe.order",
+  "pipeline": [
+    {
+      "sort": [
+        {
+          "number": {
+            "direction": "desc",
+            "caseSensitive": true
+          }
+        },
+        {
+          "when": "desc"
+        },
+        {
+          "amount": "asc"
+        }
+      ]
+    },
+    {
+      "page": {
+        "limit": 5,
+        "count": {
+          "upTo": 500
+        }
+      }
+    }
+  ],
+  "fingerprint": "sha256:1141e12a964c2b705c5c8a0b739af694f668860f8cba6bcbb5893bbfe1db2022",
+  "canonical": "{\"entity\":\"probe.order\",\"scope\":{\"path\":\"OrganizationId\",\"organisation\":\"a8d899a4-2029-4806-a4b7-a414eab21801\"},\"stages\":[{\"sort\":[{\"path\":\"Number\",\"direction\":\"desc\",\"caseSensitive\":true},{\"path\":\"When\",\"direction\":\"desc\",\"caseSensitive\":true},{\"path\":\"Amount\",\"direction\":\"asc\",\"caseSensitive\":true}]},{\"page\":{\"limit\":5,\"count\":{\"rows\":500,\"upTo\":500,\"budgetMs\":500}}}],\"paging\":\"keyset\",\"page\":{\"limit\":5,\"cursor\":null,\"count\":{\"rows\":500,\"upTo\":500,\"budgetMs\":500}}}"
+}

@@ -524,8 +524,9 @@ What a contract 2 caller reads differently:
   the host's own 400. A batch answers an entry that does not read in its place and runs the
   others.
 - **No request at all**: the literal `null` as a body, a batch without `queries`, an explain
-  without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason:
-  "missing"`); the code was `UNKNOWN_STAGE`.
+  without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason` is
+  `"missing"` for a member that is not there and `"kind"` for a `null`); the code was
+  `UNKNOWN_STAGE`.
 - **`OPTION_NOT_APPLICABLE`** is one error per option of a condition that is no option, each with
   `params.option`; several unknown options were one error.
 - **Message texts.** `OPTION_NOT_APPLICABLE` says which of three mistakes was made (a name that

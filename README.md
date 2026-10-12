@@ -504,6 +504,38 @@ For code outside the packages (the Simplic base package is adapted with its pin)
   `NotSupportedException` for an internal call); `IEntityModelProvider.SchemaRevision`;
   `IRemoteOwnerInfo`; `IReportingAddonDefinitionSource`; `OxQLQueryService.ContractRefusal`.
 
+### Added since 2.1.126.1012
+
+Everything here is additive: a host built against 2.1.126.1012 compiles and runs unchanged, and a
+caller reads the new members by name.
+
+- **Health (contract 2).** Per remote service `contract`, `engineVersion`, `usable`, `reason` and
+  `references { declared, validated, revision, unknownTargets, reason }`; `model { entities,
+  degraded, reason }`; the limit `ownerUnavailableTtlSeconds`. `status` is also `degraded` for an
+  owner that is not usable, a declared target its owner does not publish, and a degraded model. A
+  caller without the contract header reads the members it always read.
+- **Diagnostics.** `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` carry `params.reason` (`timeout`,
+  `unreachable`, `route`, `status`), `status` when the owner answered, and `remembered` with
+  `retryAfterMs` when the owner was not called. A refusal for a target the owner does not have
+  says so at the `resolve` stage, in a run and in explain.
+- **Explain.** An owner no check asked carries `engine` and a `reason` (`unknown`, `engine`,
+  `unreachable`, `timeout`, `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak
+  contract 2; the owner reason `budget`; the note `REFERENCE_TARGET_UNKNOWN`.
+- **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
+  `OxQLEndpointOptions.StrictRemoteReferences`.
+- **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix
+  that is no entity of the host emits no reference, where it was taken for a reference into a
+  service named after the id.
+- **API.** `OwnerAvailability` and `OwnerOutage`; `RemoteReferenceValidator`,
+  `RemoteReferenceValidation`, `IRemoteSchemaSource` and `RemoteSchemaEntities` (a remote client
+  may implement the source; without it the references stay not validated);
+  `IEntityModelProvider.Degraded` (default: not said); `RemoteServiceState.Contract`,
+  `EngineVersion`, `Usable`, `Reason`, `References`, `Degrades`; `MongoQueryEngine.Availability`
+  and `ReferenceValidator`; `RemoteHealthProbe.Availability`;
+  `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
+  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`.
+  `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.
+
 ### Turning the legacy pipeline off
 
 Count the lines of the log category `OxQL.Compat.Legacy` per service: each is a caller without

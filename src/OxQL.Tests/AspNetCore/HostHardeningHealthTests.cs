@@ -327,17 +327,22 @@ public class HostHardeningHealthTests
     }
 
     [Fact]
-    public async Task A_model_without_entities_is_degraded_unless_its_provider_says_it_is_meant()
+    public async Task A_model_without_entities_is_healthy_unless_its_provider_says_it_is_degraded()
     {
         var silent = await HealthAsync(new StaticEntityModelProvider(NoEntities));
 
-        silent["status"]!.GetValue<string>().Should().Be("degraded", "a provider that does not say what its build left is taken to have lost its entities");
-        silent["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"empty"}""");
+        silent["status"]!.GetValue<string>().Should().Be("healthy", "a service without entities of its own is a host like any other");
+        silent["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":false}""", "the count is shown either way");
 
         var meant = await HealthAsync(new SayingModels(NoEntities, degraded: false));
 
-        meant["status"]!.GetValue<string>().Should().Be("healthy", "a service without entities of its own is not a finding");
+        meant["status"]!.GetValue<string>().Should().Be("healthy");
         meant["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":false}""");
+
+        var said = await HealthAsync(new SayingModels(NoEntities, degraded: true));
+
+        said["status"]!.GetValue<string>().Should().Be("degraded", "only the provider knows that its build lost the entities");
+        said["model"]!.ToJsonString().Should().Be("""{"entities":0,"degraded":true,"reason":"build"}""");
     }
 
     [Fact]
@@ -359,15 +364,60 @@ public class HostHardeningHealthTests
     }
 
     [Fact]
-    public async Task Health_without_the_contract_header_has_no_model_member_and_the_same_status()
+    public async Task Health_without_the_contract_header_has_no_model_member_and_a_status_the_model_does_not_enter()
     {
         var healthy = await HealthAsync(null, contract: null);
         var degraded = await HealthAsync(new SayingModels(NoEntities, degraded: true), contract: null);
+        var none = await HealthAsync(new SayingModels(null, degraded: null), contract: null);
 
         healthy.ContainsKey("model").Should().BeFalse();
         degraded.ContainsKey("model").Should().BeFalse();
+        none.ContainsKey("model").Should().BeFalse();
         healthy["status"]!.GetValue<string>().Should().Be("healthy");
-        degraded["status"]!.GetValue<string>().Should().Be("degraded", "the status says what the host is, for every caller");
+        degraded["status"]!.GetValue<string>().Should().Be("healthy", "the status of that form is of the referenced services alone, as it always was");
+        none["status"]!.GetValue<string>().Should().Be("healthy");
+    }
+
+    [Fact]
+    public async Task An_owner_that_is_not_usable_degrades_the_status_under_contract_2_and_not_without_the_header()
+    {
+        // Both owners answer their health; crm's names no contract this host can send a join to.
+        var client = new FactsClient(service => service == "crm" ? new RemoteOwnerInfo(null, null, null) : new RemoteOwnerInfo("2.1.0", 2, 10));
+
+        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
+
+        await host.CreateClient().GetAsync("/OxQL/health");
+        await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+
+        var plain = (await SampleHost.Body(await host.CreateClient().GetAsync("/OxQL/health")))!.AsObject();
+        var second = (await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health")))!.AsObject();
+
+        plain["status"]!.GetValue<string>().Should().Be("healthy", "both services are configured and answer, which is all that form's status has ever said");
+        plain["remote"]!.ToJsonString().Should().Be("""[{"service":"crm","configured":true,"reachable":true},{"service":"vehicle","configured":true,"reachable":true}]""");
+        plain.Select(member => member.Key).Should().Equal("status", "service", "engine", "capabilities", "limits", "remote");
+
+        second["status"]!.GetValue<string>().Should().Be("degraded");
+        second["remote"]!.AsArray().Single(entry => entry!["service"]!.GetValue<string>() == "crm")!["usable"]!.GetValue<bool>().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Health_without_the_contract_header_is_degraded_by_a_service_that_does_not_answer_or_is_not_configured()
+    {
+        foreach (var client in new[]
+        {
+            new FactsClient(_ => new RemoteOwnerInfo("2.1.0", 2, 10)) { Down = { "crm" } },
+            new FactsClient(_ => new RemoteOwnerInfo("2.1.0", 2, 10)) { Unconfigured = { "vehicle" } },
+        })
+        {
+            using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client)) { Environment = "Production" };
+
+            await host.CreateClient().GetAsync("/OxQL/health");
+            await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+
+            var body = await SampleHost.Body(await host.CreateClient().GetAsync("/OxQL/health"));
+
+            body!["status"]!.GetValue<string>().Should().Be("degraded");
+        }
     }
 
     [Fact]

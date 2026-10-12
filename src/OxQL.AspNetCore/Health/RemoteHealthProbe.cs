@@ -53,7 +53,11 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// </summary>
     public RemoteReferenceValidation? References { get; init; }
 
-    /// <summary>Whether the state is a finding: the status of <c>/oxql/health</c> is <c>degraded</c> with one.</summary>
+    /// <summary>
+    /// Whether the state is a finding: the status a contract 2 caller reads on <c>/oxql/health</c> is
+    /// <c>degraded</c> with one. A caller without the contract header reads the status by the first
+    /// two conditions alone (not configured, not reachable).
+    /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool Degrades => !Configured || Reachable == false || Usable == false || References is { UnknownTargets.Count: > 0 };
 

@@ -467,7 +467,7 @@ Anonymous, always 200, and never waits for another service:
 
 ```jsonc
 {
-  "status": "healthy",                    // "degraded" when a referenced service is not configured, was last measured unreachable or is not usable, or the model is degraded
+  "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable; contract 2 also when one is not usable, a declared target is unknown to its owner, or the model is degraded
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
   "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
@@ -567,11 +567,15 @@ Anonymous, always 200, and never waits for another service:
   answering. A host logs a warning under `OxQL.Startup` per service with unknown targets.
 - `model` (contract 2, also with `?shallow=true`) says what the host binds against: `entities`, the
   number of entities of its model, and `degraded`, with a `reason` when true: `build` (the model
-  provider says the host's build failed and it serves what was left, `IEntityModelProvider.Degraded`),
-  `empty` (the model has no entity and its provider does not say that this is meant) or
-  `unavailable` (the provider has no model). A degraded model degrades `status`: every request
-  for an entity the model lacks is `UNKNOWN_ENTITY`. A service that has no entities of its own is
-  healthy when its provider answers `Degraded: false`.
+  provider says the host's build failed and it serves what was left, `IEntityModelProvider.Degraded`)
+  or `unavailable` (the provider has no model). A degraded model degrades the `status` a contract 2
+  caller reads: every request for an entity the model lacks is `UNKNOWN_ENTITY`. A model without
+  entities is degraded only when its provider says so (`Degraded: true`): a service that has no
+  entities of its own is healthy and shows `entities: 0`.
+- `status` for a caller without the contract header is `degraded` while a referenced service is
+  not configured or was last measured unreachable, and `healthy` otherwise. What an owner's engine
+  can do, the check of the declared references and the model count for the status a contract 2
+  caller reads only.
 - `?shallow=true` starts no measurement. It is the form one host uses to ask another, so a probe
   never sets off the probed service's own probes. The same answer tells the asking host the owner's
   `engine.version` and `limits.maxBatchQueries`.

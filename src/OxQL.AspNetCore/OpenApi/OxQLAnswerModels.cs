@@ -375,7 +375,7 @@ public sealed class OxQLHealthModel
     [JsonPropertyName("degraded")]
     public bool Degraded { get; init; }
 
-    /// <summary>Why it is degraded: `build`, `empty` or `unavailable`.</summary>
+    /// <summary>Why it is degraded: `build` or `unavailable`.</summary>
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
 }

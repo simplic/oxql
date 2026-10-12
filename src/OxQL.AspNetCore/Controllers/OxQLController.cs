@@ -47,10 +47,11 @@ namespace OxQL.AspNetCore.Controllers;
 /// can do for this host (<c>contract</c>, <c>engineVersion</c>, <c>usable</c>, and a
 /// <c>reason</c> when it is not usable), and the answer says how many entities the host's model
 /// has and whether it is what a failed build left (<c>model { entities, degraded, reason }</c>).
-/// The status is <c>degraded</c> while a service is not configured, does not answer or is not
-/// usable, and while the model is degraded. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
-/// starts no measurement; that is the form one host asks of another, so a probe never sets off
-/// the probed service's own probes.
+/// The status is <c>degraded</c> while a service is not configured or does not answer; under
+/// contract 2 also while a service is not usable, while a reference this host declares names a
+/// target its owner does not publish, and while the model is degraded. With <c>?shallow=true</c>
+/// the answer leaves <c>remote</c> out and starts no measurement; that is the form one host asks
+/// of another, so a probe never sets off the probed service's own probes.
 /// <c>capabilities</c> and <c>limits</c> are read per caller and say what holds for that caller's
 /// requests. A request without the contract header on a host that answers contract 1 by the
 /// compatibility rewrite gets the names the published engine listed before contract 2 (batches,
@@ -174,7 +175,12 @@ public class OxQLController : ControllerBase
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
         var services = client is null || shallow ? null : Referenced(probe.State(ModelOrNull(models), client), models, client);
         var model = ModelHealth.Of(models);
-        var degraded = model.Degraded || (services is not null && services.Any(state => state.Degrades));
+
+        // What a caller without the header reads is frozen, the status word included: it is degraded by a service that
+        // is not configured or does not answer, and by nothing the engine has learned to say since.
+        var degraded = Contract1
+            ? services is not null && services.Any(state => !state.Configured || state.Reachable == false)
+            : model.Degraded || (services is not null && services.Any(state => state.Degrades));
 
         // LEGACY(compat.v1): a caller the legacy pipeline answers reads what that pipeline honours; remove with src/OxQL.AspNetCore/Legacy.
         var legacy = Legacy.LegacyHealth.For(options, HttpContext);
@@ -198,10 +204,11 @@ public class OxQLController : ControllerBase
 
     /// <summary>
     /// The state of the host's entity model on health: how many entities it has, and whether it is
-    /// what a failed build left, with the reason: <c>build</c> (the provider says the build failed),
-    /// <c>empty</c> (no entity, and the provider does not say that is meant) or <c>unavailable</c>
-    /// (the provider has no model to hand out). A degraded model degrades the status: no query binds
-    /// against an entity the model lacks.
+    /// what a failed build left, with the reason: <c>build</c> (the provider says the build failed)
+    /// or <c>unavailable</c> (the provider has no model to hand out). A degraded model degrades the
+    /// status a contract 2 caller reads: no query binds against an entity the model lacks. A model
+    /// without entities is degraded only when its provider says so: a service without entities of
+    /// its own is a host like any other.
     /// </summary>
     private sealed record ModelHealth(int Entities, bool Degraded, string? Reason)
     {
@@ -214,7 +221,6 @@ public class OxQLController : ControllerBase
                 return models.Degraded switch
                 {
                     true => new ModelHealth(entities, true, "build"),
-                    null when entities == 0 => new ModelHealth(0, true, "empty"),
                     _ => new ModelHealth(entities, false, null),
                 };
             }

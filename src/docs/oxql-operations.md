@@ -267,6 +267,29 @@ neither ([below](#contract-1-answers)). What a host should know:
   one escapes it there. The schema document is the base package's and keeps its own spelling (its
   revision is the hash of its bytes).
 
+### The API description of the routes
+
+The four routes describe themselves to whatever generates an API document from the host's API
+explorer (an OpenAPI generator such as Swashbuckle), without a dependency on one. The document
+says what a route is for and how it is called; the language stays in the documentation, which
+every description points to (`OxQLDocumentation.Url`).
+
+| what | where it comes from |
+|---|---|
+| summary and description of a route | `[EndpointSummary]` and `[EndpointDescription]` on the action, from the constants of `OxQLDocumentation` |
+| the header `X-OxQL-Contract` (and `X-OxQL-Timing` on query and batch) as an optional header parameter | `[OxQLOperation(Headers = …)]`, applied by `OxQLApiDescriptionProvider`, which `AddOxQLAspNetCore` registers. The parameter is description only: the header is read and checked where it always was |
+| the request body of contract 2 (`OxQLQueryBody` with its stages, `page.count` among them; `OxQLBatchBody`; `OxQLExplainBody`) | `[OxQLOperation(Body = …)]`: the engine binds a body with converters of its own, so the model of the wire is a documentation model (`OxQL.AspNetCore.OpenApi`). Nothing is bound into it, and the member of the route between services (`keyedBy`) is not part of it |
+| every status with its body and what it means | `[ProducesResponseType(type, status, "application/json", Description = …)]`: `OxQLQueryAnswer`, `OxQLBatchAnswer`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, and the refusal envelope `OxQLError` for 400, 403, 413, 422, 429, 500 and 504. 401 and 404 are the host's own answers |
+| the descriptions of parameters and of the models' members | the XML comments of `OxQL.AspNetCore`, which ship in the package (`lib/net10.0/OxQL.AspNetCore.xml`) |
+| the contract 1 body and answer (legacy) | named by `OxQLOperationAttribute.Contract1Body` and `Contract1Answer` in the endpoint's metadata, for a host that documents them as alternatives; the document describes contract 2 |
+
+What is left to the host: to include the XML comments in its generator (the file has to be beside
+the assembly: `CopyDocumentationFilesFromPackages` in the project that references the package), its
+security scheme, examples, and hiding routes of its own. The Sample host shows the first.
+
+No media type constraint is put on the routes for the sake of the description: a body is read by
+the host's JSON formatters as before.
+
 ### What a host measures
 
 The engine has one meter, named `OxQL` (`OxQLMetrics.MeterName`), which a host exports with its

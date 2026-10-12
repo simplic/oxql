@@ -552,6 +552,12 @@ caller reads the new members by name.
 - **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
   starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
   (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
+- **The routes describe themselves.** Each of `POST /OxQL/query`, `batch`, `explain` and
+  `GET /OxQL/health` carries a summary and a description that points to the documentation, the
+  header `X-OxQL-Contract` as a parameter, the contract 2 body and answers as models of the wire
+  (`OxQL.AspNetCore.OpenApi`) and every status with its body, for a generator that reads the
+  API explorer. See *The API description of the routes* in
+  [`oxql-operations.md`](src/docs/oxql-operations.md).
 - **What a host measures.** The meter `OxQL` (`OxQLMetrics`) with the counter `oxql.requests` and
   the histogram `oxql.request.duration` (seconds), tagged `contract`, `route`, `entity` and
   `outcome`, for both contracts. The line of the log category `OxQL.Compat.Legacy` also carries
@@ -573,6 +579,9 @@ caller reads the new members by name.
   and `ReferenceValidator`; `RemoteHealthProbe.Availability`;
   `OxQLRequestBodyAttribute` (`OxQL.AspNetCore.Binding`); `Codes.InvalidRequestBody`;
   `OxQLMetrics` (`OxQL.Core.Engine`); `ExecutionOptions.ClientDeadlineMarginMs`;
+  `OxQLDocumentation`, `OxQLOperationAttribute`, `OxQLHeaders`, `OxQLRequestHeaders`,
+  `OxQLApiDescriptionProvider` and the documentation models (`OxQL.AspNetCore.OpenApi`), which
+  `AddOxQLAspNetCore` registers the provider for;
   `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
   and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;

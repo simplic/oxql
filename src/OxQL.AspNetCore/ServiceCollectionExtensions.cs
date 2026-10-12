@@ -54,6 +54,8 @@ public static class ServiceCollectionExtensions
             // What the probe measures of an owner is what the keyed fetch goes by, and the other way round.
             Availability = provider.GetService<Core.Engine.OwnerAvailability>(),
         });
+        // What the routes say of themselves to an API description beyond their signatures: the body models of the wire, the headers.
+        services.TryAddEnumerable(ServiceDescriptor.Transient<Microsoft.AspNetCore.Mvc.ApiExplorer.IApiDescriptionProvider, OpenApi.OxQLApiDescriptionProvider>());
         services.AddHostedService<RemoteReferenceValidationStarter>();
         services.AddTransient<IStartupFilter, ScopeProviderStartupFilter>();
         services.AddTransient<IStartupFilter, RemoteReferenceStartupFilter>();

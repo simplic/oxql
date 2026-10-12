@@ -56,6 +56,12 @@ builder.Services.AddSwaggerGen(opts =>
         Version = "v1",
         Description = "Sample application demonstrating the OxQL flexible document query engine."
     });
+
+    // The OxQL routes describe themselves (summary, description, the contract header, the bodies of the
+    // wire, every status). The XML comments of the engine's assemblies, which ship in its packages, add
+    // the descriptions of the parameters and of the models' members.
+    foreach (var comments in Directory.EnumerateFiles(AppContext.BaseDirectory, "OxQL.*.xml"))
+        opts.IncludeXmlComments(comments);
 });
 
 var app = builder.Build();

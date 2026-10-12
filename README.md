@@ -481,12 +481,21 @@ For code outside the packages (the Simplic base package is adapted with its pin)
   `OxQLQueryService` constructor takes the `LegacyRoute`. `ReferenceDef.Targets` is required;
   `TargetEntity`, `TargetField` and `IsRemote` derive from it. `WireNames.DisplayCandidates` is an
   `IReadOnlyList<string>`. `OxQL.Model` references `MongoDB.Bson`, no longer `MongoDB.Driver`.
-- **Removed.** `RemoteResolver`; `EntityModel.BuiltAt`; `ReferenceDef.Direction` and
-  `ReferenceDirection`; `WireNames.PublishedStorageName`.
-- **No longer public.** The compiler and the helpers behind the engine: `MongoCompiler`,
-  `WireEncoder`, `IndexAdvisor`, `CompatBinder`, `CompatRows`, `BsonDocumentJsonConverter` and the
-  compile records beside them. The positional records of `OxQL.Core.Binding` stay public and are
-  engine internals: their shape changes without notice.
+- **Removed.** `RemoteResolver`; `ResolveCache` and `SemiJoinCache` (one `OwnerFetchCache` holds
+  the resolved rows and, apart, the semi-join ids; a host that registered or constructed either
+  registers `OwnerFetchCache`, which `AddOxQLMongo` does itself) and with them
+  `CacheOptions.ResolveCacheMaxEntries` (now `OwnerFetchCacheMaxEntries`); `IndexAdvice`;
+  `IIndexSource.ExplainAsync` with `MongoIndexSource.ExplainAsync` and `ExplainCommand`;
+  `ExplainResult.Bound`, `Count` and `Collation` (the record holds the explain model of
+  [`oxql-operations.md`](src/docs/oxql-operations.md)); `EntityModel.BuiltAt`;
+  `ReferenceDef.Direction` and `ReferenceDirection`; `WireNames.PublishedStorageName`.
+- **No longer public.** The compiler and the helpers behind the engine: `MongoCompiler` with
+  `CompiledQuery`, `CompileOptions` and `SemiJoinSlot`, `WireEncoder`, `IndexAdvisor`,
+  `CompatBinder` with `CompatRewrite`, `CompatRows`, `BsonDocumentJsonConverter`, `ResolveResult`,
+  and the members `MongoQueryEngine.NextCursor`, `ClrModelBuilder.ReferenceIdAttributeName`,
+  `ClrModelBuilder.PublishedProperties` and `DocumentModelBuilder.DefaultRepresentation`. The
+  positional records of `OxQL.Core.Binding` stay public and are engine internals: their shape
+  changes without notice.
 - **Added, with defaults** so existing implementers compile: `IRemoteQueryClient.ExplainAsync` and
   `ExplainBatchAsync`; `IOxQLQueryService.BatchAsync(batch, internalCall, …)`,
   `ExplainAsync(request, internalCall, …)` and `ExplainBatchAsync` (the defaults throw

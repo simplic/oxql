@@ -112,6 +112,31 @@ public class RefBroken
 
     [OxQLReferenceWhen("kind", "a", "transport.shipment")]
     public Guid RemoteWithoutField { get; set; }
+
+    [OxQLReference("transaction", "id")]
+    public Guid UnprefixedTarget { get; set; }
+
+    [OxQLReferenceWhen("kind", "a", "transaction", Field = "id")]
+    [OxQLReferenceWhen("kind", "b", "refs.tour")]
+    public Guid UnprefixedCaseTarget { get; set; }
+}
+
+/// <summary>An entity of a host whose own ids carry no prefix: one reference to another such entity, one to an id the host does not have.</summary>
+public class UnprefixedLine
+{
+    public Guid Id { get; set; }
+
+    [OxQLReference("ledger")]
+    public Guid LedgerId { get; set; }
+
+    [OxQLReference("ledgers", "id")]
+    public Guid MistypedId { get; set; }
+}
+
+public class UnprefixedLedger
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = "";
 }
 
 /// <summary>The local item target: keyed billing lines, unkeyed notes.</summary>

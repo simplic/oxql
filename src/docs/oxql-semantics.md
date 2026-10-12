@@ -926,6 +926,15 @@ base package's `[ReferenceId]`). There are four more:
   combining them with `[OxQLReference]` on the same member, or with conflicting cases, drops them
   all (`reference-declaration-unresolved`). The condition's values compare exactly with the stored
   string or enum sibling.
+- **Whose entity a target is** is read off its id. An id that is an entity of this host is local.
+  Any other id is another service's only when it carries that service's prefix
+  (`<service>.<entity>`, the prefix being the host's `InternalHosts` key): the reference is then
+  remote and the declaration names the target field. An id of this host's own prefix that is no
+  entity is the build finding `reference-target-unknown` (`reference-case-target-unknown` for a
+  case), and an id without any prefix that is no entity of this host is
+  `reference-target-unprefixed`: it names no owning service, so no reference is emitted (a case is
+  dropped) and nothing asks the host to configure a service named after an entity. A build
+  finding never stops a host from starting; the member simply has no join.
 - A member the service cannot annotate (inherited, or on a shared type) is declared by the host:
   `new ReferenceDeclarations().For<Resource>("id").When(ReferenceDeclarations.Variant, "DriverResource", "staff.employee", field: "id")`,
   or `.To(target, field?, item?, keyAs?)` for an unconditional one, passed to

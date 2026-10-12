@@ -217,7 +217,8 @@ internal static class ModelAssembler
     /// <summary>
     /// One declared target resolved against the entity set: the local entity (and its keyed item
     /// collection) or a remote one, with the field defaulted to the key where this host can read
-    /// it; null with a finding when the host cannot complete it.
+    /// it; null with a finding when the host cannot complete it. A target is remote only when its
+    /// id carries the prefix of a service that is not this host's.
     /// </summary>
     private static ReferenceTarget? ResolveTarget(
         IReadOnlyDictionary<string, EntityDef> entities,
@@ -307,6 +308,20 @@ internal static class ModelAssembler
                     pending.OwnerLabel,
                     $"A case of the reference names '{target}', which is not an entity of this host, so the case is dropped.",
                     target));
+
+            return null;
+        }
+
+        // The owning service of a remote target is its id's prefix. An id without one names no
+        // service: it is a local id this host does not have (a typo, an entity that was renamed),
+        // or another service's entity under an id that cannot be routed. Neither is a reference.
+        if (!target.Contains('.'))
+        {
+            findings.Add(new BuildFinding(
+                BuildCodes.ReferenceTargetUnprefixed,
+                pending.OwnerLabel,
+                $"The reference names '{target}', which is not an entity of this host and has no service prefix, so it names no owning service and {(pending.Plain && declared.Item is null ? "no reference is emitted" : "the case is dropped")}. Name an entity of this host, or another service's entity by its full id '<service>.<entity>'.",
+                target));
 
             return null;
         }

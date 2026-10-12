@@ -831,6 +831,13 @@ public static class BuildCodes
     /// <summary>A typed or multi-target reference case names a local entity id the model does not have; the case is dropped.</summary>
     public const string ReferenceCaseTargetUnknown = "reference-case-target-unknown";
 
+    /// <summary>
+    /// A reference names a target id without a service prefix (<c>&lt;service&gt;.&lt;entity&gt;</c>)
+    /// that is not an entity of this host. An id without a prefix names no owning service, so it is
+    /// never a remote target: the reference (or the case) is dropped. <c>Detail</c> is the id.
+    /// </summary>
+    public const string ReferenceTargetUnprefixed = "reference-target-unprefixed";
+
     /// <summary>An item target's path is not an array of keyed objects on the target entity, or its field is not a member of the element; the case is dropped.</summary>
     public const string ReferenceItemUnknown = "reference-item-unknown";
 

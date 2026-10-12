@@ -1427,8 +1427,10 @@ owning service, owners in parallel:
   are `owner_unanswered` at once, with the diagnostic of the call that failed (`RESOLVE_UNREACHABLE`,
   or `RESOLVE_TIMEOUT` after a timeout, the same `params.reason` and `status`) and
   `params.remembered: true`, a semi-join into it is refused at once, exactly as the failed call
-  answered, without the wait. Then one request
-  tries the owner while the others keep the remembered answer until that call lands; an answer ends
+  answered, without the wait. When the time
+  is over nothing is remembered: every request asks the owner again, also those that arrive
+  together, so the queries one page sends side by side are all answered by an owner that is back
+  and none from memory; a call that fails starts the time again, and an answer ends
   the record. Any other HTTP error (401, 413, 400, 500) is the owner's word on one request and is
   not remembered, and neither is an answer the host's client could not read (it is
   `RESOLVE_UNREACHABLE` for that request, and the next request asks the owner again). A caller

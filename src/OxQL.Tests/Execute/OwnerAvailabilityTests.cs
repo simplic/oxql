@@ -94,7 +94,7 @@ public class OwnerAvailabilityTests
     // ---- the record ---------------------------------------------------------------------------------
 
     [Fact]
-    public void An_owner_that_failed_is_not_entered_until_the_time_is_over_and_then_by_one_caller()
+    public void An_owner_that_failed_is_not_entered_until_the_time_is_over_and_then_by_every_caller()
     {
         var time = new ManualTime();
         var availability = new OwnerAvailability(TimeSpan.FromSeconds(5), time);
@@ -111,29 +111,80 @@ public class OwnerAvailabilityTests
         time.Advance(TimeSpan.FromSeconds(3));
 
         availability.OutageOf("staff").Should().BeNull("a read lets nobody in and holds nobody back once the time is over");
-        availability.TryEnter("staff", out _).Should().BeTrue("the time is over: one caller tries");
-        availability.TryEnter("staff", out outage).Should().BeFalse("the others keep the answer until that call lands");
-        outage!.Reason.Should().Be(OwnerAvailability.Unreachable);
+        availability.TryEnter("staff", out _).Should().BeTrue("the time is over: the owner is asked again");
+        availability.TryEnter("staff", out outage).Should().BeTrue("by everyone: who comes while the first call is under way asks too");
+        outage.Should().BeNull();
+
+        availability.Failed("staff", OwnerAvailability.Timeout);
+
+        availability.TryEnter("staff", out outage).Should().BeFalse("a call that fails starts the time again");
+        outage.Should().Be(new OwnerOutage(OwnerAvailability.Timeout, null, TimeSpan.FromSeconds(5)));
 
         availability.Succeeded("staff");
 
-        availability.TryEnter("staff", out _).Should().BeTrue("the call landed and the owner answered");
+        availability.TryEnter("staff", out _).Should().BeTrue("the owner answered");
         availability.OutageOf("staff").Should().BeNull();
     }
 
     [Fact]
-    public void A_trial_that_never_reports_holds_the_others_back_for_one_more_period_only()
+    public async Task Requests_that_arrive_together_after_the_time_is_over_are_all_answered_by_an_owner_that_is_back()
     {
+        var options = BindHost.Options();
         var time = new ManualTime();
-        var availability = new OwnerAvailability(TimeSpan.FromSeconds(5), time);
+        var down = true;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new EndingClient(async token =>
+        {
+            if (Volatile.Read(ref down))
+                throw new HttpRequestException("No connection could be made.");
 
-        availability.Failed("staff", OwnerAvailability.Timeout);
+            await release.Task.WaitAsync(token);
+
+            return new BatchResponse
+            {
+                Results =
+                [
+                    new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["items"] = new System.Text.Json.Nodes.JsonArray(FakeRemoteClient.Row("id", Driver.ToString(), ("name", "Ada"))),
+                        ["pageInfo"] = new System.Text.Json.Nodes.JsonObject { ["hasNextPage"] = false },
+                    },
+                ],
+            };
+        });
+
+        // Two hosts' worth of state would hide it: both requests share the record, and neither reads the other's rows from a cache.
+        MongoQueryEngine Engine(OwnerAvailability shared) =>
+            new(new StaticEntityModelProvider(model.Value), new FakeAggregateRunner { PageRows = [Row("driver", Driver)] }, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options)) { Availability = shared };
+
+        var availability = new OwnerAvailability(options, time);
+        var one = Engine(availability);
+        var other = Engine(availability);
+
+        (await RunAsync(one)).Diagnostics.Should().ContainSingle();
+        (await RunAsync(other)).Diagnostics.Should().ContainSingle().Which.Params.Should().Contain("remembered", true);
+        client.Calls.Should().Be(1);
+
         time.Advance(TimeSpan.FromSeconds(5));
-        availability.TryEnter("staff", out _).Should().BeTrue();
+        Volatile.Write(ref down, false);
 
-        time.Advance(TimeSpan.FromSeconds(5));
+        var first = RunAsync(one);
 
-        availability.TryEnter("staff", out _).Should().BeTrue("the caller that tried was stopped before it could say how the call ended");
+        SpinWait.SpinUntil(() => client.Calls == 2, TimeSpan.FromSeconds(30)).Should().BeTrue("the first request asks the owner again");
+
+        // The second arrives while the first one's call is still under way.
+        var second = RunAsync(other);
+
+        SpinWait.SpinUntil(() => client.Calls == 3 || second.IsCompleted, TimeSpan.FromSeconds(30)).Should().BeTrue();
+        release.SetResult();
+
+        foreach (var result in await Task.WhenAll(first, second))
+        {
+            result.Diagnostics.Should().BeNullOrEmpty("the owner answers again, so nothing is said from memory");
+            result.Items[0]!["res"]!["name"]!.GetValue<string>().Should().Be("Ada");
+        }
+
+        client.Calls.Should().Be(3);
     }
 
     [Fact]

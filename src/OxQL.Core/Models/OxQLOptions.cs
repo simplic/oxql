@@ -642,7 +642,7 @@ public sealed class CacheOptions
     /// a call that reached nobody, ran out of its budget, or found no internal query route (HTTP 404)
     /// at the owner's host. Until then a request that needs the owner gets the answer of a failed call
     /// at once (the alias <c>null</c> with that call's <c>RESOLVE_UNREACHABLE</c> or <c>RESOLVE_TIMEOUT</c>, a semi-join refused) instead of
-    /// waiting for the call's budget again; afterwards one caller tries the owner. 0 remembers nothing.
+    /// waiting for the call's budget again; afterwards the owner is called again. 0 remembers nothing.
     /// </summary>
     public int OwnerUnavailableTtlSeconds { get; set; } = 5;
 }

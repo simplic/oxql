@@ -19,9 +19,10 @@ public sealed record OwnerOutage(string Reason, int? Status, TimeSpan RetryAfter
 /// After a failure the owner is not called for <c>OxQL:Cache:OwnerUnavailableTtlSeconds</c>: a
 /// request that needs it gets the answer the failed call gave (the alias <c>null</c> with that
 /// call's <c>RESOLVE_UNREACHABLE</c> or <c>RESOLVE_TIMEOUT</c>, a semi-join refused) at once, instead of waiting for the call's
-/// budget again on every page. When the time is over the next caller tries the owner
-/// (<see cref="TryEnter"/> answers true to one caller); the others keep the remembered answer until
-/// that call lands or the same time has passed once more. A success forgets the owner.
+/// budget again on every page. When the time is over nothing is remembered any more: every caller
+/// asks the owner again (<see cref="TryEnter"/> answers true to all of them), so the queries that
+/// one page sends side by side are all answered once the owner is back, and none of them from
+/// memory. A call that fails then starts the time again. A success forgets the owner.
 /// </para>
 /// <para>
 /// A failure is a call that got no answer (no connection, no answer in time) or an owner whose host
@@ -65,7 +66,7 @@ public sealed class OwnerAvailability
     /// <summary>
     /// Whether <paramref name="service"/> may be called now. False with the remembered
     /// <paramref name="outage"/> while its time runs; true for an owner nothing is remembered of, and
-    /// for the one caller that tries an owner again once the time is over.
+    /// for every caller once the time is over.
     /// </summary>
     public bool TryEnter(string service, out OwnerOutage? outage)
     {
@@ -87,14 +88,9 @@ public sealed class OwnerAvailability
                 return false;
             }
 
-            // The time is over: this caller tries. Whoever comes before its call lands keeps the
-            // remembered answer, for at most the same time again should the call never report.
-            var again = ttl();
-
-            if (again > TimeSpan.Zero)
-                entries[service] = entry with { Until = time.GetUtcNow() + again };
-            else
-                entries.Remove(service);
+            // The time is over, for everyone: callers that arrive together all ask, so what they are
+            // parts of (the chunks of one page) is not answered half by the owner and half from memory.
+            entries.Remove(service);
 
             outage = null;
             return true;

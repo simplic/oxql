@@ -216,7 +216,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Cache:NegativeResolveTtlSeconds` | 10 | how long a key an owner answered as not found is cached; a `strict` request reads past it; `0` caches none |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
 | `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
-| `Cache:OwnerUnavailableTtlSeconds` | 5 | how long an owner that did not answer (no connection, no answer within its call budget, HTTP 404 on the internal query route) is not called again: its aliases are `null` with `RESOLVE_UNREACHABLE` (`params.remembered`) at once instead of after the call budget; `0` remembers nothing |
+| `Cache:OwnerUnavailableTtlSeconds` | 5 | how long an owner that did not answer (no connection, no answer within its call budget, HTTP 404 on the internal query route) is not called again: its aliases are `null` at once instead of after the call budget, with the code and `params.reason` of the call that failed (`RESOLVE_UNREACHABLE`, or `RESOLVE_TIMEOUT` after a timeout) and `params.remembered`; `0` remembers nothing |
 | `Cursor:SigningKey` | — | required; the host does not start without it; cursors are HMAC-signed with a key derived from it |
 | `Startup:StrictRemoteReferences` | unset | whether a declared remote reference into a service the host has no `InternalHosts` entry for stops the host from starting: `true` in every environment, `false` in none (the error line per service and health's `configured: false` stay); unset, it stops in `Development`, `Local` and under continuous integration |
 

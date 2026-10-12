@@ -17,8 +17,8 @@ public sealed record OwnerOutage(string Reason, int? Status, TimeSpan RetryAfter
 /// before it calls.
 /// <para>
 /// After a failure the owner is not called for <c>OxQL:Cache:OwnerUnavailableTtlSeconds</c>: a
-/// request that needs it gets the answer a failed call gives (the alias <c>null</c> with
-/// <c>RESOLVE_UNREACHABLE</c>, a semi-join refused) at once, instead of waiting for the call's
+/// request that needs it gets the answer the failed call gave (the alias <c>null</c> with that
+/// call's <c>RESOLVE_UNREACHABLE</c> or <c>RESOLVE_TIMEOUT</c>, a semi-join refused) at once, instead of waiting for the call's
 /// budget again on every page. When the time is over the next caller tries the owner
 /// (<see cref="TryEnter"/> answers true to one caller); the others keep the remembered answer until
 /// that call lands or the same time has passed once more. A success forgets the owner.

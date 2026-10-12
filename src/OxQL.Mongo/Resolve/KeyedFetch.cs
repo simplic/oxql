@@ -766,11 +766,7 @@ internal sealed class KeyedFetch
     private static Refusal Unanswered(string service, CallOutcome outcome)
     {
         var remembered = outcome.Remembered;
-        var reason = remembered is not null ? remembered.Reason
-            : outcome.Failure == Failure.Timeout ? ReasonTimeout
-            : outcome.Status is null ? ReasonUnreachable
-            : outcome.Status == NoRoute ? ReasonRoute
-            : ReasonStatus;
+        var reason = ReasonOf(outcome);
         var parameters = new Dictionary<string, object?> { ["service"] = service, ["reason"] = reason };
 
         if (outcome.Status is { } answered)
@@ -1088,11 +1084,7 @@ internal sealed class KeyedFetch
 
         var nulled = $"'{string.Join("', '", aliases)}' is null on this page.";
         var remembered = call.Outcome.Remembered;
-        var reason = remembered is not null ? remembered.Reason
-            : failure == Failure.Timeout ? ReasonTimeout
-            : call.Outcome.Status is null ? ReasonUnreachable
-            : call.Outcome.Status == NoRoute ? ReasonRoute
-            : ReasonStatus;
+        var reason = ReasonOf(call.Outcome);
         var parameters = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases, ["reason"] = reason };
 
         if (call.Outcome.Status is { } answered)
@@ -1123,6 +1115,17 @@ internal sealed class KeyedFetch
 
         return true;
     }
+
+    /// <summary>
+    /// <c>params.reason</c> of a call without an answer. A remembered outcome is the failed call's own
+    /// (<see cref="CallOutcome.Recalled"/>), so the call and every answer given from the memory of it
+    /// say the same reason under the same code.
+    /// </summary>
+    private static string ReasonOf(CallOutcome outcome) =>
+        outcome.Failure == Failure.Timeout ? ReasonTimeout
+        : outcome.Status is null ? ReasonUnreachable
+        : outcome.Status == NoRoute ? ReasonRoute
+        : ReasonStatus;
 
     /// <summary>What the last call to an owner the host does not ask right now ended in, as a clause.</summary>
     private static string Last(OwnerOutage remembered, string service) => remembered.Reason switch
@@ -2836,6 +2839,13 @@ internal sealed class KeyedFetch
 
         /// <summary>How many batches went out for it, a split batch counted per part.</summary>
         public int Calls { get; init; } = 1;
+
+        /// <summary>
+        /// The outcome of the call that left <paramref name="outage"/>, for a request that is not sent
+        /// while it is remembered: a timeout stays a timeout, an owner's status stays its status.
+        /// </summary>
+        public static CallOutcome Recalled(OwnerOutage outage) =>
+            new([], outage.Reason == OwnerAvailability.Timeout ? KeyedFetch.Failure.Timeout : KeyedFetch.Failure.Unreachable, outage.Status) { Remembered = outage };
     }
 
     /// <summary>
@@ -3052,7 +3062,8 @@ internal sealed class KeyedFetch
     /// </summary>
     /// <remarks>
     /// Another service's owner the host remembers as not answering (<see cref="OwnerAvailability"/>) is
-    /// not called: the outcome is the remembered failure, at once. What the call ends in is written
+    /// not called: the outcome is the remembered failure, at once and under the code the call that
+    /// failed had (<c>RESOLVE_TIMEOUT</c> for one that timed out). What the call ends in is written
     /// there: a success, a call no connection reached, one that ran out of a <paramref name="whole"/>
     /// budget, and an owner whose host has no internal query route (404) or whose gateway says it is
     /// away (502, 503, 504). Any other HTTP error is the owner's word on this request and is not kept.
@@ -3062,7 +3073,7 @@ internal sealed class KeyedFetch
         var known = service == SelfService ? null : Availability;
 
         if (known is not null && !known.TryEnter(service, out var outage) && outage is not null)
-            return new CallOutcome([], Failure.Unreachable, outage.Status) { Remembered = outage };
+            return CallOutcome.Recalled(outage);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 

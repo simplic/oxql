@@ -301,7 +301,11 @@ public class OwnerAvailabilityTests
         var second = await RunAsync(engine);
 
         client.Calls.Should().ContainSingle();
-        second.Diagnostics.Should().ContainSingle().Which.Params.Should().Contain("reason", "timeout").And.Contain("remembered", true);
+
+        var remembered = second.Diagnostics.Should().ContainSingle().Subject;
+
+        remembered.Code.Should().Be(Codes.ResolveTimeout);
+        remembered.Params.Should().Contain("reason", "timeout").And.Contain("remembered", true);
 
         // A request with 300 ms in all leaves its owner call less than half of what one call may take.
         var (hurried, hurriedRunner, hurriedClient, _) = Host(options => options.Execution.ResolveTimeoutMs = 2_000);
@@ -313,6 +317,103 @@ public class OwnerAvailabilityTests
 
         hurriedClient.Calls.Should().ContainSingle();
         hurried.Availability.OutageOf("staff").Should().BeNull("the request ran out of time, which says nothing of the owner");
+    }
+
+    /// <summary>An owner whose every batch ends as the test says, counted.</summary>
+    private sealed class EndingClient(Func<CancellationToken, Task<BatchResponse>> end) : IRemoteQueryClient
+    {
+        private int calls;
+
+        public int Calls => Volatile.Read(ref calls);
+
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref calls);
+
+            return end(cancellationToken);
+        }
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
+    }
+
+    private static (MongoQueryEngine Engine, EndingClient Client) Ending(Func<CancellationToken, Task<BatchResponse>> end, EntityModel? entities = null)
+    {
+        var options = BindHost.Options(configure => configure.Execution.ResolveTimeoutMs = 60);
+        var client = new EndingClient(end);
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(entities ?? model.Value), new FakeAggregateRunner { PageRows = [Row("driver", Driver)] }, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options))
+        {
+            Availability = new OwnerAvailability(options, new ManualTime()),
+        };
+
+        return (engine, client);
+    }
+
+    private static async Task<BatchResponse> Never(CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+        throw new OperationCanceledException(cancellationToken);
+    }
+
+    private static Func<CancellationToken, Task<BatchResponse>> EndOf(string cause) => cause switch
+    {
+        "timeout" => Never,
+        "unreachable" => _ => throw new HttpRequestException("No connection could be made."),
+        "route" => _ => throw new HttpRequestException("The owner did not answer with success.", null, HttpStatusCode.NotFound),
+        _ => _ => throw new HttpRequestException("The owner did not answer with success.", null, HttpStatusCode.ServiceUnavailable),
+    };
+
+    [Theory]
+    [InlineData("unreachable", Codes.ResolveUnreachable, "unreachable", null)]
+    [InlineData("timeout", Codes.ResolveTimeout, "timeout", null)]
+    [InlineData("route", Codes.ResolveUnreachable, "route", 404)]
+    [InlineData("gateway", Codes.ResolveUnreachable, "status", 503)]
+    public async Task The_answer_from_memory_has_the_code_the_reason_and_the_status_of_the_call_that_failed(string cause, string code, string reason, int? status)
+    {
+        var (engine, client) = Ending(EndOf(cause));
+
+        var first = (await RunAsync(engine)).Diagnostics.Should().ContainSingle().Subject;
+        var second = (await RunAsync(engine)).Diagnostics.Should().ContainSingle().Subject;
+
+        client.Calls.Should().Be(1, "the second answer is given from what the host remembers");
+
+        first.Code.Should().Be(code);
+        first.Params.Should().Contain("reason", reason).And.NotContainKey("remembered");
+
+        second.Code.Should().Be(code, "what is remembered is that call, so it is said under that call's code");
+        second.Params.Should().Contain("reason", reason).And.Contain("remembered", true).And.Contain("retryAfterMs", 5000);
+        second.Message.Should().Contain("was not asked");
+
+        foreach (var diagnostic in new[] { first, second })
+        {
+            if (status is { } answered)
+                diagnostic.Params.Should().Contain("status", answered);
+            else
+                diagnostic.Params.Should().NotContainKey("status");
+        }
+    }
+
+    [Theory]
+    [InlineData("unreachable", "unreachable", "Unreachable")]
+    [InlineData("timeout", "timeout", "Timeout")]
+    public async Task A_semi_join_refused_from_memory_says_what_the_call_that_failed_said(string cause, string reason, string word)
+    {
+        const string semiJoin = """[{ "resolve": { "path": "vehicleId", "as": "veh" } }, { "match": { "veh.matchCode": { "eq": "V-1" } } }, { "page": { "limit": 10 } }]""";
+        var (engine, client) = Ending(EndOf(cause), BindHost.Probe);
+
+        var first = (await engine.ExecuteAsync(BindHost.Request("probe.order", semiJoin), BindHost.Context())).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal.Errors![0];
+        var second = (await engine.ExecuteAsync(BindHost.Request("probe.order", semiJoin), BindHost.Context())).Should().BeOfType<QueryOutcome.Refused>().Subject.Refusal.Errors![0];
+
+        client.Calls.Should().Be(1);
+
+        first.Code.Should().Be(Codes.ResolveUnavailable);
+        second.Code.Should().Be(Codes.ResolveUnavailable);
+        first.Message.Should().Contain($"({word})");
+        second.Message.Should().Be(first.Message);
+        first.Params.Should().Contain("reason", reason).And.NotContainKey("remembered");
+        second.Params.Should().Contain("reason", reason).And.Contain("remembered", true);
     }
 
     [Fact]

@@ -641,7 +641,7 @@ public sealed class CacheOptions
     /// How long an owner that did not answer is not called again (<c>OwnerAvailability</c>): after
     /// a call that reached nobody, ran out of its budget, or found no internal query route (HTTP 404)
     /// at the owner's host. Until then a request that needs the owner gets the answer of a failed call
-    /// at once (the alias <c>null</c> with <c>RESOLVE_UNREACHABLE</c>, a semi-join refused) instead of
+    /// at once (the alias <c>null</c> with that call's <c>RESOLVE_UNREACHABLE</c> or <c>RESOLVE_TIMEOUT</c>, a semi-join refused) instead of
     /// waiting for the call's budget again; afterwards one caller tries the owner. 0 remembers nothing.
     /// </summary>
     public int OwnerUnavailableTtlSeconds { get; set; } = 5;

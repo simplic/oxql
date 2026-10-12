@@ -36,6 +36,9 @@ public sealed class OxQLOptions
     /// <summary>Cursor signing.</summary>
     public CursorOptions Cursor { get; set; } = new();
 
+    /// <summary>What the host checks when it starts.</summary>
+    public StartupOptions Startup { get; set; } = new();
+
     /// <inheritdoc cref="LimitOptions.MaxPageSize"/>
     public int MaxPageSize { get => Limits.MaxPageSize; set => Limits.MaxPageSize = value; }
 
@@ -630,6 +633,19 @@ public sealed class CacheOptions
     /// waiting for the call's budget again; afterwards one caller tries the owner. 0 remembers nothing.
     /// </summary>
     public int OwnerUnavailableTtlSeconds { get; set; } = 5;
+}
+
+/// <summary>The checks a host runs when it starts.</summary>
+public sealed class StartupOptions
+{
+    /// <summary>
+    /// Whether a declared remote reference whose owning service is not configured on the host
+    /// (no <c>InternalHosts</c> entry) stops the host from starting: <c>true</c> stops it in every
+    /// environment, <c>false</c> in none (the finding is logged as an error and health lists the
+    /// service as not configured either way), unset leaves the rule by environment: it stops in
+    /// <c>Development</c>, <c>Local</c> and under continuous integration.
+    /// </summary>
+    public bool? StrictRemoteReferences { get; set; }
 }
 
 /// <summary>Cursor signing.</summary>

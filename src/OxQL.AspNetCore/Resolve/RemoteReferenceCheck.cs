@@ -16,10 +16,12 @@ namespace OxQL.AspNetCore.Resolve;
 /// service, which is every remote target of every case of a typed, item or converted reference
 /// too (<see cref="RemoteReferences.Of"/>), needs that service configured on this host (an
 /// <c>InternalHosts</c> entry, read through <see cref="IRemoteQueryClient.IsConfigured"/>). A reference without one is a
-/// configuration problem of this service, never a silent runtime null: an error log on every
-/// host, and a refusal to start in <c>Development</c>, <c>Local</c> and under continuous
-/// integration (<see cref="OxQLEndpointOptions.ContinuousIntegration"/>), the same strict set
-/// the schema build fails fast in. A host without a remote
+/// configuration problem of this service, never a silent runtime null: one error line per
+/// service on every host, with the configuration keys to add, and a refusal to start in
+/// <c>Development</c>, <c>Local</c> and under continuous integration
+/// (<see cref="OxQLEndpointOptions.ContinuousIntegration"/>), the same strict set the schema build
+/// fails fast in, unless the host says otherwise (<see cref="OxQLEndpointOptions.StrictRemoteReferences"/>,
+/// or <c>OxQL:Startup:StrictRemoteReferences</c>). A host without a remote
 /// query client refuses remote resolves at runtime (<c>RESOLVE_UNAVAILABLE</c>) and is not
 /// checked here.
 /// </summary>
@@ -53,9 +55,40 @@ public static class RemoteReferenceCheck
         variables is not null && variables.Any(variable =>
             !string.IsNullOrWhiteSpace(variable) && variable.Trim() != "0" && !string.Equals(variable.Trim(), "false", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Whether a finding stops the host: what the host set in code (<paramref name="endpoint"/>), else
+    /// what its configuration says (<paramref name="configured"/>,
+    /// <c>OxQL:Startup:StrictRemoteReferences</c>), else the rule by environment
+    /// (<see cref="IsStrict(string?, bool)"/>).
+    /// </summary>
+    public static bool IsStrict(bool? endpoint, bool? configured, string? environmentName, bool continuousIntegration) =>
+        endpoint ?? configured ?? IsStrict(environmentName, continuousIntegration);
+
     /// <summary>One line per finding.</summary>
     public static string Describe(RemoteReference reference) =>
         $"'{reference.Entity}#{reference.Path}' references '{reference.TargetEntity}', but this host has no InternalHosts entry for '{reference.Service}'; configure the service under that key or the reference resolves to nothing.";
+
+    /// <summary>
+    /// One line per service the findings name, ordinally by service: how many declared references
+    /// need it, the first of them, and the configuration to add: the <c>InternalHosts</c> entry, and
+    /// the <c>InternalApiVersions</c> entry an owner needs that does not answer on <c>v1</c>.
+    /// </summary>
+    public static IReadOnlyList<string> DescribeByService(IEnumerable<RemoteReference> findings)
+    {
+        ArgumentNullException.ThrowIfNull(findings);
+
+        return findings.GroupBy(reference => reference.Service, StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal).Select(group =>
+        {
+            var references = group.ToList();
+            var first = references[0];
+            var others = references.Count == 1 ? "" : $" and {references.Count - 1} more";
+            var needs = references.Count == 1 ? "1 declared reference needs" : $"{references.Count} declared references need";
+
+            return $"service '{group.Key}' is not configured on this host: {needs} it ('{first.Entity}#{first.Path}' -> '{first.TargetEntity}'{others}), and each resolves to nothing until it is. "
+                + $"Add the configuration key InternalHosts:{group.Key} (\"InternalHosts\": {{ \"{group.Key}\": \"<host:port>\" }}); "
+                + $"when the owner does not answer on API version v1, also InternalApiVersions:{group.Key} (\"InternalApiVersions\": {{ \"{group.Key}\": \"<version>\" }}).";
+        }).ToList();
+    }
 }
 
 /// <summary>
@@ -125,25 +158,39 @@ internal sealed class RemoteReferenceStartupFilter(IServiceProvider provider) : 
                 return true;
 
             var logger = provider.GetService<ILoggerFactory>()?.CreateLogger("OxQL.Startup") ?? NullLogger.Instance;
+            var services = RemoteReferenceCheck.DescribeByService(findings);
+
+            // One line per service says what to configure; the references behind it are listed for whoever asks.
+            foreach (var service in services)
+                logger.LogError("OxQL remote reference finding: {Finding}", service);
 
             foreach (var finding in findings)
-                logger.LogError("OxQL remote reference finding: {Finding}", RemoteReferenceCheck.Describe(finding));
+                logger.LogDebug("OxQL remote reference without a configured service: {Finding}", RemoteReferenceCheck.Describe(finding));
 
             if (Strict())
             {
-                logger.LogCritical("OxQL refuses to start: {Count} declared remote reference(s) have no configured service on this host.", findings.Count);
+                logger.LogCritical(
+                    "OxQL refuses to start: {Count} declared remote reference(s) into {Services} service(s) have no configured service on this host. Configure them, or set OxQL:Startup:StrictRemoteReferences to false to start without them.",
+                    findings.Count,
+                    services.Count);
 
                 if (throwWhenStrict)
                     throw new InvalidOperationException(
-                        "OxQL refuses to start: " + string.Join(" ", findings.Select(RemoteReferenceCheck.Describe)));
+                        "OxQL refuses to start: " + string.Join(" ", services) + " To start without them, set OxQL:Startup:StrictRemoteReferences to false.");
             }
 
             return true;
         }
     }
 
-    private bool Strict() =>
-        RemoteReferenceCheck.IsStrict(
+    private bool Strict()
+    {
+        var endpoint = provider.GetService<IOptions<OxQLEndpointOptions>>()?.Value;
+
+        return RemoteReferenceCheck.IsStrict(
+            endpoint?.StrictRemoteReferences,
+            provider.GetService<Core.Models.OxQLOptions>()?.Startup.StrictRemoteReferences,
             provider.GetService<IHostEnvironment>()?.EnvironmentName,
-            provider.GetService<IOptions<OxQLEndpointOptions>>()?.Value.ContinuousIntegration ?? false);
+            endpoint?.ContinuousIntegration ?? false);
+    }
 }

@@ -29,4 +29,13 @@ public sealed class OxQLEndpointOptions
     /// it to decide for the host instead of the machine, as a test host does.
     /// </summary>
     public bool ContinuousIntegration { get; set; }
+
+    /// <summary>
+    /// Whether a declared remote reference without a configured service stops the host from
+    /// starting, decided here in code: <c>true</c> in every environment, <c>false</c> in none. Unset
+    /// (the default), the configuration decides (<c>OxQL:Startup:StrictRemoteReferences</c>), and
+    /// without it the environment does: <c>Development</c>, <c>Local</c> and
+    /// <see cref="ContinuousIntegration"/> stop.
+    /// </summary>
+    public bool? StrictRemoteReferences { get; set; }
 }

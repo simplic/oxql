@@ -1247,6 +1247,17 @@ owning service, owners in parallel:
   `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run reports
   `RESOLVE_UNREACHABLE` (and refuses under `strict`) and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
   gate.
+- **Owners that are not configured.** When the host starts it checks every declared remote
+  reference against the services it knows (`IRemoteQueryClient.IsConfigured`, the `InternalHosts`
+  entries). A service without an entry is one error line under `OxQL.Startup`, whatever number of
+  reference paths need it (those are listed at debug level): the service, how many references
+  need it, the first of them, and the keys to add: `InternalHosts:<service>`, and
+  `InternalApiVersions:<service>` when the owner does not answer on API version `v1`. Whether the
+  host then refuses to start is `OxQL:Startup:StrictRemoteReferences` (`OxQLEndpointOptions.StrictRemoteReferences`
+  in code wins over it): `true` in every environment, `false` in none; unset, the host refuses in
+  `Development`, `Local` and under continuous integration, and elsewhere starts and reports the
+  service as `configured: false` on health. The owner need not run for this check; it reads the
+  configuration only.
 - **Owners that do not answer.** A host keeps one record of the owners whose last call failed
   (`OwnerAvailability`, a singleton `AddOxQLCore` registers): a call no connection reached, a call
   that got no answer although it had at least half of its ceiling (`ResolveTimeoutMs`, or

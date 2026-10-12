@@ -13,7 +13,8 @@ public sealed record OwnerOutage(string Reason, int? Status, TimeSpan RetryAfter
 /// <summary>
 /// What a host remembers between requests about owners that did not answer: one record per host,
 /// written by the keyed fetch (a call that failed or succeeded) and by the health probe (a
-/// measurement), read by the keyed fetch before it calls.
+/// measurement that answered, or one that could make no connection), read by the keyed fetch
+/// before it calls.
 /// <para>
 /// After a failure the owner is not called for <c>OxQL:Cache:OwnerUnavailableTtlSeconds</c>: a
 /// request that needs it gets the answer a failed call gives (the alias <c>null</c> with

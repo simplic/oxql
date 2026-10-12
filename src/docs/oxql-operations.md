@@ -430,7 +430,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
-| `Cache:OwnerUnavailableTtlSeconds` | 5 (`0` remembers nothing) | keyed fetch and semi-join: how long an owner is not called again after a call that reached nobody, got no answer within a whole call budget, or found no internal query route (HTTP 404; also 502, 503, 504). Until then the request gets the failed call's answer at once | `RESOLVE_UNREACHABLE` with `params.remembered: true`, `retryAfterMs`; a semi-join 422 `RESOLVE_UNAVAILABLE` | no (health only, contract 2: `ownerUnavailableTtlSeconds`) | one record per host, which its health probe writes too: a measurement that finds the owner answering ends the wait early |
+| `Cache:OwnerUnavailableTtlSeconds` | 5 (`0` remembers nothing) | keyed fetch and semi-join: how long an owner is not called again after a call that reached nobody, got no answer within a whole call budget, or found no internal query route (HTTP 404; also 502, 503, 504). Until then the request gets the failed call's answer at once | `RESOLVE_UNREACHABLE` with `params.remembered: true`, `retryAfterMs`; a semi-join 422 `RESOLVE_UNAVAILABLE` | no (health only, contract 2: `ownerUnavailableTtlSeconds`) | one record per host, which its health probe writes too: a measurement that finds the owner answering ends the wait early, and one that can make no connection to the owner starts it |
 | `Explain:Enabled` | `true` | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
 | `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries), from the first round an owner is asked in | note `REMOTE_UNCHECKED` (`reason: "timeout"` for an owner that was asked, `"budget"` for a part nothing was sent for) | no | — |
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
@@ -1428,9 +1428,12 @@ owning service, owners in parallel:
   into it is refused at once, exactly as a failed call answers, without the wait. Then one request
   tries the owner while the others keep the remembered answer until that call lands; an answer ends
   the record. Any other HTTP error (401, 413, 400, 500) is the owner's word on one request and is
-  not remembered. The health probe writes the same record: an owner it measures as not answering is
-  not called, and one it measures as answering is called again at once (a remembered missing route
-  stays, since a health answer says nothing of the internal route). A request whose own time was
+  not remembered. The health probe writes the same record: an owner it measures as answering is
+  called again at once (a remembered missing route stays, since a health answer says nothing of the
+  internal route), and an owner it could make no connection to (refused, a name without an address,
+  a connect that timed out at the socket) is not called. A probe that ran out of its own time, was
+  answered `false` or got an HTTP error leaves the record as it is: the health route is not the
+  route a join calls, so only a join's own call says that one fails. A request whose own time was
   nearly spent when it called says nothing of the owner and leaves no record.
 - **What a page asks.** The keys a page needs are collected first, from its rows and less what the
   cache holds; only owners with at least one key are asked for their facts and sent a query. A page

@@ -399,21 +399,104 @@ public class OwnerAvailabilityTests
 
     // ---- the health probe ---------------------------------------------------------------------------
 
-    [Fact]
-    public async Task What_the_health_probe_measures_is_what_the_keyed_fetch_goes_by()
+    /// <summary>An owner whose health ends as the test says, per service.</summary>
+    private sealed class ProbedClient(Func<string, CancellationToken, Task<bool>> health) : IRemoteQueryClient
+    {
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => health(serviceKey, cancellationToken);
+    }
+
+    private static async Task<(OwnerAvailability Availability, IReadOnlyList<RemoteServiceState> States)> ProbedAsync(Func<string, CancellationToken, Task<bool>> health, Action<OwnerAvailability>? before = null, TimeSpan? timeout = null)
     {
         var options = BindHost.Options();
         var availability = new OwnerAvailability(options);
-        var probe = new RemoteHealthProbe(options) { Availability = availability };
-        var client = new FakeRemoteClient { Reachable = { "staff" } };
+        var probe = new RemoteHealthProbe(options) { Availability = availability, ProbeTimeout = timeout ?? TimeSpan.FromSeconds(30) };
+        var client = new ProbedClient(health);
 
-        availability.Failed("staff", OwnerAvailability.Unreachable);
+        before?.Invoke(availability);
 
         probe.State(model.Value, client);
         await probe.Refreshing;
 
+        return (availability, probe.State(model.Value, client));
+    }
+
+    [Fact]
+    public async Task A_health_probe_that_answers_ends_what_is_remembered_of_the_owner()
+    {
+        var (availability, _) = await ProbedAsync((_, _) => Task.FromResult(true), before: record => record.Failed("staff", OwnerAvailability.Unreachable));
+
         availability.OutageOf("staff").Should().BeNull("health saw the owner answer");
-        availability.OutageOf("fleet")!.Reason.Should().Be(OwnerAvailability.Unreachable, "health found it not answering");
+    }
+
+    public static TheoryData<string, Exception> ConnectionFailures => new()
+    {
+        { "refused", new HttpRequestException(HttpRequestError.ConnectionError, "No connection could be made.", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused)) },
+        { "name", new HttpRequestException(HttpRequestError.NameResolutionError, "No such host is known.") },
+        { "connect timeout", new HttpRequestException("The connection attempt failed.", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.TimedOut)) },
+        { "socket", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.HostUnreachable) },
+    };
+
+    [Theory]
+    [MemberData(nameof(ConnectionFailures))]
+    public async Task A_health_probe_that_could_make_no_connection_is_remembered(string cause, Exception failure)
+    {
+        var (availability, states) = await ProbedAsync((_, _) => Task.FromException<bool>(failure));
+
+        states.Should().OnlyContain(state => state.Reachable == false);
+        availability.OutageOf("staff")!.Reason.Should().Be(OwnerAvailability.Unreachable, cause);
+        availability.OutageOf("fleet")!.Reason.Should().Be(OwnerAvailability.Unreachable, cause);
+    }
+
+    public static TheoryData<string, Exception> OtherFailures => new()
+    {
+        { "status", new HttpRequestException("The owner did not answer with success.", null, HttpStatusCode.ServiceUnavailable) },
+        { "no health route", new HttpRequestException("The owner did not answer with success.", null, HttpStatusCode.NotFound) },
+        { "unread", new System.Text.Json.JsonException("The answer is no JSON.") },
+        { "response ended", new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely.") },
+        { "the client's own timeout", new TaskCanceledException("The request was cancelled.", new TimeoutException("The request timed out.")) },
+        { "fault", new InvalidOperationException("The client is misconfigured.") },
+    };
+
+    [Theory]
+    [MemberData(nameof(OtherFailures))]
+    public async Task A_health_probe_that_fails_otherwise_reports_the_owner_unreachable_and_records_nothing(string cause, Exception failure)
+    {
+        var (availability, states) = await ProbedAsync((_, _) => Task.FromException<bool>(failure));
+
+        states.Should().OnlyContain(state => state.Reachable == false, "health still says what it measured");
+        availability.OutageOf("staff").Should().BeNull(cause);
+        availability.OutageOf("fleet").Should().BeNull(cause);
+    }
+
+    [Fact]
+    public async Task A_health_probe_that_is_answered_false_records_nothing_and_leaves_what_is_remembered()
+    {
+        var (availability, states) = await ProbedAsync((_, _) => Task.FromResult(false), before: record => record.Failed("fleet", OwnerAvailability.Timeout));
+
+        states.Should().OnlyContain(state => state.Reachable == false);
+        availability.OutageOf("staff").Should().BeNull("an answer of false does not say why");
+        availability.OutageOf("fleet")!.Reason.Should().Be(OwnerAvailability.Timeout, "nor does it end what a join's own call found");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_health_probe_that_times_out_records_nothing(bool hearsCancellation)
+    {
+        var never = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var (availability, states) = await ProbedAsync(
+            (_, token) => hearsCancellation ? never.Task.WaitAsync(token) : never.Task,
+            timeout: TimeSpan.FromMilliseconds(50));
+
+        states.Should().OnlyContain(state => state.Reachable == false, "a service that does not answer in time is not reachable on health");
+        availability.OutageOf("staff").Should().BeNull("the probe's own time says nothing of the route a join calls");
+        availability.OutageOf("fleet").Should().BeNull();
     }
 
     /// <summary>An owner that answers every batch with one HTTP status and counts the batches.</summary>

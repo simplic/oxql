@@ -115,10 +115,13 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// The host's record of owners that did not answer, which the keyed fetch reads before it calls:
-    /// a measurement that finds an owner unreachable is remembered there, and one that finds it
-    /// answering forgets it, so a join stops waiting for an owner health already knows is down and
-    /// asks it again as soon as health sees it back. Null: the probe only reports.
+    /// The host's record of owners that did not answer, which the keyed fetch reads before it calls.
+    /// A measurement that finds an owner answering forgets it there, so a join asks the owner again
+    /// as soon as health sees it back. A measurement writes an outage there only when no connection
+    /// to the owner could be made (refused, no address for the name, the connect timed out): one that
+    /// ran out of the probe's time, was answered false or failed in any other way says nothing a join
+    /// should go by, since the owner's health route is not the route a join calls. Null: the probe
+    /// only reports.
     /// </summary>
     public OwnerAvailability? Availability { get; init; }
 
@@ -196,10 +199,9 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             var reachable = await client.IsReachableAsync(service, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
 
             // An answering health says the owner's host is up, not that it has the internal query route.
+            // One that says false does not say why, and a join finds out for itself.
             if (reachable)
                 Availability?.Succeeded(service, keepRoute: true);
-            else
-                Availability?.Failed(service, OwnerAvailability.Unreachable);
 
             // The client keeps what the owner's health said of it where it measures reachability.
             return RemoteServiceState.Measured(service, reachable, reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null);
@@ -207,9 +209,34 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
         catch (Exception exception)
         {
             logger.LogDebug(exception, "OxQL health probe of {Service} failed", service);
-            Availability?.Failed(service, OwnerAvailability.Unreachable);
+
+            if (NoConnection(exception))
+                Availability?.Failed(service, OwnerAvailability.Unreachable);
 
             return RemoteServiceState.Measured(service, false, null);
         }
+    }
+
+    /// <summary>
+    /// Whether a probe failed because no connection to the owner could be made: the client's HTTP
+    /// stack says so (a connection error, a name that does not resolve), or a socket error is what it
+    /// failed on. A probe that was cancelled or timed out is none, whatever it was waiting for.
+    /// </summary>
+    private static bool NoConnection(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case OperationCanceledException or TimeoutException:
+                    return false;
+
+                case HttpRequestException { StatusCode: null, HttpRequestError: HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError }:
+                case System.Net.Sockets.SocketException:
+                    return true;
+            }
+        }
+
+        return false;
     }
 }

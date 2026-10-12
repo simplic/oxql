@@ -27,14 +27,21 @@ internal sealed class LegacyPipeline : ILegacyPipeline
     private readonly IAggregateRunner runner;
     private readonly OxQLOptions options;
     private readonly ILogger logger;
+    private readonly AggregateDeadline deadline;
 
-    /// <summary>The pipeline over <paramref name="models"/>' collections, run by <paramref name="runner"/>.</summary>
-    public LegacyPipeline(IEntityModelProvider models, IAggregateRunner runner, OxQLOptions options, ILogger<LegacyPipeline>? logger = null)
+    /// <summary>
+    /// The pipeline over <paramref name="models"/>' collections, run by <paramref name="runner"/>.
+    /// <paramref name="time"/> is the clock the deadline of an aggregate is kept by (the system's when null).
+    /// </summary>
+    public LegacyPipeline(IEntityModelProvider models, IAggregateRunner runner, OxQLOptions options, ILogger<LegacyPipeline>? logger = null, TimeProvider? time = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.logger = logger ?? NullLogger<LegacyPipeline>.Instance;
+
+        // The ceiling stays the pipeline's own; an aggregate the database says nothing of by then, and the margin after it, is given up on.
+        deadline = new AggregateDeadline(time ?? TimeProvider.System, options.Execution.ClientDeadlineMarginMs);
     }
 
     /// <inheritdoc/>
@@ -116,7 +123,7 @@ internal sealed class LegacyPipeline : ILegacyPipeline
 
         try
         {
-            rows = (await runner.AggregateAsync(entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
+            rows = (await deadline.RunAsync(runner, entity, aggregate.Page, Run(), cancellationToken).ConfigureAwait(false)).ToList();
             more = rows.Count > aggregate.Limit;
 
             if (more)
@@ -124,7 +131,7 @@ internal sealed class LegacyPipeline : ILegacyPipeline
 
             // The count follows the page, as it did: one aggregate after the other.
             if (aggregate.Count is { } count)
-                total = (await runner.AggregateAsync(entity, count, Run(), cancellationToken).ConfigureAwait(false)).FirstOrDefault() is { } counted && counted.Contains("totalCount") ? counted["totalCount"].ToInt64() : 0;
+                total = (await deadline.RunAsync(runner, entity, count, Run(), cancellationToken).ConfigureAwait(false)).FirstOrDefault() is { } counted && counted.Contains("totalCount") ? counted["totalCount"].ToInt64() : 0;
         }
         catch (Exception exception) when (exception is MongoExecutionTimeoutException or TimeoutException)
         {

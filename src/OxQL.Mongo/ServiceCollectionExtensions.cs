@@ -77,7 +77,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<IEntityModelProvider>(),
             provider.GetRequiredService<IAggregateRunner>(),
             provider.GetRequiredService<OxQLOptions>(),
-            provider.GetService<ILogger<Legacy.LegacyPipeline>>()));
+            provider.GetService<ILogger<Legacy.LegacyPipeline>>(),
+            provider.GetService<TimeProvider>()));
 
         services.AddSingleton<IQueryEngine>(provider =>
         {

@@ -499,6 +499,14 @@ public sealed class ExecutionOptions
     /// <summary><c>maxTimeMS</c> on every aggregate; a timeout is 504 <c>QUERY_TIMEOUT</c>.</summary>
     public int MaxTimeMs { get; set; } = 10_000;
 
+    /// <summary>
+    /// How long after an aggregate's time limit this host still waits for the database to answer
+    /// before it gives the aggregate up and answers 504 <c>QUERY_TIMEOUT</c> itself, in
+    /// milliseconds. The database ends an aggregate at its limit and says so; this is the deadline
+    /// for the case in which nothing comes back. A value below zero switches the deadline off.
+    /// </summary>
+    public int ClientDeadlineMarginMs { get; set; } = 1_000;
+
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;
 

@@ -135,7 +135,7 @@ Held by `LegacyPipelineTests` (S01 to S07, F01 to F04) and the legacy block of `
 | `Always` | `true` | off: the rewrite answers first (see above) |
 | `OrganisationPath` | `OrganizationId` | the stored member every collection is filtered by |
 | `AllowedLookupSources` | empty | the collections a `lookup` may read, without regard to case; empty means any collection of the entity's database |
-| `MaxTimeMs` | 600 000 | ten minutes, so a long-running report still answers; not clamped; 0 or less takes the default. It is not the contract 2 engine's `Execution:MaxTimeMs` |
+| `MaxTimeMs` | 600 000 | ten minutes, so a long-running report still answers; not clamped; 0 or less takes the default. It is not the contract 2 engine's `Execution:MaxTimeMs`. An aggregate the database has said nothing of by then, and `Execution:ClientDeadlineMarginMs` after it, is given up on and answered `QUERY_TIMEOUT` like the limit's own expiry |
 
 The pipeline checks a request against the host's `OxQL:Limits` (`MaxPageSize`, `DefaultPageSize`,
 `MaxPipelineStages`, `MaxLookupStages`, `MaxUnwindStages`, `MaxGroupFields`,

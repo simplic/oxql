@@ -55,9 +55,13 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         TimeProvider? time = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
-        this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        // Every aggregate is measured and has a deadline on this side beside the limit the database applies to it.
+        this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)))
+        {
+            Deadline = new AggregateDeadline(time ?? TimeProvider.System, options.Execution.ClientDeadlineMarginMs),
+        };
         // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
         // remote target needs the remote client.
         ownerCache = cache ?? new OwnerFetchCache(this.options);
@@ -912,6 +916,10 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
                 return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case MongoCommandException command when command.Code == 50:
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
+
+            // The database said nothing by the deadline this host keeps beside its limit: the same answer.
+            case AggregateDeadlineException:
                 return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case var _ when RequestError(exception) is { } refusal:

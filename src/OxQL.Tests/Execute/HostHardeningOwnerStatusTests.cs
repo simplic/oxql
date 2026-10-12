@@ -66,7 +66,24 @@ public class HostHardeningOwnerStatusTests
 
         diagnostic.Code.Should().Be(Codes.ResolveUnreachable, "the code list is closed; the message tells the two causes apart");
         diagnostic.Message.Should().Contain("answered with HTTP " + text).And.NotContain("could not be reached");
-        diagnostic.Params!.Keys.Should().BeEquivalentTo(["service", "aliases"]);
+        diagnostic.Params!.Keys.Should().BeEquivalentTo(["service", "aliases", "reason", "status"]);
+        diagnostic.Params["reason"].Should().Be("status");
+        diagnostic.Params["status"].Should().Be((int)status);
+        result.Items[0]!["contact"].Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_resolve_whose_owner_has_no_internal_query_route_names_the_two_causes_a_host_can_act_on()
+    {
+        var result = (await RunAsync(HttpStatusCode.NotFound, Resolve)).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
+        var diagnostic = result.Diagnostics.Should().ContainSingle().Subject;
+
+        diagnostic.Code.Should().Be(Codes.ResolveUnreachable);
+        diagnostic.Message.Should().Contain("HTTP 404")
+            .And.Contain("does not serve the internal query route")
+            .And.Contain("an engine without that route")
+            .And.Contain("InternalApiVersions:crm");
+        diagnostic.Params.Should().Contain("service", "crm").And.Contain("reason", "route").And.Contain("status", 404);
         result.Items[0]!["contact"].Should().BeNull();
     }
 
@@ -75,7 +92,10 @@ public class HostHardeningOwnerStatusTests
     {
         var result = (await RunAsync(null, Resolve)).Should().BeOfType<QueryOutcome.Success>().Subject.Result;
 
-        result.Diagnostics.Should().ContainSingle().Which.Message.Should().Contain("could not be reached");
+        var diagnostic = result.Diagnostics.Should().ContainSingle().Subject;
+
+        diagnostic.Message.Should().Contain("could not be reached");
+        diagnostic.Params.Should().Contain("reason", "unreachable").And.NotContainKey("status");
     }
 
     [Fact]

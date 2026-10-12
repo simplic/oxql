@@ -89,7 +89,10 @@ public class OxQLController : ControllerBase
     /// not working" from a browser. It never waits for another service: the reachability is the
     /// last one measured, refreshed in the background at most once per
     /// <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is null until the first
-    /// measurement has finished. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
+    /// measurement has finished. Under contract 2 each service also says what its owner's engine
+    /// can do for this host (<c>contract</c>, <c>engineVersion</c>, <c>usable</c>, and a
+    /// <c>reason</c> when it is not usable); the status is <c>degraded</c> while a service is not
+    /// configured, does not answer or is not usable. With <c>?shallow=true</c> the answer leaves <c>remote</c> out and
     /// starts no measurement; that is the form one host asks of another, so a probe never sets off
     /// the probed service's own probes.
     /// <para>
@@ -113,7 +116,7 @@ public class OxQLController : ControllerBase
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
         var services = client is null || shallow ? null : probe.State(ModelOrNull(models), client);
-        var degraded = services is not null && services.Any(state => !state.Configured || state.Reachable == false);
+        var degraded = services is not null && services.Any(state => state.Degrades);
 
         // LEGACY(compat.v1): a caller the legacy pipeline answers reads what that pipeline honours; remove with src/OxQL.AspNetCore/Legacy.
         var legacy = Legacy.LegacyHealth.For(options, HttpContext);
@@ -129,9 +132,17 @@ public class OxQLController : ControllerBase
             },
             capabilities = legacy?.Capabilities ?? EngineCapabilities.Of(remote, options.Compat.Enabled, options.Explain.Enabled, Contract1),
             limits = legacy?.Limits ?? Limits(options),
-            remote = services,
+            remote = Contract1 ? services?.Select(Contract1State).ToList() : (object?)services,
         });
     }
+
+    /// <summary>
+    /// A remote service as a contract 1 caller reads it: the three members that form has always had.
+    /// What the owner's engine can do (<c>contract</c>, <c>engineVersion</c>, <c>usable</c>,
+    /// <c>reason</c>) is a contract 2 answer's.
+    /// </summary>
+    private static object Contract1State(RemoteServiceState state) =>
+        new { service = state.Service, configured = state.Configured, reachable = state.Reachable };
 
     /// <summary>
     /// Every limit the engine enforces. The schema document publishes the ones a caller checks a

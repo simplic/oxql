@@ -164,7 +164,9 @@ where the legacy pipeline answers it first reads that pipeline's capabilities an
 
 - `engine` and `remote` say what the host is and are the same for every caller: a host that reads
   another host's shallow health sends no contract header and takes `engine.version`,
-  `engine.contract`, `limits.maxBatchQueries` and `limits.maxPageSize` from it.
+  `engine.contract`, `limits.maxBatchQueries` and `limits.maxPageSize` from it. A `remote` entry
+  has the three members shown; what a contract 2 caller reads beside them (`contract`,
+  `engineVersion`, `usable`, `reason`) is not written here.
 - `capabilities` has `batch` and `compat.v1` and nothing else: no `page.offset`, no `any`, no
   `group.page`, none of the remote names, no `explain`.
 - `limits` has the ten values the pipeline and its two routes check. `regexMaxLength` is the

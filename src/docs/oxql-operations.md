@@ -127,8 +127,8 @@ stage's effective `onMissing`:
 |---|---|---|
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
 | `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
-| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases` | an owner did not answer within its budget; the aliases are `null` on this page |
-| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases` | an owner was not reached, or answered with an HTTP error (the message names the status) |
+| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"` | an owner did not answer within its budget; the aliases are `null` on this page |
+| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered) | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner's host has no internal query route under the address this host calls (the owner runs an engine without that route, or `InternalApiVersions:<service>` names another API version than the owner serves; the message says both), `reason: "status"` with the status for any other |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
 | `RESOLVE_MISSING` (loss by `onMissing`) | `alias`, `count`, `truncated`, `rows` `[{ row, element?, key, outcome }]` | under `onMissing` `report` or `refuse`: references that resolved to `not_found`, `invalid_key` or `owner_unanswered`; one per stage; `rows` capped at `MaxReportedRows` |
 | `RESOLVE_AMBIGUOUS` (loss) | as `RESOLVE_MISSING` | always: keys more than one record holds; the alias holds the first by target order, then key |
@@ -362,7 +362,7 @@ Anonymous, always 200, and never waits for another service:
 
 ```jsonc
 {
-  "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable
+  "status": "healthy",                    // "degraded" when a referenced service is not configured, was last measured unreachable or is not usable
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
   "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
@@ -381,7 +381,10 @@ Anonymous, always 200, and never waits for another service:
     "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainMaxBatchChecks": 64, "explainRatePerMinute": 120, "explainRateBurst": 30, "explainOwnerRatePerMinute": 20, "explainOwnerRateBurst": 5,
     "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
-  "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
+  "remote": [
+    { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true },
+    { "service": "hr", "configured": true, "reachable": true, "usable": false, "reason": "engine" }
+  ]
 }
 ```
 
@@ -421,6 +424,16 @@ Anonymous, always 200, and never waits for another service:
   measurement, taken at most once per `Cache:HealthProbeTtlSeconds` in the background, and
   absent before the first one has finished or for a service that is not configured; an absent
   `reachable` does not degrade `status`.
+- Under contract 2 each `remote` entry also says what the owner can do for this host, from what the
+  remote client read of the owner's shallow health when it measured reachability
+  (`IRemoteOwnerInfo`): `contract` and `engineVersion` as the owner named them (absent when it named
+  none), and `usable`: `true` only for an owner that answered and speaks this engine's contract,
+  `false` with a `reason` otherwise, absent while nothing is measured or the client keeps no owner
+  facts. `reason` is `notConfigured` (no `InternalHosts` entry), `unreachable` (its health did not
+  answer; a wrong `InternalApiVersions` entry looks the same) or `engine` (it answered and names no
+  contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
+  `usable: false` degrades `status` as `reachable: false` does. A caller without the contract
+  header reads the three members `service`, `configured`, `reachable` and the same `status`.
 - `?shallow=true` starts no measurement. It is the form one host uses to ask another, so a probe
   never sets off the probed service's own probes. The same answer tells the asking host the owner's
   `engine.version` and `limits.maxBatchQueries`.

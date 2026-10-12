@@ -161,4 +161,133 @@ public class HostHardeningHealthTests
         finished.Should().BeSameAs(refreshing, "the refresh ends at the probe timeout");
         probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Reachable == false);
     }
+
+    /// <summary>A client whose owners answer their health, and that says what each health named (null: it keeps no facts).</summary>
+    private sealed class FactsClient(Func<string, RemoteOwnerInfo?> facts) : IRemoteQueryClient, IRemoteOwnerInfo
+    {
+        public HashSet<string> Down { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> Unconfigured { get; } = new(StringComparer.Ordinal);
+
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public bool IsConfigured(string serviceKey) => !Unconfigured.Contains(serviceKey);
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(!Down.Contains(serviceKey));
+
+        public RemoteOwnerInfo? OwnerOf(string serviceKey) => facts(serviceKey);
+    }
+
+    /// <summary>A client that measures reachability and says nothing of what an owner runs.</summary>
+    private sealed class PlainClient : IRemoteQueryClient
+    {
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
+    }
+
+    private static async Task<IReadOnlyList<RemoteServiceState>> MeasuredAsync(IRemoteQueryClient client)
+    {
+        var probe = Probe();
+
+        probe.State(BindHost.Probe, client);
+        await probe.Refreshing;
+
+        return probe.State(BindHost.Probe, client);
+    }
+
+    [Fact]
+    public async Task An_owner_that_speaks_this_engines_contract_is_usable_and_names_its_engine()
+    {
+        var states = await MeasuredAsync(new FactsClient(_ => new RemoteOwnerInfo("2.1.0", EngineCapabilities.Contract, 10)));
+
+        states.Should().OnlyContain(state => state.Reachable == true && state.Usable == true && state.Reason == null
+            && state.Contract == EngineCapabilities.Contract && state.EngineVersion == "2.1.0" && !state.Degrades);
+    }
+
+    [Fact]
+    public async Task An_owner_whose_health_names_no_contract_answers_and_is_not_usable()
+    {
+        // What a health answer without an engine member reads as: facts that are known and name nothing.
+        var nameless = RemoteOwnerInfo.FromShallowHealth(System.Text.Json.Nodes.JsonNode.Parse("""{"status":"healthy","service":"oxql"}"""));
+        var states = await MeasuredAsync(new FactsClient(service => service == "crm" ? nameless : new RemoteOwnerInfo("2.1.0", 2, 10)));
+        var crm = states.Single(state => state.Service == "crm");
+
+        crm.Reachable.Should().BeTrue("its health answered");
+        crm.Usable.Should().BeFalse("it names no contract this host can send a join to");
+        crm.Reason.Should().Be(RemoteServiceState.Engine);
+        crm.Contract.Should().BeNull();
+        crm.Degrades.Should().BeTrue();
+        states.Single(state => state.Service == "vehicle").Usable.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task An_owner_on_another_contract_is_not_usable_and_says_which_it_speaks()
+    {
+        var states = await MeasuredAsync(new FactsClient(_ => new RemoteOwnerInfo("1.1.0", 1, 10)));
+
+        states.Should().OnlyContain(state => state.Usable == false && state.Reason == RemoteServiceState.Engine && state.Contract == 1 && state.EngineVersion == "1.1.0");
+    }
+
+    [Fact]
+    public async Task An_owner_that_does_not_answer_and_one_that_is_not_configured_say_why_they_are_not_usable()
+    {
+        var client = new FactsClient(_ => new RemoteOwnerInfo("2.1.0", 2, 10)) { Down = { "crm" }, Unconfigured = { "vehicle" } };
+        var states = await MeasuredAsync(client);
+
+        states.Single(state => state.Service == "crm").Should().Match<RemoteServiceState>(state =>
+            state.Configured && state.Reachable == false && state.Usable == false && state.Reason == RemoteServiceState.Unreachable && state.Contract == null);
+        states.Single(state => state.Service == "vehicle").Should().Match<RemoteServiceState>(state =>
+            !state.Configured && state.Reachable == null && state.Usable == false && state.Reason == RemoteServiceState.NotConfigured);
+    }
+
+    [Fact]
+    public async Task A_client_that_keeps_no_owner_facts_leaves_usable_unknown_and_the_host_healthy()
+    {
+        foreach (var client in new IRemoteQueryClient[] { new PlainClient(), new FactsClient(_ => null) })
+        {
+            var states = await MeasuredAsync(client);
+
+            states.Should().OnlyContain(state => state.Reachable == true && state.Usable == null && state.Reason == null && !state.Degrades);
+        }
+    }
+
+    [Fact]
+    public async Task Health_under_contract_2_says_what_each_owner_can_do_and_is_degraded_by_one_that_is_not_usable()
+    {
+        var client = new FactsClient(service => service == "crm" ? new RemoteOwnerInfo(null, null, null) : new RemoteOwnerInfo("2.1.0", 2, 10));
+
+        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
+
+        await host.Client(contract: 2).GetAsync("/OxQL/health");
+        await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+
+        var body = await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health"));
+        var remote = body!["remote"]!.AsArray().Select(node => node!.AsObject()).ToList();
+
+        body["status"]!.GetValue<string>().Should().Be("degraded");
+        remote.Single(entry => entry["service"]!.GetValue<string>() == "crm").ToJsonString()
+            .Should().Be("""{"service":"crm","configured":true,"reachable":true,"usable":false,"reason":"engine"}""");
+        remote.Single(entry => entry["service"]!.GetValue<string>() == "vehicle").ToJsonString()
+            .Should().Be("""{"service":"vehicle","configured":true,"reachable":true,"contract":2,"engineVersion":"2.1.0","usable":true}""");
+    }
+
+    [Fact]
+    public async Task Health_without_the_contract_header_keeps_the_three_members_of_a_remote_service()
+    {
+        var client = new FactsClient(_ => new RemoteOwnerInfo("2.1.0", 2, 10)) { Unconfigured = { "vehicle" } };
+
+        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client)) { Environment = "Production" };
+
+        await host.CreateClient().GetAsync("/OxQL/health");
+        await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+
+        var body = await SampleHost.Body(await host.CreateClient().GetAsync("/OxQL/health"));
+
+        body!["remote"]!.ToJsonString().Should().Be("""[{"service":"crm","configured":true,"reachable":true},{"service":"vehicle","configured":false}]""");
+    }
 }

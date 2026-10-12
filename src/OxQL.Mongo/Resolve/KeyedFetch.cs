@@ -1034,15 +1034,28 @@ internal sealed class KeyedFetch
         var aliases = call.Sent.Select(entry => entry.Target.Stage.As).Distinct().ToList();
         var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
 
+        var nulled = $"'{string.Join("', '", aliases)}' is null on this page.";
+        var reason = failure == Failure.Timeout ? ReasonTimeout
+            : call.Outcome.Status is null ? ReasonUnreachable
+            : call.Outcome.Status == NoRoute ? ReasonRoute
+            : ReasonStatus;
+        var parameters = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases, ["reason"] = reason };
+
+        if (call.Outcome.Status is { } answered)
+            parameters["status"] = answered;
+
         diagnostics.Add(new Diagnostic
         {
             Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
-            Message = failure == Failure.Timeout
-                ? $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; '{string.Join("', '", aliases)}' is null on this page."
-                : call.Outcome.Status is { } status
-                    ? $"{owner} answered with HTTP {status}; '{string.Join("', '", aliases)}' is null on this page."
-                    : $"{owner} could not be reached; '{string.Join("', '", aliases)}' is null on this page.",
-            Params = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases },
+            Message = reason switch
+            {
+                ReasonTimeout => $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; {nulled}",
+                // The owner's host answered and has no such route: the two causes a host can act on are named.
+                ReasonRoute => $"{owner} answered with HTTP {NoRoute}: it does not serve the internal query route. It runs an engine without that route, or this host routes it to another API version than the owner serves (InternalApiVersions:{call.Service}); {nulled}",
+                ReasonStatus => $"{owner} answered with HTTP {call.Outcome.Status}; {nulled}",
+                _ => $"{owner} could not be reached; {nulled}",
+            },
+            Params = parameters,
         });
 
         foreach (var (target, keys, _) in call.Sent)
@@ -2725,6 +2738,21 @@ internal sealed class KeyedFetch
         Timeout,
         Unreachable,
     }
+
+    /// <summary>The status of an owner whose host answers and has no internal query route.</summary>
+    private const int NoRoute = 404;
+
+    /// <summary><c>params.reason</c> of an owner that did not answer within its budget (<c>RESOLVE_TIMEOUT</c>).</summary>
+    internal const string ReasonTimeout = "timeout";
+
+    /// <summary><c>params.reason</c> of an owner no connection reached (<c>RESOLVE_UNREACHABLE</c>, no <c>status</c>).</summary>
+    internal const string ReasonUnreachable = "unreachable";
+
+    /// <summary><c>params.reason</c> of an owner that answered 404: no internal query route under the address this host calls.</summary>
+    internal const string ReasonRoute = "route";
+
+    /// <summary><c>params.reason</c> of an owner that answered any other HTTP error (<c>params.status</c>).</summary>
+    internal const string ReasonStatus = "status";
 
     /// <summary>
     /// The results of a call, or why there are none; <see cref="Status"/> is set when the owner was

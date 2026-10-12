@@ -766,10 +766,13 @@ public sealed partial class MongoQueryEngine
     /// <summary>
     /// A weak validator of the answer itself: the request, who asked (organisation and user), and the
     /// answer as it is written, without what differs between two tellings of one answer (the
-    /// validator, and what each owner cost this time: <c>owners[].ms</c>, <c>calls</c>, <c>cached</c>).
+    /// validator, what each owner cost this time: <c>owners[].ms</c>, <c>calls</c>, <c>cached</c>, and
+    /// the <c>engine</c> of an owner that was not asked, which is what the host happened to know of
+    /// it and no part of what was checked: the tier that asks nobody leaves it out, and it comes and
+    /// goes with the host's last read of the owner's health).
     /// So two answers that differ in anything a caller reads (<c>valid</c>, an error, a note, an alias,
-    /// what an owner said, a revision, whether it is complete) never share it, and one identity's
-    /// validator never stands for another's answer.
+    /// what an owner said, a revision, whether it is complete) never share it, two that say the same
+    /// of the request share it, and one identity's validator never stands for another's answer.
     /// </summary>
     private static string EtagOf(ExplainRequest request, ExplainResult answer, RequestContext context)
     {
@@ -789,6 +792,10 @@ public sealed partial class MongoQueryEngine
 
                 foreach (var cost in OwnerCosts)
                     (said as JsonObject)?.Remove(cost);
+
+                // An owner no check asked says nothing of itself: its engine is the host's knowledge of the moment.
+                if (said is JsonObject entry && entry["answered"] is null)
+                    entry.Remove("engine");
 
                 return said;
             }).ToList(),
@@ -857,10 +864,17 @@ public sealed partial class MongoQueryEngine
     /// host knows of it (<c>engine</c> from its health facts, a <c>reason</c> when it is not taken to
     /// answer), and one that is not is noted <c>REMOTE_UNCHECKED</c> (<see cref="RemoteExplain.Unasked"/>),
     /// which makes the verdict <c>unknown</c>. The cached tier asks nobody and says so by its own notes.
+    /// <para>
+    /// A host whose remote client keeps no owner facts (it is no <see cref="IRemoteOwnerInfo"/>) has
+    /// nothing to judge such an owner by, and never will have: the join is answered as one whose
+    /// owner was not a subject of the check, without a note, and the verdict is what the rest of the
+    /// request makes it. Only a client that keeps facts and has none of this owner, within the slice
+    /// of time the read of them had, leaves the owner unchecked.
+    /// </para>
     /// </summary>
     private void Unasked(Draft draft, OwnerList owners)
     {
-        if (draft.Request.Remote == ExplainRequest.RemoteCached || draft.Bound is not { } bound)
+        if (draft.Request.Remote == ExplainRequest.RemoteCached || draft.Bound is not { } bound || remote is not IRemoteOwnerInfo known)
             return;
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -876,7 +890,7 @@ public sealed partial class MongoQueryEngine
                     continue;
 
                 var entry = owners.Entries[owners.IndexOf(query.Service, remote: true)];
-                var facts = (remote as IRemoteOwnerInfo)?.OwnerOf(query.Service);
+                var facts = known.OwnerOf(query.Service);
 
                 if (facts is not null && (facts.EngineVersion is not null || facts.Contract is not null))
                 {

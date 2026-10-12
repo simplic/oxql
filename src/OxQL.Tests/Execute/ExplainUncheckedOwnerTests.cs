@@ -136,6 +136,104 @@ public class ExplainUncheckedOwnerTests
         result.OwnerOf("crm")["reason"]!.GetValue<string>().Should().Be(OwnerAvailability.Unreachable);
     }
 
+    /// <summary>A client that reaches owners and keeps nothing of what their health says.</summary>
+    private sealed class FactlessClient : IRemoteQueryClient
+    {
+        public int Calls;
+
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Calls);
+
+            throw new NotSupportedException();
+        }
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
+    }
+
+    private static async Task<ExplainResult> ExplainAsync(IRemoteQueryClient client, Action<MongoQueryEngine>? before = null, string tier = "check")
+    {
+        var options = BindHost.Options();
+        var engine = new MongoQueryEngine(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, options, client);
+
+        before?.Invoke(engine);
+
+        var body = $$"""{ "query": { "entityType": "{{Invoice}}", "pipeline": {{WholeAlias}} }, "remote": "{{tier}}", "include": ["notes"] }""";
+
+        return (await engine.ExplainAsync(ExplainAnswer.Envelope(body), BindHost.Context(options))).Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
+    }
+
+    [Fact]
+    public async Task A_host_whose_client_keeps_no_owner_facts_answers_a_join_nobody_asked_without_a_note()
+    {
+        var client = new FactlessClient();
+
+        var result = await ExplainAsync(client);
+
+        result.Valid.Should().BeTrue();
+        result.Executable.Should().Be(Basis.Yes, "there is nothing such a host could ever judge the owner by");
+        result.Cache.Complete.Should().BeTrue();
+        result.Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked);
+        client.Calls.Should().Be(0);
+
+        var owner = result.OwnerOf("crm");
+
+        owner["answered"].Should().BeNull("it was never asked");
+        owner["calls"]!.GetValue<int>().Should().Be(0);
+        owner.ContainsKey("reason").Should().BeFalse();
+        owner.ContainsKey("engine").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_host_whose_client_keeps_no_owner_facts_does_not_judge_an_owner_by_what_it_remembers_either()
+    {
+        var result = await ExplainAsync(new FactlessClient(), engine => engine.Availability.Failed("crm", OwnerAvailability.Unreachable));
+
+        result.Executable.Should().Be(Basis.Yes);
+        result.Notes.Should().NotContain(note => note.Code == Notes.RemoteUnchecked);
+        result.OwnerOf("crm").ContainsKey("reason").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Two_answers_that_say_the_same_of_the_request_have_the_same_validator()
+    {
+        var facts = new RemoteOwnerInfo("2.1.0", EngineCapabilities.Contract, 10);
+
+        // A client without facts: the check and the tier that asks nobody say the same.
+        var plain = await ExplainAsync(new FactlessClient());
+        var plainCached = await ExplainAsync(new FactlessClient(), tier: "cached");
+
+        plain.Etag.Should().NotBeNull();
+        plainCached.Etag.Should().Be(plain.Etag);
+
+        // An owner known to speak the contract: the check lists what the host knows of its engine, the
+        // cached tier does not, and both say that the query runs.
+        var known = await ExplainAsync(new FakeRemoteClient { Owners = { ["crm"] = facts } });
+        var knownCached = await ExplainAsync(new FakeRemoteClient { Owners = { ["crm"] = facts } }, tier: "cached");
+
+        known.Executable.Should().Be(Basis.Yes);
+        knownCached.Executable.Should().Be(Basis.Yes);
+        known.OwnerOf("crm").ContainsKey("engine").Should().BeTrue();
+        knownCached.Etag.Should().Be(known.Etag);
+        known.Etag.Should().Be(plain.Etag, "the same request, the same verdict, nothing else a caller reads of the request");
+
+        // An owner remembered as not answering: the same note and verdict with and without its facts.
+        var down = await ExplainAsync(new FakeRemoteClient { Owners = { ["crm"] = facts } }, engine => engine.Availability.Failed("crm", OwnerAvailability.Unreachable));
+        var downUnknown = await ExplainAsync(new FakeRemoteClient(), engine => engine.Availability.Failed("crm", OwnerAvailability.Unreachable));
+
+        down.Executable.Should().Be(Basis.Unknown);
+        downUnknown.Executable.Should().Be(Basis.Unknown);
+        downUnknown.Etag.Should().Be(down.Etag);
+
+        // Another verdict is another validator.
+        var unknown = await ExplainAsync(new FakeRemoteClient());
+
+        unknown.Executable.Should().Be(Basis.Unknown);
+        unknown.Etag.Should().NotBe(known.Etag).And.NotBe(down.Etag, "its note says another reason");
+    }
+
     [Fact]
     public async Task The_cached_tier_asks_nobody_and_is_answered_as_before()
     {

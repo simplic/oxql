@@ -1072,7 +1072,12 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     remembers as not answering (`Cache:OwnerUnavailableTtlSeconds`) leaves a `REMOTE_UNCHECKED` note
     at the join's stage with `params { service, target, reason }` (`unknown`, `engine`,
     `unreachable`, `timeout`, `route`), `cache.complete: false` and `executable: "unknown"`. The
-    cached tier asks nobody and is not judged this way.
+    cached tier asks nobody and is not judged this way. Neither is a host whose remote client keeps
+    no owner facts (it does not implement `IRemoteOwnerInfo`): it has nothing to judge the owner
+    by, so the join is answered without a note and without `engine` or `reason` on the owner's
+    entry, and `executable` is what the rest of the request makes it. The note with
+    `reason: "unknown"` is for a client that keeps facts and has none of this owner yet (its
+    health was not read, or not within the slice).
   - *Conditions at owners.* A condition on a member of another service's rows (a semi-join) is bound
     by that owner when the query runs, before the page. Explain has the owner bind the query the run
     sends it first for the condition (the condition relative to the target, the target field
@@ -1135,9 +1140,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     owner answer is kept, the cached answer is the answer a `check` gives, with the same `etag`.
 - **The validator.** `etag` is a hash of the request (but not of `remote`), of who asks (the
   organisation and the user) and of the answer as it is written, less what differs between two
-  tellings of one answer: the `etag` itself and what each owner cost this time (`owners[].ms`,
-  `calls`, `cached`). So it covers `valid`, every error, note, stage, alias, type, column and
-  catalog entry, what each owner answered (`owners[].answered`, `reason`, `engine`), the revisions and
+  tellings of one answer: the `etag` itself, what each owner cost this time (`owners[].ms`,
+  `calls`, `cached`), and the `engine` of an owner no check asked (what the host knew of it at that
+  moment, which the cached tier does not list). So it covers `valid`, every error, note, stage, alias, type, column and
+  catalog entry, what each owner answered (`owners[].answered`, `reason`, and its `engine` when it was asked), the revisions and
   `cache`: two answers that differ in anything a caller reads never share it, also when an owner
   answers differently under an unchanged revision (an addon defined at the owner, an owner that
   publishes no revision and was redeployed, an index created for `include: "indexes"`). One identity's

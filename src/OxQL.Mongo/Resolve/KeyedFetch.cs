@@ -3106,8 +3106,57 @@ internal sealed class KeyedFetch
             result = kept;
         }
 
-        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service, filter), unwrap: filter);
+        // Under contract 2 an owner error that lies at no stage of the owner query (the target is no
+        // entity of the owner's model, say) is said at the resolve, as explain says it.
+        return Refused(result, target.Entity, stage, (error, mapped) => MapBack(error, mapped, target, service, filter), unwrap: filter,
+            whole: filter && service != SelfService ? (service, target.TargetName) : null);
     }
+
+    /// <summary>
+    /// Whether an owner error is about the owner query as a whole: it names no stage and no entry of a
+    /// request's <c>filter</c>. The target entity the owner does not have is the case that matters: no
+    /// stage the caller wrote is wrong, the reference's declared target is.
+    /// </summary>
+    internal static bool IsOfTheWholeQuery(JsonObject error) => error["stage"] is null && error["filter"] is null;
+
+    /// <summary>
+    /// An owner error about the owner query as a whole as the caller's, at the resolve
+    /// <paramref name="stage"/>: the owner's code, message, path and params, with
+    /// <c>params.owner { service, entity, target, stage: null, path }</c>.
+    /// </summary>
+    internal static QueryValidationError OfTheWholeQuery(JsonObject error, string service, string entity, string target, int? stage)
+    {
+        var parameters = error["params"] is JsonObject written
+            ? written.ToDictionary(pair => pair.Key, pair => (object?)pair.Value?.DeepClone(), StringComparer.Ordinal)
+            : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        parameters["owner"] = new Dictionary<string, object?>
+        {
+            ["service"] = service,
+            ["entity"] = entity,
+            ["target"] = target,
+            ["stage"] = null,
+            ["path"] = error["path"]?.ToString(),
+        };
+
+        return new QueryValidationError
+        {
+            Code = error["code"]?.ToString() ?? Codes.InternalError,
+            Message = error["message"]?.ToString() ?? "",
+            Path = error["path"]?.ToString(),
+            Stage = stage,
+            Params = parameters,
+        };
+    }
+
+    /// <summary>
+    /// The head of a refusal whose owner refused the owner query as a whole, for a run and for explain
+    /// alike. An owner that does not have the target says so in terms of the declaration, which is
+    /// what has to change.
+    /// </summary>
+    internal static string RefusedAsAWhole(string service, string entity, string code) => code == Codes.UnknownEntity
+        ? $"The owner of '{entity}' refused the query: '{service}' has no entity '{entity}'. The reference declares a target its owner does not publish under that id."
+        : $"The owner of '{entity}' refused the query as a whole ({code}), at none of the stages this request wrote.";
 
     /// <summary>An owner error at one of <paramref name="target"/>'s continued stages as the caller's; null for one at the owner query's own stages.</summary>
     private static QueryValidationError? MapBack(JsonObject error, TargetPlan target, string service) =>
@@ -3222,12 +3271,14 @@ internal sealed class KeyedFetch
     /// <c>RESOLVE_REFUSED</c> at <paramref name="stage"/>; <paramref name="map"/> maps an owner error
     /// back to the caller's stage, or leaves it (null), and the head then points at the first mapped one.
     /// </summary>
-    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null, object? filter = null, bool unwrap = false)
+    private static Refusal Refused(JsonNode? result, string targetEntity, int? stage, Func<JsonObject, QueryValidationError, QueryValidationError?>? map = null, object? filter = null, bool unwrap = false,
+        (string Service, string Target)? whole = null)
     {
         result = OwnerFaults.Scrubbed(result);
 
         var inner = new List<QueryValidationError>();
         int? mappedStage = null;
+        string? wholeCode = null;
 
         if (result?["errors"] is JsonArray errors)
         {
@@ -3257,6 +3308,11 @@ internal sealed class KeyedFetch
                     owner = mapped;
                     mappedStage ??= mapped.Stage;
                 }
+                else if (whole is { } asked && IsOfTheWholeQuery(error))
+                {
+                    owner = OfTheWholeQuery(error, asked.Service, targetEntity, asked.Target, stage);
+                    wholeCode ??= owner.Code;
+                }
 
                 inner.Add(owner);
             }
@@ -3268,7 +3324,9 @@ internal sealed class KeyedFetch
             Code = Codes.ResolveRefused,
             Message = result is null
                 ? $"The owner of '{targetEntity}' answered without a result for this query."
-                : $"The owner of '{targetEntity}' refused the query: {result["title"]?.ToString() ?? result["type"]?.ToString() ?? "no reason given"}.",
+                : wholeCode is not null && mappedStage is null && whole is { } refusing
+                    ? RefusedAsAWhole(refusing.Service, targetEntity, wholeCode)
+                    : $"The owner of '{targetEntity}' refused the query: {result["title"]?.ToString() ?? result["type"]?.ToString() ?? "no reason given"}.",
             Stage = at,
             Filter = at is null ? filter : null,
         };

@@ -663,11 +663,18 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
 
                 Remember(check, answer);
 
+                // What the owner refuses of the owner query as a whole (the target is no entity of its
+                // model, say) lies at no stage the caller wrote: it is the resolve's, as a run's refusal says it.
+                var ofWhole = new List<JsonObject>();
+                var mappedAny = false;
+
                 if (answer["errors"] is JsonArray owned)
                     foreach (var error in owned.OfType<JsonObject>())
                     {
                         if (check.Map(error) is { } mapped)
                         {
+                            mappedAny = true;
+
                             if (mapped.Stage is { } at && check.Bound is { } refusing)
                                 refusedAt.Add((at, refusing.Declared.Entity));
 
@@ -678,7 +685,28 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
                         {
                             own.Add(miss);
                         }
+                        else if (!each.Local && KeyedFetch.IsOfTheWholeQuery(error))
+                        {
+                            ofWhole.Add(error);
+                        }
                     }
+
+                if (ofWhole.Count > 0 && check.Bound is { } refused)
+                {
+                    var entity = refused.Declared.Entity;
+                    var said = ofWhole.Select(error => KeyedFetch.OfTheWholeQuery(error, check.Service, entity, check.Target, check.Stage)).ToList();
+                    var head = new QueryValidationError
+                    {
+                        Code = Codes.ResolveRefused,
+                        // Beside an error at a stage the caller wrote, the head is the run's plain one.
+                        Message = mappedAny ? $"The owner of '{entity}' refused the query." : KeyedFetch.RefusedAsAWhole(check.Service, entity, said[0].Code),
+                        Stage = check.Stage,
+                    };
+
+                    foreach (var error in new[] { head }.Concat(said))
+                        if (!errors.Any(other => other.Code == error.Code && other.Stage == error.Stage && other.Path == error.Path && other.Message == error.Message))
+                            errors.Add(error);
+                }
 
                 Said();
 

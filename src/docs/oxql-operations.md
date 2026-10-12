@@ -111,7 +111,7 @@ the listed status.
 | `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
 | `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
-| `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
+| `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`; an error about the owner query as a whole, which names no stage, such as `UNKNOWN_ENTITY` for a target the owner does not have: the `resolve` stage, `params.owner.stage: null`, and the head says that the reference declares a target its owner does not publish). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
@@ -915,7 +915,11 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner's error keeps its own `params` and gains `params.owner`. A contract 1 answer carries none.
 - **`remote`.** With `check` (the default) the owner queries of every keyed stage are bound by their
   owners' internal explain: an owner error becomes this request's error at the caller's stage
-  (`params.owner` as in a refusal) and the stage's status `error`. All owner calls of one explain
+  (`params.owner` as in a refusal) and the stage's status `error`. An owner error about the owner
+  query as a whole (it names no stage: the target is no entity of the owner's model,
+  `UNKNOWN_ENTITY`) is an error at the `resolve` stage, under a `RESOLVE_REFUSED` head, with the two
+  errors a run is refused with; an owner error at a stage this host added to the owner query (the
+  key match, the page) stays this host's own and is not the request's. All owner calls of one explain
   share `Explain:RemoteTimeoutMs` (1 500 ms), which runs from the first round an owner is asked in
   (binding and reading the owners' health facts come before it; the facts are read within the
   slice a run gives them, a tenth of the time left and at most 250 ms); a part no owner answered (a

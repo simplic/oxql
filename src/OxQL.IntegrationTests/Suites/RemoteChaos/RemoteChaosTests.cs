@@ -274,8 +274,13 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         diagnostic["params"]!["service"]!.GetValue<string>().Should().Be(LabFleet.ExternalOwner);
         diagnostic["params"]!["aliases"]!.AsArray().Select(alias => alias!.GetValue<string>()).Should().Equal("w");
 
+        // A reached owner that said no is told apart from a network that is down: by its status in params, and in
+        // words by the status, or for a missing route by the route.
         if (status is not null)
-            diagnostic["message"]!.GetValue<string>().Should().Contain($"HTTP {status}", "a reached owner that said no is told apart from a network that is down");
+        {
+            diagnostic["params"]!["status"]!.GetValue<int>().Should().Be(status, caseId);
+            diagnostic["message"]!.GetValue<string>().Should().Contain(status == 404 ? "did not answer on its query route" : $"HTTP {status}", caseId);
+        }
 
         // A failure known at once must not cost the caller the resolve budget.
         answer.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(2_000), caseId);

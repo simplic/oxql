@@ -513,10 +513,69 @@ For code outside the packages (the Simplic base package is adapted with its pin)
 ### Added since 2.1.126.1012
 
 Everything here is additive for a host: one built against 2.1.126.1012 compiles and runs
-unchanged, and a caller reads the new members by name. Three answers to a contract 2 caller are
-others than before, and their entries say so: a body the host cannot bind (the refusal envelope
-in place of the host's own 400), a `null` entry of a batch (its code), and the `null` of a
-`values` list under a collection. A caller without the contract header reads what it always read.
+unchanged, and a caller reads the new members by name. Where an answer is another than
+2.1.126.1012 gave to the same request, it is one of the following; the entries further down say
+the rest.
+
+What a contract 2 caller reads differently:
+
+- **A body the host cannot bind**, on `query`, `batch` and `explain`: the refusal envelope (400
+  `validation_error`, `INVALID_REQUEST_BODY` or the stage's own code, with `params`) in place of
+  the host's own 400. A batch answers an entry that does not read in its place and runs the
+  others.
+- **No request at all**: the literal `null` as a body, a batch without `queries`, an explain
+  without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason:
+  "missing"`); the code was `UNKNOWN_STAGE`.
+- **`OPTION_NOT_APPLICABLE`** is one error per option of a condition that is no option, each with
+  `params.option`; several unknown options were one error.
+- **Message texts.** `OPTION_NOT_APPLICABLE` says which of three mistakes was made (a name that
+  is no option, an option that is no boolean, an `options` that is no object); a `dateTrunc` key
+  says whether its path is no date (`INVALID_AGGREGATE_ARGUMENT`) or lies under a collection
+  (`GROUP_ON_COLLECTION`); a request that is not there says the place that is missing;
+  `RESOLVE_UNREACHABLE` for an owner that answered 404 says that the owner did not answer on its
+  query route; `RESOLVE_REFUSED` for a refusal that lies at none of the request's stages says
+  that the owner refused the query as a whole, or that it has no such entity. A client goes by
+  `code` and `params`; no text is part of the contract.
+- **Grouping.** A `dateTrunc` key is a date in every answer: a bucket whose local start lies
+  outside the calendar a date on the wire can name is keyed with the first or the last instant.
+- **Values under a collection.** The `null` of a `values` list counts what a comparison with
+  `null` selects, and a row whose collection is empty is counted under no value.
+- **Joins into an owner that just failed.** For `Cache:OwnerUnavailableTtlSeconds` (5) after a
+  call that got no answer the owner is not called: the alias is `null` at once, with the
+  diagnostic of the call that failed and `params.remembered`, and a semi-join is refused at once.
+  `0` calls the owner for every request.
+- **`RESOLVE_REFUSED` for a target the owner does not have** lies at the `resolve` stage.
+- **Health.** `status` is also `degraded` for an owner that answers and does not speak contract 2,
+  for a declared target its owner does not publish, and for a model its provider calls degraded
+  or cannot hand out.
+- **Explain.** `executable` is `unknown`, with a `REMOTE_UNCHECKED` note and `cache.complete:
+  false`, for a join whose owner no check asked and that the host cannot take to answer: its
+  remote client keeps owner facts (`IRemoteOwnerInfo`) and has none of that owner, or the facts
+  name another contract, or the host remembers the owner as not answering. A join into a target
+  the host's check found its owner not to publish is noted `REFERENCE_TARGET_UNKNOWN` and is not
+  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for; it was
+  `timeout`), `unknown`, `engine` and `route` beside the ones it had.
+- **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
+  by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **The API description.** The schemas of the OxQL routes in a document generated from the API
+  explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
+  `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in
+  place of the engine's request and result types, so a client regenerated from the document has
+  other type names. The wire is the same.
+
+What a caller without the contract header reads differently:
+
+- Where the legacy pipeline answers it (the default): 504 `QUERY_TIMEOUT`, in the words that
+  pipeline has for its limit's expiry, when the database has said nothing by
+  `Compat:Legacy:MaxTimeMs` and `Execution:ClientDeadlineMarginMs`. Nothing else: every status,
+  header and body is the one it read, a body the host cannot bind is the host's answer, and
+  health has its members and its `status` by the rule it had.
+- Where the rewrite answers it (`Compat:Legacy:Enabled=false`, or `Compat:Legacy:Always=false`
+  for what the rewrite can express), the request is bound and run by this release's engine: it
+  reads the binder's message texts named above and `OPTION_NOT_APPLICABLE` once per option (a
+  binder's error carries no `params` for this caller), a `dateTrunc` key that is always a date,
+  and the 504 by the host's deadline, whose `QUERY_TIMEOUT` carries `params.maxTimeMs` as that of
+  the database's own expiry now does.
 
 - **Health (contract 2).** Per remote service `contract`, `engineVersion`, `usable`, `reason` and
   `references { declared, validated, revision, unknownTargets, reason }`; `model { entities,
@@ -527,11 +586,14 @@ in place of the host's own 400), a `null` entry of a batch (its code), and the `
   header reads the members it always read and the `status` by the rule it always had.
 - **Diagnostics.** `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` carry `params.reason` (`timeout`,
   `unreachable`, `route`, `status`), `status` when the owner answered, and `remembered` with
-  `retryAfterMs` when the owner was not called. A refusal for a target the owner does not have
+  `retryAfterMs` when the owner was not called; an answer given from memory has the code, the
+  reason and the status of the call that failed. A refusal for a target the owner does not have
   says so at the `resolve` stage, in a run and in explain.
-- **Explain.** An owner no check asked carries `engine` and a `reason` (`unknown`, `engine`,
-  `unreachable`, `timeout`, `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak
-  contract 2; the owner reason `budget`; the note `REFERENCE_TARGET_UNKNOWN`.
+- **Explain.** On a host whose remote client keeps owner facts (`IRemoteOwnerInfo`), an owner no
+  check asked carries `engine` and a `reason` (`unknown`, `engine`, `unreachable`, `timeout`,
+  `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak contract 2; a host whose
+  client keeps none answers such a join without a note. The owner reason `budget`; the note
+  `REFERENCE_TARGET_UNKNOWN`.
 - **A body that does not read (contract 2).** A request whose body the host cannot bind is
   answered in the refusal envelope: 400 `validation_error` with the new code
   `INVALID_REQUEST_BODY` and `params { reason, path, expected, actual, line, position }`

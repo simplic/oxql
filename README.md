@@ -542,6 +542,11 @@ caller reads the new members by name.
   or removed, and a caller without the contract header reads the codes as before. A `null` entry
   of a batch is `INVALID_REQUEST_BODY` under contract 2 (it was `UNKNOWN_STAGE`, which a caller
   without the header still reads).
+- **Values under a collection.** The `null` of a `values` list over a path through a collection
+  is what `{ "<path>": { "in": [null] } }` selects: the elements without a value and the rows
+  whose collection is not there. A row whose collection is there and empty holds no value and is
+  counted under none; it is asked for with `exists: false` on a member of the element (see
+  *Distinct values* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
 - **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
   starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
   (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).

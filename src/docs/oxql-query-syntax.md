@@ -890,8 +890,9 @@ POST query { "entityType": "transport.shipment",
 - **The row** is `{ "value": … }`, with `"count": n` under `counts`. The value is written as a row
   writes the member: an enum as its number, a `long` and a `decimal` as numbers, a date as
   `YYYY-MM-DD`, a `dateTime` as an ISO instant, a guid as text. `count` is a JSON number.
-- **`null` is a value**: the member null or absent (and, under a collection, the row that holds no
-  element) is the one row `{ "value": null }`. The empty string is a value of its own.
+- **`null` is a value**: the member null or absent is the one row `{ "value": null }`. The empty
+  string is a value of its own. Under a collection `null` is what a comparison with `null`
+  selects (see below).
 - **A string folds as a group key folds**: spellings the collation calls equal are one value,
   reported under the first spelling met.
 - **Order**: with `counts`, by the count, most first, then by value; without, by value. Values
@@ -905,7 +906,11 @@ POST query { "entityType": "transport.shipment",
   as soon as the bound is reached, so a request that matches exactly `scan` rows carries it too.
   It stays a diagnostic under `strict`.
 - **Under a collection that is not unwound** a value is one some element holds, and **`count`
-  counts elements**, a row without any once under `null`; `scan` still counts rows.
+  counts elements**; `scan` still counts rows. `null` is listed for the elements that hold no
+  value and for a row whose collection is not there, which is what `{ "<path>": { "in": [null] } }`
+  selects. A row whose collection is there and empty holds no value: no entry counts it and no
+  value of the list selects it. The rows without any element are asked for with `exists: false`
+  on a member every element has: `{ "items.id": { "exists": false } }`.
 - **Under an alias whose rows come from an owner after the page** (another service's record, a
   keyed join) the stage is refused: `NOT_CONTINUABLE`. Explain says it beforehand
   (`can.values: false`, `why.values: "owner"` or `"joinedAfterPage"`).

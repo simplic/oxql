@@ -263,6 +263,9 @@ internal static class MongoCompiler
     /// <summary>The prefix of the position a values stage numbers the elements of a collection it unwinds by; no row keeps it.</summary>
     private const string ReservedValuesIndex = Aliases.ReservedPrefix + "oxVal";
 
+    /// <summary>The member a values stage notes under, per collection it unwinds, whether the collection is there and holds no element.</summary>
+    private const string ReservedValuesEmpty = Aliases.ReservedPrefix + "oxValE";
+
     /// <summary>The member of a values answer that holds the values: each its <c>_id</c> and, under <see cref="ValuesCount"/>, the rows that hold it.</summary>
     public const string ValuesList = "v";
 
@@ -2428,9 +2431,14 @@ internal static class MongoCompiler
     /// <list type="bullet">
     /// <item>The bound on the rows stands first, so nothing after it reads more than that many rows,
     /// and an index that holds the organisation and the path answers them without reading a document.</item>
-    /// <item>A collection is unwound keeping the row that holds none (its value is null), and with the
-    /// position of each element: the first element of a row, or the row without one, counts the row,
-    /// so the rows read are known however many elements they hold.</item>
+    /// <item>A collection is unwound keeping the row that holds none, and with the position of each
+    /// element: the first element of a row, or the row without one, counts the row, so the rows read
+    /// are known however many elements they hold.</item>
+    /// <item>A value is listed for what a condition on the path selects, and null is no exception: a
+    /// collection that is not there is a null (a comparison with null matches the row), a collection
+    /// that is there and empty holds no value at all (no comparison matches it). So the emptiness of
+    /// each collection is noted before its unwind, such a row adds nothing to a value's count, and a
+    /// value nothing was counted for is not listed. The row is still one of the rows read.</item>
     /// <item>The search runs on the groups, not on the rows: there are as many comparisons as there
     /// are distinct values, and the rows read are counted whatever the search keeps.</item>
     /// <item>With counts the values lead by their number of rows, then by value; without, by value.
@@ -2442,11 +2450,16 @@ internal static class MongoCompiler
         yield return new BsonDocument("$limit", values.Scan);
 
         var positions = new List<string>();
+        var empties = new List<BsonValue>();
 
         foreach (var collection in values.Collections)
         {
-            positions.Add(ReservedValuesIndex + positions.Count);
+            var empty = ReservedValuesEmpty + positions.Count;
 
+            positions.Add(ReservedValuesIndex + positions.Count);
+            empties.Add("$" + empty);
+
+            yield return new BsonDocument("$addFields", new BsonDocument(empty, new BsonDocument("$eq", new BsonArray { "$" + collection, new BsonArray() })));
             yield return new BsonDocument("$unwind", new BsonDocument
             {
                 ["path"] = "$" + collection,
@@ -2458,7 +2471,10 @@ internal static class MongoCompiler
         var group = new BsonDocument
         {
             ["_id"] = "$" + values.Path.Storage,
-            [ValuesCount] = new BsonDocument("$sum", 1),
+            // What an empty collection left of its row holds no value: it counts for none.
+            [ValuesCount] = new BsonDocument("$sum", empties.Count == 0
+                ? 1
+                : new BsonDocument("$cond", new BsonArray { empties.Count == 1 ? empties[0] : new BsonDocument("$or", new BsonArray(empties)), 0, 1 })),
         };
 
         // One element per row counts the row: the first of each collection, or the row that has none.
@@ -2472,6 +2488,10 @@ internal static class MongoCompiler
         yield return new BsonDocument("$group", group);
 
         var list = new BsonArray();
+
+        // The null nothing but empty collections stood for is no value of the list.
+        if (empties.Count > 0)
+            list.Add(new BsonDocument("$match", new BsonDocument(ValuesCount, new BsonDocument("$gt", 0))));
 
         if (values.Search is { } search)
             list.Add(new BsonDocument("$match", Filter(search, null, collated)));

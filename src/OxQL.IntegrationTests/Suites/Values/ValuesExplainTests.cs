@@ -61,7 +61,7 @@ public class ValuesExplainTests
 
         var plan = body["plan"]!["stages"]!.AsArray().Select(emitted => emitted!.AsObject().First().Key).ToList();
 
-        plan.Should().Equal("$match", "$match", "$limit", "$unwind", "$group", "$facet");
+        plan.Should().Equal("$match", "$match", "$limit", "$addFields", "$unwind", "$group", "$facet");
         body["plan"]!.AsObject().ContainsKey("count").Should().BeFalse("nothing is counted beside the values");
         body["plan"]!["bound"]!.AsObject().ContainsKey("page").Should().BeFalse();
 

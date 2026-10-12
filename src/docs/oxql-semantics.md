@@ -46,9 +46,11 @@ document. The operators do not, except `exists`:
 - `exists` is accepted on every stored member, a collection, an object and an `unknown` member
   included; every other operator but `is` needs a scalar (`NOT_FILTERABLE`).
 
-**Collections.** A path through a collection in `match` means "some element". On a collection
-of scalars, `eq null` matches a row whose collection is absent, not one whose collection is
-empty; `exists: true` matches both a populated and an empty collection. `any` needs an element
+**Collections.** A path through a collection in `match` means "some element". `eq null` (and
+`in [null]`) on such a path matches a row in which some element holds no value, and a row whose
+collection is absent or `null`, not one whose collection is empty; `exists: false` on a member of
+the element matches a row without any element (the collection absent, `null` or empty). On a
+collection itself `exists: true` matches both a populated and an empty collection. `any` needs an element
 that satisfies the whole inner condition, so an absent, `null` or empty collection never
 matches it and always matches `not { any }`. `unwind` drops a row whose collection is absent,
 `null` or empty unless `preserveNull` is `true`, which keeps it once with the element absent
@@ -805,12 +807,21 @@ would write by hand, and tests hold the two equal on the same rows, values, coun
 What the stage adds to that group:
 
 - **It reads through collections.** For `items.status.name` it unwinds `items` (and, for
-  `items.weightNotes.number`, both collections) for the values alone, keeping the row that holds no
-  element as `null`: the hand-written form is `unwind` with `preserveNull` and then the group. A
-  value is then one that **some element** holds, which is what a condition on the same path
-  matches (`{ "items.status.name": { "in": […] } }` is "some item has one of these"), and `count`
-  counts elements, not rows. After an `unwind` of the collection the member is a scalar of the row
+  `items.weightNotes.number`, both collections) for the values alone. A value is then one that
+  **some element** holds, which is what a condition on the same path matches
+  (`{ "items.status.name": { "in": […] } }` is "some item has one of these"), and `count` counts
+  elements, not rows. After an `unwind` of the collection the member is a scalar of the row
   (`item.status.name`): a row is an element, and a row without elements is no row.
+- **`null` under a collection is what a comparison with `null` selects.** `{ "items.status.name":
+  { "in": [null] } }` (and `eq null`) selects a row in which some element holds no name, and a row
+  whose collection is not there at all (the member absent or `null`); it does not select a row
+  whose collection is there and empty, since no element is there to hold anything. The list
+  follows the condition: `null` counts the elements without a value and, once each, the rows
+  without the collection; a row with an empty collection is counted under no value (it is still
+  one of the rows `scan` bounds). So every entry of the list, `null` included, sent back as `in`
+  finds the rows it was counted from. The rows without any element are a question of their own,
+  asked with `exists: false` on a member every element has (`{ "items.id": { "exists": false } }`:
+  the collection absent, `null` or empty), or with `not` around an `any`.
 - **It bounds the rows it reads** (`scan`, at most `Values:ScanRows`, 50 000): the bound stands
   before the unwinds and the group, so the cost of a list never grows with what the request
   matches. Reaching it is said (`VALUES_SCAN_CAPPED`): the list is then "the values among the
@@ -829,8 +840,9 @@ What the stage adds to that group:
 string another; a string's spellings fold into one value under the collation, reported under the
 first one met (which spelling that is depends on the order the rows are read in); an enum is its
 stored number, one the enum does not declare included. A value sent back as `eq` or in `in` finds
-the rows the list counted, as a group's key does, with the one exception grouping has too: an
-undeclared enum number cannot be named in a condition (`UNKNOWN_ENUM_MEMBER`).
+the rows the list counted, as a group's key does, under a collection too (`null` included, see
+above), with the one exception grouping has too: an undeclared enum number cannot be named in a
+condition (`UNKNOWN_ENUM_MEMBER`).
 
 **The request's `filter`.** Every entry runs before the stage, at the point its paths are in the
 row; none reads `value` or `count`, which exist only in the answer. A set filter asks for its list

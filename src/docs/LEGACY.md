@@ -222,13 +222,14 @@ engine guarantees a contract 2 caller holds for it. Of what this release adds:
 
 | Guarantee | A contract 2 request | A contract 1 request the rewrite answers |
 |---|---|---|
-| A walk by cursor serves every row once whatever the sort member holds: a NaN, a value of another stored type than the member declares (a decimal as text, text under an `int`) | yes | no: the cursor continues by one range per sort field as it always did, which stays inside the stored type of the position and holds for nothing against a NaN; rows of another type and rows on the far side of a NaN are not served |
-| A text comparison that runs as a pattern, and the text form of a decimal, ends at the end of the value | yes (`\z`) | no: the pattern ends with `$`, which also holds before a line feed that ends the value |
-| `first`, `last` and `push` after a sort with ties are the same on every page (the sort is completed by the key) | yes | no: the sort is sent as written, and rows that tie arrive in the order the database hands them |
+| A walk by cursor follows the sort across a NaN and across stored types (a decimal as text, text under an `int`) | yes | the cursor continues by one range per sort field, as it was issued: within the stored type of the position, among the numbers a range compares |
+| A text comparison that runs as a pattern, and the text form of a decimal, ends at the end of the value | yes (`\z`) | the pattern ends with `$`, as contract 1 wrote it |
+| `first`, `last` and `push` after a sort with ties are the same on every page (the sort is completed by the key) | yes | the sort is sent as written, and rows that tie are in the database's order |
 | Comparisons under the host's collation: `startsWith` through a collection, a duration stored as text compared by byte beside a folding condition, a join over a text key | yes | not applicable: a contract 1 request runs under no collation, and its `ignoreCase` is a pattern that folds case |
-| A body that does not read is answered with the refusal envelope, and in a batch refuses its entry, whether the body declares its length or not | yes | no: the host's 400 ProblemDetails for the body as a whole, as before |
+| A body that does not read is answered with the refusal envelope, and in a batch refuses its entry, whether the body declares its length or not | yes | the host's 400 ProblemDetails for the body as a whole, as before |
+| Under the alias of an unwind a row shows the members its projection names there | yes | the row as contract 1 answers it |
 | `params` on a refusal | yes | none |
-| Health waits once for the first measurement of the referenced services, and says `pending`, `usable`, `reason`, `references`, `model` | yes | no: answered at once with the three members of a `remote` entry |
+| Health waits once for the first measurement of the referenced services, and says `pending`, `usable`, `reason`, `references`, `model` | yes | answered at once with the three members of a `remote` entry |
 
 What holds for both, since it is decided before or after the request is compiled:
 

@@ -78,6 +78,21 @@ public sealed partial class Binder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        try
+        {
+            return await BindRequestAsync(request, context, explain, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException) when (RequestText.HoldsBroken(request))
+        {
+            // A name or a text of the request is no Unicode text, and a read of it as one failed: the
+            // caller's mistake, whether or not a host answered it from the body first.
+            return new BindOutcome.Failed(Refusal.Validation([RequestText.Refused()]));
+        }
+    }
+
+    private async ValueTask<BindOutcome> BindRequestAsync(QueryRequest request, RequestContext context, bool explain, CancellationToken cancellationToken)
+    {
+
         if (context.Organisation is null || context.Organisation == Guid.Empty)
             return new BindOutcome.Failed(Refusal.AccessDenied("The request carries no organisation."));
 

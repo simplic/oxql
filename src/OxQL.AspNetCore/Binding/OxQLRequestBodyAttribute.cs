@@ -331,7 +331,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                         // The batch reads: the entries that do not are answered in their places, the others run.
                         var answered = entries.ToDictionary(
                             entry => entry.Key,
-                            entry => Refusal.Validation(entry.Value.Select(error => Entry(error, entry.Key)).ToList()));
+                            entry => Refusal.Validation(entry.Value.Select(error => WithLimit(Entry(error, entry.Key), options)).ToList()));
 
                         // The entries answered before the body was bound keep their answers.
                         foreach (var (index, refusal) in http.Items[EntriesItem] as Dictionary<int, Refusal> ?? [])
@@ -371,8 +371,17 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     /// The refusal as the action's result, logged as the controller logs a refusal and counted as a
     /// request on the engine's meter: it never reaches the query service, where requests are counted.
     /// </summary>
+    /// <summary>A refusal under a limit's code says the limit's value on this host, as every refusal of that limit does.</summary>
+    private static QueryValidationError WithLimit(QueryValidationError error, OxQLOptions options) =>
+        error is { Code: Codes.LookupLimitExceeded, Params: { } carried } && !carried.ContainsKey("max")
+            ? error with { Params = new Dictionary<string, object?>(carried, StringComparer.Ordinal) { ["max"] = options.Limits.MaxLookupLimit } }
+            : error;
+
     private static IActionResult Refused(HttpContext http, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter, Refusal refusal)
     {
+        if (refusal.Errors is { } said)
+            refusal = refusal with { Errors = [.. said.Select(error => WithLimit(error, options))] };
+
         OxQLMetrics.Record(
             OxQLQueryService.ContractOf(options, http),
             RouteOf(parameter.ParameterType),

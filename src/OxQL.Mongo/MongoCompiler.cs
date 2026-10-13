@@ -309,14 +309,32 @@ internal static class MongoCompiler
     [ThreadStatic]
     private static CollationOptions? folding;
 
+    /// <summary>
+    /// Whether the patterns compiled on this thread end as a contract 1 pattern always has, with
+    /// <c>$</c> (see <see cref="End"/>); set for an aggregate compiled as written.
+    /// </summary>
+    [ThreadStatic]
+    private static bool dollarEnd;
+
+    /// <summary>
+    /// The end of a pattern the engine builds from a text: the very end of the value, which is
+    /// <c>\z</c>. (<c>$</c> is that place and one more, before a line feed that ends the value: a
+    /// text is found where the value ends, and nowhere before it.) The start anchor needs no
+    /// such care: without the multi-line option, which the engine never sets, <c>^</c> is the start
+    /// of the value. A contract 1 pattern ends as it always has.
+    /// </summary>
+    private static string End => dollarEnd ? "$" : @"\z";
+
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(options);
 
         var outer = folding;
+        var outerEnd = dollarEnd;
 
         folding = options.Collation ?? new CollationOptions();
+        dollarEnd = options.AsWritten;
 
         try
         {
@@ -325,6 +343,7 @@ internal static class MongoCompiler
         finally
         {
             folding = outer;
+            dollarEnd = outerEnd;
         }
     }
 
@@ -1868,7 +1887,7 @@ internal static class MongoCompiler
 
     /// <summary>The whole-value pattern of a text: escaped and anchored at both ends, folding case only as a fold.</summary>
     private static BsonRegularExpression Anchored(string text, Casing casing) =>
-        new("^" + RegexGuard.Escape(text) + "$", casing == Casing.Fold ? "i" : "");
+        new("^" + RegexGuard.Escape(text) + End, casing == Casing.Fold ? "i" : "");
 
     /// <summary>
     /// One comparison of one member. Each form asks the member one thing, so through a collection
@@ -1900,7 +1919,7 @@ internal static class MongoCompiler
             // equivalents, so contains and endsWith find what eq and startsWith find. It is still a
             // pattern: no index bounds it, and it reads every candidate row.
             "contains" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
-            "endsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()) + "$", flags)),
+            "endsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()) + End, flags)),
             "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
             // Under the collation a prefix is the range from the prefix up to the prefix
             // followed by the highest character: every string that starts with it under the
@@ -1911,7 +1930,7 @@ internal static class MongoCompiler
             "startsWith" when casing == Casing.Collated && many => new BsonDocument(storage, new BsonRegularExpression("^" + AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
             "startsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonDocument { ["$gte"] = Text(value), ["$lt"] = Text(value) + AfterEveryCharacter }),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
-            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),
+            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + End, flags)),
             "regex" => new BsonDocument(storage, new BsonRegularExpression(Text(value), flags)),
             "exists" => new BsonDocument(storage, new BsonDocument("$exists", value)),
             _ => new BsonDocument(storage, value),

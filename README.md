@@ -558,6 +558,10 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **Text that ends in a line feed.** `endsWith`, and an exact `eq`, `neq`, `in` or `nin` in a
+  request that folds case elsewhere, read the end of the text as the end of the value: `"1"` is
+  not found at the end of `"1
+"`, and the exact comparison answers what it answers alone.
 - **`startsWith` through a collection.** A folding `startsWith` on a path through a collection
   that is not unwound (`items.text`, a collection of text) answers the rows in which one element
   starts with the text, in a `match`, the request's `filter`, a join's `filter` and under `not`;

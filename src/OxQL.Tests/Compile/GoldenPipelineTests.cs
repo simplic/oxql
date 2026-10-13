@@ -199,7 +199,7 @@ public class GoldenPipelineTests
                 { Number: { $in: [ 'a', 'b' ] } },
                 { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
                 { Number: { $gte: 'a', $lt: 'a￿' } },
-                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i },
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]\z/i },
                 { Number: { $gte: 'a', $lt: 'a￿' } },
                 { Number: /^a/ } ] } }
             """));

@@ -64,7 +64,7 @@ public class CaseInsensitiveCompileTests
                 { Number: { $gt: 'a' } },
                 { Number: { $gte: 'a.b', $lt: 'a.b￿' } },
                 { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
-                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i } ] } }
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]\z/i } ] } }
             """));
         compiled.CountStages![1].ShouldBeBson(compiled.PageStages[1], "the count reads the same filter");
         compiled.Collation.Should().NotBeNull();
@@ -88,13 +88,13 @@ public class CaseInsensitiveCompileTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $and: [ { $or: [
-                { Number: /^a\.b$/ },
-                { Number: { $not: /^a$/ } },
-                { Number: { $in: [ /^a$/, /^b$/ ] } },
-                { Number: { $nin: [ /^a$/, null ] } },
+                { Number: /^a\.b\z/ },
+                { Number: { $not: /^a\z/ } },
+                { Number: { $in: [ /^a\z/, /^b\z/ ] } },
+                { Number: { $nin: [ /^a\z/, null ] } },
                 { Number: /^a/ },
                 { Number: /a/ },
-                { Number: /a$/ } ] },
+                { Number: /a\z/ } ] },
                 { Note: 'x' } ] } }
             """));
         compiled.Collation.Should().NotBeNull("the note folds");
@@ -134,8 +134,9 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task A_contract_1_fold_is_the_pattern_it_always_was_without_a_collation()
     {
-        var compiled = await Compile("""[{ "match": { "number": { "eq": "a", "options": { "ignoreCase": true } }, "note": { "startsWith": "b", "options": { "ignoreCase": true } } } }, { "sort": [{ "number": "asc" }] }]""", context: BindHost.Context(contract: 1));
+        var compiled = await Compile("""[{ "match": { "number": { "eq": "a", "options": { "ignoreCase": true } }, "note": { "startsWith": "b", "options": { "ignoreCase": true } } } }, { "sort": [{ "number": "asc" }] }]""", context: BindHost.Context(contract: 1), options: Options with { AsWritten = true });
 
+        // A contract 1 request is compiled as written, and its pattern ends as it always has.
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { $and: [ { Number: /^a$/i }, { Note: /^b/i } ] } }"));
         compiled.Collation.Should().BeNull();
     }

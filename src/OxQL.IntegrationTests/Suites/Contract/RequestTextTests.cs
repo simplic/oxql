@@ -24,7 +24,8 @@ public class RequestTextTests
 
     private const string Entity = Corpus.Employee;
 
-    private static Task<LabClient> Staff(int? contract = 2) => Lab.ClientAsync(LabService.Staff, contract: contract);
+    /// <summary>The host the cases run against; a derived class puts a buffering middleware ahead of MVC.</summary>
+    protected virtual Task<LabClient> Staff(int? contract = 2) => Lab.ClientAsync(LabService.Staff, contract: contract);
 
     public static TheoryData<string, string, string, string> Places() => new()
     {
@@ -182,4 +183,26 @@ public class RequestTextTests
 
         public override long Length => throw new NotSupportedException();
     }
+}
+
+/// <summary>
+/// Every case of <see cref="RequestTextTests"/> on a host whose own middleware has read the body
+/// into a buffer ahead of MVC and set it back to its start: the answers are the same.
+/// </summary>
+[Trait("Category", "Integration")]
+public class RequestTextBufferedTests : RequestTextTests
+{
+    protected override async Task<LabClient> Staff(int? contract = 2) =>
+        (await CorpusFleet.SharedAsync()).Variant(LabService.Staff, "buffered", new Dictionary<string, string?> { [FleetHost.BufferBodyKey] = "rewound" }, contract: contract);
+}
+
+/// <summary>
+/// Every case of <see cref="RequestTextTests"/> on a host whose own middleware has made the body
+/// seekable and not read it: the answers are the same.
+/// </summary>
+[Trait("Category", "Integration")]
+public class RequestTextUnreadBufferTests : RequestTextTests
+{
+    protected override async Task<LabClient> Staff(int? contract = 2) =>
+        (await CorpusFleet.SharedAsync()).Variant(LabService.Staff, "buffered-unread", new Dictionary<string, string?> { [FleetHost.BufferBodyKey] = "unread" }, contract: contract);
 }

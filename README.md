@@ -570,9 +570,12 @@ What a contract 2 caller reads differently:
   characters' bytes, alone and in a request that folds case elsewhere and so runs
   under the collation. Explain notes such a comparison and a sort on such a member with
   `DURATION_ORDERS_AS_TEXT`, a new note code a client that lists the codes adds.
-- **A body sent without a declared length** (`Transfer-Encoding: chunked`) is answered like one
-  with a `Content-Length`: text that is no Unicode text names its place, and in a batch refuses
-  its entry while the others run.
+- **A body sent without a declared length** (`Transfer-Encoding: chunked`), and a body a
+  middleware of the host has buffered ahead of MVC (`EnableBuffering`), is answered like one
+  with a `Content-Length` that MVC reads from the wire: text that is no Unicode text names its
+  place, and in a batch refuses its entry while the others run. A buffer is read from its start
+  and left where it stood. A request handed to the engine itself (`IQueryEngine`) is refused with
+  the same code and `reason`, without a place.
 - **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
   `Etc` area (`Etc/GMT-2` to `Etc/GMT+12`), on every host platform. A zone id the
   host's zone table has and the database's does not is `INVALID_TIMEZONE` (400) too.

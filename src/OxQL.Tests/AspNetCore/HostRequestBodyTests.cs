@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OxQL.AspNetCore.Binding;
 using OxQL.AspNetCore.Legacy;
 using OxQL.Core.Binding;
+using OxQL.Core.Models;
 using Xunit;
 
 namespace OxQL.Tests.AspNetCore;
@@ -21,9 +22,12 @@ namespace OxQL.Tests.AspNetCore;
 /// </summary>
 public class HostRequestBodyTests
 {
-    private const string Query = "/OxQL/query";
+    private protected const string Query = "/OxQL/query";
     private const string Batch = "/OxQL/batch";
     private const string Explain = "/OxQL/explain";
+
+    /// <summary>The host of a case; a derived class puts its own middleware ahead of MVC.</summary>
+    private protected virtual SampleHost NewHost(Action<OxQLOptions>? options = null, Action<IServiceCollection>? configure = null) => new(options, configure);
 
     private const string Good = """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 1 } }] }""";
 
@@ -100,7 +104,7 @@ public class HostRequestBodyTests
     [MemberData(nameof(Kinds))]
     public async Task A_value_of_another_JSON_kind_than_its_place_takes_is_refused_with_the_place_and_both_kinds(string body, string code, string path, string? expected, string? actual, int? stage)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, body);
         var error = Refused(response, text, answer);
@@ -120,7 +124,7 @@ public class HostRequestBodyTests
     [InlineData("""{ "entityType": "probe.order", "pipeline": [{ "group": { "by": [{ "dateTrunc": { "path": "createdAt" }, "as": "m" }], "fields": {} } }] }""", "$.pipeline[0].group.by[0].dateTrunc.unit", 0)]
     public async Task A_required_member_that_is_not_written_is_refused_as_missing_with_its_place(string body, string path, int? stage)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, body);
         var error = Refused(response, text, answer);
@@ -134,7 +138,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task Both_required_members_missing_are_two_errors_of_one_refusal()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, "{}");
 
@@ -150,7 +154,7 @@ public class HostRequestBodyTests
     [InlineData("not json", 1, 2)]
     public async Task A_body_that_is_no_JSON_is_refused_with_the_line_and_the_position_from_1(string body, int line, int position)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, body);
         var error = Refused(response, text, answer);
@@ -167,7 +171,7 @@ public class HostRequestBodyTests
     [InlineData("  \r\n ")]
     public async Task An_empty_body_is_refused_as_empty(string body)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         foreach (var route in new[] { Query, Batch, Explain })
         {
@@ -182,7 +186,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task The_literal_null_is_no_request_on_any_route()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         foreach (var route in new[] { Query, Batch, Explain })
         {
@@ -197,7 +201,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_body_nested_deeper_than_the_host_reads_says_the_depth()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
         var condition = """{ "number": { "eq": "x" } }""";
 
         for (var level = 0; level < 200; level++)
@@ -216,7 +220,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_batch_answers_an_entry_that_does_not_read_in_its_place_and_runs_the_others()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
         var bad = Stage("""{ "sort": { "number": "asc" } }""");
         var fraction = Stage("""{ "page": { "limit": 1.5 } }""");
 
@@ -266,7 +270,7 @@ public class HostRequestBodyTests
     [InlineData("[]", "kind", "$")]
     public async Task A_batch_that_does_not_read_itself_is_refused_as_a_whole(string body, string reason, string path)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Batch, body);
         var error = Refused(response, text, answer);
@@ -293,7 +297,7 @@ public class HostRequestBodyTests
     [InlineData("""{ "query": { "entityType": "probe.order", "pipeline": [] }, "shape": { "width": 1 } }""", "UNKNOWN_REQUEST_MEMBER", "$.shape.width")]
     public async Task An_explain_body_that_does_not_read_is_refused_with_the_place(string body, string code, string path)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Explain, body);
         var error = Refused(response, text, answer);
@@ -305,7 +309,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task An_unknown_member_of_an_explain_envelope_names_the_member()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Explain, """{ "query": { "entityType": "probe.order", "pipeline": [] }, "verbose": true }""");
         var error = Refused(response, text, answer);
@@ -319,7 +323,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_request_that_binds_is_answered_as_before_and_its_body_is_read_once_by_the_host()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, Good);
 
@@ -334,16 +338,16 @@ public class HostRequestBodyTests
 
     // ---- a body longer than a request may be ---------------------------------------------------
 
-    private const int Cap = 512;
+    private protected const int Cap = 512;
 
-    private static SampleHost Capped() => new(options =>
+    private protected SampleHost Capped() => NewHost(options =>
     {
         options.Limits.MaxRequestBytes = Cap;
         options.Explain.MaxRequestBytes = Cap;
     });
 
     /// <summary>A request sent chunked: it never tells the server how long its body is.</summary>
-    private static HttpRequestMessage Chunked(string route, string json)
+    private protected static HttpRequestMessage Chunked(string route, string json)
     {
         var content = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes(json)));
 
@@ -388,7 +392,7 @@ public class HostRequestBodyTests
     }
 
     [Fact]
-    public async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_does_not_read_is_refused_without_a_place()
+    public virtual async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_does_not_read_is_refused_without_a_place()
     {
         // The test server has no body size limit to set, so the model binder reads the whole body;
         // what is kept beside it for the refusal ends at the length a request may have.
@@ -410,7 +414,7 @@ public class HostRequestBodyTests
     }
 
     [Fact]
-    public async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_reads_is_bound_as_without_the_copy()
+    public virtual async Task A_body_of_undeclared_length_that_outgrows_what_is_kept_and_reads_is_bound_as_without_the_copy()
     {
         using var host = Capped();
 
@@ -423,7 +427,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_body_of_another_media_type_stays_the_frameworks_415()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, _) = await PostAsync(host, Query, Good, media: "text/plain");
 
@@ -433,7 +437,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_header_that_names_no_contract_is_said_before_the_body()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (response, text, answer) = await PostAsync(host, Query, "not json", contract: 3);
         var error = Refused(response, text, answer);
@@ -445,7 +449,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_body_in_another_charset_is_read_in_that_charset()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
         var client = host.Client();
         var content = new ByteArrayContent(Encoding.Unicode.GetBytes(Stage("""{ "sort": { "number": "asc" } }""")));
 
@@ -479,7 +483,7 @@ public class HostRequestBodyTests
     [MemberData(nameof(Unbound))]
     public async Task Without_the_contract_header_a_body_that_does_not_bind_is_the_hosts_answer(string route, string body, string[] keys)
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         foreach (var contract in new int?[] { null, 1 })
         {
@@ -499,7 +503,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task Without_the_contract_header_the_hosts_answer_to_a_body_that_is_no_JSON_is_word_for_word_the_frameworks()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         var (_, _, answer) = await PostAsync(host, Query, "not json", contract: null);
 
@@ -511,7 +515,7 @@ public class HostRequestBodyTests
     [Fact]
     public async Task A_contract_1_request_that_does_not_bind_is_counted_as_a_contract_1_request()
     {
-        using var host = new SampleHost();
+        using var host = NewHost();
 
         await PostAsync(host, Query, """{ "entityType": "probe.order", "pipeline": {} }""", contract: null);
         await PostAsync(host, Batch, """{ "queries": {} }""", contract: null);
@@ -544,7 +548,7 @@ public class HostRequestBodyTests
         }
     }
 
-    private static SampleHost HostWithItsOwnValidation() => new(configure: services =>
+    private SampleHost HostWithItsOwnValidation() => NewHost(configure: services =>
     {
         services.Configure<ApiBehaviorOptions>(behaviour => behaviour.SuppressModelStateInvalidFilter = true);
         services.Configure<MvcOptions>(mvc => mvc.Filters.Add<HostValidationFilter>());

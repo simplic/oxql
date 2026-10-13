@@ -73,15 +73,32 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         var contract1 = OxQLQueryService.ContractOf(options, http) == 1;
         var limit = Math.Max(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes);
 
-        // A body within what a request may be long is read here, once, and handed to the model binder
-        // from memory, whether it declares its length or not: a name or a text in it that is no Unicode
-        // text is answered before anything reads it as one. A longer body is handed on as it came, what
-        // was read of it ahead of the rest: keeping a copy never stands between a body and its binder.
-        if (!http.Request.Body.CanSeek && (http.Request.ContentLength ?? 0) <= limit && IsUtf8(http.Request)
-            && await BufferedAsync(http, limit).ConfigureAwait(false) is { } bytes)
-        {
-            http.Request.Body = new MemoryStream(bytes, writable: false);
+        // A body within what a request may be long is read here, once, whether it declares its length or
+        // not and whether the host has buffered it ahead or not: a name or a text in it that is no Unicode
+        // text is answered before anything reads it as one. A body from the wire is handed to the model
+        // binder from memory; a buffered one is read from its start and left where it stood. A longer body
+        // is handed on as it came, what was read of it ahead of the rest: keeping a copy never stands
+        // between a body and its binder.
+        byte[]? bytes = null;
+        var whole = true;
 
+        if (IsUtf8(http.Request) && (http.Request.ContentLength ?? 0) <= limit)
+        {
+            if (http.Request.Body.CanSeek)
+            {
+                // What the binder reads of a buffer its host left elsewhere than at the start is not the body as it was written.
+                whole = http.Request.Body.Position == 0;
+                bytes = await RewoundAsync(http, limit).ConfigureAwait(false);
+            }
+            else if (await BufferedAsync(http, limit).ConfigureAwait(false) is { } read)
+            {
+                bytes = read;
+                http.Request.Body = new MemoryStream(read, writable: false);
+            }
+        }
+
+        if (bytes is not null)
+        {
             if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes) is { Count: > 0 } broken
                 && (contract1 || OxQLQueryService.ContractRefusal(options, http) is null))
             {
@@ -92,7 +109,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                 }
 
                 // A batch whose own members read answers the entries that do not in their places and runs the others.
-                if (parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, broken) is { } rest)
+                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, broken) is { } rest)
                 {
                     http.Request.Body = new MemoryStream(rest.Body, writable: false);
                     http.Items[EntriesItem] = rest.Entries;
@@ -188,6 +205,46 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         http.Request.Body = new ReplayStream(buffer, body);
 
         return null;
+    }
+
+    /// <summary>
+    /// A body the host has buffered, read from its start up to <paramref name="limit"/> bytes and set
+    /// back to where it stood; null when it is longer.
+    /// </summary>
+    private static async Task<byte[]?> RewoundAsync(HttpContext http, int limit)
+    {
+        var body = http.Request.Body;
+        var stood = body.Position;
+
+        try
+        {
+            body.Position = 0;
+
+            var buffer = new byte[(int)Math.Min(limit + 1L, Math.Max(http.Request.ContentLength ?? 0, 16 * 1024))];
+            var read = 0;
+
+            while (true)
+            {
+                if (read == buffer.Length)
+                {
+                    if (read > limit)
+                        return null;
+
+                    Array.Resize(ref buffer, (int)Math.Min(limit + 1L, buffer.Length * 2L));
+                }
+
+                var got = await body.ReadAsync(buffer.AsMemory(read), http.RequestAborted).ConfigureAwait(false);
+
+                if (got == 0)
+                    return read == buffer.Length ? buffer : buffer[..read];
+
+                read += got;
+            }
+        }
+        finally
+        {
+            body.Position = stood;
+        }
     }
 
     /// <summary>What was read of a body ahead of the rest of it, as one stream that reads forward only.</summary>

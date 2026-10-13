@@ -39,29 +39,12 @@ public class HostHardeningRequestSizeTests
         return request;
     }
 
-    /// <summary>Reads every body into a buffer ahead of MVC and rewinds it, as a host's own middleware may.</summary>
-    private sealed class BufferingStartupFilter(List<long?> declared) : IStartupFilter
-    {
-        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
-        {
-            app.Use(async (context, pipeline) =>
-            {
-                declared.Add(context.Request.ContentLength);
-                context.Request.EnableBuffering();
-                await context.Request.Body.CopyToAsync(Stream.Null);
-                context.Request.Body.Position = 0;
-                await pipeline(context);
-            });
-            next(app);
-        };
-    }
-
     private static SampleHost Host(bool buffered, List<long?>? declared = null) => new(
         options => options.Limits.MaxRequestBytes = Max,
         services =>
         {
             if (buffered)
-                services.AddSingleton<IStartupFilter>(new BufferingStartupFilter(declared ?? []));
+                services.AddSingleton<IStartupFilter>(new BufferingStartupFilter(BufferedBody.Rewound, declared));
         });
 
     [Theory]

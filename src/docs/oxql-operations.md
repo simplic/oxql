@@ -51,7 +51,11 @@ entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.e
 in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
 itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
 that is no whole number. Text that is no Unicode text (`encoding`) in an entry refuses that
-entry, in a member of the batch itself the batch, whether the body declares its length or not.
+entry, in a member of the batch itself the batch, whether the body declares its length or not and
+whether a middleware of the host has buffered it ahead of MVC or not (a buffer is read from its
+start, up to the length a request may have, and left where it stood). A request handed to the
+engine without a host (`IQueryEngine`) that holds such a text is refused with the same code and
+`reason`, without `path` and `in`.
 
 The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
 `OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the

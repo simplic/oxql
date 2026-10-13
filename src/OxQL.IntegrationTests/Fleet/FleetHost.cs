@@ -52,6 +52,9 @@ public sealed class FleetHost : IAsyncDisposable
 
     public IServiceProvider Services => app.Services;
 
+    /// <summary>The harness's own key of a variant that buffers every request body ahead of MVC: <c>rewound</c>, <c>end</c> or <c>unread</c>.</summary>
+    public const string BufferBodyKey = "Lab:BufferBody";
+
     /// <summary>
     /// Starts a host. <paramref name="configuration"/> is layered over the host's defaults, so a
     /// variant names only the keys it changes (<c>OxQL:Limits:MaxPageSize</c> and the like).
@@ -118,6 +121,23 @@ public sealed class FleetHost : IAsyncDisposable
         services.AddSingleton<IRemoteQueryClient, InMemoryRemoteClient>();
 
         var app = builder.Build();
+
+        // A variant whose own middleware buffers every body ahead of MVC, as a host's base package may:
+        // read to the end and set back ("rewound"), read to the end and left there ("end"), or not read ("unread").
+        if (settings.GetValueOrDefault(BufferBodyKey) is { Length: > 0 } buffered)
+            app.Use(async (context, next) =>
+            {
+                Microsoft.AspNetCore.Http.HttpRequestRewindExtensions.EnableBuffering(context.Request);
+
+                if (buffered != "unread")
+                    await context.Request.Body.CopyToAsync(Stream.Null);
+
+                if (buffered == "rewound")
+                    context.Request.Body.Position = 0;
+
+                await next(context);
+            });
+
         app.MapControllers();
         await app.StartAsync();
 

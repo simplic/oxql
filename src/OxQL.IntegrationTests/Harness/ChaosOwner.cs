@@ -60,6 +60,25 @@ public enum ChaosMode
     Closed,
 }
 
+/// <summary>What the chaos owner does to the rows of an answer that is otherwise correct (<see cref="ChaosMode.Ok"/>).</summary>
+public enum ChaosRows
+{
+    /// <summary>The rows asked for.</summary>
+    AsAsked,
+
+    /// <summary>The rows asked for, and after them rows of widgets nobody asked for.</summary>
+    Unasked,
+
+    /// <summary>Every row twice, one after the other.</summary>
+    Twice,
+
+    /// <summary>Every third row is left out.</summary>
+    Fewer,
+
+    /// <summary>The rows asked for, in the reverse of the order asked.</summary>
+    Reversed,
+}
+
 /// <summary>What the chaos owner's health route does, independently of <see cref="ChaosMode"/>.</summary>
 public enum ChaosHealth
 {
@@ -88,6 +107,9 @@ public sealed record ChaosSettings
 
     /// <summary><see cref="ChaosMode.Ok"/> only: answer over this many synthetic widgets instead of the three.</summary>
     public int? Many { get; init; }
+
+    /// <summary><see cref="ChaosMode.Ok"/> only: what becomes of the rows of each answer.</summary>
+    public ChaosRows Rows { get; init; }
 
     /// <summary>After this many batch calls the owner resets itself to <see cref="ChaosMode.Ok"/> and the defaults; null is sticky.</summary>
     public int? Times { get; init; }
@@ -421,8 +443,54 @@ public sealed class ChaosOwner : HttpMessageHandler
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new HugeStream()) { Headers = { { "Content-Type", "application/json" } } } };
 
             default:
-                return Json(HttpStatusCode.OK, new JsonObject { ["results"] = Correct() });
+                return Json(HttpStatusCode.OK, new JsonObject { ["results"] = Rewritten(Correct(), queries, answering) });
         }
+    }
+
+    /// <summary>The correct results with their rows changed as <see cref="ChaosSettings.Rows"/> says; a refusal is left as it is.</summary>
+    private static JsonArray Rewritten(JsonArray results, JsonArray queries, ChaosSettings answering)
+    {
+        if (answering.Rows == ChaosRows.AsAsked)
+            return results;
+
+        for (var index = 0; index < results.Count; index++)
+        {
+            if (results[index]?["items"] is not JsonArray items)
+                continue;
+
+            var rows = items.Select(item => item!.DeepClone()).ToList();
+
+            switch (answering.Rows)
+            {
+                case ChaosRows.Unasked:
+                    // The rows of the same query without its conditions, and of those the ones it did not answer.
+                    var every = queries[index]!.DeepClone();
+
+                    every["pipeline"] = new JsonArray(((JsonArray)every["pipeline"]!).Where(stage => stage?["match"] is null && stage?["page"] is null).Select(stage => stage!.DeepClone()).ToArray());
+                    ((JsonObject)every).Remove("keyedBy");
+
+                    var asked = rows.Select(row => row.ToJsonString()).ToHashSet(StringComparer.Ordinal);
+
+                    rows.AddRange((Answer(every, answering.Many)["items"] as JsonArray ?? []).Where(row => !asked.Contains(row!.ToJsonString())).Take(5).Select(row => row!.DeepClone()));
+                    break;
+
+                case ChaosRows.Twice:
+                    rows = [.. rows.SelectMany(row => new[] { row, row.DeepClone() })];
+                    break;
+
+                case ChaosRows.Fewer:
+                    rows = [.. rows.Where((_, at) => at % 3 != 2)];
+                    break;
+
+                case ChaosRows.Reversed:
+                    rows.Reverse();
+                    break;
+            }
+
+            results[index]!["items"] = new JsonArray(rows.ToArray());
+        }
+
+        return results;
     }
 
     private static async Task<HttpResponseMessage> HangAsync(CancellationToken cancellationToken)

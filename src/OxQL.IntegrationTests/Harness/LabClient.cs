@@ -133,7 +133,13 @@ public sealed class LabClient
         var headers = response.Headers.Concat(response.Content.Headers)
             .ToDictionary(header => header.Key, header => string.Join(", ", header.Value), StringComparer.OrdinalIgnoreCase);
 
-        return new WireAnswer(response.StatusCode, Json.TryParse(text), text, headers, watch.Elapsed, $"{method} {route} {body}");
+        var answer = new WireAnswer(response.StatusCode, Json.TryParse(text), text, headers, watch.Elapsed, $"{method} {route} {body}");
+
+        // Every refusal any suite provokes is held against what its code carries for a client.
+        if (Who.Contract == 2)
+            RefusalParams.Hold(answer);
+
+        return answer;
     }
 
     // ── what a case computes before it asserts ──────────────────────────────────────────────

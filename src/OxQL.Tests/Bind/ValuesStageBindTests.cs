@@ -179,7 +179,7 @@ public class ValuesStageBindTests
 
         error.Stage.Should().Be(0);
         error.Path.Should().Be(path);
-        error.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["option"] = "search", ["kind"] = kind });
+        error.Params.Should().BeEquivalentTo(new Dictionary<string, object?> { ["option"] = "search", ["reason"] = "notApplicable", ["kind"] = kind });
         Basis.OfCode[error.Code].Should().Be(Basis.Model);
     }
 

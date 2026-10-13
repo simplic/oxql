@@ -563,6 +563,10 @@ What a contract 2 caller reads differently:
   under the collation).
 - **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
   `Etc` area (`Etc/GMT-2`), on every host platform; they were `INVALID_TIMEZONE`.
+- **`params` on every refusal of a stage and of an option.** `UNKNOWN_STAGE` carries `reason`
+  and `keys`; `UNKNOWN_STAGE_MEMBER` always `stage` and `reason` (and `member`, `members` where
+  they are known); `OPTION_NOT_APPLICABLE` always `option` and `reason`. A code that carried
+  `params` keeps what it carried.
 - **Duration operands** are days and smaller: `P1Y` and `P1M` (no fixed lengths) are 400
   `INVALID_OPERAND`.
 - **An error inside `any`** names the member as the row has it, under its collection

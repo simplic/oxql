@@ -352,7 +352,7 @@ public sealed partial class Binder
 
                 if (stage is null)
                 {
-                    errors.Add(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null));
+                    errors.Add(NoStage(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null), "null", []));
                     traced.Add((index, null, before, shape));
                     continue;
                 }
@@ -361,7 +361,7 @@ public sealed partial class Binder
                 // is not, and no stage binds from nothing.
                 if (stage.Kind is { } kind && !HasMember(stage, kind) && (contract2 || kind != "values"))
                 {
-                    errors.Add(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null));
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null), kind, [kind], "null"));
                     traced.Add((index, kind, before, shape));
                     continue;
                 }
@@ -397,9 +397,10 @@ public sealed partial class Binder
                     // Contract 1 knows no such stage: it is the unknown stage it always was there.
                     case "values" when contract2: BindValues(stage.Values!, index); break;
                     default:
-                        errors.Add(Error(Codes.UnknownStage, stage.Keys.Count == 0
+                        errors.Add(NoStage(Error(Codes.UnknownStage, stage.Keys.Count == 0
                             ? "A stage object must carry exactly one stage member."
-                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page{(contract2 ? ", values" : "")}.", index, null));
+                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page{(contract2 ? ", values" : "")}.", index, null),
+                            stage.Keys.Count switch { 0 => "empty", 1 => "unknown", _ => "severalKeys" }, stage.Keys));
                         break;
                 }
 
@@ -439,12 +440,27 @@ public sealed partial class Binder
             if (collated)
             {
                 foreach (var (stage, path) in exactSorts)
-                    errors.Add(Error(Codes.OptionNotApplicable, $"The sort on '{path}' asks for the exact order, but another comparison, sort or group key of the request folds case; a request orders exactly only when every string comparison in it is caseSensitive.", stage, path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"The sort on '{path}' asks for the exact order, but another comparison, sort or group key of the request folds case; a request orders exactly only when every string comparison in it is caseSensitive.", stage, path), "caseSensitive", "folds"));
 
                 // Inside a collated aggregate an exact comparison is a pattern, with the pattern's limit.
                 foreach (var (stage, path, op) in exactTexts)
                     errors.Add(Operand(TooLongToMatch(op, path), stage, path, op, "length"));
             }
+
+            // Every member a stage does not have says its stage and why, whichever place of the binder
+            // refused it: one that says no more is a member the stage does not know.
+            if (contract2)
+                for (var position = 0; position < errors.Count; position++)
+                    if (errors[position] is { Code: Codes.UnknownStageMember, Stage: { } at } incomplete && at < pipeline.Count
+                        && (incomplete.Params is null || !incomplete.Params.ContainsKey("stage") || !incomplete.Params.ContainsKey("reason")))
+                        errors[position] = incomplete with
+                        {
+                            Params = new Dictionary<string, object?>(incomplete.Params ?? new Dictionary<string, object?>())
+                            {
+                                ["stage"] = incomplete.Params?.GetValueOrDefault("stage") ?? pipeline[at]?.Kind,
+                                ["reason"] = incomplete.Params?.GetValueOrDefault("reason") ?? "unknown",
+                            },
+                        };
 
             LabelFilterFindings();
 
@@ -1771,7 +1787,7 @@ public sealed partial class Binder
 
             if (condition.Options is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'{condition.Path}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{condition.Path}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path), "options", "outcome"));
                 return null;
             }
 
@@ -1951,7 +1967,7 @@ public sealed partial class Binder
 
             if (condition.Options is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable, "'is' takes no options.", index, condition.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable, "'is' takes no options.", index, condition.Path), "options", "operator"));
                 return null;
             }
 
@@ -1959,6 +1975,36 @@ public sealed partial class Binder
 
             return operand is null ? null : new BoundCondition.Leaf(path, "is", operand, IgnoreCase: false, IsSemiJoin: false);
         }
+
+        /// <summary>A stage object that is no stage, with what a client renders it from (contract 2): why, and the keys it carries.</summary>
+        private QueryValidationError NoStage(QueryValidationError error, string reason, IReadOnlyList<string> keys) => !contract2 ? error : error with
+        {
+            Params = new Dictionary<string, object?> { ["reason"] = reason, ["keys"] = keys.ToList() },
+        };
+
+        /// <summary>
+        /// A member a stage does not have, or has in another form, with what a client renders it from
+        /// (contract 2): the stage, the members (<c>member</c> is the first) and why.
+        /// </summary>
+        private QueryValidationError NoMember(QueryValidationError error, string stage, IReadOnlyList<string> members, string reason) => !contract2 || error.Code != Codes.UnknownStageMember ? error : error with
+        {
+            Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>())
+            {
+                ["stage"] = stage,
+                ["member"] = members.Count > 0 ? members[0] : null,
+                ["members"] = members.ToList(),
+                ["reason"] = reason,
+            },
+        };
+
+        /// <summary>
+        /// A refusal of an option with what a client renders it from (contract 2): the option, and why
+        /// it does not apply.
+        /// </summary>
+        private QueryValidationError Option(QueryValidationError error, string option, string reason) => !contract2 ? error : error with
+        {
+            Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>()) { ["option"] = option, ["reason"] = reason },
+        };
 
         /// <summary>
         /// The case option of a condition, as the caller's choice: true to compare exactly,
@@ -2004,7 +2050,7 @@ public sealed partial class Binder
                 if (!contract2)
                     errors.Add(Error(Codes.OptionNotApplicable, "'caseSensitive' is not an option under contract 1; it is a contract 2 option." + Contract1Hint, index, condition.Path));
                 else if (!applies)
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path), "caseSensitive", "notApplicable"));
                 else
                     caseSensitive = sensitive;
             }
@@ -2186,9 +2232,9 @@ public sealed partial class Binder
 
             if (unknown.Count > 0)
             {
-                errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
                     $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? LookupMembers : "from, path, as, select, filter, limit")}."
-                    + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
+                    + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null), "lookup", unknown, "unknown"));
                 return;
             }
 
@@ -2201,12 +2247,12 @@ public sealed partial class Binder
             if (lookup.Malformed.Count > 0)
             {
                 foreach (var name in lookup.Malformed)
-                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, name switch
                     {
                         "first" => "A lookup's 'first' is true or false.",
                         "sort" => "A lookup's 'sort' is an array of sort entries: [{\"path\": \"asc\"}, …].",
                         _ => $"A lookup's '{name}' is a string.",
-                    }, index, null));
+                    }, index, null), "lookup", [name], "kind"));
                 return;
             }
 
@@ -2251,8 +2297,8 @@ public sealed partial class Binder
             // runs continues nothing.
             if (lookup.ForTarget is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'forTarget' applies to a stage continued under a remote alias with several targets; {(lookup.On is null ? "this lookup joins on the entity itself" : $"'{lookup.On}' is a row of this host")}.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'forTarget' applies to a stage continued under a remote alias with several targets; {(lookup.On is null ? "this lookup joins on the entity itself" : $"'{lookup.On}' is a row of this host")}.", index, null), "forTarget", "notContinued"));
                 return;
             }
 
@@ -2280,8 +2326,8 @@ public sealed partial class Binder
             // The owning row of an element: only a lookup of another service's item collection has one.
             if (lookup.ParentAs is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'parentAs' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'parentAs' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null), "parentAs", "notAnItem"));
                 return;
             }
 
@@ -2355,7 +2401,7 @@ public sealed partial class Binder
             {
                 // One child is what first takes; a limit would say something else.
                 if (lookup.Limit is not null)
-                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null), "limit", "withFirst"));
 
                 limit = 1;
             }
@@ -2492,8 +2538,8 @@ public sealed partial class Binder
             {
                 if (item is null)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable,
-                        $"'parentAs' names the row that owns an element; '{from}' is an entity, which is its own row. Look up '{entityId}#<collection>' to join elements.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable,
+                        $"'parentAs' names the row that owns an element; '{from}' is an entity, which is its own row. Look up '{entityId}#<collection>' to join elements.", index, null), "parentAs", "notAnItem"));
                     return;
                 }
 
@@ -2545,7 +2591,7 @@ public sealed partial class Binder
             if (first)
             {
                 if (lookup.Limit is not null)
-                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null), "limit", "withFirst"));
 
                 limit = 1;
             }
@@ -2655,9 +2701,9 @@ public sealed partial class Binder
 
             if (unknown.Count > 0)
             {
-                errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
                     $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? ResolveMembers : "path, as, select, filter")}."
-                    + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
+                    + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null), "resolve", unknown, "unknown"));
                 return;
             }
 
@@ -2667,13 +2713,13 @@ public sealed partial class Binder
             if (resolve.Malformed.Count > 0)
             {
                 foreach (var name in resolve.Malformed)
-                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, name switch
                     {
                         "elements" => "A resolve's 'elements' is \"first\" or \"all\".",
                         "onMissing" => "A resolve's 'onMissing' is \"null\", \"report\" or \"refuse\".",
                         "byTarget" => "A resolve's 'byTarget' is an object with one member per target: its path, or { \"path\": …, \"elements\": \"first\" | \"all\" }.",
                         _ => $"A resolve's '{name}' is a string.",
-                    }, index, null));
+                    }, index, null), "resolve", [name], "kind"));
                 return;
             }
 
@@ -2711,8 +2757,8 @@ public sealed partial class Binder
             // runs continues nothing.
             if (resolve.ForTarget is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    "'forTarget' applies to a stage continued under a remote alias with several targets; this resolve runs on this host.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    "'forTarget' applies to a stage continued under a remote alias with several targets; this resolve runs on this host.", index, null), "forTarget", "notContinued"));
                 return;
             }
 
@@ -2781,8 +2827,8 @@ public sealed partial class Binder
             }
             else if (elements is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'elements' applies to a path through a collection that is not unwound; '{resolve.Path}' holds one value per row.", index, resolve.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'elements' applies to a path through a collection that is not unwound; '{resolve.Path}' holds one value per row.", index, resolve.Path), "elements", "oneValue"));
                 return;
             }
 
@@ -2991,8 +3037,8 @@ public sealed partial class Binder
             {
                 if (!targets.Contains(forTarget, StringComparer.Ordinal))
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable,
-                        $"'forTarget' names '{forTarget}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, root));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable,
+                        $"'forTarget' names '{forTarget}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, root), "forTarget", "notATarget"));
                     return;
                 }
 
@@ -3339,7 +3385,7 @@ public sealed partial class Binder
 
                 if (node.Options?.Unknown is { Count: > 0 } unknown)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; the option is caseSensitive, written true or false.", index, node.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; the option is caseSensitive, written true or false.", index, node.Path), unknown[0], "unknown"));
                     refused = true;
                 }
 
@@ -4592,7 +4638,7 @@ public sealed partial class Binder
 
                 if (field.CaseSensitive is not null && !text)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to a sort on a string member; '{field.Path}' is {Kinds.WithArticle(path.LeafKind)}.", index, field.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to a sort on a string member; '{field.Path}' is {Kinds.WithArticle(path.LeafKind)}.", index, field.Path), "caseSensitive", "notApplicable"));
                     continue;
                 }
 
@@ -4636,8 +4682,8 @@ public sealed partial class Binder
             if (unknown.Count == 0)
                 return true;
 
-            errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.{hint}", index, null));
+            errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.{hint}", index, null), stage == "a group key" ? "group" : stage, unknown, "unknown"));
 
             return false;
         }
@@ -5010,7 +5056,7 @@ public sealed partial class Binder
                     Message = $"'search' keeps the values that start with a text; '{stage.Path}' is {Kinds.WithArticle(path.LeafKind)}, not text.",
                     Stage = index,
                     Path = stage.Path,
-                    Params = new Dictionary<string, object?> { ["option"] = "search", ["kind"] = Kinds.NameOf(path.LeafKind) },
+                    Params = new Dictionary<string, object?> { ["option"] = "search", ["reason"] = "notApplicable", ["kind"] = Kinds.NameOf(path.LeafKind) },
                 });
                 return;
             }

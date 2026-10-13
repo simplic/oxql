@@ -41,7 +41,7 @@ what a client needs to render it, and neither it nor the message ever names a ty
 | `empty` | the body is empty | — |
 | `depth` | the body nests deeper than the host reads | `max` |
 | `kind` | a value is of another JSON kind than its place takes: a body or a stage that is no object, a `pipeline`, `sort`, `and`, `or`, `group.by` or `queries` that is no array, a condition, a `not`, an aggregate or a `variables` that is no object, an `entityType` that is no string, a `strict` that is no boolean, a fraction where a whole number is read | `path`, `expected` and `actual` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`); a place only known as a whole (a stage) carries `path` alone |
-| `encoding` | a member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape (`"\ud800"`, which is well-formed JSON), or bytes that are no UTF-8. It is said before anything else about a body that is JSON to its end (one that is not is `json`) and nests no deeper than the host reads (a deeper one is `depth`), one error per place for the first 20 places of the body. A `path` longer than 1 024 characters is cut to at most 1 024, the last of them an ellipsis (`…`), and the message names the place as cut | `path` (the text; for a name, the object that holds it), `in`: `name` or `value` |
+| `encoding` | a member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape (`"\ud800"`, which is well-formed JSON), or bytes that are no UTF-8. An escaped half is said before anything else about a body that is JSON to its end (one that is not is `json`) and nests no deeper than the host reads (a deeper one is `depth`), one error per place for the first 20 places of the body. Bytes that are no UTF-8 are said the same way in such a body; in a body that is also no JSON to its end or nests deeper they are still what is said, in place of `json` and `depth`, as one error at the `path` `$` (`in`: `value`). A `path` longer than 1 024 characters is cut to at most 1 024, the last of them an ellipsis (`…`), and the message names the place as cut | `path` (the text; for a name, the object that holds it), `in`: `name` or `value` |
 | `missing` | a required member is not written: `entityType`, `pipeline`, a batch's `queries`, an explain envelope's `query`, the `path` or `unit` of a `dateTrunc` | `path` |
 
 `params.path` is the place in the body as a JSON path from its root (`$.pipeline[2].sort`,
@@ -53,9 +53,10 @@ itself is refused whole only where it is no batch: no object, no `queries` array
 that is no whole number. Text that is no Unicode text (`encoding`) in an entry refuses that
 entry, in a member of the batch itself the batch, whether the body declares its length or not and
 whether a middleware of the host has buffered it ahead of MVC or not (a buffer is read from its
-start, up to the length a request may have, and left where it stood: the model binder alone reads
-the batch without the entries that are refused, and whatever reads the buffer after the action
-reads the body as it was written). An entry whose places all lie past the 20 a refusal names is
+start, up to the length a request may have, and left where it stood). The batch without the
+entries that are refused is the request's body for the whole MVC pipeline of that request, its
+filters and the action included; whatever runs after that pipeline reads the body as it was
+written. An entry whose places all lie past the 20 a refusal names is
 refused with the same code and `reason`, without `path` and `in`. A request handed to the engine
 without a host (`IQueryEngine`) that holds such a text is refused so too. A byte order mark ahead
 of a body is passed over wherever the body is read.

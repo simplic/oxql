@@ -158,6 +158,12 @@ that representation. Where a fleet's data is not uniform, the options under
 - **`timeSpan`** stored as text orders by character. That agrees with duration order only while
   every value is non-negative and below one day; from a day on the text gains a day component
   (`1.02:00:00`), and a `gt` or a sort across that boundary, or across a negative value, does not.
+  An ordered comparison goes by the characters' bytes whatever else the request asks, so it has
+  one answer alone and beside a condition that folds case. A **sort** on such a member orders
+  under the request's collation when another comparison, sort or key of the request folds, and by
+  byte when none does: the two orders differ where the texts differ in punctuation (`10:00:00`
+  and `10.00:00:00`). A service that orders or compares durations stores them as a number
+  (ticks or milliseconds), which orders by value.
 - **Addon keys** (`addon.<path>` of a defined key) always match tolerantly, whatever the options:
   a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
   `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes

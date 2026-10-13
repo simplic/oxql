@@ -1146,7 +1146,8 @@ internal static class MongoCompiler
                 {
                     var paths = Paths(condition).ToList();
 
-                    if (paths.Count == 0 || SemiJoins(condition))
+                    // So is a condition that may be asked as an expression, which no element test holds: it is asked after the unwind alone.
+                    if (paths.Count == 0 || SemiJoins(condition) || ComparesTextDuration(condition))
                         exact = false;
                     else if (unwind.As is { } alias && paths.All(path => Under(path, alias) && path.Storage is not null))
                         element.Add(condition);
@@ -1162,6 +1163,16 @@ internal static class MongoCompiler
 
         private static IEnumerable<BoundCondition> Conjuncts(BoundCondition condition) =>
             condition is BoundCondition.And and ? and.Conditions.SelectMany(Conjuncts) : [condition];
+
+        private static bool ComparesTextDuration(BoundCondition condition) => condition switch
+        {
+            BoundCondition.And and => and.Conditions.Any(ComparesTextDuration),
+            BoundCondition.Or or => or.Conditions.Any(ComparesTextDuration),
+            BoundCondition.Not not => ComparesTextDuration(not.Condition),
+            BoundCondition.Any any => ComparesTextDuration(any.Inner),
+            BoundCondition.Leaf leaf => leaf is { Path.LeafKind: Kind.TimeSpan, Op: "gt" or "gte" or "lt" or "lte", Operand: BoundOperand.Single { Value: BsonString } },
+            _ => false,
+        };
 
         private static bool SemiJoins(BoundCondition condition) => condition switch
         {
@@ -1789,9 +1800,9 @@ internal static class MongoCompiler
 
         // A decimal under the addon bag is written wrapped by the bag serializer: match both places.
         if (leaf.Path.Addon is not null && leaf.Path.Kind == Kind.Decimal)
-            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated), LeafAt(storage + "._v", leaf, collated) });
+            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated, element), LeafAt(storage + "._v", leaf, collated, element) });
 
-        return LeafAt(storage, leaf, collated);
+        return LeafAt(storage, leaf, collated, element);
     }
 
     /// <summary>
@@ -1847,7 +1858,7 @@ internal static class MongoCompiler
         _ => Casing.Value,
     };
 
-    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf, bool collated)
+    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf, bool collated, bool element)
     {
         var op = leaf.Op;
         var casing = CasingOf(leaf, collated);
@@ -1880,6 +1891,13 @@ internal static class MongoCompiler
 
                 return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing, many))));
 
+            // A duration stored as text orders by character, and by the same characters whatever else the
+            // request asks: under a collation, which would order them by its own weights, the comparison is
+            // made on the bytes. (Of one element, inside 'any', and through a collection no expression can
+            // be asked: there the plain operator stands.)
+            case BoundOperand.Single { Value: BsonString duration } when collated && !many && !element && leaf.Path.LeafKind == Kind.TimeSpan && op is "gt" or "gte" or "lt" or "lte":
+                return ByBytes(storage, op, duration.Value);
+
             case BoundOperand.Single single:
                 return Compare(storage, op, single.Value, casing, many);
 
@@ -1887,6 +1905,20 @@ internal static class MongoCompiler
                 return new BsonDocument(storage, BsonNull.Value);
         }
     }
+
+    /// <summary>
+    /// An ordered comparison of a stored text with a text by their bytes, inside an aggregate whose
+    /// collation a plain operator would compare under: the texts are compared by a function the
+    /// collation does not reach. Both are text without letters of two cases (a duration as the driver
+    /// writes it), so that the function sets case aside changes nothing. A value that is no text
+    /// meets no ordered comparison with one, as under the plain operator.
+    /// </summary>
+    private static BsonDocument ByBytes(string storage, string op, string text) =>
+        new("$expr", new BsonDocument("$and", new BsonArray
+        {
+            new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + storage), "string" }),
+            new BsonDocument("$" + op, new BsonArray { new BsonDocument("$strcasecmp", new BsonArray { TextOrEmpty("$" + storage), new BsonDocument("$literal", text) }), 0 }),
+        }));
 
     /// <summary>The whole-value pattern of a text: escaped and anchored at both ends, folding case only as a fold.</summary>
     private static BsonRegularExpression Anchored(string text, Casing casing) =>

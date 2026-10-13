@@ -2144,9 +2144,29 @@ public sealed class Binder
             }
 
             // The inner paths are relative to one element; the ledger has them under the collection.
+            var errorsBefore = errors.Count;
             var inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
 
+            // So has an error: it names the path as the row has it (the collection, then the element's member), in its path, its params and its words.
+            for (var position = errorsBefore; position < errors.Count; position++)
+                errors[position] = UnderCollection(errors[position], condition.Path!);
+
             return inner is null ? null : new BoundCondition.Any(path, inner);
+        }
+
+        /// <summary>An error of a condition inside <c>any</c>, with the element's member named under its collection.</summary>
+        private static QueryValidationError UnderCollection(QueryValidationError error, string collection)
+        {
+            if (error.Path is not { Length: > 0 } relative || error.Code == Shape.PoisonedCode)
+                return error;
+
+            var full = collection + "." + relative;
+            var parameters = error.Params;
+
+            if (parameters is not null && parameters.TryGetValue("path", out var named) && named is string text && text == relative)
+                parameters = new Dictionary<string, object?>(parameters) { ["path"] = full };
+
+            return error with { Path = full, Message = error.Message.Replace($"'{relative}'", $"'{full}'", StringComparison.Ordinal), Params = parameters };
         }
 
         // ---- lookup --------------------------------------------------------------------------

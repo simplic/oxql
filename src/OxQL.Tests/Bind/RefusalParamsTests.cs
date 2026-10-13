@@ -220,6 +220,26 @@ public class RefusalParamsTests
         (await Refused(Match("""{ "items": { "any": { "and": [] } } }"""), Codes.EmptyLogicalGroup)).Message.Should().Be("'and' has no conditions.");
     }
 
+    /// <summary>An error of a condition inside <c>any</c> names the member as the row has it: under its collection.</summary>
+    [Fact]
+    public async Task An_error_inside_any_names_the_member_under_its_collection()
+    {
+        var unknown = await Refused(Match("""{ "not": { "items": { "any": { "nope": { "exists": true } } } } }"""), Codes.UnknownPath);
+
+        unknown.Path.Should().Be("items.nope");
+        unknown.Message.Should().Contain("'items.nope'").And.NotContain("'nope'");
+
+        var operand = await Refused(Match("""{ "items": { "any": { "and": [{ "quantity": { "eq": "many" } }] } } }"""), Codes.InvalidOperand);
+
+        operand.Path.Should().Be("items.quantity");
+        operand.Params!["path"].Should().Be("items.quantity");
+        operand.Message.Should().Contain("'items.quantity'");
+
+        var op = await Refused(Match("""{ "items": { "any": { "quantity": { "like": 1 } } } }"""), Codes.UnknownOperator);
+
+        op.Path.Should().Be("items.quantity");
+    }
+
     [Fact]
     public async Task A_dateTrunc_over_a_member_that_is_no_date_says_what_the_member_is()
     {

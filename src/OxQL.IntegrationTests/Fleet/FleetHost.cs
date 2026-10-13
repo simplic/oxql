@@ -216,19 +216,40 @@ public sealed class LogCapture : ILoggerProvider
 {
     public ConcurrentQueue<(string Category, LogLevel Level, string Message)> Entries { get; } = new();
 
-    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries);
+    /// <summary>The exceptions the host logged as errors, each with its line: what stands behind an answer that only names a correlation id.</summary>
+    public ConcurrentQueue<(string Message, string Exception)> Faults { get; } = new();
+
+    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries, Faults);
 
     public void Dispose()
     {
     }
 
-    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, string)> entries) : ILogger
+    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, string)> entries, ConcurrentQueue<(string, string)> faults) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            entries.Enqueue((category, logLevel, formatter(state, exception)));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+
+            entries.Enqueue((category, logLevel, message));
+
+            if (exception is not null && logLevel >= LogLevel.Error)
+                faults.Enqueue((message, Chain(exception)));
+        }
+
+        /// <summary>An exception and what caused it, each as its type and message, outermost first.</summary>
+        private static string Chain(Exception exception)
+        {
+            var parts = new List<string>();
+
+            for (var current = exception; current is not null && parts.Count < 6; current = current.InnerException)
+                parts.Add($"{current.GetType().Name}: {current.Message}");
+
+            return string.Join(" <- ", parts);
+        }
     }
 }

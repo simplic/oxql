@@ -976,11 +976,21 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     /// <summary>The server's code for a zone id its zone table does not have.</summary>
     internal const int UnknownZoneCode = 40485;
 
-    /// <summary>Whether the server refused an arithmetic expression for what a row holds: its codes for an operand that is no number, and for a quotient by zero.</summary>
-    private static bool IsArithmeticRejection(MongoCommandException command) =>
-        command.Code != 50
-        && command.ErrorMessage is { } message
-        && (message.Contains("$add", StringComparison.Ordinal) || message.Contains("$subtract", StringComparison.Ordinal) || message.Contains("$multiply", StringComparison.Ordinal) || message.Contains("$divide", StringComparison.Ordinal));
+    /// <summary>
+    /// Whether the server refused an arithmetic expression for what a row holds. A server that has a
+    /// code of its own for it says it by that code (an operand <c>$add</c>, <c>$multiply</c>,
+    /// <c>$subtract</c> or <c>$divide</c> does not take, a quotient by zero, two dates added); one that
+    /// answers with a general code (<c>TypeMismatch</c>, <c>BadValue</c>) is taken by the operator its
+    /// message names, as a word of its own: <c>$addFields</c> and <c>$addToSet</c> are other things,
+    /// and what fails there is a fault.
+    /// </summary>
+    internal static bool IsArithmeticRejection(MongoCommandException command) =>
+        // The codes of the server's expression engines: 16554 to 16612 and 14 or 2 with the operator named, and 4848401 and 7157719 to 7157723 where a group computes it.
+        command.Code is 16554 or 16555 or 16556 or 16608 or 16609 or 16610 or 16611 or 16612 or 4848401 or (>= 7157719 and <= 7157723)
+        || (command.Code is 2 or 14 && command.ErrorMessage is { } message && ArithmeticOperator().IsMatch(message));
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![\w$])\$(?:add|subtract|multiply|divide)(?!\w)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex ArithmeticOperator();
 
     /// <summary>
     /// Whether the server refused to compile a pattern: its dedicated code, or the generic

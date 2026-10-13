@@ -184,6 +184,56 @@ public class MongoQueryEngineTests
         runner.Calls[2].Options.Comment.Should().BeNull("a request without a correlation id sends no comment");
     }
 
+    [Theory]
+    // A server with a code of its own for the arithmetic.
+    [InlineData(16554, "$add only supports numeric or date types, not string", true)]
+    [InlineData(16555, "$multiply only supports numeric types, not string", true)]
+    [InlineData(16556, "can't $subtract string from int", true)]
+    [InlineData(16609, "$divide only supports numeric types, not string and int", true)]
+    [InlineData(16608, "can't $divide by zero", true)]
+    [InlineData(16612, "only one date allowed in an $add expression", true)]
+    [InlineData(7157723, "only numbers and dates are allowed in an $add expression", true)]
+    [InlineData(7157721, "only numbers are allowed in an $multiply expression", true)]
+    [InlineData(7157720, "Only numbers and dates are allowed in an $subtract expression.", true)]
+    [InlineData(7157719, "$divide only supports numeric types", true)]
+    [InlineData(7157722, "only one date allowed in an $add expression", true)]
+    [InlineData(4848401, "can't $divide by zero", true)]
+    // A server that answers with a general code: the operator its message names, as a word of its own.
+    [InlineData(14, "PlanExecutor error during aggregation :: caused by :: $add only supports numeric or date types, not string", true)]
+    [InlineData(14, "Failed to optimize pipeline :: caused by :: can't $subtract string from long", true)]
+    [InlineData(14, "$multiply only supports numeric types, not bool", true)]
+    [InlineData(2, "can't $divide by zero", true)]
+    [InlineData(14, "Executor error during getMore :: caused by :: '$divide' only supports numeric types", true)]
+    // Another stage or accumulator, and another code, is a fault of the engine.
+    [InlineData(14, "$addFields specification stage must be an object, got string", false)]
+    [InlineData(40272, "$addFields specification stage must be an object, got string", false)]
+    [InlineData(14, "$addToSet requires a set", false)]
+    [InlineData(2, "$multiplyBy is not an operator", false)]
+    [InlineData(168, "Unrecognized expression '$add'", false)]
+    [InlineData(16020, "Expression $divide takes exactly 2 arguments. 3 were passed in.", false)]
+    [InlineData(14, "Invalid $project :: caused by :: unknown field $addx", false)]
+    public async Task An_arithmetic_rejection_is_told_by_the_servers_code_or_by_the_operator_its_message_names(int code, string message, bool rowsDoing)
+    {
+        var connection = new ConnectionId(new ServerId(new ClusterId(1), new DnsEndPoint("localhost", 27017)));
+        var failure = new MongoCommandException(connection, message, new BsonDocument("aggregate", "orders"), new BsonDocument { ["ok"] = 0, ["code"] = code, ["errmsg"] = message });
+
+        MongoQueryEngine.IsArithmeticRejection(failure).Should().Be(rowsDoing, message);
+
+        var (engine, _) = Host(runner => runner.Fail = failure);
+        var refusal = await Refused(engine, "[]");
+
+        if (rowsDoing)
+        {
+            refusal.Status.Should().Be(422, message);
+            refusal.Errors!.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidAggregateArgument);
+        }
+        else
+        {
+            refusal.Status.Should().Be(500, message);
+            refusal.Errors!.Should().ContainSingle().Which.Code.Should().Be(Codes.InternalError);
+        }
+    }
+
     [Fact]
     public async Task Driver_errors_map_to_the_refusal_classes()
     {

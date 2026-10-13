@@ -151,7 +151,11 @@ public partial class CommandBudgetTests
         var commands = capture.Drain().Engine;
 
         answer.StatusCode.Should().Be(200, answer.Text);
-        commands.Should().HaveCount(4);
+
+        // The page and each owner's fetch are always sent. The count runs beside the page, and this page ends the list:
+        // the rows served are the count then, and a count the database has not been sent by that time is not sent.
+        commands.Count.Should().BeInRange(3, 4, string.Join(", ", commands.Select(command => $"{Service(command.Database)}.{command.Collection}")));
+        commands.Select(command => Service(command.Database)).Distinct().Should().HaveCount(3, "the page and the fetch of each of the two owners");
         commands.Select(command => command.Comment).Should().OnlyContain(comment => comment == "corr-s3", "the page, the count and each owner's fetch are found in a profiler from the one id");
     }
 

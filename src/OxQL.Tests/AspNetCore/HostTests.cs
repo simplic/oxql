@@ -862,4 +862,27 @@ public class HostTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body?.ToJsonString());
         body!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
     }
+
+    /// <summary>Explain shows the first page of a request: the cursor of its page is not read, whether it would verify or not.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public async Task Explain_answers_a_request_the_same_with_and_without_a_cursor(int contract)
+    {
+        using var host = new SampleHost();
+
+        static string Request(string page) => $$"""{ "query": { "entityType": "probe.order", "pipeline": [{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2{{page}} } }] }, "include": ["plan"] }""";
+
+        var first = await SampleHost.Body(await host.Client(contract).PostAsync("/OxQL/explain", SampleHost.Json(Request(""))));
+        var after = await host.Client(contract).PostAsync("/OxQL/explain", SampleHost.Json(Request(""", "cursor": "no cursor of this host" """)));
+        var body = await SampleHost.Body(after);
+
+        after.StatusCode.Should().Be(HttpStatusCode.OK, body?.ToJsonString());
+        body!["valid"]!.GetValue<bool>().Should().BeTrue();
+        body["plan"]!.ToJsonString().Should().Be(first!["plan"]!.ToJsonString());
+        body["plan"]!["bound"]!.ToJsonString().Should().Contain("\"cursor\":null");
+        body["plan"]!["stages"]!.AsArray().Should().NotBeEmpty();
+        body["plan"]!["stages"]!.ToJsonString().Should().NotContain("$or", "the stages are those of the first page");
+        host.Runner.Calls.Should().BeEmpty();
+    }
 }

@@ -709,6 +709,12 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   malformed body or one past an explain bound, 403 without an organisation, 413 for a body over the
   limit, 429 over the rate, 500 for an engine fault. `contract` is the contract the request was read
   as; a contract 1 request is rewritten by the compatibility binder and answered the same way.
+- **`page.cursor`.** Explain does not read the cursor of a page: a request is explained the same
+  with a cursor, without one and with one that would not verify (a run answers that one
+  `CURSOR_INVALID`). What it shows is the request's first page: `plan.bound` has the page with
+  `cursor: null`, and the leading `$match` of `plan.stages` holds the scope and the conditions
+  without the alternatives of a position. The page a run sends after a cursor carries those
+  alternatives in that `$match` (the semantics document, under the cursor's position).
 - **`engine`.** `contract` is the contract the engine speaks. `2` is the marker of this package: an
   engine that reports it has the whole contract 2 language and this answer.
 - **Absent members.** A member that would be null is left out, except where null says something:

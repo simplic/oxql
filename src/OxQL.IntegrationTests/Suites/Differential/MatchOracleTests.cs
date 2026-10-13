@@ -73,9 +73,10 @@ public class MatchOracleTests
         "name" => ["l", "ph", "ÜLL", "a.", "*", "(c)", "[x", "\\", "%", "_", "ZULU", "Stra", "sse", "e", "nobody"],
         "note" => ["note", "NÖTE", "-1", "1", "z", "nobody"],
         "address.city" => ["k", "LN", "ö", "ber"],
-        "tags" => ["al", "TA", "ä", "mm"],
-        "items.code" => ["a", "-1", ".", "*4", "Ä"],
-        "items.parts.sku" => ["sku", "-1", "U-"],
+        // A text between two elements of one row that starts none of them: "b" between "älpha" and "gamma".
+        "tags" => ["al", "TA", "ä", "mm", "b", "be", "c"],
+        "items.code" => ["a", "-1", ".", "*4", "Ä", "b", "B-", "c"],
+        "items.parts.sku" => ["sku", "-1", "U-", "sku-2", "SKU-1"],
         _ => ["a", "1", "Z"],
     };
 
@@ -224,6 +225,9 @@ public class MatchOracleTests
         new Leaf("tags", "eq", N("alpha")),
         new Leaf("tags", "nin", Set("beta", "gamma")),
         new Leaf("tags", "exists", N(false)),
+        new Leaf("tags", "startsWith", N("b")),
+        new Leaf("items.code", "startsWith", N("b")),
+        new Leaf("items.parts.sku", "startsWith", N("sku-2")),
         new Leaf("items.code", "eq", N("a-1")),
         new Leaf("items.code", "eq", null),
         new Leaf("items.code", "neq", N("B-2"), CaseSensitive: true),

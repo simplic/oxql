@@ -1736,7 +1736,9 @@ public sealed class Binder
 
             // A folding contains or endsWith is a pattern that folds accents too: each letter
             // is a class of its equivalents, and it is that pattern the server has to compile.
-            var foldsAccents = contract2 && ignoreCase && op is "contains" or "endsWith" && AccentFold.Applies(options.Representation.Collation);
+            // So is a folding startsWith through a collection, where the prefix cannot be a range.
+            var throughCollection = path.CollectionAncestors > 0 || path.Kind == Kind.Array;
+            var foldsAccents = contract2 && ignoreCase && (op is "contains" or "endsWith" || (op == "startsWith" && throughCollection)) && AccentFold.Applies(options.Representation.Collation);
 
             if (isPattern && (foldsAccents ? !TextsOf(operand).All(text => RegexGuard.PatternFits(AccentFold.Pattern(text, options.Representation.Collation))) : !TextFits(operand)))
             {

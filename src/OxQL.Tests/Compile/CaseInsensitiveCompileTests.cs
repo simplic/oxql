@@ -201,6 +201,20 @@ public class CaseInsensitiveCompileTests
         lookupStage["$lookup"]["pipeline"].AsBsonArray[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Number: 'x' } }"));
     }
 
+    /// <summary>Two bounds on a collection's path could be met by two elements: there a folding prefix is one pattern, which one element meets.</summary>
+    [Fact]
+    public async Task A_folding_prefix_through_a_collection_is_one_pattern_and_a_range_on_one_value()
+    {
+        var compiled = await Compile("""[{ "match": { "items.price.currency": { "startsWith": "ab" }, "tags": { "startsWith": "ab" }, "number": { "startsWith": "ab" }, "items": { "any": { "price.currency": { "startsWith": "ab" } } } } }]""");
+        var match = compiled.PageStages.Select(stage => stage.GetValue("$match", null)).OfType<BsonDocument>().Last();
+        var asked = match.GetValue("$and", null) is BsonArray conditions ? conditions.OfType<BsonDocument>().Aggregate(new BsonDocument(), (all, each) => all.Merge(each)) : match;
+
+        asked["Items.Price.Currency"].Should().BeOfType<BsonRegularExpression>().Which.Pattern.Should().StartWith("^");
+        asked["Tags"].Should().BeOfType<BsonRegularExpression>().Which.Options.Should().Be("i");
+        asked["Number"].AsBsonDocument.Names.Should().Equal("$gte", "$lt");
+        asked["Items"]["$elemMatch"]["Price.Currency"].AsBsonDocument.Names.Should().Equal(["$gte", "$lt"], "inside 'any' the path is one element's own value");
+    }
+
     [Fact]
     public async Task A_join_on_a_string_key_compares_the_key_byte_for_byte_inside_a_collated_aggregate()
     {

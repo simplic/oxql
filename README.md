@@ -558,6 +558,10 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **`startsWith` through a collection.** A folding `startsWith` on a path through a collection
+  that is not unwound (`items.text`, a collection of text) answers the rows in which one element
+  starts with the text, in a `match`, the request's `filter`, a join's `filter` and under `not`;
+  it reads every candidate row there, as `contains` does.
 - **A walk by cursor over a number, a `decimal` or an addon key.** The pages are the order of
   the sort, split, also where rows hold the decimal as text beside the migrated rows, a NaN, or
   an addon value of another stored type: each row is served once. A cursor issued before is

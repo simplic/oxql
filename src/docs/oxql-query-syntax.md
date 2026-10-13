@@ -218,7 +218,7 @@ Anything else is `UNKNOWN_OPERATOR`.
 | `eq`, `neq` | every scalar kind | one value, or `null` (`eq null` = absent or null; `neq null` = present and non-null) |
 | `gt`, `gte`, `lt`, `lte` | `int long double decimal date dateTime timeSpan string enum` | one value |
 | `in`, `nin` | every scalar kind | an array of values (`OPERAND_NOT_ARRAY` otherwise); `in []` matches nothing, `nin []` everything |
-| `contains`, `startsWith`, `endsWith` | `string` | a string; a folding `startsWith` is a range under the collation, the others are patterns the engine escapes (`endsWith` anchored at the end) |
+| `contains`, `startsWith`, `endsWith` | `string` | a string; a folding `startsWith` is a range under the collation (through a collection a pattern, so that one element starts with the text), the others are patterns the engine escapes (`endsWith` anchored at the end) |
 | `regex` | `string` | a pattern up to `RegexMaxLength` (`REGEX_TOO_LONG`); nested quantifiers and backreferences are `INVALID_REGEX`; an unanchored pattern is diagnosed `REGEX_UNANCHORED` |
 | `exists` | every stored member, objects and collections included | a boolean |
 | `is` | an object, or a collection of objects, whose type has variants | a variant name, or a non-empty array of names |

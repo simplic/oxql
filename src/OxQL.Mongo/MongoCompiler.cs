@@ -1830,6 +1830,9 @@ internal static class MongoCompiler
         var op = leaf.Op;
         var casing = CasingOf(leaf, collated);
 
+        // A path through a collection holds one value per element, and a condition on it is one element's to meet.
+        var many = leaf.Path.CollectionAncestors > 0 || leaf.Path.Kind == Kind.Array;
+
         switch (leaf.Operand)
         {
             case BoundOperand.Null:
@@ -1851,12 +1854,12 @@ internal static class MongoCompiler
                 // agrees with $and of $ne on a missing member, which is the only case where
                 // the two could differ for a scalar.
                 if (op == "neq")
-                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, casing))));
+                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, casing, many))));
 
-                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing))));
+                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing, many))));
 
             case BoundOperand.Single single:
-                return Compare(storage, op, single.Value, casing);
+                return Compare(storage, op, single.Value, casing, many);
 
             default:
                 return new BsonDocument(storage, BsonNull.Value);
@@ -1867,7 +1870,13 @@ internal static class MongoCompiler
     private static BsonRegularExpression Anchored(string text, Casing casing) =>
         new("^" + RegexGuard.Escape(text) + "$", casing == Casing.Fold ? "i" : "");
 
-    private static BsonDocument Compare(string storage, string op, BsonValue value, Casing casing)
+    /// <summary>
+    /// One comparison of one member. Each form asks the member one thing, so through a collection
+    /// (<paramref name="many"/>) it holds when one element meets it; the one form of two bounds, a
+    /// prefix under the collation, is a pattern there, since two bounds on a collection's path could
+    /// be met by two elements.
+    /// </summary>
+    private static BsonDocument Compare(string storage, string op, BsonValue value, Casing casing, bool many)
     {
         // A fold that stays a pattern (contains, endsWith) folds case with the flag, under a
         // collation or not; an exact comparison and a caller's own pattern carry none.
@@ -1897,6 +1906,9 @@ internal static class MongoCompiler
             // followed by the highest character: every string that starts with it under the
             // collation, accents and case folded, and nothing else, and an index on the member
             // bounds it, which no pattern does.
+            // Through a collection the two bounds would each be met by some element, not by one: there
+            // the prefix is the anchored pattern that folds as the collation does.
+            "startsWith" when casing == Casing.Collated && many => new BsonDocument(storage, new BsonRegularExpression("^" + AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
             "startsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonDocument { ["$gte"] = Text(value), ["$lt"] = Text(value) + AfterEveryCharacter }),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
             "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),

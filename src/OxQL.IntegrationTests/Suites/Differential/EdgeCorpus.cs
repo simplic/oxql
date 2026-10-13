@@ -156,7 +156,7 @@ public static class EdgeCorpus
             OptionalState = States[n * 2 % States.Length],
             Address = new ConformanceAddress { City = n % 4 == 0 ? "Köln" : n % 4 == 1 ? "koln" : n % 4 == 2 ? "Berlin" : "", Zip = n % 3 == 0 ? null : "5" + (n % 3), Floor = n % 3 },
             OptionalAddress = new ConformanceAddress { City = "City " + (n % 3), Zip = n % 2 == 0 ? null : "Z" + (n % 4), Floor = n % 2 },
-            Tags = (n % 6) switch { 0 => [], 1 => ["alpha"], 2 => ["alpha", "beta"], 3 => ["Beta", "ALPHA", "gamma"], 4 => ["älpha"], _ => ["beta", "beta"] },
+            Tags = (n % 6) switch { 0 => [], 1 => ["alpha"], 2 => ["alpha", "beta"], 3 => ["Beta", "ALPHA", "gamma"], 4 => ["älpha", "gamma"], _ => ["beta", "beta"] },
             Items = [.. Enumerable.Range(0, n % 4).Select(position => new ConformanceItem
             {
                 Id = Ids.Of(Spaces.ConformanceItem, org, n * 10 + position),

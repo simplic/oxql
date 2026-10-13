@@ -4320,6 +4320,7 @@ public sealed partial class Binder
 
                 var operands = new List<BoundExpression>();
                 var kinds = new List<Kind>();
+                var taken = new List<Kind>();
                 var numeric = Kind.Long;
 
                 foreach (var operand in expression.Operands ?? [])
@@ -4329,11 +4330,15 @@ public sealed partial class Binder
                     if (bound is null)
                         return null;
 
-                    if (operandKind is Kind.Double or Kind.Decimal)
-                        numeric = operandKind == Kind.Decimal || numeric == Kind.Decimal ? Kind.Decimal : Kind.Double;
+                    // A duration its member stores as a number takes part as that number (contract 2; a contract 1 request is bound by the declared kinds alone).
+                    var counted = contract2 ? StoredNumber(bound, operandKind) : operandKind;
+
+                    if (counted is Kind.Double or Kind.Decimal)
+                        numeric = counted == Kind.Decimal || numeric == Kind.Decimal ? Kind.Decimal : Kind.Double;
 
                     operands.Add(bound);
                     kinds.Add(operandKind);
+                    taken.Add(counted);
                 }
 
                 if (operands.Count == 0)
@@ -4345,7 +4350,15 @@ public sealed partial class Binder
                 if (expression.Operator == "coalesce")
                     return new BoundExpression.Arithmetic(expression.Operator!, operands);
 
-                if (!ArithmeticApplies(expression.Operator!, kinds, out var result, out var why))
+                // Contract 1 is frozen: its arithmetic binds over any operands, a long unless one is a double or a
+                // decimal. What its rows hold is said when it runs.
+                if (!contract2)
+                {
+                    kind = numeric;
+                    return new BoundExpression.Arithmetic(expression.Operator!, operands);
+                }
+
+                if (!ArithmeticApplies(expression.Operator!, taken, out var result, out var why))
                 {
                     errors.Add(new QueryValidationError
                     {
@@ -4358,7 +4371,9 @@ public sealed partial class Binder
                 }
 
                 // A quotient of whole numbers is no whole number: it is a double, a decimal with a decimal operand.
-                kind = result ?? (expression.Operator == "divide" && numeric == Kind.Long ? Kind.Double : numeric);
+                // Under a mean it counts as the whole numbers it is taken from: the mean is taken in decimal, as
+                // a mean over whole numbers is.
+                kind = result ?? (expression.Operator == "divide" && numeric == Kind.Long && function != "avg" ? Kind.Double : numeric);
                 return new BoundExpression.Arithmetic(expression.Operator!, operands);
             }
 
@@ -4367,6 +4382,16 @@ public sealed partial class Binder
             kind = KindOf(constant);
             return new BoundExpression.Literal(constant);
         }
+
+        /// <summary>
+        /// The kind an operand takes part in arithmetic as: a duration whose member stores it as a number
+        /// (ticks as a 64-bit integer, or a double in the member's unit) is that number; every other
+        /// operand is of its own kind, so a duration stored as text is no number.
+        /// </summary>
+        private static Kind StoredNumber(BoundExpression operand, Kind kind) =>
+            kind == Kind.TimeSpan && operand is BoundExpression.Path { Resolved: { Addon: null, Leaf.Representation.BsonType: var stored } }
+                ? stored switch { BsonType.Int64 => Kind.Long, BsonType.Double => Kind.Double, _ => kind }
+                : kind;
 
         /// <summary>
         /// Whether an arithmetic operator takes operands of these kinds, and the kind of what it
@@ -4408,6 +4433,7 @@ public sealed partial class Binder
                 {
                     "add" when Date(other) => "takes numbers and at most one date; two dates do not add up",
                     "subtract" when Date(other) => "takes a date from a date, or a number from a date or a number, not a date from a number",
+                    _ when other == Kind.TimeSpan => "takes numbers, not a duration its member stores as text",
                     _ => $"takes numbers, not {Kinds.WithArticle(other)}",
                 };
                 return false;

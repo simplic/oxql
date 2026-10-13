@@ -595,10 +595,13 @@ What a contract 2 caller reads differently:
   `INVALID_REQUEST_BODY` with `params { reason: "encoding", path, in: "name" | "value" }` (a new
   `reason`), on `query`, `batch` and `explain`; an entry of a batch is answered in its place.
 - **Arithmetic in an aggregate's argument.** A quotient by zero or by `null` is `null`, which an
-  aggregate skips, whatever rows the request meets; a quotient is a `double` (a `decimal` with a
-  `decimal` operand), so `sum` and `avg` over one carry its fraction. An operand that is no
-  number (text, a boolean, a duration, a guid, two dates in an `add`) and a `subtract` or
-  `divide` without exactly two operands are 400 `INVALID_AGGREGATE_ARGUMENT` with
+  aggregate skips, whatever rows the request meets. A quotient of whole numbers is a `double`
+  under `sum`, `min` and `max`, so they carry its fraction; under `avg` it counts as the whole
+  numbers it is taken from, and the mean is a `decimal`, as a mean over whole numbers is. A
+  duration its member stores as a number (ticks, or a `double` in the member's unit) is an
+  operand, as that number (`sum(divide(duration, 600000000))`). An operand that is no number
+  (text, a boolean, a duration stored as text, a guid, two dates in an `add`) and a `subtract`
+  or `divide` without exactly two operands are 400 `INVALID_AGGREGATE_ARGUMENT` with
   `params { operator, kinds }`, in a run and in explain; a row that holds text where the kinds
   allow a number is 422 with the same code.
 - **A NUL character in an operand.** A text operand that holds one (`"\u0000"`) is matched as

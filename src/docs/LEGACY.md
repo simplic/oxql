@@ -235,7 +235,13 @@ What holds for both, since it is decided before or after the request is compiled
 
 - a `dateTrunc.timezone` written as an offset from UTC or a fixed zone of the `Etc` area binds, and
   a zone the database's zone table does not have is `INVALID_TIMEZONE` (400);
-- arithmetic of an aggregate over a row that holds no number is 422 `INVALID_AGGREGATE_ARGUMENT`;
+- arithmetic of an aggregate over a row that holds no number is 422 `INVALID_AGGREGATE_ARGUMENT`
+  (what the kinds of the operands say is refused under contract 2 only: a contract 1 request is
+  bound whatever they are, and its arithmetic is a `long` unless an operand is a `double` or a
+  `decimal`);
+- a quotient by zero or by `null` is `null`, which an aggregate skips;
+- a join over a member that is not the target's key joins no record to a reference that is null
+  or not stored, and no child to a record that holds nothing in the member it is named by;
 - a pattern with a NUL character is `INVALID_REGEX`;
 - a request the database has said nothing of by its deadline is 504 `QUERY_TIMEOUT`.
 

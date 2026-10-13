@@ -1200,6 +1200,10 @@ public sealed class ExplainTypes
         {
             var service = entityId.Split('.')[0];
 
+            // An id in the namespace of this host's own entities names an entity of this service, or none: nobody else owns it.
+            if (model.Entities.Keys.Any(id => id.StartsWith(service + ".", StringComparison.Ordinal)))
+                return Failed(head, Codes.UnknownEntity, $"'{entityId}' is not an entity of this service.");
+
             if (owners is null || !owners.Knows(service))
                 return Failed(head, Codes.UnknownEntity, $"'{entityId}' is not an entity of this host, and this host knows no owner for '{service}'.");
 

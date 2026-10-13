@@ -534,6 +534,17 @@ public class ExplainTypesTests
         result.Catalog[2]["type"]!.GetValue<string>().Should().Be("t:rc.customer");
     }
 
+    /// <summary>An id in the namespace of the host's own entities that names none is unknown in this service; one of another namespace needs an owner.</summary>
+    [Fact]
+    public async Task A_catalog_entry_for_an_entity_the_service_does_not_have_says_whose_it_would_be()
+    {
+        var result = await ExplainAsync("[]", """ "catalog": [{ "id": "own", "entity": "rc.nope" }, { "id": "other", "entity": "nowhere.thing" }] """);
+
+        result.Catalog[0]["error"]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownEntity);
+        result.Catalog[0]["error"]!["message"]!.GetValue<string>().Should().Be("'rc.nope' is not an entity of this service.");
+        result.Catalog[1]["error"]!["message"]!.GetValue<string>().Should().Be("'nowhere.thing' is not an entity of this host, and this host knows no owner for 'nowhere'.");
+    }
+
     [Fact]
     public async Task A_catalog_entry_with_a_prefix_reads_the_members_the_table_cut()
     {

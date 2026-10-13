@@ -60,16 +60,27 @@ public class JoinOracleTests
         }
     }
 
-    /// <summary>The semi-join of a condition on the other service's record selects the rows whose record meets it, whatever else the request asks.</summary>
+    /// <summary>
+    /// The semi-join of a condition on the other service's record selects the rows whose record meets
+    /// it, whatever else the request asks. The records spell one code two ways (<c>EMP-EVEN</c>,
+    /// <c>Emp-Even</c>): a comparison folds them into one, and <c>caseSensitive</c> tells them apart.
+    /// </summary>
     [Theory]
-    [InlineData("""{ "e.matchCode": { "startsWith": "emp" } }""", "emp-")]
-    [InlineData("""{ "e.matchCode": { "eq": "emp-even" } }""", "EMP-EVEN")]
-    [InlineData("""{ "e.matchCode": { "eq": "EMP-EVEN", "options": { "caseSensitive": true } }, "count": { "gte": 0 } }""", "EMP-EVEN")]
-    public async Task A_condition_on_another_services_record_selects_the_rows_whose_record_meets_it(string condition, string code)
+    [InlineData("""{ "e.matchCode": { "startsWith": "emp" } }""", "emp-", false)]
+    [InlineData("""{ "e.matchCode": { "eq": "emp-even" } }""", "EMP-EVEN", false)]
+    [InlineData("""{ "e.matchCode": { "eq": "EMP-EVEN", "options": { "caseSensitive": true } }, "count": { "gte": 0 } }""", "EMP-EVEN", true)]
+    [InlineData("""{ "e.matchCode": { "eq": "Emp-Even", "options": { "caseSensitive": true } } }""", "Emp-Even", true)]
+    [InlineData("""{ "e.matchCode": { "startsWith": "Emp", "options": { "caseSensitive": true } } }""", "Emp-", true)]
+    public async Task A_condition_on_another_services_record_selects_the_rows_whose_record_meets_it(string condition, string code, bool exact)
     {
         var client = await EdgeCorpus.ClientAsync();
-        var expected = EdgeCorpus.Stored().Where(row => Text(Employee(row), "MatchCode") is { } held && (code.EndsWith('-') ? held.StartsWith(code, StringComparison.OrdinalIgnoreCase) : held.Equals(code, StringComparison.OrdinalIgnoreCase)))
+        var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var expected = EdgeCorpus.Stored().Where(row => Text(Employee(row), "MatchCode") is { } held && (code.EndsWith('-') ? held.StartsWith(code, comparison) : held.Equals(code, comparison)))
             .Select(EdgeCorpus.WireId).Order(StringComparer.Ordinal).ToList();
+        var folded = EdgeCorpus.Stored().Count(row => Text(Employee(row), "MatchCode") is { } held && (code.EndsWith('-') ? held.StartsWith(code, StringComparison.OrdinalIgnoreCase) : held.Equals(code, StringComparison.OrdinalIgnoreCase)));
+
+        if (exact)
+            expected.Count.Should().BeLessThan(folded, "the exact comparison selects fewer rows than the one that folds");
 
         expected.Should().NotBeEmpty();
 

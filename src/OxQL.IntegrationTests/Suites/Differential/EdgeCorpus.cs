@@ -282,7 +282,8 @@ public static class EdgeCorpus
                 {
                     Id = EmployeeIdOf(org, k),
                     OrganizationId = org.Id(),
-                    MatchCode = k % 2 == 0 ? "EMP-EVEN" : "emp-" + k,
+                    // Two spellings of one code, so a comparison that folds case and one that does not select other rows.
+                    MatchCode = k == 2 ? "EMP-EVEN" : k == 4 ? "Emp-Even" : "emp-" + k,
                     IsDeleted = k == 5,
                     Children = k % 3,
                 }.ToBsonDocument();

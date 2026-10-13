@@ -354,6 +354,44 @@ public class PagingDifferentialTests
         await HoldsAsync(id, new Walks.Query(Entity, stages), [7, 31]);
     }
 
+    // ── under a filter of the request, and row by row ──────────────────────────────────────────────
+
+    /// <summary>Every fifteenth case of the entity's rows, every eighth of the unwound, the grouped and the joined rows: a few of every shape.</summary>
+    public static TheoryData<string, string> AFewOfEach()
+    {
+        var data = new TheoryData<string, string>();
+
+        foreach (var (prefix, cases, step) in new[] { ("R", RootSorts(), 15), ("U", UnwoundSorts(), 8), ("G", GroupSorts(), 8), ("J", JoinedSorts(), 8) })
+            foreach (var row in cases.Where((_, index) => index % step == 0))
+                data.Add($"{prefix}:{row[0]}", (string)row[1]);
+
+        return data;
+    }
+
+    /// <summary>The filter of a request narrows the rows of every stage that reads the entity; a walk under it is its one page, split.</summary>
+    [Theory]
+    [MemberData(nameof(AFewOfEach))]
+    public async Task F_a_walk_under_a_filter_of_the_request_is_the_one_page_split(string id, string stages)
+    {
+        const string Filter = """[{ "id": "counted", "where": { "count": { "gte": 2 } } }, { "id": "kept", "where": { "isDeleted": { "neq": true } } }]""";
+
+        var client = await EdgeCorpus.ClientAsync();
+        var without = await Walks.WholeAsync(client, new Walks.Query(Entity, stages));
+        var under = await Walks.WholeAsync(client, new Walks.Query(Entity, stages, Filter));
+
+        under.Should().NotBeEmpty(id).And.NotEqual(without, $"{id}: the filter takes rows out");
+
+        await HoldsAsync(id[2..], new Walks.Query(Entity, stages, Filter), [3, 7], rowByRow: true);
+    }
+
+    /// <summary>In pages of one row and of two, in every run and not only the wide one: each page ends on another row, and each is continued.</summary>
+    [Theory]
+    [MemberData(nameof(AFewOfEach))]
+    public async Task S_a_walk_row_by_row_is_the_one_page_split(string id, string stages)
+    {
+        await HoldsAsync(id[2..], new Walks.Query(Entity, stages), [3], rowByRow: true);
+    }
+
     // ── the two directions ────────────────────────────────────────────────────────────────
 
     /// <summary>

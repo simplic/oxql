@@ -186,4 +186,63 @@ public class MixedStorageWalkTests
             (await Walks.DifferencesAsync(client, query, whole, [1, 2, 3])).Should().BeEmpty($"{member}{sort}");
         }
     }
+
+    /// <summary>
+    /// The position rule of a contract 1 cursor over these rows: it continues by one comparison per
+    /// sort member with the last value of the page, and a comparison is made within the stored type
+    /// of that value. What holds for every walk: the one page of all rows is the order of the sort,
+    /// every page of a walk is in that order, a row is served once, and the walk ends. The rows each
+    /// walk continues to from the positions its pages of five end on are held by their number. A
+    /// walk that continues across the stored types is a contract 2 walk (<c>X-OxQL-Contract: 2</c>).
+    /// </summary>
+    [Theory]
+    [InlineData("""[{ "count": "asc" }, { "note": "desc" }]""", 12)]
+    [InlineData("""[{ "count": "asc" }]""", 14)]
+    [InlineData("""[{ "count": "desc" }]""", 7)]
+    [InlineData("""[{ "name": "asc" }]""", 36)]
+    [InlineData("""[{ "note": "asc" }]""", 19)]
+    [InlineData("""[{ "note": "desc" }]""", 10)]
+    [InlineData("""[{ "optionalAmount": "asc" }]""", 8)]
+    [InlineData("""[{ "optionalAmount": "desc" }]""", 16)]
+    [InlineData("""[{ "optionalCount": "asc" }]""", 12)]
+    [InlineData("""[{ "optionalCount": "desc" }]""", 30)]
+    [InlineData("""[{ "optionalRatio": "asc" }]""", 10)]
+    [InlineData("""[{ "optionalRatio": "desc" }]""", 31)]
+    public async Task A_contract_1_walk_over_such_a_member_continues_by_comparison_with_the_last_value_in_the_order_of_the_sort(string sort, int served)
+    {
+        var fleet = await Fleet.Value;
+        var query = new Walks.Query(Entity, $$"""[{ "sort": {{sort}} }, { "project": { "id": 1 } }]""");
+        var whole = (await Walks.WholeAsync(fleet.Client(LabService.Conformance), query)).Select(Key).ToList();
+        var legacy = fleet.Client(LabService.Conformance, contract: 1);
+
+        // A contract 1 row is the stored document, its key under the stored name.
+        static string Key(string row) => System.Text.Json.Nodes.JsonNode.Parse(row)!.AsObject().Single().Value!.GetValue<string>();
+
+        // One page of every row is the order contract 2 answers.
+        (await Walks.WholeAsync(legacy, query)).Select(Key).Should().Equal(whole, sort);
+
+        var rows = new List<string>();
+        string? cursor = null;
+        var pages = 0;
+
+        do
+        {
+            var page = new System.Text.Json.Nodes.JsonObject { ["limit"] = 5 };
+
+            if (cursor is not null)
+                page["cursor"] = cursor;
+
+            var answer = await legacy.QueryAsync(query.Body(page));
+
+            answer.ShouldBeOk($"{sort}, page {pages + 1}");
+            rows.AddRange(Walks.Rows(answer).Select(Key));
+            cursor = answer.HasNextPage ? answer.NextCursor : null;
+        }
+        while (cursor is not null && ++pages < Rows);
+
+        cursor.Should().BeNull($"{sort}: the walk ends");
+        rows.Should().OnlyHaveUniqueItems(sort);
+        rows.Should().BeSubsetOf(whole).And.Equal(whole.Where(rows.Contains), $"{sort}: the rows served are in the order of the sort");
+        rows.Should().HaveCount(served, sort);
+    }
 }

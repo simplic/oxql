@@ -119,6 +119,12 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
 /// next caller start it again. Before the first measurement has finished a configured service
 /// is reported with an unknown reachability, which does not degrade the status.
 /// </para>
+/// <para>
+/// The first measurement of a process is the one exception to not waiting, and only for a caller
+/// that asks so (<see cref="FirstStateAsync"/>): it is awaited once, by every caller that arrives
+/// while it runs together, for no longer than a measurement may take. A status read after a start
+/// therefore says what was measured, and not that nothing was yet.
+/// </para>
 /// </summary>
 public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthProbe>? logger = null, TimeProvider? time = null)
 {
@@ -128,6 +134,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     private IReadOnlyList<RemoteServiceState>? measured;
     private long? takenAt;
     private Task? refresh;
+    private Task? first;
 
     /// <summary>How long one service may take to answer before it counts as not reachable.</summary>
     public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(2);
@@ -177,6 +184,33 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
 
             return measured ?? services.Select(service => client.IsConfigured(service) ? RemoteServiceState.Unmeasured(service) : RemoteServiceState.Unconfigured(service)).ToList();
         }
+    }
+
+    /// <summary>What a caller waits beyond <see cref="ProbeTimeout"/> for the first measurement to be put down once every service answered or ran out of its time.</summary>
+    private static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// <see cref="State"/>, after the first measurement of this process where a configured service
+    /// has none yet: that one measurement is awaited, by all callers of the moment together, for at
+    /// most <see cref="ProbeTimeout"/> and a moment to put it down. Once that wait is over, measured
+    /// or not, no call waits again.
+    /// </summary>
+    public async Task<IReadOnlyList<RemoteServiceState>> FirstStateAsync(EntityModel? model, IRemoteQueryClient client)
+    {
+        var state = State(model, client);
+
+        if (!state.Any(service => service.Reason == RemoteServiceState.Pending))
+            return state;
+
+        Task wait;
+
+        lock (gate)
+            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle)) : Task.CompletedTask;
+
+        await wait.ConfigureAwait(false);
+
+        lock (gate)
+            return measured ?? state;
     }
 
     private async Task RefreshAsync(IReadOnlyList<string> services, IRemoteQueryClient client)

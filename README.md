@@ -549,6 +549,9 @@ What a contract 2 caller reads differently:
 - **Health.** `status` is also `degraded` for an owner that answers and does not speak contract 2,
   for a declared target its owner does not publish, and for a model its provider calls degraded
   or cannot hand out.
+  The first health request of a process that carries the contract header waits for the first
+  measurement of the referenced services (at most 2 s, once), so its `status` says what was
+  measured; `?shallow=true` and a request without the header are answered at once.
 - **Explain.** `executable` is `unknown`, with a `REMOTE_UNCHECKED` note and `cache.complete:
   false`, for a join whose owner no check asked and that the host cannot take to answer: its
   remote client keeps owner facts (`IRemoteOwnerInfo`) and has none of that owner, or the facts

@@ -40,10 +40,10 @@ namespace OxQL.AspNetCore.Controllers;
 /// <para>
 /// <b>health.</b> The engine version, contract, capabilities and limits, and the state of every
 /// service the model references remotely. Anonymous and always reachable, so it answers "why is my
-/// list not working" from a browser. It never waits for another service: the reachability is the
-/// last one measured, refreshed in the background at most once per
-/// <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is null until the first
-/// measurement has finished. Under contract 2 each service also says what its owner's engine
+/// list not working" from a browser. The reachability is the last one measured, refreshed in the
+/// background at most once per <c>OxQL:Cache:HealthProbeTtlSeconds</c>, and <c>reachable</c> is
+/// null until the first measurement has finished; only that first measurement of a process is
+/// waited for, once and for no longer than it may take, by a contract 2 caller. Under contract 2 each service also says what its owner's engine
 /// can do for this host (<c>contract</c>, <c>engineVersion</c>, <c>usable</c>, and a
 /// <c>reason</c> when it is not usable), and the answer says how many entities the host's model
 /// has and whether it is what a failed build left (<c>model { entities, degraded, reason }</c>).
@@ -166,7 +166,7 @@ public class OxQLController : ControllerBase
     [EndpointDescription(OxQLDocumentation.HealthDescription)]
     [OxQLOperation(Headers = OxQLHeaders.Contract)]
     [ProducesResponseType(typeof(OxQLHealthAnswer), StatusCodes.Status200OK, Json, Description = "The state of the engine on this host.")]
-    public IActionResult Health(
+    public async Task<IActionResult> Health(
         [FromServices] IQueryEngine engine,
         [FromServices] IEntityModelProvider models,
         [FromServices] RemoteHealthProbe probe,
@@ -174,7 +174,11 @@ public class OxQLController : ControllerBase
         [FromQuery] bool shallow = false)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-        var services = client is null || shallow ? null : Referenced(probe.State(ModelOrNull(models), client), models, client);
+
+        // What a contract 2 caller reads of a service is what was measured of it: the first measurement after a start is
+        // waited for, once. A caller without the header is answered at once, as ever.
+        var services = client is null || shallow ? null
+            : Referenced(Contract1 ? probe.State(ModelOrNull(models), client) : await probe.FirstStateAsync(ModelOrNull(models), client).ConfigureAwait(false), models, client);
         var model = ModelHealth.Of(models);
 
         // What a caller without the header reads is frozen, the status word included: it is degraded by a service that

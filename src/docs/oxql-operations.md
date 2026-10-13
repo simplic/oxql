@@ -465,7 +465,8 @@ Fixed bounds, not configurable:
 
 ## `GET /oxql/health`
 
-Anonymous, always 200, and never waits for another service:
+Anonymous, always 200, and answered from what was last measured of the other services. It waits
+for a measurement in one case: the first one of a process, for a contract 2 caller (below).
 
 ```jsonc
 {
@@ -551,8 +552,12 @@ Anonymous, always 200, and never waits for another service:
   `false` with a `reason` otherwise, absent while nothing is measured or the client keeps no owner
   facts. `reason` is one of:
   `pending` (configured, and nothing was measured of it yet: the entry carries neither `reachable`
-  nor `usable`, and `status` says nothing of it; the first answer after a start reads so, since
-  health never waits for a measurement);
+  nor `usable`, and `status` says nothing of it). So that a `status` read after a start says what
+  was measured, a contract 2 request that would read `pending` waits for the first measurement of
+  the process: once, every such request of the moment for the same measurement, and for no longer
+  than a measurement may take (2 s per service, all services at a time). `pending` is therefore
+  read only where that wait ran out, and no later request waits. A caller without the contract
+  header and `?shallow=true` never wait;
   `notConfigured` (no `InternalHosts` entry);
   `unreachable` (its health did not answer);
   `route` (the owner's host answers and has no internal query route under the API version this

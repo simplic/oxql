@@ -87,6 +87,96 @@ public class HostHardeningHealthTests
     }
 
     [Fact]
+    public async Task The_first_contract_2_request_reads_what_the_first_measurement_found_and_all_callers_of_the_moment_share_it()
+    {
+        var client = new GatedClient();
+
+        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
+
+        var callers = Enumerable.Range(0, 6).Select(_ => host.Client(contract: 2).GetAsync("/OxQL/health")).ToList();
+
+        SpinWait.SpinUntil(() => client.Probes >= 2, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        callers.Should().OnlyContain(caller => !caller.IsCompleted, "the measurement is not in yet");
+
+        // A caller without the header is answered meanwhile, as before.
+        var plain = await SampleHost.Body(await host.CreateClient().GetAsync("/OxQL/health"));
+
+        plain!["remote"]!.AsArray().Should().OnlyContain(entry => entry!["reachable"] == null);
+
+        client.Answer.SetResult(false);
+
+        foreach (var caller in callers)
+        {
+            var body = await SampleHost.Body(await caller);
+
+            body!["status"]!.GetValue<string>().Should().Be("degraded");
+            body["remote"]!.AsArray().Should().OnlyContain(entry => entry!["reachable"]!.GetValue<bool>() == false && entry["reason"]!.GetValue<string>() == "unreachable");
+        }
+
+        client.Probes.Should().Be(2, "one measurement of the two services answers every caller");
+    }
+
+    [Fact]
+    public async Task A_service_that_never_answers_is_measured_as_not_reachable_by_the_end_of_the_wait()
+    {
+        var client = new GatedClient { IgnoresCancellation = true };
+        var probe = new RemoteHealthProbe(BindHost.Options(options => options.Cache.HealthProbeTtlSeconds = 10)) { ProbeTimeout = TimeSpan.FromMilliseconds(100) };
+
+        (await probe.FirstStateAsync(BindHost.Probe, client)).Should().OnlyContain(state => state.Reachable == false, "its time was up, which is a measurement");
+    }
+
+    [Fact]
+    public async Task The_wait_for_the_first_measurement_ends_with_the_measurement()
+    {
+        var client = new GatedClient();
+        var probe = Probe();
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var first = probe.FirstStateAsync(BindHost.Probe, client);
+
+        first.IsCompleted.Should().BeFalse();
+        client.Answer.SetResult(true);
+
+        (await first).Should().OnlyContain(state => state.Reachable == true);
+        timer.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20), "the probe's timeout is thirty seconds here, and nothing waited for it");
+    }
+
+    [Fact]
+    public async Task A_wait_that_ran_out_says_pending_and_no_later_call_waits()
+    {
+        // The client holds the thread of the measurement, so the measurement outlasts its own timeout.
+        var client = new BlockingClient();
+        var probe = new RemoteHealthProbe(BindHost.Options(options => options.Cache.HealthProbeTtlSeconds = 10)) { ProbeTimeout = TimeSpan.FromMilliseconds(50) };
+
+        (await probe.FirstStateAsync(BindHost.Probe, client)).Should().OnlyContain(state => state.Reason == RemoteServiceState.Pending);
+
+        var again = probe.FirstStateAsync(BindHost.Probe, client);
+
+        again.IsCompleted.Should().BeTrue("the first measurement is waited for once per process");
+        (await again).Should().OnlyContain(state => state.Reason == RemoteServiceState.Pending);
+
+        client.Release.Set();
+        await probe.Refreshing;
+    }
+
+    /// <summary>A client whose probe blocks the thread that calls it until the test lets go.</summary>
+    private sealed class BlockingClient : IRemoteQueryClient
+    {
+        public ManualResetEventSlim Release { get; } = new();
+
+        public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public bool IsConfigured(string serviceKey) => true;
+
+        public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken)
+        {
+            Release.Wait(TimeSpan.FromSeconds(30));
+
+            return Task.FromResult(true);
+        }
+    }
+
+    [Fact]
     public async Task A_shallow_request_leaves_the_remote_state_out_and_starts_no_measurement()
     {
         var client = new GatedClient();

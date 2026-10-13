@@ -94,11 +94,11 @@ public class AgreementTests
 
         one.StatusCode.Should().Be(200);
 
-        if (Tag(one) is { } tag)
-        {
-            Tag(again).Should().Be(tag);
-            Tag(other).Should().NotBe(tag);
-        }
+        var tag = Tag(one);
+
+        tag.Should().NotBeNullOrEmpty("an explain answer carries its etag");
+        Tag(again).Should().Be(tag);
+        Tag(other).Should().NotBeNullOrEmpty().And.NotBe(tag);
 
         JsonNode Without(JsonNode body)
         {

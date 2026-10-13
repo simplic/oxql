@@ -13,6 +13,13 @@ public sealed record KeysetField(string Storage, bool Ascending, BsonValue Value
     /// within the type its member is stored as.
     /// </summary>
     public bool SeveralTypes { get; init; }
+
+    /// <summary>
+    /// Whether every row holds a value here: an entity's key. With <c>everyType</c> such a leg has no
+    /// alternative for the rows that hold nothing, so every alternative of the predicate is a range
+    /// of the index of the sort.
+    /// </summary>
+    public bool NeverNull { get; init; }
 }
 
 /// <summary>
@@ -102,7 +109,8 @@ public static class KeysetPredicate
             foreach (var beyond in Beyond(field.Value, ascending: false, last && inclusive, everyType, types))
                 alternatives.Add(new BsonDocument(leg) { [field.Storage] = beyond });
 
-            alternatives.Add(new BsonDocument(leg) { [field.Storage] = BsonNull.Value });
+            if (!(everyType && field.NeverNull))
+                alternatives.Add(new BsonDocument(leg) { [field.Storage] = BsonNull.Value });
         }
 
         return alternatives.Count == 1 ? alternatives[0].AsBsonDocument : new BsonDocument("$or", alternatives);

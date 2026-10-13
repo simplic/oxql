@@ -223,6 +223,7 @@ engine guarantees a contract 2 caller holds for it. Of what this release adds:
 | Guarantee | A contract 2 request | A contract 1 request the rewrite answers |
 |---|---|---|
 | A walk by cursor follows the sort across a NaN and across stored types (a decimal as text, text under an `int`) | yes | the cursor continues by one range per sort field, as it was issued: within the stored type of the position, among the numbers a range compares |
+| The page after a cursor is planned alternative by alternative of its predicate, each with the scope, so it reads the keys of its rows whatever the position ties on | yes | the predicate stands beside the scope as one condition, as contract 1 wrote it |
 | A text comparison that runs as a pattern, and the text form of a decimal, ends at the end of the value | yes (`\z`) | the pattern ends with `$`, as contract 1 wrote it |
 | `first`, `last` and `push` after a sort with ties are the same on every page (the sort is completed by the key) | yes | the sort is sent as written, and rows that tie are in the database's order |
 | Comparisons under the host's collation: `startsWith` through a collection, a duration stored as text compared by byte beside a folding condition, a join over a text key | yes | not applicable: a contract 1 request runs under no collation, and its `ignoreCase` is a pattern that folds case |

@@ -86,7 +86,7 @@ public class MongoQueryEngineTests
 
         next.PageInfo.HasNextPage.Should().BeFalse();
         next.PageInfo.NextCursor.Should().BeNull();
-        runner.Calls[1].Stages[0]["$match"].AsBsonDocument.Contains("$and").Should().BeTrue();
+        runner.Calls[1].Stages[0]["$match"]["$or"].AsBsonArray.Should().OnlyContain(alternative => alternative["$and"].AsBsonArray[0].AsBsonDocument.Contains("OrganizationId"), "the page after a position is the alternatives of its predicate, each within the scope");
     }
 
     [Fact]

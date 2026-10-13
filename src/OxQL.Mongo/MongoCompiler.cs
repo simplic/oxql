@@ -213,8 +213,8 @@ internal sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Cou
     /// while the rows stay the same: a projection after the page is taken
     /// (<see cref="MongoCompiler.ProjectsAfterPage"/>), the rename of an unwound element after it too,
     /// the order and the cut of the parents before their unwind, the rows without a passing element
-    /// dropped before it (<see cref="UnwindPlacement"/>), and a cursor's position also as one range on
-    /// the leading sort field.
+    /// dropped before it (<see cref="UnwindPlacement"/>), and a cursor's position as the alternatives
+    /// of its predicate, each with the scope and the matches beside it.
     /// </summary>
     public bool AsWritten { get; init; }
 }
@@ -444,7 +444,7 @@ internal static class MongoCompiler
         if (position is not null && unwinding is { ParentsFirst: true, IndexAscending: not null })
             keyset = LeadingFields(sortFields) is { Count: > 0 } leading ? KeysetConjuncts(Legs(position, leading, key: false, []), !options.AsWritten, inclusive: true) : null;
 
-        stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset))));
+        stages.Add(new BsonDocument("$match", LeadingMatch(scope, keyset, alternatives: !options.AsWritten)));
 
         var countStages = page.IncludeTotalCount || page.Count is not null ? new List<BsonDocument> { new("$match", scope) } : null;
 
@@ -823,6 +823,9 @@ internal static class MongoCompiler
             countStages.Add(new BsonDocument("$limit", countCap + 1));
             countStages.Add(new BsonDocument("$count", "n"));
         }
+
+        if (!options.AsWritten)
+            WithFollowingMatches(stages);
 
         return new CompiledQuery
         {
@@ -1488,10 +1491,10 @@ internal static class MongoCompiler
 
         foreach (var field in sortFields)
             if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
-                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path) });
+                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path), NeverNull = field.Path.Storage == KeyStorage });
 
         if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
-            legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
+            legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)) { NeverNull = true });
 
         foreach (var index in indexes)
             if (!legs.Any(leg => leg.Storage == index))
@@ -1512,20 +1515,54 @@ internal static class MongoCompiler
 
     /// <summary>
     /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it
-    /// on): the null-aware predicate over every leg and, with <paramref name="ranged"/>, the one range
-    /// on the leading leg it implies, first.
+    /// on): the null-aware predicate over every leg. With <paramref name="everyType"/> (a contract 2
+    /// page) it follows the sort across the stored types; without it (a contract 1 page) it is the
+    /// predicate that page always sent.
     /// </summary>
-    private static List<BsonDocument> KeysetConjuncts(IReadOnlyList<KeysetField> legs, bool ranged, bool inclusive = false)
+    private static List<BsonDocument> KeysetConjuncts(IReadOnlyList<KeysetField> legs, bool everyType, bool inclusive = false) =>
+        [KeysetPredicate.After(legs, inclusive, everyType)];
+
+    /// <summary>
+    /// The leading match: the organisation's scope and, on a page after a position, the rows after it.
+    /// <para>
+    /// With <paramref name="alternatives"/> (a contract 2 page) the match is the predicate's
+    /// <c>$or</c> itself, each alternative with the scope in it: an alternative is then one range of
+    /// the index of the sort (the scope, the members before a leg at the position's values, the leg
+    /// beyond its value), the database plans each on its own and merges them in the order of the
+    /// sort, and a page reads the keys of its rows whatever the position ties on. A contract 1 page
+    /// (without <paramref name="alternatives"/>) sends the predicate beside the scope, as that page
+    /// is written.
+    /// </para>
+    /// </summary>
+    private static BsonDocument LeadingMatch(BsonDocument scope, List<BsonDocument>? keyset, bool alternatives)
     {
-        var conjuncts = new List<BsonDocument>();
+        if (keyset is null)
+            return scope;
 
-        // A contract 2 page follows the sort across stored types; a contract 1 page sends the predicate it always sent.
-        if (ranged && KeysetPredicate.LeadingRange(legs, everyType: true) is { } range)
-            conjuncts.Add(range);
+        if (!alternatives || keyset[0].ElementCount != 1 || !keyset[0].TryGetValue("$or", out var legs))
+            return new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset));
 
-        conjuncts.Add(KeysetPredicate.After(legs, inclusive, everyType: ranged));
+        return new BsonDocument("$or", new BsonArray(legs.AsBsonArray.Select(leg => new BsonDocument("$and", new BsonArray { scope, leg }.AddRange(keyset.Skip(1))))));
+    }
 
-        return conjuncts;
+    /// <summary>
+    /// Takes the matches that follow a leading match of alternatives (<see cref="LeadingMatch"/>) into
+    /// each alternative. Matches that stand next to each other are one condition, and the database
+    /// reads them as one: inside the alternatives they leave the match the alternatives themselves,
+    /// each planned on its own.
+    /// </summary>
+    private static void WithFollowingMatches(List<BsonDocument> stages)
+    {
+        if (stages.Count < 2 || stages[0]["$match"] is not BsonDocument { ElementCount: 1 } leading || !leading.TryGetValue("$or", out var alternatives))
+            return;
+
+        while (stages.Count > 1 && stages[1].ElementCount == 1 && stages[1].TryGetValue("$match", out var following))
+        {
+            foreach (var alternative in alternatives.AsBsonArray)
+                alternative["$and"].AsBsonArray.Add(following);
+
+            stages.RemoveAt(1);
+        }
     }
 
     /// <summary>

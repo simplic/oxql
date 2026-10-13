@@ -351,9 +351,16 @@ included, as it always has; a cursor of one contract is never one of the other.
   is rewritten between two pages is. A `count`, a `min`/`max` and a sum of `int`, `long` or
   `decimal` values are exact however often they are computed.
 - A cursor's position is sent to the database as the null-aware predicate over every field of the
-  order and, where the leading sort field holds a value, as one range on that field beside it
-  (`k >= v` ascending; "not above `v`" descending, which keeps the nulls that follow): the rows
-  before the position fail one comparison, and an index on the sort is bounded by one range.
+  order: one alternative per field, the fields before it at the position's values and the field
+  beyond its value. Under contract 2 the leading match of the page is these alternatives
+  themselves, each with the organisation's scope and the conditions that stand next to it in it.
+  An alternative is then one range of an index on the scope and the sort; the database plans each
+  on its own and merges them in the order of the sort, so a page reads the keys of its rows,
+  whatever the position ties on. Held on a server in `KeysetPlanServerTests`: on 20 000 rows of
+  one organisation with the index of the sort, a page of 51 from the middle of a walk reads 52 to
+  54 keys, for one, two and three sort members in every mix of directions, with and without a
+  condition. A contract 1 page sends the predicate as one condition beside the scope, as it
+  always did.
 - **A page continues in the order of its sort whatever the member holds.** A range comparison
   stays inside the stored type of its operand and holds for nothing against a NaN, while a sort
   orders every value. So the position of a contract 2 cursor also admits, on a numeric leg,
@@ -363,9 +370,7 @@ included, as it always has; a cursor of one contract is never one of the other.
   serves every row once whatever the rows hold: a decimal as text beside the migrated rows, an
   addon value of any stored type, text under an `int` or a number under a `string` that some
   writer stored. An index on the sort answers the question for the types with the bounds of each
-  type, so such a page reads the keys of its page, as before (on 150 000 rows of one
-  organisation and an index on organisation, sort member and key, a page of 50 reads 52 index
-  keys with the question and 51 without, in 0.4 ms either way). The one stored type the position
+  type, and where no row is of another type the alternative reads one key. The one stored type the position
   does not ask for is the array: a sort orders an array under a member of one value by one of
   its elements. A walk by cursor is defined for a sort member of one value; an array there is outside it.
 - A contract 2 cursor carries the number of rows the pages up to it served. It is what a later

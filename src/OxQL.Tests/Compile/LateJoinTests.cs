@@ -215,7 +215,7 @@ public class LateJoinTests
             CustomerLookupJson,
             """{ $set: { cust: { $arrayElemAt: ["$cust__arr", 0] } } }""",
             """{ $unset: "cust__arr" }""",
-            $$"""{ $match: { $and: [ { $or: [ { "cust.Name": { $gte: "abc" } }, { "cust.Name": { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }, { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } }, { "cust.Name": { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] } ] } }""",
+            $$"""{ $match: { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } }, { "cust.Name": { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] } }""",
             """{ $sort: { "cust.Name": 1, _id: 1 } }""",
             "{ $limit: 3 }");
     }
@@ -415,7 +415,7 @@ public class LateJoinTests
         var withJoin = await Compile($$"""[{{OrdersLookup}}, { "sort": [{ "name": "asc" }] }, { "page": { "limit": 1, "cursor": "{{first.PageInfo.NextCursor}}" } }]""", Customer);
 
         Kinds(withJoin.PageStages).Should().Equal("$match", "$sort", "$limit", "$lookup", "$set");
-        withJoin.PageStages[0]["$match"].AsBsonDocument.Contains("$and").Should().BeTrue("the cursor predicate is merged into the leading match");
-        withJoin.PageStages[0]["$match"]["$and"].AsBsonArray[1].AsBsonDocument.ToJson().Should().Contain("Name", "the predicate reads the sort leg off the row, which no join touches");
+        withJoin.PageStages[0]["$match"].AsBsonDocument.Contains("$or").Should().BeTrue("the leading match is the cursor predicate, each alternative with the scope");
+        withJoin.PageStages[0]["$match"]["$or"].AsBsonArray.Should().OnlyContain(alternative => alternative["$and"].AsBsonArray[1].AsBsonDocument.Contains("Name"), "the predicate reads the sort leg off the row, which no join touches");
     }
 }

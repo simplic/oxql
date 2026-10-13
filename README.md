@@ -623,6 +623,9 @@ What a contract 2 caller reads differently:
   or a value of another stored type than the member declares (a decimal as text beside the
   migrated rows, an addon value of any type, text under an `int`, a number under a `string`):
   each row is served once. A cursor issued before is continued as it was issued.
+  The page after a cursor is sent as the alternatives of its position, each within the
+  organisation's scope and the conditions beside it, so with an index on the scope and the sort
+  it reads the keys of its rows, also where many rows share the position's leading value.
 - **Joins on a text key.** In a request that folds case, a join over a reference stored as text
   joins a row whose reference is null, not stored or no text as it joins it in a request that
   folds nothing; the rows beside it join byte for byte.
@@ -750,7 +753,8 @@ What a caller without the contract header reads differently:
   and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
   `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`;
-  `KeysetField.SeveralTypes`, `KeysetPredicate.After(legs, inclusive, everyType)` and
+  `KeysetField.SeveralTypes` and `KeysetField.NeverNull`,
+  `KeysetPredicate.After(legs, inclusive, everyType)` and
   `KeysetPredicate.LeadingRange(legs, everyType)`.
   `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.
 

@@ -287,6 +287,33 @@ public class HostRequestTextBufferedTests
         host.Runner.Calls.Should().BeEmpty();
     }
 
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task Without_the_contract_header_a_factory_that_answers_nothing_leaves_the_400_of_a_host_without_one(int? left)
+    {
+        using var host = Host((BufferedBody?)left, configure: services => services.Configure<ApiBehaviorOptions>(behaviour =>
+            behaviour.InvalidModelStateResponseFactory = _ => null!));
+
+        foreach (var declared in new[] { true, false })
+        foreach (var contract in new int?[] { 1, null })
+        foreach (var route in new[] { "/OxQL/query", "/OxQL/explain", "/OxQL/batch" })
+        foreach (var body in new[] { InValue, InName })
+        {
+            var answer = await SendAsync(host, route, body, contract, declared);
+            var because = $"{route} contract {contract?.ToString() ?? "none"} {(declared ? "declared" : "undeclared")} {body}: {answer.Text}";
+
+            answer.Status.Should().Be(HttpStatusCode.BadRequest, because);
+
+            var said = JsonNode.Parse(answer.Text)!;
+
+            said["status"]!.GetValue<int>().Should().Be(400, because);
+            said["errors"]!.AsObject().Select(member => member.Key).Should().Equal(["$"], because);
+            said["errors"]!["$"]![0]!.GetValue<string>().Should().Contain("no Unicode text", because);
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
     /// <summary>A byte order mark, as a client may write it ahead of a body.</summary>
     private const string Mark = "\uFEFF";
 

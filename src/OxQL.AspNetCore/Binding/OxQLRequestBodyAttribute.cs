@@ -340,8 +340,9 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         action.ModelState.Clear();
         action.ModelState.AddModelError(RequestBodyReader.Root, Said);
 
-        if (http.RequestServices.GetService<IOptions<ApiBehaviorOptions>>()?.Value.InvalidModelStateResponseFactory is { } factory)
-            return factory(action);
+        // A factory that answers nothing leaves the answer of a host that configured none.
+        if (http.RequestServices.GetService<IOptions<ApiBehaviorOptions>>()?.Value.InvalidModelStateResponseFactory is { } factory && factory(action) is { } answer)
+            return answer;
 
         return new BadRequestObjectResult(new ValidationProblemDetails(action.ModelState) { Status = StatusCodes.Status400BadRequest }) { ContentTypes = { "application/problem+json" } };
     }

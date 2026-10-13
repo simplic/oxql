@@ -70,7 +70,7 @@ public class RemoteHostTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*InternalHosts*crm*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start:*log lines above*OxQL:Startup:StrictRemoteReferences*");
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class RemoteHostTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*InternalHosts*crm*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start:*log lines above*OxQL:Startup:StrictRemoteReferences*");
     }
 
     [Fact]

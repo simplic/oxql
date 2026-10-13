@@ -681,6 +681,10 @@ What a caller without the contract header reads differently:
   The deadline runs on the host's clock from when the aggregate is handed to the driver, so the
   selection of a server, the wait for a pooled connection and the transfer of the rows are in it;
   a margin below 0 switches it off, and the database's own limit holds either way.
+- **The strict start.** The exception that stops a host whose declared remote references have no
+  configured service says how many there are, that the log lines before it name them, and the
+  switch; the services and the keys to set are in those lines (`OxQL.Startup`), once.
+  `RemoteReferenceCheck.Refusal` is its text.
 - **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
   `OxQLEndpointOptions.StrictRemoteReferences`, `Execution:ClientDeadlineMarginMs` (5 000).
 - **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix

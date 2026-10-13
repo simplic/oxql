@@ -96,7 +96,11 @@ public class RemoteReferencesTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*'fleet'*nest.order#department.id*InternalHosts:fleet*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start:*log lines above*OxQL:Startup:StrictRemoteReferences*");
+
+        // The line the log carries for the service names the nested reference and the key to set.
+        RemoteReferenceCheck.DescribeByService(RemoteReferenceCheck.Unconfigured(Model, new FakeRemoteClient { Configured = ["vehicle", "staff", "crm"] }))
+            .Should().ContainSingle().Which.Should().Match("*'fleet'*nest.order#department.id*InternalHosts:fleet*");
     }
 
     [Fact]

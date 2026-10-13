@@ -30,7 +30,7 @@ public class HostHardeningStrictStartupTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*InternalHosts*crm*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start:*log lines above*OxQL:Startup:StrictRemoteReferences*");
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public class HostHardeningStrictStartupTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*InternalHosts*crm*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start:*log lines above*OxQL:Startup:StrictRemoteReferences*");
     }
 
     [Theory]
@@ -155,7 +155,11 @@ public class HostHardeningStrictStartupTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*service 'crm'*InternalHosts:crm*OxQL:Startup:StrictRemoteReferences*");
+        // The exception is short: the log lines before it name the services and the keys, once.
+        var message = act.Should().Throw<InvalidOperationException>().WithMessage("OxQL refuses to start: * service(s) have no configured service on this host.*log lines above*OxQL:Startup:StrictRemoteReferences*").Which.Message;
+
+        message.Should().NotContain("InternalHosts").And.NotContain("'crm'");
+        message.Should().MatchRegex(@"^OxQL refuses to start: [0-9]+ declared remote reference\(s\) into [0-9]+ service\(s\) have");
     }
 
     [Fact]

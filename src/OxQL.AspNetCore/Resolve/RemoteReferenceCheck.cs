@@ -64,6 +64,16 @@ public static class RemoteReferenceCheck
     public static bool IsStrict(bool? endpoint, bool? configured, string? environmentName, bool continuousIntegration) =>
         endpoint ?? configured ?? IsStrict(environmentName, continuousIntegration);
 
+    /// <summary>
+    /// The message of the exception that stops a strict host: how many services are not configured,
+    /// where they are named, and the switch that starts the host without them. The services and the
+    /// keys to set are in the log lines written before it (<see cref="DescribeByService"/>).
+    /// </summary>
+    public static string Refusal(int references, int services) =>
+        $"OxQL refuses to start: {references} declared remote reference(s) into {services} service(s) have no configured service on this host. "
+        + "The log lines above (OxQL.Startup, 'OxQL remote reference finding') name each service and the configuration keys to set. "
+        + "To start without them, set OxQL:Startup:StrictRemoteReferences to false.";
+
     /// <summary>One line per finding.</summary>
     public static string Describe(RemoteReference reference) =>
         $"'{reference.Entity}#{reference.Path}' references '{reference.TargetEntity}', but this host has no InternalHosts entry for '{reference.Service}'; configure the service under that key or the reference resolves to nothing.";
@@ -174,9 +184,9 @@ internal sealed class RemoteReferenceStartupFilter(IServiceProvider provider) : 
                     findings.Count,
                     services.Count);
 
+                // The lines above say it in full, once; the exception the host, the framework and the runtime each print again says it in short.
                 if (throwWhenStrict)
-                    throw new InvalidOperationException(
-                        "OxQL refuses to start: " + string.Join(" ", services) + " To start without them, set OxQL:Startup:StrictRemoteReferences to false.");
+                    throw new InvalidOperationException(RemoteReferenceCheck.Refusal(findings.Count, services.Count));
             }
 
             return true;

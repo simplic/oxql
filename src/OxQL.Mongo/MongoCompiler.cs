@@ -2380,6 +2380,13 @@ internal static class MongoCompiler
     /// accents would join; ids are exact, so the joined rows are compared again byte for
     /// byte, with the byte functions that a collation does not reach. A key that is not a
     /// string joins as it always has.
+    /// <para>
+    /// The byte functions take text and nothing else, and the database evaluates them where their
+    /// operand is known before a row is read: the key of the row a join runs for is such an operand,
+    /// in the branch that is not taken too. So each reads its operand as text or as the empty text
+    /// (<see cref="TextOrEmpty"/>), and a row whose key is null, not stored or of another type is
+    /// compared by the plain join alone.
+    /// </para>
     /// </summary>
     private static BsonDocument ExactKeyMatch(string foreignField)
     {
@@ -2395,12 +2402,16 @@ internal static class MongoCompiler
             }),
             ["then"] = new BsonDocument("$and", new BsonArray
             {
-                new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { field, key }), 0 }),
-                new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", field), new BsonDocument("$strLenBytes", key) }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { TextOrEmpty(field), TextOrEmpty(key) }), 0 }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", TextOrEmpty(field)), new BsonDocument("$strLenBytes", TextOrEmpty(key)) }),
             }),
             ["else"] = true,
         })));
     }
+
+    /// <summary>A value where it is text, the empty text where it is anything else: an operand a byte function takes whatever the value is.</summary>
+    private static BsonDocument TextOrEmpty(string value) =>
+        new("$cond", new BsonArray { new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", value), "string" }), value, "" });
 
     /// <summary>
     /// The projection inside a join: what the join loads of its target (the select of a contract 1

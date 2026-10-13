@@ -558,6 +558,9 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **Joins on a text key.** In a request that folds case, a join over a reference stored as text
+  joins a row whose reference is null, not stored or no text as it joins it in a request that
+  folds nothing; the rows beside it join byte for byte.
 - **The API description.** The schemas of the OxQL routes in a document generated from the API
   explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
   `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in

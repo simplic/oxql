@@ -211,7 +211,7 @@ public class CaseInsensitiveCompileTests
                 { $match: {{OrgJson}} },
                 { $match: { $expr: { $cond: {
                     if: { $and: [ { $eq: [ { $type: "$$oxKey" }, "string" ] }, { $eq: [ { $type: "$Code" }, "string" ] } ] },
-                    then: { $and: [ { $eq: [ { $indexOfBytes: [ "$Code", "$$oxKey" ] }, 0 ] }, { $eq: [ { $strLenBytes: "$Code" }, { $strLenBytes: "$$oxKey" } ] } ] },
+                    then: { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$Code")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$Code")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] },
                     else: true } } } },
                 { $limit: 1 },
                 { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
@@ -223,10 +223,13 @@ public class CaseInsensitiveCompileTests
 
         join.Names.Should().Equal("from", "localField", "foreignField", "let", "pipeline", "as");
         join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code' }"));
-        join["pipeline"].AsBsonArray[1]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("""
-            { $and: [ { $eq: [ { $indexOfBytes: [ "$FolderCode", "$$oxKey" ] }, 0 ] }, { $eq: [ { $strLenBytes: "$FolderCode" }, { $strLenBytes: "$$oxKey" } ] } ] }
+        join["pipeline"].AsBsonArray[1]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse($$"""
+            { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$FolderCode")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$FolderCode")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] }
             """));
     }
+
+    /// <summary>An operand of a byte function: the value where it is text, the empty text where it is anything else, so the function is given text whatever the row holds.</summary>
+    private static string Text(string value) => $$"""{ $cond: [ { $eq: [ { $type: "{{value}}" }, "string" ] }, "{{value}}", "" ] }""";
 
     [Fact]
     public async Task A_join_on_a_string_key_is_unchanged_when_nothing_folds()

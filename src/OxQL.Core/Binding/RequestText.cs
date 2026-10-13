@@ -29,9 +29,23 @@ internal static class RequestText
     };
 
     /// <summary>
+    /// What the JSON reader names as the source of an exception it throws for a value it cannot
+    /// read as what was asked for, a text that is no Unicode text among them. An exception thrown
+    /// by anything else (a host's definitions source, the engine itself) carries another source.
+    /// </summary>
+    private const string ReaderSource = "System.Text.Json.Rethrowable";
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is the JSON reader's own: the failure of a read of a
+    /// JSON value, as that of a name or a text that is no Unicode text is.
+    /// </summary>
+    public static bool IsFailedRead(InvalidOperationException exception) =>
+        string.Equals(exception.Source, ReaderSource, StringComparison.Ordinal);
+
+    /// <summary>
     /// Whether <paramref name="request"/> holds a name or a text that is no Unicode text in any of
-    /// the JSON values it carries as written. Asked only once a read has failed, to tell the
-    /// caller's mistake from a fault.
+    /// the JSON values it carries as written. Asked only once a read of a JSON value has failed
+    /// (<see cref="IsFailedRead"/>), to tell the caller's mistake from a fault.
     /// </summary>
     public static bool HoldsBroken(QueryRequest request) => Holds(request, 0);
 

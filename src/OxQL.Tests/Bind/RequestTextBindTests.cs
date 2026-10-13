@@ -49,6 +49,28 @@ public class RequestTextBindTests
         }
     }
 
+    /// <summary>A definitions source of a host that fails with an error of its own.</summary>
+    private sealed class FailingAddons : OxQL.Model.Addon.IAddonDefinitionSource
+    {
+        public const string Said = "the definitions store is not open";
+
+        public ValueTask<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(Said);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public async Task A_fault_while_a_request_with_such_a_text_is_bound_stays_a_fault(int contract)
+    {
+        // The text stands where nothing reads it; what fails is the host's own source, on the addon path.
+        var request = BindHost.Parse($$"""{ {{Head}}, "variables": { "unused": "{{Half}}" }, "pipeline": [{ "match": { "addon.weight": { "gte": 1 } } }] }""");
+
+        var bind = async () => await BindHost.BindAsync(BindHost.Probe, request, BindHost.Context(addons: new FailingAddons(), contract: contract));
+
+        (await bind.Should().ThrowAsync<InvalidOperationException>()).WithMessage(FailingAddons.Said);
+    }
+
     [Fact]
     public async Task A_whole_pair_binds()
     {

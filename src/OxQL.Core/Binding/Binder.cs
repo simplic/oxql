@@ -82,10 +82,11 @@ public sealed partial class Binder
         {
             return await BindRequestAsync(request, context, explain, cancellationToken).ConfigureAwait(false);
         }
-        catch (InvalidOperationException) when (RequestText.HoldsBroken(request))
+        catch (InvalidOperationException exception) when (RequestText.IsFailedRead(exception) && RequestText.HoldsBroken(request))
         {
             // A name or a text of the request is no Unicode text, and a read of it as one failed: the
-            // caller's mistake, whether or not a host answered it from the body first.
+            // caller's mistake, whether or not a host answered it from the body first. Anything else
+            // that fails while such a request is bound is a fault and is passed on as one.
             return new BindOutcome.Failed(Refusal.Validation([RequestText.Refused()]));
         }
     }

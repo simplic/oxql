@@ -140,9 +140,9 @@ public class ShapeHCollectionsTests
     }
 
     [Fact]
-    public async Task H10_an_unknown_path_inside_any_is_refused_naming_the_element_relative_path()
+    public async Task H10_an_unknown_path_inside_any_is_refused_naming_the_member_under_its_collection()
     {
-        Refused(await Match("""{ "items": { "any": { "nope": { "eq": 1 } } } }"""), "UNKNOWN_PATH", "nope");
+        Refused(await Match("""{ "items": { "any": { "nope": { "eq": 1 } } } }"""), "UNKNOWN_PATH", "items.nope");
     }
 
     [Fact]

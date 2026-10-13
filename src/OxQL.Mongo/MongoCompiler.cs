@@ -257,6 +257,9 @@ internal static class MongoCompiler
     /// <summary>The variable the <c>keyedBy</c> prologue's filter reads each element under.</summary>
     private const string ElementVariable = "oxItem";
 
+    /// <summary>The variable a quotient reads its divisor under.</summary>
+    private const string DivisorVariable = "oxDivisor";
+
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
 
@@ -2759,6 +2762,19 @@ internal static class MongoCompiler
         BoundExpression.Path { Unwrap: true } path => new BsonDocument("$ifNull", new BsonArray { "$" + path.Resolved.Storage + "._v", "$" + path.Resolved.Storage }),
         BoundExpression.Path path => "$" + path.Resolved.Storage,
         BoundExpression.Literal literal => new BsonDocument("$literal", literal.Value),
+
+        // A quotient by zero is no number: it is null, as a quotient by null is. The divisor is read
+        // once and taken as null where it is zero, so no row and no constant makes the database
+        // divide by zero, in a branch it takes or in one it only looks at.
+        BoundExpression.Arithmetic { Operator: "divide", Operands: [var dividend, var divisor] } => new BsonDocument("$let", new BsonDocument
+        {
+            ["vars"] = new BsonDocument(DivisorVariable, Expression(divisor)),
+            ["in"] = new BsonDocument("$divide", new BsonArray
+            {
+                Expression(dividend),
+                new BsonDocument("$cond", new BsonArray { new BsonDocument("$eq", new BsonArray { "$$" + DivisorVariable, 0 }), BsonNull.Value, "$$" + DivisorVariable }),
+            }),
+        }),
         BoundExpression.Arithmetic arithmetic => new BsonDocument(arithmetic.Operator switch
         {
             "add" => "$add",

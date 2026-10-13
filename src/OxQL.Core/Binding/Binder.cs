@@ -4232,6 +4232,7 @@ public sealed class Binder
                 }
 
                 var operands = new List<BoundExpression>();
+                var kinds = new List<Kind>();
                 var numeric = Kind.Long;
 
                 foreach (var operand in expression.Operands ?? [])
@@ -4245,6 +4246,7 @@ public sealed class Binder
                         numeric = operandKind == Kind.Decimal || numeric == Kind.Decimal ? Kind.Decimal : Kind.Double;
 
                     operands.Add(bound);
+                    kinds.Add(operandKind);
                 }
 
                 if (operands.Count == 0)
@@ -4253,7 +4255,23 @@ public sealed class Binder
                     return null;
                 }
 
-                kind = expression.Operator == "coalesce" ? Kind.Unknown : numeric;
+                if (expression.Operator == "coalesce")
+                    return new BoundExpression.Arithmetic(expression.Operator!, operands);
+
+                if (!ArithmeticApplies(expression.Operator!, kinds, out var result, out var why))
+                {
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.InvalidAggregateArgument,
+                        Message = $"'{expression.Operator}' {why}.",
+                        Stage = index,
+                        Params = contract2 ? new Dictionary<string, object?> { ["operator"] = expression.Operator, ["kinds"] = kinds.Select(Kinds.NameOf).ToList() } : null,
+                    });
+                    return null;
+                }
+
+                // A quotient of whole numbers is no whole number: it is a double, a decimal with a decimal operand.
+                kind = result ?? (expression.Operator == "divide" && numeric == Kind.Long ? Kind.Double : numeric);
                 return new BoundExpression.Arithmetic(expression.Operator!, operands);
             }
 
@@ -4261,6 +4279,54 @@ public sealed class Binder
 
             kind = KindOf(constant);
             return new BoundExpression.Literal(constant);
+        }
+
+        /// <summary>
+        /// Whether an arithmetic operator takes operands of these kinds, and the kind of what it
+        /// answers where that is no number. Arithmetic is over numbers; a member of a kind the model
+        /// does not know, a null and what a <c>coalesce</c> answers are taken as they come (a row that
+        /// holds something else there is refused when the request runs). Dates take part in two forms:
+        /// one date in an <c>add</c> or as what a <c>subtract</c> takes from (a date moved by
+        /// milliseconds), and one date less another (the milliseconds between them).
+        /// </summary>
+        private static bool ArithmeticApplies(string op, IReadOnlyList<Kind> kinds, out Kind? result, [NotNullWhen(false)] out string? why)
+        {
+            static bool Number(Kind kind) => kind is Kind.Int or Kind.Long or Kind.Double or Kind.Decimal or Kind.Enum or Kind.Unknown;
+            static bool Date(Kind kind) => kind is Kind.Date or Kind.DateTime;
+
+            result = null;
+            why = null;
+
+            if (op is "subtract" or "divide" && kinds.Count != 2)
+            {
+                why = $"takes two operands, not {kinds.Count}";
+                return false;
+            }
+
+            if (op == "subtract" && Date(kinds[0]) && (Date(kinds[1]) || Number(kinds[1])))
+            {
+                result = Date(kinds[1]) ? Kind.Long : Kind.DateTime;
+                return true;
+            }
+
+            if (op == "add" && kinds.Count(Date) == 1 && kinds.All(kind => Date(kind) || Number(kind)))
+            {
+                result = Kind.DateTime;
+                return true;
+            }
+
+            if (kinds.FirstOrDefault(kind => !Number(kind), Kind.Unknown) is var other && other != Kind.Unknown)
+            {
+                why = op switch
+                {
+                    "add" when Date(other) => "takes numbers and at most one date; two dates do not add up",
+                    "subtract" when Date(other) => "takes a date from a date, or a number from a date or a number, not a date from a number",
+                    _ => $"takes numbers, not {Kinds.WithArticle(other)}",
+                };
+                return false;
+            }
+
+            return true;
         }
 
         private static Kind KindOf(BsonValue value) => value.BsonType switch

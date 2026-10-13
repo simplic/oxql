@@ -558,6 +558,13 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **Arithmetic in an aggregate's argument.** A quotient by zero or by `null` is `null`, which an
+  aggregate skips, whatever rows the request meets; a quotient is a `double` (a `decimal` with a
+  `decimal` operand), so `sum` and `avg` over one carry its fraction. An operand that is no
+  number (text, a boolean, a duration, a guid, two dates in an `add`) and a `subtract` or
+  `divide` without exactly two operands are 400 `INVALID_AGGREGATE_ARGUMENT` with
+  `params { operator, kinds }`, in a run and in explain; a row that holds text where the kinds
+  allow a number is 422 with the same code.
 - **A NUL character in an operand.** A text operand that holds one (`"\u0000"`) is matched as
   the character it is by every operator; a `regex` that holds one is 400 `INVALID_REGEX` (the
   pattern writes it `\x00`).

@@ -953,6 +953,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         MongoCommandException command when IsPatternRejection(command) =>
             Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]),
 
+        // The binder takes numbers into the arithmetic of an aggregate by the kind of each member; a
+        // row that holds something else there (text under a member the model does not describe) is
+        // the data's doing, said with the code of the argument.
+        MongoCommandException command when IsArithmeticRejection(command) =>
+            Refusal.NotExecutable(Codes.InvalidAggregateArgument, "A row holds a value the arithmetic of an aggregate cannot take: it adds, subtracts, multiplies and divides numbers, and moves a date by a number."),
+
         // The binder bounds how deep a condition nests; a pipeline the driver still cannot
         // serialize this deep is the query's cost, not a fault of the host.
         BsonSerializationException =>
@@ -960,6 +966,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         _ => null,
     };
+
+    /// <summary>Whether the server refused an arithmetic expression for what a row holds: its codes for an operand that is no number, and for a quotient by zero.</summary>
+    private static bool IsArithmeticRejection(MongoCommandException command) =>
+        command.Code != 50
+        && command.ErrorMessage is { } message
+        && (message.Contains("$add", StringComparison.Ordinal) || message.Contains("$subtract", StringComparison.Ordinal) || message.Contains("$multiply", StringComparison.Ordinal) || message.Contains("$divide", StringComparison.Ordinal));
 
     /// <summary>
     /// Whether the server refused to compile a pattern: its dedicated code, or the generic

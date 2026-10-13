@@ -639,7 +639,17 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   object by its members.
 - An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`
   (a bare number, boolean or `null` is a literal too), or an arithmetic expression
-  `add subtract multiply divide coalesce` over an array of arguments.
+  `add subtract multiply divide coalesce` over an array of arguments. Arithmetic is over numbers
+  (`int`, `long`, `double`, `decimal`, an enum by its number; a member of `unknown` kind, a `null`
+  and what a `coalesce` answers are taken as they come): an operand of another kind is
+  `INVALID_AGGREGATE_ARGUMENT` (`params { operator, kinds }`), and so is a `subtract` or a
+  `divide` that does not take exactly two operands. A date takes part in two forms: one date in
+  an `add`, or a date a number is subtracted from, is that date moved by so many milliseconds
+  (a `dateTime`); one date less another is the milliseconds between them (a `long`). **A quotient
+  by zero is `null`**, as a quotient by `null` is, and `sum`, `avg`, `min` and `max` skip it like
+  any `null`; a quotient is a `double`, a `decimal` when an operand is one. A row that holds a
+  value no arithmetic takes where the kinds allow one (text under an `unknown` member) refuses
+  the run: 422 `INVALID_AGGREGATE_ARGUMENT`.
 - **Written as read.** A `group` that is no object is `UNKNOWN_STAGE_MEMBER`, and so is a key
   that names both `path` and `dateTrunc` (`params.reason: "exclusive"`). An aggregate is an object
   of one function: two functions, an argument object that names no path, variable, literal or

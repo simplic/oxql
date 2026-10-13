@@ -530,10 +530,9 @@ What a contract 2 caller reads differently:
   others.
 - **No request at all**: the literal `null` as a body, a batch without `queries`, an explain
   without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason` is
-  `"missing"` for a member that is not there and `"kind"` for a `null`); the code was
-  `UNKNOWN_STAGE`.
+  `"missing"` for a member that is not there and `"kind"` for a `null`).
 - **`OPTION_NOT_APPLICABLE`** is one error per option of a condition that is no option, each with
-  `params.option`; several unknown options were one error.
+  `params.option`.
 - **Message texts.** `OPTION_NOT_APPLICABLE` says which of three mistakes was made (a name that
   is no option, an option that is no boolean, an `options` that is no object); a `dateTrunc` key
   says whether its path is no date (`INVALID_AGGREGATE_ARGUMENT`) or lies under a collection
@@ -564,8 +563,8 @@ What a contract 2 caller reads differently:
   remote client keeps owner facts (`IRemoteOwnerInfo`) and has none of that owner, or the facts
   name another contract, or the host remembers the owner as not answering. A join into a target
   the host's check found its owner not to publish is noted `REFERENCE_TARGET_UNKNOWN` and is not
-  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for; it was
-  `timeout`), `unknown`, `engine` and `route` beside the ones it had.
+  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for),
+  `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
 - **A duration stored as text.** `gt`, `gte`, `lt` and `lte` on it have one answer, by the

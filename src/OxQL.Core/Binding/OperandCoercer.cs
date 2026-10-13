@@ -28,11 +28,6 @@ public sealed class OperandCoercer
     private readonly bool contract2;
 
     /// <summary>
-    /// The coercer of one request. Under <paramref name="contract2"/> an operand is read as written or
-    /// refused: a decimal is digits with one optional sign, point and exponent, and a member holding a
-    /// single character takes one character.
-    /// </summary>
-    /// <summary>
     /// The collection whose elements the operands being read are compared with (inside <c>any</c>);
     /// null elsewhere. A message names a member under it, as the row has it.
     /// </summary>
@@ -40,6 +35,11 @@ public sealed class OperandCoercer
 
     private string Shown(ResolvedPath path) => Under is null ? path.Wire : Under + "." + path.Wire;
 
+    /// <summary>
+    /// The coercer of one request. Under <paramref name="contract2"/> an operand is read as written or
+    /// refused: a decimal is digits with one optional sign, point and exponent, and a member holding a
+    /// single character takes one character.
+    /// </summary>
     public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null, bool contract2 = true)
     {
         this.options = options;

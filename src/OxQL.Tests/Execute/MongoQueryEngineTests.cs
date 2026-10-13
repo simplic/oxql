@@ -113,7 +113,7 @@ public class MongoQueryEngineTests
         var continued = runner.Calls.Last(call => !call.Stages[^1].Contains("$count")).Stages;
 
         continued.Should().NotContain(stage => stage.Contains("$skip"), "the next page starts after the last group by value, not by counting groups");
-        continued[^3].ShouldBeBson(BsonDocument.Parse("{ $match: { st: { $gt: 1 } } }"), "after the group, where its key exists, and before the sort");
+        continued[^3].ShouldBeBson(BsonDocument.Parse("{ $match: { $or: [ { st: { $gt: 1 } }, { st: { $type: [2, 14, 3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] } }"), "after the group, where its key exists, and before the sort: the larger keys, and the keys of a type that orders after a number");
         continued[^2].ShouldBeBson(BsonDocument.Parse("{ $sort: { st: 1 } }"));
     }
 

@@ -21,6 +21,11 @@ public class GoldenPipelineTests
         return MongoCompiler.Compile(bound, Options);
     }
 
+    /// <summary>The stored types a sort puts after text, and after a number: what a page that continues across the types asks for beside the range.</summary>
+    private const string LaterThanText = "[3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127]";
+
+    private const string LaterThanNumbers = "[2, 14, 3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127]";
+
     private static BsonDocument Scope() => new("$match", new BsonDocument("OrganizationId", Org));
 
     private static void ShouldBe(IReadOnlyList<BsonDocument> actual, params string[] expected)
@@ -403,7 +408,7 @@ public class GoldenPipelineTests
         var compiled = await Compile($$"""[{ "sort": [{ "number": "asc" }] }, { "page": { "limit": 2, "cursor": "{{cursor}}" } }]""");
 
         ShouldBe(compiled.PageStages,
-            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "abc" } }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }""",
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { Number: { $gte: "abc" } }, { Number: { $type: {{LaterThanText}} } } ] }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } }, { Number: { $type: {{LaterThanText}} } } ] } ] } }""",
             "{ $sort: { Number: 1, _id: 1 } }",
             "{ $limit: 3 }");
 
@@ -413,7 +418,7 @@ public class GoldenPipelineTests
 
         (await Compile($$"""[{ "sort": [{ "number": "desc" }] }, { "page": { "limit": 2, "cursor": "{{back}}" } }]""")).PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
             { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
-                { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+                { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $lt: "abc" } }, { Number: { $type: [1, 16, 18, 19] } }, { Number: null } ] } ] } }
             """));
 
         // After a null the leading field bounds nothing, and the key alone is its own range.
@@ -460,13 +465,13 @@ public class GoldenPipelineTests
         ShouldBe((await Next("""[{ "number": "desc" }, { "id": "desc" }]""", After)).PageStages,
             $$"""
             { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
-                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: { $type: [1, 16, 18, 19] } }, { Number: null } ] } ] } }
             """,
             "{ $sort: { Number: -1, _id: -1 } }",
             "{ $limit: 3 }");
 
         ShouldBe((await Next("""[{ "number": "asc" }, { "id": "asc" }]""", After)).PageStages,
-            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "abc" } }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }""",
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { Number: { $gte: "abc" } }, { Number: { $type: {{LaterThanText}} } } ] }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } }, { Number: { $type: {{LaterThanText}} } } ] } ] } }""",
             "{ $sort: { Number: 1, _id: 1 } }",
             "{ $limit: 3 }");
 
@@ -474,7 +479,7 @@ public class GoldenPipelineTests
         ShouldBe((await Next("""[{ "id": "desc" }, { "number": "asc" }]""", After)).PageStages,
             $$"""
             { $match: { $and: [ {{OrgJson}}, { _id: { $not: { $gt: {{id.ToJson()}} } } },
-                { $or: [ { _id: {{id.ToJson()}}, Number: { $gt: "abc" } }, { _id: { $lt: {{id.ToJson()}} } }, { _id: null } ] } ] } }
+                { $or: [ { _id: {{id.ToJson()}}, Number: { $gt: "abc" } }, { _id: {{id.ToJson()}}, Number: { $type: {{LaterThanText}} } }, { _id: { $lt: {{id.ToJson()}} } }, { _id: null } ] } ] } }
             """,
             "{ $sort: { _id: -1, Number: 1 } }",
             "{ $limit: 3 }");
@@ -494,7 +499,7 @@ public class GoldenPipelineTests
         ShouldBe((await Next("""[{ "number": "asc" }, { "id": "asc" }, { "number": "desc" }, { "id": "desc" }]""", After)).PageStages,
             $$"""
             { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
-                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: { $type: [1, 16, 18, 19] } }, { Number: null } ] } ] } }
             """,
             "{ $sort: { Number: -1, _id: -1 } }",
             "{ $limit: 3 }");
@@ -648,7 +653,7 @@ public class GoldenPipelineTests
         var next = await Compile(Pipeline.Replace("""{ "limit": 10 }""", $$"""{ "limit": 10, "cursor": "{{BindHost.Cursors.Encode(payload)}}" }"""));
 
         ShouldBe(next.PageStages,
-            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "$n" } } ] } }""",
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { Number: { $gte: "$n" } }, { Number: { $type: {{LaterThanText}} } } ] } ] } }""",
             ItemsYieldARow,
             $$"""{ $set: { __oxFirst: { $cond: [ { $eq: [ { $ifNull: [ "$Number", null ] }, { $literal: "$n" } ] }, { $max: [ {{ItemsLo}}, { $cond: [ { $gt: [ "$_id", { $literal: {{id.ToJson()}} } ] }, NumberLong(3), NumberLong(4) ] } ] }, {{ItemsLo}} ] } } }""",
             $$"""{ $match: { $expr: { $lte: [ "$__oxFirst", {{ItemsHi}} ] } } }""",
@@ -656,7 +661,7 @@ public class GoldenPipelineTests
             "{ $limit: 12 }",
             """{ $unset: "__oxFirst" }""",
             """{ $unwind: { path: "$Items", preserveNullAndEmptyArrays: false, includeArrayIndex: "at" } }""",
-            $$"""{ $match: { $and: [ { Number: { $gte: "$n" } }, { $or: [ { Number: "$n", at: 3, _id: { $gt: {{id.ToJson()}} } }, { Number: "$n", at: { $gt: 3 } }, { Number: { $gt: "$n" } } ] } ] } }""",
+            $$"""{ $match: { $and: [ { $or: [ { Number: { $gte: "$n" } }, { Number: { $type: {{LaterThanText}} } } ] }, { $or: [ { Number: "$n", at: 3, _id: { $gt: {{id.ToJson()}} } }, { Number: "$n", at: { $gt: 3 } }, { Number: "$n", at: { $type: {{LaterThanNumbers}} } }, { Number: { $gt: "$n" } }, { Number: { $type: {{LaterThanText}} } } ] } ] } }""",
             """{ $sort: { Number: 1, at: 1, _id: 1 } }""",
             "{ $limit: 11 }",
             """{ $set: { item: "$Items" } }""",
@@ -876,7 +881,7 @@ public class GoldenPipelineTests
         next.PageStages[^3].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $and: [
                 { total: { $not: { $gt: 0.30000000000000004 } } },
-                { $or: [ { total: 0.30000000000000004, st: 1, no: { $ne: null } }, { total: 0.30000000000000004, st: { $gt: 1 } }, { total: { $lt: 0.30000000000000004 } }, { total: { $numberDouble: "NaN" } }, { total: null } ] },
+                { $or: [ { total: 0.30000000000000004, st: 1, no: { $ne: null } }, { total: 0.30000000000000004, st: { $gt: 1 } }, { total: 0.30000000000000004, st: { $type: [2, 14, 3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } }, { total: { $lt: 0.30000000000000004 } }, { total: { $numberDouble: "NaN" } }, { total: null } ] },
                 { $nor: [ { st: 1, no: null } ] } ] } }
             """), "the range, the position by value (below every number stands the NaN, which no range reaches), and the served group by its keys");
         next.PageStages[^2].ShouldBeBson(BsonDocument.Parse("""{ $sort: { total: -1, st: 1, no: 1 } }"""));

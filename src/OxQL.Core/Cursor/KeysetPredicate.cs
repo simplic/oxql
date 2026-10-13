@@ -7,7 +7,8 @@ public sealed record KeysetField(string Storage, bool Ascending, BsonValue Value
 {
     /// <summary>
     /// Whether the rows may hold values of more than one stored type here: a decimal still stored as
-    /// text beside the migrated rows, a value of an addon bag. Such a leg is compared across the
+    /// text beside the migrated rows, a value of an addon bag, a member written as another type than
+    /// its model declares. Such a leg is compared across the
     /// types (<see cref="KeysetPredicate.After(IReadOnlyList{KeysetField}, bool, bool)"/>); any other
     /// within the type its member is stored as.
     /// </summary>
@@ -185,11 +186,13 @@ public static class KeysetPredicate
 
     /// <summary>
     /// The stored types in the order a sort puts them in, each bracket with its type numbers: numbers
-    /// of every width, text and symbols, objects, arrays, binary, object ids, booleans, dates,
+    /// of every width, text and symbols, objects, binary, object ids, booleans, dates,
     /// timestamps, patterns, then the types no member is written as. The null bracket stands before
-    /// them all and is asked in its own words.
+    /// them all and is asked in its own words. The array is not among them: a sort orders an array
+    /// by an element of it and not as a type, and asking for the type is the one question of these an
+    /// index answers with every key it has.
     /// </summary>
-    private static readonly int[][] Brackets = [Numbers, [2, 14], [3], [4], [5], [7], [8], [9], [17], [11], [12], [13], [15], [127]];
+    private static readonly int[][] Brackets = [Numbers, [2, 14], [3], [5], [7], [8], [9], [17], [11], [12], [13], [15], [127]];
 
     /// <summary>The type numbers of the brackets that order beyond a value's own, in the direction of the sort; empty where there is none or the value's type is in no bracket.</summary>
     private static BsonArray TypesBeyond(BsonValue value, bool ascending)

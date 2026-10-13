@@ -1486,7 +1486,7 @@ internal static class MongoCompiler
 
         foreach (var field in sortFields)
             if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
-                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = HoldsSeveralTypes(field.Path) });
+                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path) });
 
         if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
             legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
@@ -1499,12 +1499,14 @@ internal static class MongoCompiler
     }
 
     /// <summary>
-    /// Whether the rows may hold values of more than one stored type under a sort path: a decimal,
-    /// which the rows written before a migration hold as text, and a value of an addon bag, which is
-    /// stored as it was written. A sort orders such rows by type first, and a page continues across
-    /// the types.
+    /// Whether the rows may hold values of more than one stored type under a sort path. Any member
+    /// of one value may: a decimal the rows written before a migration hold as text, a value of an
+    /// addon bag, which is stored as it was written, and a member some writer stored as another type
+    /// than the model declares. A sort orders such rows by type first, and a page continues across
+    /// the types; an index on the sort serves the predicate with the bounds of each type, at the
+    /// keys of the page. A path through a collection is none: the database compares its elements.
     /// </summary>
-    private static bool HoldsSeveralTypes(ResolvedPath path) => path.LeafKind == Kind.Decimal || path.Kind == Kind.Unknown || path.Addon is not null;
+    private static bool HoldsSeveralTypes(ResolvedPath path) => path.CollectionAncestors == 0 && path.Kind != Kind.Array;
 
     /// <summary>
     /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it

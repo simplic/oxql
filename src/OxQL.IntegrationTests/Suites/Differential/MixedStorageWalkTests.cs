@@ -12,7 +12,8 @@ namespace OxQL.IntegrationTests.Suites.Differential;
 /// <summary>
 /// A walk by cursor over a member whose rows hold values of more than one stored type, or a value
 /// that is no number: a decimal written as text before a migration beside the migrated rows, a
-/// double that is NaN or infinite, a Decimal128 NaN. The database orders such rows in one order
+/// double that is NaN or infinite, a Decimal128 NaN, a member a writer stored as another type than
+/// the model declares (text under a whole number, a number under a text). The database orders such rows in one order
 /// (by type first, NaN before every number), and the pages of a walk are that order, split: no row
 /// twice, none left out, whatever value a page ends on.
 /// </summary>
@@ -74,6 +75,26 @@ public class MixedStorageWalkTests
             _ => BsonNull.Value,
         };
 
+        // Members a writer stored as another type than the model declares: text and a boolean under a
+        // whole number, a number and a date under a text.
+        row["Count"] = (n % 5) switch
+        {
+            0 => new BsonString("three"),
+            1 => new BsonString("12"),
+            2 => BsonBoolean.True,
+            _ => new BsonInt32(n % 4),
+        };
+
+        row["Note"] = (n % 8) switch
+        {
+            0 => new BsonInt32(7),
+            1 => new BsonDouble(7.5),
+            2 => new BsonDateTime(new DateTime(2026, 1, 1 + (n % 3), 0, 0, 0, DateTimeKind.Utc)),
+            3 => BsonNull.Value,
+            4 => new BsonInt64(-1),
+            _ => new BsonString("note " + (n % 3)),
+        };
+
         return row;
     }
 
@@ -82,6 +103,8 @@ public class MixedStorageWalkTests
         """[{ "optionalAmount": "asc" }]""", """[{ "optionalAmount": "desc" }]""", """[{ "optionalAmount": "desc" }, { "id": "desc" }]""", """[{ "count": "asc" }, { "optionalAmount": "desc" }]""",
         """[{ "optionalRatio": "asc" }]""", """[{ "optionalRatio": "desc" }]""", """[{ "optionalRatio": "asc" }, { "optionalAmount": "asc" }]""", """[{ "count": "desc" }, { "optionalRatio": "desc" }, { "id": "desc" }]""",
         """[{ "optionalCount": "asc" }]""", """[{ "optionalCount": "desc" }]""", """[{ "optionalCount": "asc" }, { "optionalRatio": "desc" }]""",
+        """[{ "count": "asc" }]""", """[{ "count": "desc" }]""", """[{ "note": "asc" }]""", """[{ "note": "desc" }]""",
+        """[{ "note": "asc" }, { "count": "desc" }]""", """[{ "count": "asc" }, { "note": "desc" }, { "id": "desc" }]""", """[{ "active": "asc" }, { "note": "asc" }, { "count": "asc" }]""",
     ];
 
     [Theory]
@@ -89,7 +112,7 @@ public class MixedStorageWalkTests
     public async Task A_walk_over_a_member_of_several_stored_types_is_the_one_page_split(string sort)
     {
         var client = (await Fleet.Value).Client(LabService.Conformance);
-        var query = new Walks.Query(Entity, $$"""[{ "sort": {{sort}} }, { "project": { "id": 1, "optionalAmount": 1, "optionalRatio": 1, "optionalCount": 1 } }]""");
+        var query = new Walks.Query(Entity, $$"""[{ "sort": {{sort}} }, { "project": { "id": 1, "optionalAmount": 1, "optionalRatio": 1, "optionalCount": 1, "count": 1, "note": 1 } }]""");
         var whole = await Walks.WholeAsync(client, query);
 
         whole.Should().HaveCount(Rows).And.OnlyHaveUniqueItems();
@@ -102,6 +125,8 @@ public class MixedStorageWalkTests
     [InlineData("optionalAmount")]
     [InlineData("optionalRatio")]
     [InlineData("optionalCount")]
+    [InlineData("count")]
+    [InlineData("note")]
     public async Task A_walk_over_the_groups_of_such_a_member_is_the_one_page_split(string member)
     {
         var client = (await Fleet.Value).Client(LabService.Conformance);

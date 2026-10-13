@@ -151,7 +151,7 @@ public class KeysetPredicateTests
     {
         // Ascending after a number: the larger numbers, then text and every type after it.
         Typed(false, new KeysetField("n", true, new BsonDecimal128(5m)) { SeveralTypes = true }, Key)
-            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $numberDecimal: "5" }, _id: { $gt: 120 } }, { n: { $gt: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 4, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $numberDecimal: "5" }, _id: { $gt: 120 } }, { n: { $gt: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
 
         // Descending after text: the smaller text, then every number (a NaN is one), then the nulls.
         Typed(false, new KeysetField("n", false, new BsonString("7")) { SeveralTypes = true }, Key)
@@ -162,7 +162,7 @@ public class KeysetPredicateTests
     public void The_leading_range_of_such_a_leg_holds_the_later_types_and_from_a_NaN_on_everything()
     {
         KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDecimal128(5m)) { SeveralTypes = true }, Key], everyType: true)!
-            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $gte: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 4, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $gte: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
         KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDouble(double.NaN)), Key], everyType: true)!
             .ShouldBeBson(BsonDocument.Parse("""{ n: { $ne: null } }"""));
         KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDouble(1.5)), Key], everyType: true)!

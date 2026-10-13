@@ -215,7 +215,7 @@ public class LateJoinTests
             CustomerLookupJson,
             """{ $set: { cust: { $arrayElemAt: ["$cust__arr", 0] } } }""",
             """{ $unset: "cust__arr" }""",
-            $$"""{ $match: { $and: [ { "cust.Name": { $gte: "abc" } }, { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } } ] } ] } }""",
+            $$"""{ $match: { $and: [ { $or: [ { "cust.Name": { $gte: "abc" } }, { "cust.Name": { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }, { $or: [ { "cust.Name": "abc", _id: { $gt: {{id.ToJson()}} } }, { "cust.Name": { $gt: "abc" } }, { "cust.Name": { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] } ] } }""",
             """{ $sort: { "cust.Name": 1, _id: 1 } }""",
             "{ $limit: 3 }");
     }

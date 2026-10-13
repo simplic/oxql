@@ -603,10 +603,10 @@ What a contract 2 caller reads differently:
   that is not unwound (`items.text`, a collection of text) answers the rows in which one element
   starts with the text, in a `match`, the request's `filter`, a join's `filter` and under `not`;
   it reads every candidate row there, as `contains` does.
-- **A walk by cursor over a number, a `decimal` or an addon key.** The pages are the order of
-  the sort, split, also where rows hold the decimal as text beside the migrated rows, a NaN, or
-  an addon value of another stored type: each row is served once. A cursor issued before is
-  continued as it was issued.
+- **A walk by cursor.** The pages are the order of the sort, split, also where rows hold a NaN
+  or a value of another stored type than the member declares (a decimal as text beside the
+  migrated rows, an addon value of any type, text under an `int`, a number under a `string`):
+  each row is served once. A cursor issued before is continued as it was issued.
 - **Joins on a text key.** In a request that folds case, a join over a reference stored as text
   joins a row whose reference is null, not stored or no text as it joins it in a request that
   folds nothing; the rows beside it join byte for byte.

@@ -354,12 +354,17 @@ included, as it always has; a cursor of one contract is never one of the other.
 - **A page continues in the order of its sort whatever the member holds.** A range comparison
   stays inside the stored type of its operand and holds for nothing against a NaN, while a sort
   orders every value. So the position of a contract 2 cursor also admits, on a numeric leg,
-  the rows on the far side of a NaN (NaN orders before every number), and on a
-  `decimal` member, an `unknown` member and an addon key, whose rows may hold several stored
-  types (a decimal as text beside the migrated rows), the rows whose value is of a type that
-  orders after the position's: numbers, then text, then every other type. A walk over such a
-  member serves every row once. A member of another kind that holds a value of a type its kind
-  does not have (text under an `int`) is not asked across types.
+  the rows on the far side of a NaN (NaN orders before every number), and on every sort member
+  of one value and every key of a group the rows whose value is of a type that orders after the
+  position's: numbers, then text, then objects, binary, object ids, booleans and dates. A walk
+  serves every row once whatever the rows hold: a decimal as text beside the migrated rows, an
+  addon value of any stored type, text under an `int` or a number under a `string` that some
+  writer stored. An index on the sort answers the question for the types with the bounds of each
+  type, so such a page reads the keys of its page, as before (on 150 000 rows of one
+  organisation and an index on organisation, sort member and key, a page of 50 reads 52 index
+  keys with the question and 51 without, in 0.4 ms either way). The one stored type the position
+  does not ask for is the array: a sort orders an array under a member of one value by one of
+  its elements. A walk by cursor is defined for a sort member of one value; an array there is outside it.
 - A contract 2 cursor carries the number of rows the pages up to it served. It is what a later
   page's count is known by without counting (below).
 - **Sorting on a local join alias.** A keyset cursor's condition is merged into the leading

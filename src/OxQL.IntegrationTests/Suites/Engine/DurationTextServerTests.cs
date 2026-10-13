@@ -82,8 +82,34 @@ public class DurationTextServerTests
                 var alone = await TookAsync(engine, $$"""{ "match": { "took": { "{{op}}": "{{operand}}" } } }, { "sort": [{ "id": "asc" }] }""");
                 var beside = await TookAsync(engine, $$"""{ "match": { "took": { "{{op}}": "{{operand}}" }, {{Folding}} } }, { "sort": [{ "id": "asc" }] }""");
 
+                // The rows whose text orders so against the operand's text, byte by byte: worked out here from the stored texts.
+                var written = System.Xml.XmlConvert.ToTimeSpan(operand).ToString("c", System.Globalization.CultureInfo.InvariantCulture);
+                var expected = Stored.Select((text, index) => (Order: string.CompareOrdinal(text, written), Name: "task " + index))
+                    .Where(row => op switch { "gt" => row.Order > 0, "gte" => row.Order >= 0, "lt" => row.Order < 0, _ => row.Order <= 0 })
+                    .Select(row => row.Name)
+                    .ToList();
+
+                alone.Should().Equal(expected, $"{op} {operand}");
                 beside.Should().Equal(alone, $"{op} {operand}");
             }
+        }
+    }
+
+    /// <summary>The same, written out for one operand: what orders after ten hours by its characters.</summary>
+    [Fact]
+    public async Task What_orders_after_ten_hours_by_character_is_these_rows()
+    {
+        var (owned, engine) = await SeedAsync();
+
+        await using (owned)
+        {
+            // After "10:00:00" come "23:59:59" and every text that starts with a letter; a day and more as the driver
+            // writes it ("1.00:00:00", "10.00:00:00") and a negative duration order before it.
+            (await TookAsync(engine, """{ "match": { "took": { "gt": "PT10H" } } }, { "sort": [{ "id": "asc" }] }"""))
+                .Should().Equal("task 4", "task 11", "task 12", "task 13", "task 14", "task 15", "task 16");
+
+            (await TookAsync(engine, """{ "match": { "took": { "lte": "PT0S" } } }, { "sort": [{ "id": "asc" }] }"""))
+                .Should().Equal("task 0", "task 8", "task 9", "task 17");
         }
     }
 }

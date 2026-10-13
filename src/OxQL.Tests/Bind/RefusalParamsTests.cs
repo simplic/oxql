@@ -272,6 +272,18 @@ public class RefusalParamsTests
         op.Path.Should().Be("items.quantity");
     }
 
+    /// <summary>A path under an alias a stage wrote after an inclusion projection: the refusal says the rule, and which alias.</summary>
+    [Fact]
+    public async Task A_path_under_an_alias_written_after_an_inclusion_projection_says_the_rule()
+    {
+        var error = await Refused("""[{ "project": { "items": 1 } }, { "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 1 } } }]""", Codes.UnknownPath);
+
+        error.Path.Should().Be("item.quantity");
+        error.Message.Should().Contain("An inclusion projection also hides").And.Contain("project after the stage that writes 'item'");
+        error.Params!["reason"].Should().Be("projected");
+        error.Params["alias"].Should().Be("item");
+    }
+
     [Fact]
     public async Task A_dateTrunc_over_a_member_that_is_no_date_says_what_the_member_is()
     {

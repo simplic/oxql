@@ -436,6 +436,14 @@ public sealed class Shape
                 $"'{wire}' left the row when '{unwound.Collection}' was unwound as '{unwound.Alias}'; read the element under '{unwound.Alias}'.",
                 PathReasons.Unwound, ("collection", unwound.Collection), ("alias", unwound.Alias));
 
+        // Under an alias the cause is one of two, and the words say both: the projection left the alias
+        // out, or the alias was written after an inclusion projection, which names what later stages
+        // may read and cannot name what does not exist yet. (The row still shows such an alias.)
+        if (!IsVisible(wire) && rootName != ImplicitRoot)
+            return PathResolution.Fail(Codes.UnknownPath,
+                $"'{wire}' was removed by the projection: it does not name '{rootName}'. An inclusion projection also hides from the stages after it every alias one of them writes; project after the stage that writes '{rootName}', and name it there.",
+                PathReasons.Projected, ("alias", rootName));
+
         if (!IsVisible(wire))
             return PathResolution.Fail(Codes.UnknownPath, $"'{wire}' was removed by the projection.", PathReasons.Projected);
 

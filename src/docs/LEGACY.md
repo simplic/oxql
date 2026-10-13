@@ -122,6 +122,11 @@ Behaviour kept as it is, because an answer depends on it:
 - A request member, a stage key and a stage member the pipeline does not know are ignored:
   `offset`, `timing`, `filter`, `strict`, a `values` stage.
 - `limit` may be written as text (`"2"`).
+- A cursor continues by one range per sort field, in the field's direction: by comparison with
+  the last value of the page. A comparison is made among the rows that hold a value in the sort
+  member, so that is where the position of a cursor lies and where it continues. A walk that is
+  to continue across the rows that hold `null` there, or do not store the member, is a contract 2
+  walk (`X-OxQL-Contract: 2`): it orders them `null` first ascending and last descending.
 - An operand its operator cannot take (`in` with a text, `contains` with a number) and a `null`
   where a stage or a sort entry stands are a fault (500).
 - An aggregate's argument is handed to the database as written: a path as `$<path>`, a variable

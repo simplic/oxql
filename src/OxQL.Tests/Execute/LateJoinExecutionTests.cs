@@ -62,7 +62,7 @@ public class LateJoinExecutionTests
         public Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<BsonDocument>>(Evaluate(collections[entity.Collection].Select(document => document.DeepClone().AsBsonDocument).ToList(), stages));
 
-        private List<BsonDocument> Evaluate(List<BsonDocument> rows, IEnumerable<BsonDocument> stages)
+        private List<BsonDocument> Evaluate(List<BsonDocument> rows, IEnumerable<BsonDocument> stages, BsonDocument? variables = null)
         {
             foreach (var stage in stages)
             {
@@ -70,6 +70,10 @@ public class LateJoinExecutionTests
 
                 rows = element.Name switch
                 {
+                    // Whether the row a join runs for holds a key at all: { $expr: { $gt: [ "$$name", null ] } }.
+                    "$match" when element.Value is BsonDocument { ElementCount: 1 } asked && asked.GetValue("$expr", null) is BsonDocument { ElementCount: 1 } expression
+                        && expression.GetValue("$gt", null) is BsonArray { Count: 2 } operands && operands[0] is BsonString { Value: var name } && name.StartsWith("$$", StringComparison.Ordinal) && operands[1].IsBsonNull
+                        => variables is not null && variables.GetValue(name[2..], BsonNull.Value) is { IsBsonNull: false } ? rows : [],
                     "$match" => rows.Where(row => Matches(row, element.Value.AsBsonDocument)).ToList(),
                     "$sort" => SortRows(rows, element.Value.AsBsonDocument),
                     "$skip" => rows.Skip(element.Value.ToInt32()).ToList(),
@@ -204,7 +208,12 @@ public class LateJoinExecutionTests
 
             var copy = row.DeepClone().AsBsonDocument;
 
-            copy[join["as"].AsString] = new BsonArray(Evaluate(candidates, join["pipeline"].AsBsonArray.Select(stage => stage.AsBsonDocument)));
+            // The variables a join binds are fields of the row it runs for; one the row lacks is null.
+            var variables = join.GetValue("let", null) is BsonDocument let
+                ? new BsonDocument(let.Select(variable => new BsonElement(variable.Name, Get(row, variable.Value.AsString[1..]) ?? BsonNull.Value)))
+                : null;
+
+            copy[join["as"].AsString] = new BsonArray(Evaluate(candidates, join["pipeline"].AsBsonArray.Select(stage => stage.AsBsonDocument), variables));
 
             return copy;
         }

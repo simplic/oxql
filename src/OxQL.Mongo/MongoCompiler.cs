@@ -2001,7 +2001,12 @@ internal static class MongoCompiler
         var exactKey = collated && IsStringStored(lookup.ChildReference);
         var onAlias = lookup.On is not null;
 
-        if (onAlias)
+        // A parent that holds no key has no children, also where children hold nothing in their
+        // reference. The entity's own key is always there; a parent under an alias, or
+        // one a reference names by another member than its key, may hold none.
+        var keyMayBeAbsent = onAlias || lookup.ParentKeyStorage != KeyStorage;
+
+        if (keyMayBeAbsent)
             pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { "$$" + ParentVariable, BsonNull.Value }))));
 
         if (exactKey)
@@ -2016,7 +2021,7 @@ internal static class MongoCompiler
 
         var join = Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As);
 
-        if (onAlias)
+        if (keyMayBeAbsent)
         {
             var let = join.TryGetValue("let", out var existing) ? existing.AsBsonDocument : new BsonDocument();
 
@@ -2261,6 +2266,14 @@ internal static class MongoCompiler
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
         var exactKey = collated && IsStringStored(resolve.Reference);
 
+        // A reference that holds nothing names no record, also where a record holds nothing in the
+        // member it is named by. A record always holds its key, so only a reference that names
+        // its target by another member is asked.
+        var held = resolve.TargetFieldStorage != KeyStorage ? HoldsKey() : null;
+
+        if (held is not null)
+            pipeline.Add(held);
+
         if (exactKey)
             pipeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
 
@@ -2284,7 +2297,7 @@ internal static class MongoCompiler
         var temporary = resolve.As + Aliases.ReservedSuffix;
         var set = new BsonDocument(resolve.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + temporary, 0 }));
 
-        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, pipeline, temporary));
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey || held is not null, pipeline, temporary));
 
         if (probe?.AmbiguityFlag is { } ambiguity)
             set[ambiguity] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + temporary), 1 });
@@ -2304,13 +2317,16 @@ internal static class MongoCompiler
 
         var probeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
 
+        if (held is not null)
+            probeline.Add(held);
+
         if (exactKey)
             probeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
 
         probeline.Add(new BsonDocument("$limit", 1));
         probeline.Add(new BsonDocument("$project", new BsonDocument(KeyStorage, 1)));
 
-        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, probeline, existing));
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey || held is not null, probeline, existing));
 
         if (probe?.ExistsFlag is { } exists)
             set[exists] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 });
@@ -2346,12 +2362,16 @@ internal static class MongoCompiler
         static BsonDocument Branch(BsonDocument when, string outcome) => new() { ["case"] = when, ["then"] = outcome };
     }
 
+    /// <summary>The match of a join's sub-pipeline that lets nothing through for a row whose local key (<see cref="KeyVariable"/>) is null or not stored.</summary>
+    private static BsonDocument HoldsKey() =>
+        new("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { "$$" + KeyVariable, BsonNull.Value })));
+
     /// <summary>
-    /// The <c>$lookup</c> document of a join. With <paramref name="exactKey"/> the local key is
-    /// bound to a variable for the sub-pipeline's byte comparison; otherwise the document is
-    /// the indexed join alone.
+    /// The <c>$lookup</c> document of a join. With <paramref name="bindKey"/> the local key is
+    /// bound to a variable the sub-pipeline reads (its byte comparison, or whether the row holds
+    /// a key at all); otherwise the document is the indexed join alone.
     /// </summary>
-    private static BsonDocument Join(string from, string localField, string foreignField, bool exactKey, BsonArray pipeline, string alias)
+    private static BsonDocument Join(string from, string localField, string foreignField, bool bindKey, BsonArray pipeline, string alias)
     {
         var join = new BsonDocument
         {
@@ -2360,7 +2380,7 @@ internal static class MongoCompiler
             ["foreignField"] = foreignField,
         };
 
-        if (exactKey)
+        if (bindKey)
             join["let"] = new BsonDocument(KeyVariable, "$" + localField);
 
         join["pipeline"] = pipeline;

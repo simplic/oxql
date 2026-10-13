@@ -561,6 +561,10 @@ What a contract 2 caller reads differently:
 - **Joins on a text key.** In a request that folds case, a join over a reference stored as text
   joins a row whose reference is null, not stored or no text as it joins it in a request that
   folds nothing; the rows beside it join byte for byte.
+- **Joins over a member that is not the target's key.** A reference that is null or not stored
+  resolves to no record (`reference_null`), and a record that holds nothing in the member it is
+  referenced by has no children in a `lookup`, also where records and references both hold
+  nothing there.
 - **The API description.** The schemas of the OxQL routes in a document generated from the API
   explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
   `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in

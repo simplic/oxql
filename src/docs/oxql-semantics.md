@@ -62,7 +62,10 @@ owner did not answer holds `null`, with the owner's diagnostic). A `resolve` yie
 the stage's `filter`, when no case of a typed reference matches, and, for a remote target, when
 the owner did not answer (with a `RESOLVE_TIMEOUT` or `RESOLVE_UNREACHABLE` diagnostic). Which of
 these a `null` is, and which of them lose data, is the join's outcome
-([Outcomes and data loss](#outcomes-and-data-loss)).
+([Outcomes and data loss](#outcomes-and-data-loss)). A reference that holds nothing names no
+record, whatever the records hold: where a reference names its target by another member than the
+target's key (a `code`), a record that holds nothing in that member is resolved by no reference,
+and has no children in a `lookup`.
 
 **Rows.** A member stored as `null` is `null` in the row; a member absent from the document is
 absent from the row object. A stored double that is `NaN` or infinite is `null`, under a `double`

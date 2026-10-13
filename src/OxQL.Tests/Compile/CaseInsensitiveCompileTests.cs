@@ -209,6 +209,7 @@ public class CaseInsensitiveCompileTests
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [
                 { $match: {{OrgJson}} },
+                { $match: { $expr: { $gt: [ "$$oxKey", null ] } } },
                 { $match: { $expr: { $cond: {
                     if: { $and: [ { $eq: [ { $type: "$$oxKey" }, "string" ] }, { $eq: [ { $type: "$Code" }, "string" ] } ] },
                     then: { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$Code")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$Code")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] },
@@ -221,9 +222,11 @@ public class CaseInsensitiveCompileTests
         var lookup = await CompileJoin(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs" } }, { "match": { "name": { "eq": "x" } } }]""");
         var join = lookup.PageStages.Single(stage => stage.Contains("$lookup"))["$lookup"].AsBsonDocument;
 
+        // The folder is named by its code, which a folder may not hold: such a parent has no children.
         join.Names.Should().Equal("from", "localField", "foreignField", "let", "pipeline", "as");
-        join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code' }"));
-        join["pipeline"].AsBsonArray[1]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse($$"""
+        join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code', oxParent: '$Code' }"));
+        join["pipeline"].AsBsonArray[1].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("""{ $match: { $expr: { $gt: [ "$$oxParent", null ] } } }"""));
+        join["pipeline"].AsBsonArray[2]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse($$"""
             { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$FolderCode")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$FolderCode")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] }
             """));
     }
@@ -232,12 +235,13 @@ public class CaseInsensitiveCompileTests
     private static string Text(string value) => $$"""{ $cond: [ { $eq: [ { $type: "{{value}}" }, "string" ] }, "{{value}}", "" ] }""";
 
     [Fact]
-    public async Task A_join_on_a_string_key_is_unchanged_when_nothing_folds()
+    public async Task A_join_on_a_string_key_compares_no_bytes_when_nothing_folds()
     {
         var resolve = await CompileJoin(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }]""");
 
+        // The one thing asked beside the plain join: the folder is named by its code, and a reference that holds nothing names none.
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
-            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
+            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] } } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().BeNull();
     }

@@ -273,6 +273,25 @@ public class RefusalParamsTests
         op.Path.Should().Be("items.quantity");
     }
 
+    /// <summary>An <c>any</c> inside another names a member under both collections, and what follows it in the outer one under the outer one.</summary>
+    [Fact]
+    public async Task An_error_beside_and_inside_an_any_in_an_any_names_the_member_under_the_collections_it_lies_in()
+    {
+        var after = await Refused(Match("""{ "items": { "any": { "and": [{ "stops": { "any": { "city": { "exists": true } } } }, { "nosuch": { "eq": 1 } }] } } }"""), Codes.UnknownPath);
+
+        after.Path.Should().Be("items.nosuch");
+        after.Message.Should().Contain("'items.nosuch'").And.NotContain("'nosuch'");
+
+        var operand = await Refused(Match("""{ "items": { "any": { "and": [{ "stops": { "any": { "city": { "exists": true } } } }, { "quantity": { "eq": "many" } }] } } }"""), Codes.InvalidOperand);
+
+        operand.Message.Should().StartWith("'items.quantity' expects");
+
+        var inside = await Refused(Match("""{ "items": { "any": { "stops": { "any": { "nosuch": { "exists": true } } } } } }"""), Codes.UnknownPath);
+
+        inside.Path.Should().Be("items.stops.nosuch");
+        inside.Message.Should().Contain("'items.stops.nosuch'").And.NotContain("'stops.nosuch'").And.NotContain("'nosuch'");
+    }
+
     /// <summary>What an error inside <c>any</c> says beside the member is said as it was written: an operator, a variable or an operand spelled like the member is none.</summary>
     [Fact]
     public async Task An_error_inside_any_leaves_what_is_no_path_as_it_was_written()

@@ -2215,8 +2215,12 @@ public sealed partial class Binder
 
             // The inner paths are relative to one element; the ledger has them under the collection.
             var errorsBefore = errors.Count;
-            // What the conditions of an element say of a member, they say of it as the row has it: under its collection.
-            (under, coercer.Under) = (condition.Path, condition.Path);
+            // What the conditions of an element say of a member, they say of it as the row has it: under its
+            // collection, which inside another 'any' lies under that one's.
+            var outer = under;
+            var collection = Named(condition.Path);
+
+            (under, coercer.Under) = (collection, collection);
 
             BoundCondition? inner;
 
@@ -2226,7 +2230,7 @@ public sealed partial class Binder
             }
             finally
             {
-                (under, coercer.Under) = (null, null);
+                (under, coercer.Under) = (outer, outer);
             }
 
             // So has an error: it names the path as the row has it (the collection, then the element's member), in its path and its params.
@@ -2256,7 +2260,7 @@ public sealed partial class Binder
             return error with { Path = full, Params = parameters };
         }
 
-        /// <summary>The collection whose elements the conditions being bound are of (inside <c>any</c>); null elsewhere.</summary>
+        /// <summary>The collection whose elements the conditions being bound are of (inside <c>any</c>), as the row has it; null elsewhere.</summary>
         private string? under;
 
         /// <summary>A member as a message names it: under the collection whose element it is a member of, inside <c>any</c>.</summary>

@@ -75,10 +75,6 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// <summary>The state of a service this host has no <c>InternalHosts</c> entry for.</summary>
     public static RemoteServiceState Unconfigured(string service) => new(service, false, null) { Usable = false, Reason = NotConfigured };
 
-    /// <summary>
-    /// The state of a configured service after one measurement: whether its health answered, and
-    /// what the client then knows of it (<paramref name="owner"/>; null when it knows nothing).
-    /// </summary>
     /// <summary>A configured service before its first measurement.</summary>
     public static RemoteServiceState Unmeasured(string service) => new(service, true, null) { Reason = Pending };
 
@@ -86,6 +82,10 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     public static RemoteServiceState WithoutRoute(string service, bool reachable, RemoteOwnerInfo? owner) =>
         new(service, true, reachable) { Contract = owner?.Contract, EngineVersion = owner?.EngineVersion, Usable = false, Reason = Route };
 
+    /// <summary>
+    /// The state of a configured service after one measurement: whether its health answered, and
+    /// what the client then knows of it (<paramref name="owner"/>; null when it knows nothing).
+    /// </summary>
     public static RemoteServiceState Measured(string service, bool reachable, RemoteOwnerInfo? owner)
     {
         if (!reachable)

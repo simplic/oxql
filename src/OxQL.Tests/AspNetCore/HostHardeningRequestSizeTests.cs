@@ -95,16 +95,21 @@ public class HostHardeningRequestSizeTests
     }
 
     [Fact]
-    public async Task A_host_that_cannot_cap_an_undeclared_length_says_so_once()
+    public async Task A_body_of_undeclared_length_is_held_to_the_cap_where_the_engine_reads_it_whole()
     {
-        // The test server has no body size limit to set, and nothing buffers the body.
+        // The test server has no body size limit to set, and nothing buffers the body. The engine's filter reads a body up
+        // to the length a request or an explain may have before it is bound, so its length is known and the cap holds.
         using var host = Host(buffered: false);
 
         for (var call = 0; call < 3; call++)
             (await host.Client().SendAsync(Chunked("/OxQL/query", Small))).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        host.Logs.Entries.Where(entry => entry.Category == typeof(RequestSizeFilter).FullName && entry.Level == LogLevel.Warning)
-            .Should().ContainSingle().Which.Message.Should().Contain("undeclared length").And.Contain(Max.ToString());
+        host.Logs.Of(typeof(RequestSizeFilter).FullName!).Should().BeEmpty("the cap holds, so there is nothing to warn about");
+
+        var over = await host.Client().SendAsync(Chunked("/OxQL/query", Large));
+
+        over.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        (await SampleHost.Body(over))!["errors"]![0]!["code"]!.GetValue<string>().Should().Be("REQUEST_TOO_LARGE");
     }
 
     [Fact]

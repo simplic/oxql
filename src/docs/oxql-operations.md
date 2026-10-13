@@ -51,8 +51,7 @@ entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.e
 in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
 itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
 that is no whole number. Text that is no Unicode text (`encoding`) in an entry refuses that
-entry, in a member of the batch itself the batch; a batch sent without a declared length
-(`Content-Length`) is refused whole for either.
+entry, in a member of the batch itself the batch, whether the body declares its length or not.
 
 The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
 `OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the
@@ -68,7 +67,7 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 | 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above; a member name or a text that is no Unicode text is answered so by the engine's filter, in the same form |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
-| 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
+| 413 | a body of undeclared length over the larger of `Limits:MaxRequestBytes` and `Explain:MaxRequestBytes`, cut off by the server; a body with a declared length, and one of undeclared length up to that size (the engine's filter reads it before it is bound), gets the `REQUEST_TOO_LARGE` envelope |
 | 415 | the request is not `application/json` |
 
 A client that maps statuses to messages treats a 400 ProblemDetails as a caller error, like a

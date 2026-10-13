@@ -73,13 +73,13 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         var contract1 = OxQLQueryService.ContractOf(options, http) == 1;
         var limit = Math.Max(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes);
 
-        // A body of declared length within what a request may be long is read here, once, and handed to
-        // the model binder from memory: a name or a text in it that is no Unicode text is answered
-        // before anything reads it as one. Any other body is read by the binder as before.
-        if (!http.Request.Body.CanSeek && http.Request.ContentLength is > 0 and var declared && declared <= limit && IsUtf8(http.Request))
+        // A body within what a request may be long is read here, once, and handed to the model binder
+        // from memory, whether it declares its length or not: a name or a text in it that is no Unicode
+        // text is answered before anything reads it as one. A longer body is handed on as it came, what
+        // was read of it ahead of the rest: keeping a copy never stands between a body and its binder.
+        if (!http.Request.Body.CanSeek && (http.Request.ContentLength ?? 0) <= limit && IsUtf8(http.Request)
+            && await BufferedAsync(http, limit).ConfigureAwait(false) is { } bytes)
         {
-            var bytes = await ReadAsync(http.Request.Body, (int)declared, http.RequestAborted).ConfigureAwait(false);
-
             http.Request.Body = new MemoryStream(bytes, writable: false);
 
             if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes) is { Count: > 0 } broken
@@ -153,12 +153,92 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     private static bool IsUtf8(HttpRequest request) =>
         !MediaTypeHeaderValue.TryParse(request.ContentType, out var media) || media.Encoding is null || media.Encoding.CodePage == Encoding.UTF8.CodePage;
 
-    private static async Task<byte[]> ReadAsync(Stream body, int declared, CancellationToken cancellationToken)
+    /// <summary>
+    /// The whole body, read up to <paramref name="limit"/> bytes; null when it is longer, and the
+    /// request's body is then what was read followed by the rest. The server's own cap on a body of
+    /// undeclared length is set before the first byte is read, where the server has one.
+    /// </summary>
+    private static async Task<byte[]?> BufferedAsync(HttpContext http, int limit)
     {
-        var bytes = new byte[declared];
-        var read = await body.ReadAtLeastAsync(bytes, declared, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+        if (http.Request.ContentLength is null && http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } cap)
+            cap.MaxRequestBodySize = limit;
 
-        return read == declared ? bytes : bytes[..read];
+        var body = http.Request.Body;
+        var buffer = new byte[(int)Math.Min(limit + 1L, Math.Max(http.Request.ContentLength ?? 0, 16 * 1024))];
+        var read = 0;
+
+        while (true)
+        {
+            if (read == buffer.Length)
+            {
+                if (read > limit)
+                    break;
+
+                Array.Resize(ref buffer, (int)Math.Min(limit + 1L, buffer.Length * 2L));
+            }
+
+            var got = await body.ReadAsync(buffer.AsMemory(read), http.RequestAborted).ConfigureAwait(false);
+
+            if (got == 0)
+                return read == buffer.Length ? buffer : buffer[..read];
+
+            read += got;
+        }
+
+        http.Request.Body = new ReplayStream(buffer, body);
+
+        return null;
+    }
+
+    /// <summary>What was read of a body ahead of the rest of it, as one stream that reads forward only.</summary>
+    private sealed class ReplayStream(byte[] ahead, Stream rest) : Stream
+    {
+        private int position;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (position >= ahead.Length)
+                return rest.Read(buffer);
+
+            var taken = Math.Min(buffer.Length, ahead.Length - position);
+
+            ahead.AsSpan(position, taken).CopyTo(buffer);
+            position += taken;
+
+            return taken;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            position >= ahead.Length ? rest.ReadAsync(buffer, cancellationToken) : ValueTask.FromResult(Read(buffer.Span));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>

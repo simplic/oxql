@@ -561,6 +561,9 @@ What a contract 2 caller reads differently:
 - **A duration stored as text.** `gt`, `gte`, `lt` and `lte` on it have one answer, by the
   characters' bytes, alone and in a request that folds case elsewhere (there they compared
   under the collation).
+- **A body sent without a declared length** (`Transfer-Encoding: chunked`) is answered like one
+  with a `Content-Length`: text that is no Unicode text names its place, and in a batch refuses
+  its entry while the others run.
 - **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
   `Etc` area (`Etc/GMT-2`), on every host platform; they were `INVALID_TIMEZONE`.
 - **`first`, `last` and `push` after a sort with ties.** A sort a `group` follows is completed by

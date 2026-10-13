@@ -60,12 +60,8 @@ public class RequestTextTests
         ShouldSayEncoding(await staff.PostAsync("OxQL/query", body), path, @in, what);
         ShouldSayEncoding(await staff.PostAsync("OxQL/explain", body), path, @in, what + " (explain)");
 
-        // A body the host reads without a declared length is answered the same; the place is named where the body was bound before it was looked at.
-        var chunked = await SendAsync(staff, "OxQL/query", Encoding.UTF8.GetBytes(body), declared: false, contract: 2);
-
-        chunked.StatusCode.Should().Be(400, $"{what}: {chunked}");
-        chunked.ErrorCodes.Should().Equal(["INVALID_REQUEST_BODY"], what);
-        chunked.Errors[0]["params"]!["reason"]!.GetValue<string>().Should().Be("encoding", what);
+        // A body sent without a declared length is answered the same.
+        ShouldSayEncoding(await SendAsync(staff, "OxQL/query", Encoding.UTF8.GetBytes(body), declared: false, contract: 2), path, @in, what + " (no declared length)");
     }
 
     [Theory]
@@ -112,6 +108,16 @@ public class RequestTextTests
             """{"reason":"encoding","path":"$.pipeline[0].match","in":"name","entry":1}""",
             """{"reason":"encoding","path":"$.pipeline[1].match.matchCode","in":"value","entry":1}""");
         answer.Results[3].Errors[0]["params"]!["reason"]!.GetValue<string>().Should().Be("kind", "an entry written as null is said as that");
+
+        // A batch sent without a declared length is answered the same, entry by entry.
+        var chunked = await SendAsync(staff, "OxQL/batch", Encoding.UTF8.GetBytes($$"""{ "queries": [{{good}}, {{broken}}, {{good}}] }"""), declared: false, contract: 2);
+
+        chunked.StatusCode.Should().Be(200, chunked.ToString());
+        chunked.Results[0].ShouldBeOk();
+        chunked.Results[2].ShouldBeOk();
+        chunked.Results[1].Errors.Select(error => error["params"]!.ToJsonString()).Should().Equal(
+            """{"reason":"encoding","path":"$.pipeline[0].match","in":"name","entry":1}""",
+            """{"reason":"encoding","path":"$.pipeline[1].match.matchCode","in":"value","entry":1}""");
 
         // A name of the batch itself is the batch's.
         var whole = await staff.PostAsync("OxQL/batch", $$"""{ "queries": [{{good}}], "m{{Half}}": 1 }""");

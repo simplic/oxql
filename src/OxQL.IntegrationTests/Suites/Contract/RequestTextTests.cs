@@ -126,6 +126,48 @@ public class RequestTextTests
     }
 
     [Fact]
+    public async Task A_batch_with_more_such_places_than_a_refusal_names_is_refused_for_what_follows_them()
+    {
+        var staff = await Staff();
+        var entry = $$"""{ "entityType": "{{Entity}}", "pipeline": [{ "match": { "matchCode": { "eq": "a{{Half}}" } } }] }""";
+        var bodies = new (string What, string Body, string Reason)[]
+        {
+            ("text after the batch", $$"""{ "queries": [{{string.Join(",", Enumerable.Repeat(entry, 21))}}] garbage""", "json"),
+            ("a batch that does not end", $$"""{ "queries": [{{string.Join(",", Enumerable.Repeat(entry, 21))}}""", "json"),
+            ("a name of the batch itself", $$"""{ "queries": [{{string.Join(",", Enumerable.Repeat(entry, 20))}}], "x{{Half}}": 1 }""", "encoding"),
+        };
+
+        foreach (var declared in new[] { true, false })
+        foreach (var (what, body, reason) in bodies)
+        {
+            var answer = await SendAsync(staff, "OxQL/batch", Encoding.UTF8.GetBytes(body), declared, contract: 2);
+            var because = $"{what}: {answer}";
+
+            answer.StatusCode.Should().Be(400, because);
+            answer.Type.Should().Be("validation_error", because);
+            answer.ErrorCodes.Should().OnlyContain(code => code == "INVALID_REQUEST_BODY", because);
+            answer.Errors.Should().OnlyContain(error => error["params"]!["reason"]!.GetValue<string>() == reason, because);
+        }
+    }
+
+    [Fact]
+    public async Task A_body_behind_a_byte_order_mark_is_answered_as_the_body_without_it()
+    {
+        var body = $$"""{ "entityType": "{{Entity}}", "pipeline": [{ "match": { "matchCode": { "eq": "a{{Half}}" } } }] }""";
+        byte[] marked = [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(body)];
+
+        foreach (var declared in new[] { true, false })
+        {
+            ShouldSayEncoding(await SendAsync(await Staff(), "OxQL/query", marked, declared, contract: 2), "$.pipeline[0].match.matchCode.eq", "value", "behind a mark");
+
+            var answer = await SendAsync(await Staff(contract: null), "OxQL/query", marked, declared, contract: null);
+
+            answer.StatusCode.Should().Be(400, answer.ToString());
+            answer.IsProblemDetails.Should().BeTrue(answer.ToString());
+        }
+    }
+
+    [Fact]
     public async Task Bytes_that_are_no_UTF_8_are_said_the_same()
     {
         var staff = await Staff();

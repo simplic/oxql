@@ -17,8 +17,12 @@ internal enum BufferedBody
     Unread,
 }
 
-/// <summary>Buffers every request body ahead of MVC, as a host's own middleware may.</summary>
-internal sealed class BufferingStartupFilter(BufferedBody body = BufferedBody.Rewound, List<long?>? declared = null) : IStartupFilter
+/// <summary>
+/// Buffers every request body ahead of MVC, as a host's own middleware may. With
+/// <paramref name="after"/> it reads the buffer again from its start once the request is answered,
+/// as a middleware that logs a body does, and keeps what it read.
+/// </summary>
+internal sealed class BufferingStartupFilter(BufferedBody body = BufferedBody.Rewound, List<long?>? declared = null, List<byte[]>? after = null) : IStartupFilter
 {
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
     {
@@ -34,6 +38,15 @@ internal sealed class BufferingStartupFilter(BufferedBody body = BufferedBody.Re
                 context.Request.Body.Position = 0;
 
             await pipeline(context);
+
+            if (after is not null)
+            {
+                using var read = new MemoryStream();
+
+                context.Request.Body.Position = 0;
+                await context.Request.Body.CopyToAsync(read);
+                after.Add(read.ToArray());
+            }
         });
         next(app);
     };

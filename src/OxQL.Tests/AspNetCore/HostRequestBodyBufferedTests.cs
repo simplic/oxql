@@ -69,7 +69,7 @@ public class HostRequestBodyUnreadBufferTests : HostRequestBodyOverBufferTests
 /// <summary>
 /// A name or a text that is no Unicode text in a body the host's own middleware has buffered ahead
 /// of MVC: the answer is the one a body read from the wire gets, wherever the middleware left the
-/// buffer, and the buffer is left where it stood.
+/// buffer, and the buffer is left where it stood, holding the body as it was written.
 /// </summary>
 public class HostRequestTextBufferedTests
 {
@@ -84,16 +84,17 @@ public class HostRequestTextBufferedTests
 
     private static readonly string InName = $$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "num{{Half}}ber": { "eq": "a" } } }] }""";
 
-    private static SampleHost Host(BufferedBody? body) => new(
+    private static SampleHost Host(BufferedBody? body, int cap = Cap, List<byte[]>? after = null) => new(
         options =>
         {
-            options.Limits.MaxRequestBytes = Cap;
-            options.Explain.MaxRequestBytes = Cap;
+            options.Limits.MaxRequestBytes = cap;
+            options.Explain.MaxRequestBytes = cap;
+            options.Limits.MaxBatchQueries = 32;
         },
         services =>
         {
             if (body is { } left)
-                services.AddSingleton<IStartupFilter>(new BufferingStartupFilter(left));
+                services.AddSingleton<IStartupFilter>(new BufferingStartupFilter(left, after: after));
         });
 
     private static async Task<(HttpStatusCode Status, string Text)> SendAsync(SampleHost host, string route, string body, int? contract, bool declared = true)
@@ -178,6 +179,162 @@ public class HostRequestTextBufferedTests
         results[2]!["items"].Should().NotBeNull();
         results[1]!["errors"]!.AsArray().Select(error => error!["params"]!.ToJsonString()).Should().Equal(
             """{"reason":"encoding","path":"$.pipeline[0].match","in":"name","entry":1}""");
+    }
+
+    [Theory]
+    [InlineData((int)BufferedBody.Rewound)]
+    [InlineData((int)BufferedBody.Unread)]
+    public async Task A_buffered_batch_answered_entry_by_entry_is_read_after_the_action_as_it_was_written(int left)
+    {
+        var after = new List<byte[]>();
+
+        using var buffered = Host((BufferedBody)left, after: after);
+
+        var good = """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 1 } }] }""";
+        var body = $$"""{ "queries": [{{good}}, {{InName}}, {{good}}] }""";
+
+        foreach (var declared in new[] { true, false })
+        {
+            after.Clear();
+
+            var answer = await SendAsync(buffered, "/OxQL/batch", body, 2, declared);
+
+            answer.Status.Should().Be(HttpStatusCode.OK, answer.Text);
+            JsonNode.Parse(answer.Text)!["results"]![1]!["errors"].Should().NotBeNull(answer.Text);
+            Encoding.UTF8.GetString(after.Should().ContainSingle().Subject).Should().Be(body);
+        }
+    }
+
+    /// <summary>A byte order mark, as a client may write it ahead of a body.</summary>
+    private const string Mark = "\uFEFF";
+
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task A_body_behind_a_byte_order_mark_is_answered_as_the_body_without_it(int? left)
+    {
+        using var host = Host((BufferedBody?)left);
+
+        foreach (var declared in new[] { true, false })
+        foreach (var contract in new int?[] { 2, 1, null })
+        foreach (var route in new[] { "/OxQL/query", "/OxQL/explain" })
+        foreach (var body in new[] { InValue, InName })
+        {
+            var expected = await SendAsync(host, route, body, contract, declared);
+            var answer = await SendAsync(host, route, Mark + body, contract, declared);
+            var because = $"{route} contract {contract?.ToString() ?? "none"} {(declared ? "declared" : "undeclared")} {body}";
+
+            answer.Status.Should().Be(HttpStatusCode.BadRequest, because + ": " + answer.Text);
+            WithoutTrace(answer.Text).Should().Be(WithoutTrace(expected.Text), because);
+
+            if (contract == 2)
+                JsonNode.Parse(answer.Text)!["errors"]![0]!["params"]!["in"]!.GetValue<string>().Should().Be(body == InName ? "name" : "value", because);
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+
+        if ((BufferedBody?)left == BufferedBody.AtEnd)
+            return;
+
+        // An entry of a batch behind the mark is answered in its place.
+        var good = """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 1 } }] }""";
+        var batch = $$"""{ "queries": [{{good}}, {{InName}}] }""";
+        var plain = await SendAsync(host, "/OxQL/batch", batch, 2);
+        var marked = await SendAsync(host, "/OxQL/batch", Mark + batch, 2);
+
+        marked.Status.Should().Be(HttpStatusCode.OK, marked.Text);
+        marked.Text.Should().Be(plain.Text);
+
+        // So is a body that does not bind for another reason.
+        var kind = """{ "entityType": 5, "pipeline": [] }""";
+        var said = await SendAsync(host, "/OxQL/query", kind, 2);
+        var behind = await SendAsync(host, "/OxQL/query", Mark + kind, 2);
+
+        behind.Status.Should().Be(HttpStatusCode.BadRequest, behind.Text);
+        WithoutTrace(behind.Text).Should().Be(WithoutTrace(said.Text));
+    }
+
+    /// <summary>The wire (null) and every way a host's middleware leaves a buffer.</summary>
+    public static TheoryData<int?> Hosts => new() { null, (int)BufferedBody.Rewound, (int)BufferedBody.AtEnd, (int)BufferedBody.Unread };
+
+    /// <summary>An entry of a batch whose operand is no Unicode text.</summary>
+    private static readonly string BrokenEntry = """{"entityType":"probe.order","pipeline":[{"match":{"number":{"eq":"a""" + Half + "\"}}}]}";
+
+    private static string Entries(int count) => string.Join(",", Enumerable.Repeat(BrokenEntry, count));
+
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task A_batch_with_more_such_places_than_a_refusal_names_is_refused_for_what_follows_them(int? left)
+    {
+        using var host = Host((BufferedBody?)left, cap: 64 * 1024);
+
+        var bodies = new (string What, string Body, string Reason)[]
+        {
+            ("text after the batch", $$"""{"queries":[{{Entries(21)}}] garbage""", "json"),
+            ("a batch that does not end", $$"""{"queries":[{{Entries(21)}}""", "json"),
+            ("a name of the batch itself", $$"""{"queries":[{{Entries(20)}}], "x{{Half}}": 1}""", "encoding"),
+            ("a text of the batch itself", $$"""{"queries":[{{Entries(20)}}], "x": "{{Half}}"}""", "encoding"),
+        };
+
+        foreach (var declared in new[] { true, false })
+        foreach (var (what, body, reason) in bodies)
+        {
+            var answer = await SendAsync(host, "/OxQL/batch", body, 2, declared);
+            var because = $"{what}, {(declared ? "declared" : "undeclared")}: {answer.Text}";
+
+            answer.Status.Should().Be(HttpStatusCode.BadRequest, because);
+
+            var errors = JsonNode.Parse(answer.Text)!["errors"]!.AsArray();
+
+            errors.Should().NotBeEmpty(because);
+            errors.Should().OnlyContain(error => error!["code"]!.GetValue<string>() == Codes.InvalidRequestBody, because);
+            errors.Should().OnlyContain(error => error!["params"]!["reason"]!.GetValue<string>() == reason, because);
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task Every_entry_of_a_batch_with_more_such_places_than_a_refusal_names_is_answered_in_its_place(int? left)
+    {
+        if ((BufferedBody?)left == BufferedBody.AtEnd)
+            return;
+
+        using var host = Host((BufferedBody?)left, cap: 64 * 1024);
+
+        var good = """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 1 } }] }""";
+
+        foreach (var declared in new[] { true, false })
+        {
+            host.Runner.Calls.Clear();
+
+            var answer = await SendAsync(host, "/OxQL/batch", $$"""{"queries":[{{Entries(11)}},{{good}},{{Entries(11)}}]}""", 2, declared);
+
+            answer.Status.Should().Be(HttpStatusCode.OK, answer.Text);
+
+            var results = JsonNode.Parse(answer.Text)!["results"]!.AsArray();
+
+            results.Should().HaveCount(23);
+            results[11]!["items"].Should().NotBeNull(answer.Text);
+            host.Runner.Calls.Should().ContainSingle();
+
+            for (var index = 0; index < 23; index++)
+            {
+                if (index == 11)
+                    continue;
+
+                var error = results[index]!["errors"]!.AsArray().Should().ContainSingle($"entry {index}: {answer.Text}").Subject!;
+
+                error["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody);
+                error["params"]!["reason"]!.GetValue<string>().Should().Be("encoding");
+                error["params"]!["entry"]!.GetValue<int>().Should().Be(index);
+            }
+
+            // The places a refusal names are named; an entry past them is said without its place.
+            results[0]!["errors"]![0]!["params"]!["path"]!.GetValue<string>().Should().Be("$.pipeline[0].match.number.eq");
+            results[20]!["errors"]![0]!["params"]!["path"]!.GetValue<string>().Should().Be("$.pipeline[0].match.number.eq");
+            results[22]!["errors"]![0]!["params"]!.AsObject().ContainsKey("path").Should().BeFalse();
+        }
     }
 
     [Theory]

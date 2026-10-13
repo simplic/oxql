@@ -82,6 +82,10 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         byte[]? bytes = null;
         var whole = true;
 
+        // A batch read without some of its entries, and the body it stands in for while the action runs.
+        Stream? rewritten = null;
+        Stream? written = null;
+
         if (IsUtf8(http.Request) && (http.Request.ContentLength ?? 0) <= limit)
         {
             if (http.Request.Body.CanSeek)
@@ -99,7 +103,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
 
         if (bytes is not null)
         {
-            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, DepthOf(http)) is { Count: > 0 } broken
+            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, DepthOf(http), out var unnamed) is { Count: > 0 } broken
                 && (contract1 || OxQLQueryService.ContractRefusal(options, http) is null))
             {
                 if (contract1)
@@ -109,9 +113,11 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                 }
 
                 // A batch whose own members read answers the entries that do not in their places and runs the others.
-                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, broken) is { } rest)
+                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, broken, unnamed) is { } rest)
                 {
-                    http.Request.Body = new MemoryStream(rest.Body, writable: false);
+                    // The model binder reads the batch without those entries; whatever reads the body after the action reads it as it was written.
+                    written = http.Request.Body;
+                    http.Request.Body = rewritten = new MemoryStream(rest.Body, writable: false);
                     http.Items[EntriesItem] = rest.Entries;
                 }
                 else
@@ -145,6 +151,11 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         catch (InvalidOperationException) when (!http.Response.HasStarted && BrokenIn(http) is not null)
         {
             stopped = true;
+        }
+        finally
+        {
+            if (written is not null && ReferenceEquals(http.Request.Body, rewritten))
+                http.Request.Body = written;
         }
 
         if (!stopped || http.Response.HasStarted || BrokenIn(http) is not { } texts)
@@ -328,12 +339,20 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     /// <summary>
     /// A batch body with the entries that hold text that is no Unicode text written as <c>null</c>,
     /// and the refusal of each; null when such text lies outside the entries of <c>queries</c>, which
-    /// refuses the batch whole.
+    /// refuses the batch whole. An entry is refused with the places the look named in it, or
+    /// without a place when it holds only places past those (<paramref name="unnamed"/>).
+    /// <para>
+    /// The look has read <paramref name="body"/> to its end, so it is JSON throughout, and no name
+    /// of the batch itself is among the places: the body reads as a document here.
+    /// </para>
     /// </summary>
-    private static (byte[] Body, Dictionary<int, Refusal> Entries)? WithoutEntries(ReadOnlyMemory<byte> body, IReadOnlyList<(string Path, bool Name)> broken)
+    private static (byte[] Body, Dictionary<int, Refusal> Entries)? WithoutEntries(ReadOnlyMemory<byte> body, IReadOnlyList<(string Path, bool Name)> broken, RequestBodyReader.UnnamedTexts unnamed)
     {
-        const string Queries = "$.queries[";
+        const string Queries = "$." + RequestBodyReader.BatchQueries + "[";
         var entries = new Dictionary<int, List<QueryValidationError>>();
+
+        if (unnamed.Elsewhere)
+            return null;
 
         foreach (var (path, name) in broken)
         {
@@ -347,7 +366,10 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             errors.Add(RequestBodyReader.Broken(RequestBodyReader.Root + path[(close + 1)..], name));
         }
 
-        using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = int.MaxValue });
+        foreach (var index in unnamed.Entries)
+            entries.TryAdd(index, [RequestBodyReader.Broken()]);
+
+        using var document = JsonDocument.Parse(RequestBodyReader.WithoutMark(body), new JsonDocumentOptions { MaxDepth = int.MaxValue });
 
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             return null;
@@ -362,7 +384,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
 
             text.Append(JsonSerializer.Serialize(member.Name)).Append(':');
 
-            if (member.Name != "queries" || member.Value.ValueKind != JsonValueKind.Array)
+            if (member.Name != RequestBodyReader.BatchQueries || member.Value.ValueKind != JsonValueKind.Array)
             {
                 text.Append(member.Value.GetRawText());
                 continue;

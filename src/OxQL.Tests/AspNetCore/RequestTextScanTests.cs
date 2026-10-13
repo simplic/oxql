@@ -10,10 +10,10 @@ using Xunit;
 namespace OxQL.Tests.AspNetCore;
 
 /// <summary>
-/// The look for a name or a text that is no Unicode text reads a body once, to the depth the host
-/// reads a body to, and keeps nothing per value: what it costs is bounded by the body's length,
-/// whatever the body nests. A body nested deeper is none of its business; the refusal of the
-/// depth answers it.
+/// The look for a name or a text that is no Unicode text reads a body once and to its end, to the
+/// depth the host reads a body to, and keeps nothing per value: the read is in proportion to the
+/// body's length, whatever the body nests, and a path is built for the places it names only. A
+/// body nested deeper is none of its business; the refusal of the depth answers it.
 /// </summary>
 public class RequestTextScanTests
 {
@@ -108,6 +108,51 @@ public class RequestTextScanTests
         var many = "[" + string.Join(",", Enumerable.Repeat("\"" + Half + "\"", 50)) + "]";
 
         RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes(many), Limit).Should().HaveCount(20);
+    }
+
+    [Fact]
+    public void The_places_past_the_ones_it_names_are_kept_as_the_entries_of_a_batch_they_lie_in()
+    {
+        var text = "\"" + Half + "\"";
+        var twenty = string.Join(",", Enumerable.Repeat(text, 20));
+
+        // Entry 0 holds the twenty that are named and one more; entries 2 and 3 hold places past them, entry 3 two of them.
+        var batch = $$"""{ "queries": [[{{twenty}}, {{text}}], "plain", { "a": {{text}} }, { "b{{Half}}": 1, "c": [{{text}}] }, {{text}}] }""";
+
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes(batch), Limit, out var unnamed).Should().HaveCount(20);
+        unnamed.Elsewhere.Should().BeFalse();
+        unnamed.Entries.Should().Equal(0, 2, 3, 4);
+
+        // A place of the batch itself, a name or a text, lies elsewhere; so does one under another member, and one in a body that is no batch.
+        foreach (var rest in new[] { $$""" "x{{Half}}": 1 """, $$""" "x": {{text}} """, $$""" "other": [{{text}}] """, $$""" "queries": {{text}} """ })
+        {
+            RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($$"""{ "queries": [[{{twenty}}]], {{rest}} }"""), Limit, out unnamed).Should().HaveCount(20, rest);
+            unnamed.Elsewhere.Should().BeTrue(rest);
+        }
+
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($"[{twenty},{text}]"), Limit, out unnamed).Should().HaveCount(20);
+        unnamed.Elsewhere.Should().BeTrue();
+
+        // The member is told by its name, however it is written.
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($$"""{ "queries": [[{{twenty}}], {{text}}] }"""), Limit, out unnamed).Should().HaveCount(20);
+        unnamed.Should().BeEquivalentTo(new { Elsewhere = false, Entries = new[] { 1 } });
+    }
+
+    [Fact]
+    public void A_body_that_is_no_JSON_after_the_places_it_names_is_no_JSON()
+    {
+        var twenty = string.Join(",", Enumerable.Repeat("\"" + Half + "\"", 21));
+
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($"[{twenty}] garbage"), Limit).Should().BeNull();
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($"[{twenty}"), Limit).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_byte_order_mark_ahead_of_the_body_is_passed_over()
+    {
+        byte[] marked = [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes($$"""{ "a": { "b{{Half}}": 1 }, "c": "{{Half}}" }""")];
+
+        RequestBodyReader.BrokenTexts(marked, Limit).Should().Equal(("$.a", true), ("$.c", false));
     }
 
     [Fact]

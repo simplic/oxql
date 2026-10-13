@@ -103,7 +103,9 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
 
         if (bytes is not null)
         {
-            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, DepthOf(http), out var unnamed) is { Count: > 0 } broken
+            var depth = DepthOf(http);
+
+            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, depth, out var unnamed) is { Count: > 0 } broken
                 && (contract1 || OxQLQueryService.ContractRefusal(options, http) is null))
             {
                 if (contract1)
@@ -113,7 +115,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                 }
 
                 // A batch whose own members read answers the entries that do not in their places and runs the others.
-                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, broken, unnamed) is { } rest)
+                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, depth, broken, unnamed) is { } rest)
                 {
                     // The model binder reads the batch without those entries; whatever reads the body after the action reads it as it was written.
                     written = http.Request.Body;
@@ -342,11 +344,12 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     /// refuses the batch whole. An entry is refused with the places the look named in it, or
     /// without a place when it holds only places past those (<paramref name="unnamed"/>).
     /// <para>
-    /// The look has read <paramref name="body"/> to its end, so it is JSON throughout, and no name
-    /// of the batch itself is among the places: the body reads as a document here.
+    /// The look has read <paramref name="body"/> to its end and to <paramref name="maxDepth"/>, so
+    /// it is JSON throughout and nests no deeper, and no name of the batch itself is among the
+    /// places: the body reads as a document here.
     /// </para>
     /// </summary>
-    private static (byte[] Body, Dictionary<int, Refusal> Entries)? WithoutEntries(ReadOnlyMemory<byte> body, IReadOnlyList<(string Path, bool Name)> broken, RequestBodyReader.UnnamedTexts unnamed)
+    private static (byte[] Body, Dictionary<int, Refusal> Entries)? WithoutEntries(ReadOnlyMemory<byte> body, int maxDepth, IReadOnlyList<(string Path, bool Name)> broken, RequestBodyReader.UnnamedTexts unnamed)
     {
         const string Queries = "$." + RequestBodyReader.BatchQueries + "[";
         var entries = new Dictionary<int, List<QueryValidationError>>();
@@ -369,7 +372,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         foreach (var index in unnamed.Entries)
             entries.TryAdd(index, [RequestBodyReader.Broken()]);
 
-        using var document = JsonDocument.Parse(RequestBodyReader.WithoutMark(body), new JsonDocumentOptions { MaxDepth = int.MaxValue });
+        using var document = JsonDocument.Parse(RequestBodyReader.WithoutMark(body), new JsonDocumentOptions { MaxDepth = maxDepth });
 
         if (document.RootElement.ValueKind != JsonValueKind.Object)
             return null;

@@ -42,6 +42,11 @@ internal static class RequestBodyReader
     /// <summary>
     /// The body as a document, or why it is none: empty, no well-formed JSON (with the line and the
     /// position in the line, both from 1), or nested deeper than the host reads.
+    /// <para>
+    /// How deep the body nests is found by one pass over its bytes that keeps a bit per level, and a
+    /// document is built only of a body within <paramref name="maxDepth"/>: what a refusal costs is
+    /// in proportion to the body's length, however deep the body nests.
+    /// </para>
     /// </summary>
     public static QueryValidationError? Parse(ReadOnlyMemory<byte> utf8, int maxDepth, out JsonDocument? document)
     {
@@ -55,11 +60,21 @@ internal static class RequestBodyReader
                 Params = new Dictionary<string, object?> { ["reason"] = ReasonEmpty },
             };
 
+        // A byte order mark ahead of the body is passed over, as the host passes over it.
+        utf8 = WithoutMark(utf8);
+
         try
         {
-            // The document itself is read without a depth of its own: how deep the host reads is said apart from what is no JSON.
-            // A byte order mark ahead of the body is passed over, as the host passes over it.
-            document = JsonDocument.Parse(WithoutMark(utf8), new JsonDocumentOptions { MaxDepth = int.MaxValue });
+            // The body is read to its end without a depth of its own first: what is no JSON is said apart from how deep the host reads.
+            if (Deepest(utf8.Span) > maxDepth)
+                return new QueryValidationError
+                {
+                    Code = Codes.InvalidRequestBody,
+                    Message = $"The request body nests deeper than {maxDepth} levels.",
+                    Params = new Dictionary<string, object?> { ["reason"] = ReasonDepth, ["max"] = maxDepth },
+                };
+
+            document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = maxDepth });
         }
         catch (JsonException exception)
         {
@@ -74,20 +89,24 @@ internal static class RequestBodyReader
             };
         }
 
-        if (Depth(document.RootElement, 1) > maxDepth)
-        {
-            document.Dispose();
-            document = null;
-
-            return new QueryValidationError
-            {
-                Code = Codes.InvalidRequestBody,
-                Message = $"The request body nests deeper than {maxDepth} levels.",
-                Params = new Dictionary<string, object?> { ["reason"] = ReasonDepth, ["max"] = maxDepth },
-            };
-        }
-
         return null;
+    }
+
+    /// <summary>
+    /// How deep a body nests, counted as the reader counts it: an object or an array at the root is
+    /// at 1, and a value that is neither is at the depth of what holds it. The body is read token by
+    /// token to its end, and one that is no JSON fails as the reader fails.
+    /// </summary>
+    private static int Deepest(ReadOnlySpan<byte> utf8)
+    {
+        var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = int.MaxValue });
+        var deepest = 0;
+
+        while (reader.Read())
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                deepest = Math.Max(deepest, reader.CurrentDepth + 1);
+
+        return deepest;
     }
 
     // ---- text that is no text -----------------------------------------------------------------
@@ -330,37 +349,6 @@ internal static class RequestBodyReader
                 return false;
 
         return true;
-    }
-
-    /// <summary>How deep a value nests, counted as the reader counts it: a scalar is at the depth of what holds it.</summary>
-    private static int Depth(JsonElement element, int at)
-    {
-        var deepest = 0;
-        var pending = new Stack<(JsonElement Element, int Depth)>();
-
-        pending.Push((element, at));
-
-        while (pending.Count > 0)
-        {
-            var (current, depth) = pending.Pop();
-
-            if (current.ValueKind == JsonValueKind.Object)
-            {
-                deepest = Math.Max(deepest, depth);
-
-                foreach (var member in current.EnumerateObject())
-                    pending.Push((member.Value, depth + 1));
-            }
-            else if (current.ValueKind == JsonValueKind.Array)
-            {
-                deepest = Math.Max(deepest, depth);
-
-                foreach (var item in current.EnumerateArray())
-                    pending.Push((item, depth + 1));
-            }
-        }
-
-        return deepest;
     }
 
     // ---- the three bodies ---------------------------------------------------------------------

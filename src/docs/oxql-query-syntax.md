@@ -260,7 +260,7 @@ storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 | `guid` | a GUID string |
 | `date` | `YYYY-MM-DD` |
 | `dateTime` | ISO-8601 with `Z` or an offset; a bare local time is refused |
-| `timeSpan` | ISO-8601 duration (`PT1H30M`) |
+| `timeSpan` | ISO-8601 duration (`PT1H30M`, `P2DT4H`, `-PT5M`). A year in it counts as 365 days and a month as 30 (`P1Y`, `P1M`). A duration is kept to 100 nanoseconds, the precision a stored one has: finer digits of a second are dropped (`PT0.00000001S` is zero) |
 | `enum` | the member name or its number; an unknown name or number is `UNKNOWN_ENUM_MEMBER` |
 | `binary` | base64 |
 

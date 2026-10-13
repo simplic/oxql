@@ -558,6 +558,8 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **Duration operands** are days and smaller: `P1Y` and `P1M` (no fixed lengths) are 400
+  `INVALID_OPERAND`.
 - **An error inside `any`** names the member as the row has it, under its collection
   (`tours.id`), in `path`, `params.path` and the message.
 - **Text that is no Unicode text.** Half of a surrogate pair written as an escape (`"\ud800"`)

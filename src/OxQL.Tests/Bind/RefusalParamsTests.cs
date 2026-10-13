@@ -79,6 +79,38 @@ public class RefusalParamsTests
         }
     }
 
+    /// <summary>A duration is days and smaller: a year and a month are no fixed lengths. It is kept to 100 nanoseconds.</summary>
+    [Theory]
+    [InlineData("P1Y")]
+    [InlineData("P1M")]
+    [InlineData("-P2Y3M4DT1H")]
+    [InlineData("P1MT1M")]
+    public async Task A_duration_of_years_or_months_is_no_operand(string duration)
+    {
+        var error = await Refused(Match($$"""{ "span": { "lt": "{{duration}}" } }"""), Codes.InvalidOperand);
+
+        Json(error).Should().Be("""{"path":"span","operator":"lt","expected":"timeSpan","actual":"string"}""");
+        error.Message.Should().Contain("a year or a month has no fixed length");
+
+        // Under contract 1 the operand is read as it always was.
+        (await BindHost.BindAsync(BindHost.Probe, BindHost.Parse($$"""{ "entityType": "{{Order}}", "pipeline": [{ "match": { "span": { "lt": "{{duration}}" } } }] }"""), BindHost.Context(contract: 1)))
+            .Should().BeOfType<BindOutcome.Bound>();
+    }
+
+    [Theory]
+    [InlineData("P1D", "1.00:00:00")]
+    [InlineData("PT1M", "00:01:00")]
+    [InlineData("P1DT1M", "1.00:01:00")]
+    [InlineData("PT0.0000001S", "00:00:00.0000001")]
+    [InlineData("PT0.00000001S", "00:00:00")]
+    public async Task A_duration_of_days_and_smaller_is_kept_to_100_nanoseconds(string duration, string stored)
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, Match($$"""{ "span": { "eq": "{{duration}}" } }"""));
+        var leaf = bound.Stages.OfType<BoundStage.Match>().Single().Condition.Should().BeOfType<BoundCondition.Leaf>().Subject;
+
+        leaf.Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.AsString.Should().Be(stored);
+    }
+
     [Theory]
     [InlineData("""{ "when": { "gte": "2026-02-30T00:00:00Z" } }""", "names no day of the calendar")]
     [InlineData("""{ "when": { "gte": "2026-06-01T25:00:00Z" } }""", "names no day of the calendar or no time of day")]

@@ -193,9 +193,10 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     /// <see cref="State"/>, after the first measurement of this process where a configured service
     /// has none yet: that one measurement is awaited, by all callers of the moment together, for at
     /// most <see cref="ProbeTimeout"/> and a moment to put it down. Once that wait is over, measured
-    /// or not, no call waits again.
+    /// or not, no call waits again. A caller that gives up (<paramref name="cancellationToken"/>) is
+    /// let go at once; the measurement goes on for the others.
     /// </summary>
-    public async Task<IReadOnlyList<RemoteServiceState>> FirstStateAsync(EntityModel? model, IRemoteQueryClient client)
+    public async Task<IReadOnlyList<RemoteServiceState>> FirstStateAsync(EntityModel? model, IRemoteQueryClient client, CancellationToken cancellationToken = default)
     {
         var state = State(model, client);
 
@@ -205,9 +206,9 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
         Task wait;
 
         lock (gate)
-            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle)) : Task.CompletedTask;
+            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle, CancellationToken.None)) : Task.CompletedTask;
 
-        await wait.ConfigureAwait(false);
+        await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         lock (gate)
             return measured ?? state;

@@ -559,7 +559,8 @@ for a measurement in one case: the first one of a process, for a contract 2 call
   nor `usable`, and `status` says nothing of it). So that a `status` read after a start says what
   was measured, a contract 2 request that would read `pending` waits for the first measurement of
   the process: once, every such request of the moment for the same measurement, and for no longer
-  than a measurement may take (2 s per service, all services at a time). `pending` is therefore
+  than a measurement may take (the probe's timeout per service, 2 s, all services at a time, and
+  a quarter of a second to record it) or than the caller waits. `pending` is therefore
   read only where that wait ran out, and no later request waits. A caller without the contract
   header and `?shallow=true` never wait;
   `notConfigured` (no `InternalHosts` entry);

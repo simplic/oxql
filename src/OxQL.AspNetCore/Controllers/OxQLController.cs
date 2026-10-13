@@ -160,25 +160,58 @@ public class OxQLController : ControllerBase
     /// <param name="probe">What was last measured of the services the model joins into.</param>
     /// <param name="client">The host's client to those services, when it has one.</param>
     /// <param name="shallow">`true` leaves `remote` out and measures nothing: the form one service asks of another.</param>
+    /// <param name="cancellationToken">The request's: a caller that gives up is let go of the wait for the first measurement.</param>
     [HttpGet("health")]
     [AllowAnonymous]
     [EndpointSummary(OxQLDocumentation.HealthSummary)]
     [EndpointDescription(OxQLDocumentation.HealthDescription)]
     [OxQLOperation(Headers = OxQLHeaders.Contract)]
     [ProducesResponseType(typeof(OxQLHealthAnswer), StatusCodes.Status200OK, Json, Description = "The state of the engine on this host.")]
-    public async Task<IActionResult> Health(
+    public async Task<IActionResult> HealthAsync(
         [FromServices] IQueryEngine engine,
         [FromServices] IEntityModelProvider models,
         [FromServices] RemoteHealthProbe probe,
         [FromServices] IRemoteQueryClient? client,
-        [FromQuery] bool shallow = false)
+        [FromQuery] bool shallow = false,
+        CancellationToken cancellationToken = default)
+    {
+        // What a contract 2 caller reads of a service is what was measured of it: the first measurement after a start is
+        // waited for, once, and for as long as the caller does. A caller without the header is answered at once, as ever.
+        var states = client is null || shallow ? null
+            : Contract1 ? probe.State(ModelOrNull(models), client)
+            : await probe.FirstStateAsync(ModelOrNull(models), client, cancellationToken).ConfigureAwait(false);
+
+        return Health(engine, models, client, states);
+    }
+
+    /// <summary>
+    /// The engine's version, contract, capabilities and limits on this host, from what was last
+    /// measured of the services the model joins into: it waits for nothing. The route is answered by
+    /// <see cref="HealthAsync"/>, which waits for the first measurement of a process where a contract 2
+    /// caller would read none; this is the same answer for a host that calls the controller itself.
+    /// </summary>
+    /// <param name="engine">The engine.</param>
+    /// <param name="models">The host's entity model.</param>
+    /// <param name="probe">What was last measured of the services the model joins into.</param>
+    /// <param name="client">The host's client to those services, when it has one.</param>
+    /// <param name="shallow">`true` leaves `remote` out and measures nothing: the form one service asks of another.</param>
+    [NonAction]
+    public IActionResult Health(
+        IQueryEngine engine,
+        IEntityModelProvider models,
+        RemoteHealthProbe probe,
+        IRemoteQueryClient? client,
+        bool shallow = false)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+
+        return Health(engine, models, client, client is null || shallow ? null : probe.State(ModelOrNull(models), client));
+    }
+
+    private IActionResult Health(IQueryEngine engine, IEntityModelProvider models, IRemoteQueryClient? client, IReadOnlyList<RemoteServiceState>? states)
     {
         var remote = engine is IEngineFeatures features && features.RemoteResolve;
-
-        // What a contract 2 caller reads of a service is what was measured of it: the first measurement after a start is
-        // waited for, once. A caller without the header is answered at once, as ever.
-        var services = client is null || shallow ? null
-            : Referenced(Contract1 ? probe.State(ModelOrNull(models), client) : await probe.FirstStateAsync(ModelOrNull(models), client).ConfigureAwait(false), models, client);
+        var services = states is null ? null : Referenced(states, models, client!);
         var model = ModelHealth.Of(models);
 
         // What a caller without the header reads is frozen, the status word included: it is degraded by a service that

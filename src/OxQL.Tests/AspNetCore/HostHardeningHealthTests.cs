@@ -158,6 +158,45 @@ public class HostHardeningHealthTests
         await probe.Refreshing;
     }
 
+    [Fact]
+    public async Task A_caller_that_gives_up_is_let_go_of_the_wait_and_the_measurement_goes_on_for_the_others()
+    {
+        var client = new GatedClient();
+        var probe = Probe();
+
+        using var gone = new CancellationTokenSource();
+
+        var leaving = probe.FirstStateAsync(BindHost.Probe, client, gone.Token);
+        var staying = probe.FirstStateAsync(BindHost.Probe, client, CancellationToken.None);
+
+        leaving.IsCompleted.Should().BeFalse();
+        gone.Cancel();
+
+        await FluentActions.Awaiting(() => leaving).Should().ThrowAsync<OperationCanceledException>();
+        staying.IsCompleted.Should().BeFalse("the measurement is the others' too");
+
+        client.Answer.SetResult(true);
+
+        (await staying).Should().OnlyContain(state => state.Reachable == true);
+    }
+
+    /// <summary>The action a host compiled against the engine calls is the one it was: it answers at once, from what was measured.</summary>
+    [Fact]
+    public void The_health_action_keeps_its_signature_and_the_route_is_served_by_the_one_that_waits()
+    {
+        var actions = typeof(OxQL.AspNetCore.Controllers.OxQLController).GetMethods().Where(method => method.Name.StartsWith("Health", StringComparison.Ordinal)).ToList();
+        var kept = actions.Single(method => method.Name == "Health");
+
+        kept.ReturnType.Should().Be(typeof(Microsoft.AspNetCore.Mvc.IActionResult));
+        kept.GetParameters().Select(parameter => parameter.ParameterType).Should().Equal(typeof(IQueryEngine), typeof(IEntityModelProvider), typeof(RemoteHealthProbe), typeof(IRemoteQueryClient), typeof(bool));
+        kept.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.NonActionAttribute), false).Should().NotBeEmpty("one action answers the route");
+
+        var routed = actions.Single(method => method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpGetAttribute), false).Length > 0);
+
+        routed.ReturnType.Should().Be(typeof(Task<Microsoft.AspNetCore.Mvc.IActionResult>));
+        routed.GetParameters().Last().ParameterType.Should().Be(typeof(CancellationToken));
+    }
+
     /// <summary>A client whose probe blocks the thread that calls it until the test lets go.</summary>
     private sealed class BlockingClient : IRemoteQueryClient
     {

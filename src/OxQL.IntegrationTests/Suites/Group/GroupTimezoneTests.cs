@@ -127,7 +127,10 @@ public class GroupTimezoneTests
     [InlineData("+15:00")]
     [InlineData("+2")]
     [InlineData("+02:60")]
+    [InlineData("Etc/GMT+13")]
+    [InlineData("Etc/GMT+14")]
     [InlineData("Etc/GMT+15")]
+    [InlineData("Etc/GMT-15")]
     [InlineData("02:00")]
     public async Task What_is_no_zone_is_refused_before_the_database_is_asked(string timezone)
     {

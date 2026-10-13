@@ -115,8 +115,17 @@ public class PagingDifferentialTests
         if (expected is { } rows)
             whole.Should().HaveCount(rows, id);
 
+        // A case holds something only where there are rows to split: more than the smallest of its page sizes,
+        // so that size is walked in more than one page, and pages of one and of two where the rows are few.
+        whole.Should().NotBeEmpty($"{id}: a walk over no rows holds nothing");
+
+        var few = whole.Count <= limits.Min();
+
         // The sizes around the number of rows there are, whatever the case's own limits say.
-        var sizes = limits.Concat(Wide || rowByRow ? [1, 2] : []).Concat(whole.Count > 1 ? [whole.Count - 1, whole.Count, whole.Count + 1] : [1]).Where(limit => limit is > 0 and <= 500);
+        var sizes = limits.Concat(Wide || rowByRow || few ? [1, 2] : []).Concat(whole.Count > 1 ? [whole.Count - 1, whole.Count, whole.Count + 1] : [1]).Where(limit => limit is > 0 and <= 500).Distinct().ToList();
+
+        if (whole.Count > 1)
+            sizes.Min().Should().BeLessThan(whole.Count, $"{id}: the smallest page size splits the rows");
         var differences = await Walks.DifferencesAsync(client, query, whole, sizes);
         var counted = await Walks.CountAsync(client, query);
 
@@ -275,8 +284,8 @@ public class PagingDifferentialTests
                 data.Add($"{id}/kinds:{direction},low:asc", Stages(Matches[turn++ % Matches.Length], group, Sort(("kinds", direction), ("low", "asc"))));
             }
 
-            // A condition on the groups, and the groups of unwound rows.
-            data.Add($"{id}/having", Stages(group, """{ "match": { "n": { "gte": 2 } } }""", Sort(("n", "desc"))));
+            // A condition on the groups, and the groups of unwound rows. A group per row holds one row: the condition is on another aggregate there.
+            data.Add($"{id}/having", Stages(group, id == "id" ? """{ "match": { "total": { "gte": 2 } } }""" : """{ "match": { "n": { "gte": 2 } } }""", Sort(("n", "desc"))));
         }
 
         const string Unwound = """{ "unwind": { "path": "items", "as": "item", "includeIndex": "position" } }""";

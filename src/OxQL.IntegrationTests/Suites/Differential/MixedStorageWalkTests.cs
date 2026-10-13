@@ -120,6 +120,50 @@ public class MixedStorageWalkTests
         (await Walks.DifferencesAsync(client, query, whole, [1, 2, 5, Rows - 1, Rows, Rows + 1])).Should().BeEmpty(sort);
     }
 
+    /// <summary>
+    /// The order itself, against the stored rows put in order here: by the stored type first (nothing,
+    /// numbers, text, booleans, dates), NaN before every number, the infinities at the ends, numbers
+    /// of every stored type by value, and the key where two rows tie. Descending is that order
+    /// turned round, the key still ascending.
+    /// </summary>
+    [Theory]
+    [InlineData("optionalAmount", "asc")]
+    [InlineData("optionalAmount", "desc")]
+    [InlineData("optionalRatio", "asc")]
+    [InlineData("optionalRatio", "desc")]
+    [InlineData("optionalCount", "asc")]
+    [InlineData("optionalCount", "desc")]
+    [InlineData("count", "asc")]
+    [InlineData("count", "desc")]
+    [InlineData("note", "asc")]
+    [InlineData("note", "desc")]
+    public async Task The_pages_are_in_the_order_the_stored_values_have(string member, string direction)
+    {
+        var client = (await Fleet.Value).Client(LabService.Conformance);
+        var storage = EdgeOracle.Storage(member);
+        var stored = Enumerable.Range(1, Rows).Select(Row).ToList();
+
+        stored.Sort((left, right) =>
+        {
+            var order = Order.Compare(EdgeOracle.At(left, storage), EdgeOracle.At(right, storage));
+
+            if (direction == "desc")
+                order = -order;
+
+            return order != 0 ? order : Order.Compare(left["_id"], right["_id"]);
+        });
+
+        var expected = stored.Select(EdgeCorpus.WireId).ToList();
+        var query = new Walks.Query(Entity, $$"""[{ "sort": [{ "{{member}}": "{{direction}}" }] }, { "project": { "id": 1 } }]""");
+
+        foreach (var limit in new[] { 500, 1, 5 })
+        {
+            var pages = await Walks.PagesAsync(client, query, limit);
+
+            pages.SelectMany(page => page.Items.Select(row => row!["id"]!.GetValue<string>())).Should().Equal(expected, $"{member} {direction} in pages of {limit}");
+        }
+    }
+
     /// <summary>The groups of such a member page the same way: a key of every stored type, the group of NaN, the group of null.</summary>
     [Theory]
     [InlineData("optionalAmount")]

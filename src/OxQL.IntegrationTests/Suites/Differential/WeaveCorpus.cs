@@ -74,6 +74,8 @@ public static class WeaveCorpus
 
     private const int SharedWithinKind = 901;
 
+    private const int SharedByTours = 902;
+
     private const int Deleted = 999;
 
     private static int TourLine(int tour, int k) => 100 + tour * 4 + k;
@@ -131,6 +133,10 @@ public static class WeaveCorpus
         // A line id a shipment holds as well.
         if (n == 4)
             lines.Add(SourceLine(SharedAcrossKinds, "held by a shipment and a tour"));
+
+        // A line id two tours hold.
+        if (n is 7 or 8)
+            lines.Add(SourceLine(SharedByTours, "held by two tours"));
 
         return new T.Tour
         {

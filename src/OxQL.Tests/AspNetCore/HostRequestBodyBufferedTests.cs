@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using OxQL.Core.Binding;
 using OxQL.Core.Models;
@@ -84,7 +85,7 @@ public class HostRequestTextBufferedTests
 
     private static readonly string InName = $$"""{ "entityType": "probe.order", "pipeline": [{ "match": { "num{{Half}}ber": { "eq": "a" } } }] }""";
 
-    private static SampleHost Host(BufferedBody? body, int cap = Cap, List<byte[]>? after = null) => new(
+    private static SampleHost Host(BufferedBody? body, int cap = Cap, List<byte[]>? after = null, Action<IServiceCollection>? configure = null) => new(
         options =>
         {
             options.Limits.MaxRequestBytes = cap;
@@ -95,6 +96,8 @@ public class HostRequestTextBufferedTests
         {
             if (body is { } left)
                 services.AddSingleton<IStartupFilter>(new BufferingStartupFilter(left, after: after));
+
+            configure?.Invoke(services);
         });
 
     private static async Task<(HttpStatusCode Status, string Text)> SendAsync(SampleHost host, string route, string body, int? contract, bool declared = true)
@@ -203,6 +206,85 @@ public class HostRequestTextBufferedTests
             JsonNode.Parse(answer.Text)!["results"]![1]!["errors"].Should().NotBeNull(answer.Text);
             Encoding.UTF8.GetString(after.Should().ContainSingle().Subject).Should().Be(body);
         }
+    }
+
+    /// <summary>A body a contract 1 request does not bind for another reason: the host answers it by its own means.</summary>
+    private const string Unbound = """{ "entityType": 5, "pipeline": [] }""";
+
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task Without_the_contract_header_such_a_body_is_answered_in_the_form_of_the_hosts_own_400(int? left)
+    {
+        using var host = Host((BufferedBody?)left);
+
+        foreach (var declared in new[] { true, false })
+        foreach (var contract in new int?[] { 1, null })
+        foreach (var route in new[] { "/OxQL/query", "/OxQL/explain", "/OxQL/batch" })
+        foreach (var body in new[] { InValue, InName })
+        {
+            var own = await SendAsync(host, route, Unbound, contract, declared);
+            var answer = await SendAsync(host, route, body, contract, declared);
+            var because = $"{route} contract {contract?.ToString() ?? "none"} {(declared ? "declared" : "undeclared")} {body}: {answer.Text}";
+
+            own.Status.Should().Be(HttpStatusCode.BadRequest, own.Text);
+            answer.Status.Should().Be(HttpStatusCode.BadRequest, because);
+
+            var said = JsonNode.Parse(answer.Text)!.AsObject();
+            var hosts = JsonNode.Parse(own.Text)!.AsObject();
+
+            // The members of the host's problem, with its type, its title and the id of the request.
+            said.Select(member => member.Key).Should().Equal(hosts.Select(member => member.Key), because);
+            said["type"]!.GetValue<string>().Should().Be(hosts["type"]!.GetValue<string>(), because);
+            said["title"]!.GetValue<string>().Should().Be(hosts["title"]!.GetValue<string>(), because);
+            said["status"]!.GetValue<int>().Should().Be(400, because);
+            said["traceId"]!.GetValue<string>().Should().NotBeNullOrEmpty(because);
+            said["errors"]!.AsObject().Select(member => member.Key).Should().Equal(["$"], because);
+            said["errors"]!["$"]![0]!.GetValue<string>().Should().Contain("no Unicode text", because);
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(Hosts))]
+    public async Task Without_the_contract_header_such_a_body_is_answered_by_the_factory_the_host_configured(int? left)
+    {
+        // A host that builds its 400 for an invalid model state itself, as a service's base package does.
+        using var host = Host((BufferedBody?)left, configure: services => services.Configure<ApiBehaviorOptions>(behaviour =>
+            behaviour.InvalidModelStateResponseFactory = context => new BadRequestObjectResult(new
+            {
+                type = "urn:host:problem:bad-request",
+                title = "Bad Request",
+                status = 400,
+                instance = context.HttpContext.Request.Path.Value,
+                errors = context.ModelState.Where(entry => entry.Value!.Errors.Count > 0).ToDictionary(entry => entry.Key, entry => entry.Value!.Errors.Select(error => error.ErrorMessage).ToArray()),
+            })));
+
+        foreach (var declared in new[] { true, false })
+        foreach (var contract in new int?[] { 1, null })
+        foreach (var body in new[] { InValue, InName })
+        {
+            var own = JsonNode.Parse((await SendAsync(host, "/OxQL/query", Unbound, contract, declared)).Text)!;
+            var answer = await SendAsync(host, "/OxQL/query", body, contract, declared);
+            var because = $"contract {contract?.ToString() ?? "none"} {(declared ? "declared" : "undeclared")} {body}: {answer.Text}";
+
+            own["type"]!.GetValue<string>().Should().Be("urn:host:problem:bad-request");
+            answer.Status.Should().Be(HttpStatusCode.BadRequest, because);
+
+            var said = JsonNode.Parse(answer.Text)!;
+
+            said["type"]!.GetValue<string>().Should().Be("urn:host:problem:bad-request", because);
+            said["title"]!.GetValue<string>().Should().Be("Bad Request", because);
+            said["instance"]!.GetValue<string>().Should().Be("/OxQL/query", because);
+            said["errors"]!.AsObject().Select(member => member.Key).Should().Equal(["$"], because);
+            said["errors"]!["$"]![0]!.GetValue<string>().Should().Contain("no Unicode text", because);
+        }
+
+        // A contract 2 request is answered in the refusal envelope whatever the host configured.
+        var coded = await SendAsync(host, "/OxQL/query", InValue, 2);
+
+        JsonNode.Parse(coded.Text)!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody, coded.Text);
+        host.Runner.Calls.Should().BeEmpty();
     }
 
     /// <summary>A byte order mark, as a client may write it ahead of a body.</summary>

@@ -71,7 +71,7 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above; a member name or a text that is no Unicode text is answered so by the engine's filter, in the same form |
+| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above; a member name or a text that is no Unicode text is answered so by the engine's filter, as the one error of the model state (`errors["$"]`) and through what the host configured to answer an invalid model state (`ApiBehaviorOptions.InvalidModelStateResponseFactory`), so in the form of every such answer of the host |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over the larger of `Limits:MaxRequestBytes` and `Explain:MaxRequestBytes`, cut off by the server; a body with a declared length, and one of undeclared length up to that size (the engine's filter reads it before it is bound), gets the `REQUEST_TOO_LARGE` envelope |

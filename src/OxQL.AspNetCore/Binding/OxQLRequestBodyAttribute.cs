@@ -110,7 +110,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             {
                 if (contract1)
                 {
-                    context.Result = await HostRefusalAsync(http, options, parameter).ConfigureAwait(false);
+                    context.Result = await HostRefusalAsync(context, options, parameter).ConfigureAwait(false);
                     return;
                 }
 
@@ -164,7 +164,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             return;
 
         var result = contract1
-            ? await HostRefusalAsync(http, options, parameter).ConfigureAwait(false)
+            ? await HostRefusalAsync(executed ?? (ActionContext)context, options, parameter).ConfigureAwait(false)
             : Refused(http, options, parameter, Refusal.Validation(texts.Select(text => RequestBodyReader.Broken(text.Path, text.Name)).ToList()));
 
         if (executed is not null)
@@ -319,23 +319,31 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
 
     /// <summary>
     /// The answer to a request without the contract header whose body holds a name or a text that is
-    /// no Unicode text: the host's own 400, in the form it answers a body it cannot bind in.
+    /// no Unicode text: the host's own 400 for a body it cannot bind. The finding is the one error of
+    /// the model state, at the root of the body, and the host's answer to an invalid model state is
+    /// built of it by what the host configured for that
+    /// (<see cref="ApiBehaviorOptions.InvalidModelStateResponseFactory"/>), so it has the form of
+    /// every such answer of that host.
     /// </summary>
     // LEGACY(compat.v1): the contract 1 half of the answer; remove with src/OxQL.AspNetCore/Legacy.
-    private static async Task<IActionResult> HostRefusalAsync(HttpContext http, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter)
+    private static async Task<IActionResult> HostRefusalAsync(ActionContext action, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter)
     {
+        const string Said = "The request body holds a member name or a text that is no Unicode text: half of a surrogate pair, or bytes that are no UTF-8.";
+
+        var http = action.HttpContext;
+
+        // LEGACY(compat.v1): the request is counted where every contract 1 request is.
         await Legacy.LegacyRoute.UnboundAsync(http, options, RouteOf(parameter.ParameterType)).ConfigureAwait(false);
         OxQLMetrics.Record(1, RouteOf(parameter.ParameterType), OxQLMetrics.NoEntity, OxQLMetrics.Unbound, TimeSpan.Zero);
 
-        var problem = new ValidationProblemDetails(new Dictionary<string, string[]>
-        {
-            [RequestBodyReader.Root] = ["The request body holds a member name or a text that is no Unicode text: half of a surrogate pair, or bytes that are no UTF-8."],
-        })
-        {
-            Status = StatusCodes.Status400BadRequest,
-        };
+        // Whatever a read that stopped at the text left in the model state is not the finding.
+        action.ModelState.Clear();
+        action.ModelState.AddModelError(RequestBodyReader.Root, Said);
 
-        return new BadRequestObjectResult(problem) { ContentTypes = { "application/problem+json" } };
+        if (http.RequestServices.GetService<IOptions<ApiBehaviorOptions>>()?.Value.InvalidModelStateResponseFactory is { } factory)
+            return factory(action);
+
+        return new BadRequestObjectResult(new ValidationProblemDetails(action.ModelState) { Status = StatusCodes.Status400BadRequest }) { ContentTypes = { "application/problem+json" } };
     }
 
     /// <summary>
@@ -428,7 +436,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             && BrokenIn(http) is { } broken)
         {
             context.Result = OxQLQueryService.ContractOf(bodyOptions, http) == 1
-                ? await HostRefusalAsync(http, bodyOptions, bodyParameter).ConfigureAwait(false)
+                ? await HostRefusalAsync(context, bodyOptions, bodyParameter).ConfigureAwait(false)
                 : Refused(http, bodyOptions, bodyParameter, Refusal.Validation(broken.Select(text => RequestBodyReader.Broken(text.Path, text.Name)).ToList()));
             return;
         }

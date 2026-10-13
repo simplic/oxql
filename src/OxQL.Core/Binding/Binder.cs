@@ -4225,8 +4225,12 @@ public sealed partial class Binder
             return new DateTrunc(path, trunc.Unit!, timezone, weekStart);
         }
 
-        /// <summary>A zone without rules, which the database reads off its spelling: an offset from UTC up to fourteen hours, or a fixed zone of the Etc area.</summary>
-        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[+-](?:0[0-9]|1[0-4])(?::?[0-5][0-9])?|Etc/GMT(?:[+-](?:[0-9]|1[0-4]))?|Etc/UTC|GMT)$")]
+        /// <summary>
+        /// A zone without rules, which the database reads off its spelling: an offset from UTC up to
+        /// fourteen hours, or a fixed zone of the Etc area. That area has the zones from fourteen hours
+        /// east of UTC (<c>Etc/GMT-14</c>) to twelve west (<c>Etc/GMT+12</c>), and no other.
+        /// </summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[+-](?:0[0-9]|1[0-4])(?::?[0-5][0-9])?|Etc/GMT(?:-(?:[0-9]|1[0-4])|\+(?:[0-9]|1[0-2]))?|Etc/UTC|GMT)$")]
         private static partial System.Text.RegularExpressions.Regex FixedZone();
 
         private static bool TryIanaId(TimeZoneInfo zone, [NotNullWhen(true)] out string? iana)

@@ -709,7 +709,8 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 - `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`, and spaces around
   it are not read. Accepted as well, on every host platform the same:
   an offset from UTC up to fourteen hours (`+02:00`, `+0200`, `+02`, `-09:30`) and the fixed
-  zones `Etc/GMT`, `Etc/GMT+1` … `Etc/GMT-14` (their sign is the reverse of an offset's),
+  zones `Etc/GMT` and `Etc/GMT-14` … `Etc/GMT+12` (their sign is the reverse of an offset's;
+  the area has no zone further west than `Etc/GMT+12`, and `Etc/GMT+13` is `INVALID_TIMEZONE`),
   `Etc/UTC` and `GMT`, which the database reads off their spelling; and a Windows zone id
   (`W. Europe Standard Time`), for which the IANA id it maps to is sent. A zone id is looked up
   in the zone table of the host's runtime and has to map to a Windows zone there, so that it

@@ -38,6 +38,31 @@ public class CoreHardeningTimezoneTests
         bound.Stages.OfType<BoundStage.Group>().Single().Keys.Single().Trunc!.Timezone.Should().Be("Europe/Berlin");
     }
 
+    /// <summary>The fixed zones of the Etc area are the ones there are: fourteen hours east of UTC (<c>Etc/GMT-14</c>) to twelve west (<c>Etc/GMT+12</c>).</summary>
+    [Theory]
+    [InlineData("Etc/GMT-14", true)]
+    [InlineData("Etc/GMT-13", true)]
+    [InlineData("Etc/GMT-1", true)]
+    [InlineData("Etc/GMT+0", true)]
+    [InlineData("Etc/GMT-0", true)]
+    [InlineData("Etc/GMT", true)]
+    [InlineData("Etc/GMT+1", true)]
+    [InlineData("Etc/GMT+12", true)]
+    [InlineData("Etc/GMT+13", false)]
+    [InlineData("Etc/GMT+14", false)]
+    [InlineData("Etc/GMT-15", false)]
+    [InlineData("Etc/GMT+15", false)]
+    [InlineData("Etc/GMT+01", false)]
+    public async Task A_fixed_zone_of_the_Etc_area_binds_where_there_is_one_and_is_refused_where_there_is_none(string timezone, bool exists)
+    {
+        var outcome = await BindHost.BindAsync(BindHost.Probe, BindHost.Request(Order, Pipeline(timezone)));
+
+        if (exists)
+            outcome.Should().BeOfType<BindOutcome.Bound>(timezone).Which.Pipeline.Stages.OfType<BoundStage.Group>().Single().Keys.Single().Trunc!.Timezone.Should().Be(timezone);
+        else
+            outcome.Should().BeOfType<BindOutcome.Failed>(timezone).Which.Refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidTimezone);
+    }
+
     [Fact]
     public async Task A_name_that_is_no_zone_is_refused() =>
         await BindHost.ErrorAsync(BindHost.Probe, Order, Pipeline("Mars/Olympus_Mons"), Codes.InvalidTimezone);

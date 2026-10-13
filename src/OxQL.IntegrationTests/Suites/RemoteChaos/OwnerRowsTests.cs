@@ -18,41 +18,8 @@ namespace OxQL.IntegrationTests.Suites.RemoteChaos;
 /// same on every page size. Generated rows against the owner's own table.
 /// </summary>
 [Trait("Category", "Integration")]
-public sealed class OwnerRowsTests : IAsyncLifetime
+public sealed class OwnerRowsTests : OwnerRowsFleet
 {
-    private const int Rows = 64;
-
-    private const int Widgets = 40;
-
-    private CorpusFleet? fleet;
-
-    private CorpusFleet Fleet => fleet ?? throw new InvalidOperationException("The fixture has not started.");
-
-    private static Guid IdOf(int n) => Ids.Of(Spaces.ConformanceEntity, Org.A, 7_000 + (n * 41 % 211));
-
-    /// <summary>The widget a row names: one of the owner's, one the owner does not have, or none.</summary>
-    private static string? CodeOf(int n) => (n % 8) switch
-    {
-        6 => null,
-        7 => $"W-{9_000 + n:D4}",
-        _ => $"W-{1 + (n * 7 % Widgets):D4}",
-    };
-
-    public async Task InitializeAsync() =>
-        fleet = await CorpusFleet.CreateAsync("owner_rows", seed: [], extra: async created =>
-        {
-            var database = await created.DatabaseAsync(LabService.Conformance);
-
-            await database.GetCollection<BsonDocument>(LabService.Conformance.Model.Entities[Corpus.Conformance].Collection).InsertManyAsync(Enumerable.Range(1, Rows).Select(n =>
-                new ConformanceEntity { Id = IdOf(n), OrganizationId = Org.A.Id(), Name = $"row {n:D3}", Count = n, WidgetCodeExplicit = CodeOf(n) }.ToBsonDocument()));
-        });
-
-    public async Task DisposeAsync()
-    {
-        if (fleet is not null)
-            await fleet.DisposeAsync();
-    }
-
     public static TheoryData<ChaosRows, string, string> Cases()
     {
         var data = new TheoryData<ChaosRows, string, string>();
@@ -154,7 +121,16 @@ public sealed class OwnerRowsTests : IAsyncLifetime
             }
         }
     }
+}
 
+/// <summary>
+/// The same owner under load, where what is held is also how long an answer takes: it runs with the
+/// tests that measure time, one after another and after every other test.
+/// </summary>
+[Trait("Category", "Integration")]
+[Collection(TimedCollection.Name)]
+public sealed class OwnerRowsUnderLoadTests : OwnerRowsFleet
+{
     /// <summary>
     /// An owner that goes away and comes back while requests keep arriving. The host remembers an
     /// owner that did not answer and does not call it for a while; whatever the owner does and
@@ -269,5 +245,42 @@ public sealed class OwnerRowsTests : IAsyncLifetime
         last.ShouldBeOk().ShouldHaveNoDiagnostics();
         Fleet.Owner.BatchesSince(mark).Should().NotBeEmpty("the owner is asked again");
         (await client.HostAsync()).Services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>().OutageOf(LabFleet.ExternalOwner).Should().BeNull();
+    }
+}
+
+/// <summary>The fleet both classes run against: rows that name a widget of the owner, one it does not have, or none.</summary>
+public abstract class OwnerRowsFleet : IAsyncLifetime
+{
+    protected const int Rows = 64;
+
+    protected const int Widgets = 40;
+
+    private CorpusFleet? fleet;
+
+    protected CorpusFleet Fleet => fleet ?? throw new InvalidOperationException("The fixture has not started.");
+
+    protected static Guid IdOf(int n) => Ids.Of(Spaces.ConformanceEntity, Org.A, 7_000 + (n * 41 % 211));
+
+    /// <summary>The widget a row names: one of the owner's, one the owner does not have, or none.</summary>
+    protected static string? CodeOf(int n) => (n % 8) switch
+    {
+        6 => null,
+        7 => $"W-{9_000 + n:D4}",
+        _ => $"W-{1 + (n * 7 % Widgets):D4}",
+    };
+
+    public async Task InitializeAsync() =>
+        fleet = await CorpusFleet.CreateAsync("owner_rows", seed: [], extra: async created =>
+        {
+            var database = await created.DatabaseAsync(LabService.Conformance);
+
+            await database.GetCollection<BsonDocument>(LabService.Conformance.Model.Entities[Corpus.Conformance].Collection).InsertManyAsync(Enumerable.Range(1, Rows).Select(n =>
+                new ConformanceEntity { Id = IdOf(n), OrganizationId = Org.A.Id(), Name = $"row {n:D3}", Count = n, WidgetCodeExplicit = CodeOf(n) }.ToBsonDocument()));
+        });
+
+    public async Task DisposeAsync()
+    {
+        if (fleet is not null)
+            await fleet.DisposeAsync();
     }
 }

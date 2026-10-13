@@ -142,4 +142,38 @@ public class PatternTextServerTests
             refused.Should().BeOfType<QueryOutcome.Refused>().Which.Refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.InvalidRegex);
         }
     }
+
+    public sealed class PricedModel
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        public decimal Price { get; set; }
+    }
+
+    /// <summary>A decimal still stored as text is matched by its text to the end: a text with one more character, a line feed, is another text.</summary>
+    [Fact]
+    public async Task A_decimal_stored_as_text_is_matched_to_the_end_of_its_text()
+    {
+        var direct = new EngineDirect(ClrModelBuilder.Build([new EntityDeclaration("pt.priced", "pt.priced", typeof(PricedModel), "tmp_pt_priced", null, false)]));
+
+        await using var owned = await MongoFixture.CreateDatabaseAsync("pattern_decimal");
+
+        await owned.Database.GetCollection<BsonDocument>("tmp_pt_priced").InsertManyAsync(new BsonValue[] { "12.5", "12.50", "12.50\n", new BsonDecimal128(12.5m), "12.5\n" }.Select((price, index) => new BsonDocument
+        {
+            ["_id"] = new BsonBinaryData(Guid.Parse($"00000000-0000-0000-0000-{index + 1:D12}"), GuidRepresentation.Standard),
+            ["OrganizationId"] = EngineDirect.OrganisationValue,
+            ["Price"] = price,
+        }));
+
+        var engine = direct.Engine(await MongoFixture.ClientAsync(), owned.Name);
+
+        async Task<int> CountAsync(string condition) =>
+            (await direct.ExecuteAsync(engine, "pt.priced", $$"""[{ "match": {{condition}} }, { "page": { "limit": 50 } }]""")).Count;
+
+        (await CountAsync("""{ "price": { "eq": 12.5 } }""")).Should().Be(3);
+        (await CountAsync("""{ "price": { "in": [12.5, 7] } }""")).Should().Be(3);
+        (await CountAsync("""{ "price": { "neq": 12.5 } }""")).Should().Be(2);
+    }
 }

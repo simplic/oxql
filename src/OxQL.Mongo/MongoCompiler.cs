@@ -1902,8 +1902,8 @@ internal static class MongoCompiler
 
             case BoundOperand.Set set:
                 var values = casing is Casing.Fold or Casing.Exact
-                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)Anchored(text.Value, casing) : value))
-                    : new BsonArray(set.Values);
+                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)Anchored(text.Value, casing) : ToEnd(value)))
+                    : new BsonArray(set.Values.Select(ToEnd));
 
                 return new BsonDocument(storage, new BsonDocument(op == "nin" ? "$nin" : "$in", values));
 
@@ -1914,9 +1914,9 @@ internal static class MongoCompiler
                 // agrees with $and of $ne on a missing member, which is the only case where
                 // the two could differ for a scalar.
                 if (op == "neq")
-                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, casing, many))));
+                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", ToEnd(value), casing, many))));
 
-                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing, many))));
+                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, ToEnd(value), casing, many))));
 
             // A duration stored as text orders by character, and by the same characters whatever else the
             // request asks: under a collation, which would order them by its own weights, the comparison is
@@ -1946,6 +1946,15 @@ internal static class MongoCompiler
             new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + storage), "string" }),
             new BsonDocument("$" + op, new BsonArray { new BsonDocument("$strcasecmp", new BsonArray { TextOrEmpty("$" + storage), new BsonDocument("$literal", text) }), 0 }),
         }));
+
+    /// <summary>
+    /// The pattern of a bound alternative (the text a decimal may be stored as) with its end at the
+    /// end of the value (<see cref="End"/>): it is bound once for both contracts, ending <c>$</c>.
+    /// </summary>
+    private static BsonValue ToEnd(BsonValue value) =>
+        value is BsonRegularExpression { Pattern: var pattern } bound && pattern.EndsWith('$') && !pattern.EndsWith(@"\$", StringComparison.Ordinal)
+            ? new BsonRegularExpression(pattern[..^1] + End, bound.Options)
+            : value;
 
     /// <summary>The whole-value pattern of a text: escaped and anchored at both ends, folding case only as a fold.</summary>
     private static BsonRegularExpression Anchored(string text, Casing casing) =>

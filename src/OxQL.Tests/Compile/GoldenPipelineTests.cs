@@ -154,7 +154,7 @@ public class GoldenPipelineTests
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $or: [
                 { Amount: NumberDecimal("12.50") },
-                { Amount: { $regularExpression: { pattern: "^12\\.50*$", options: "" } } } ] } }
+                { Amount: { $regularExpression: { pattern: "^12\\.50*\\z", options: "" } } } ] } }
             """));
 
         // F3: an ordered comparison gets no text bracket. Mongo compares text by characters,
@@ -173,7 +173,7 @@ public class GoldenPipelineTests
         negated.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $nor: [
                 { Amount: NumberDecimal("10") },
-                { Amount: { $regularExpression: { pattern: "^10(?:\\.0+)?$", options: "" } } } ] } }
+                { Amount: { $regularExpression: { pattern: "^10(?:\\.0+)?\\z", options: "" } } } ] } }
             """));
     }
 
@@ -933,8 +933,8 @@ public class GoldenPipelineTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $or: [
-                { $or: [ { "Addon.Preis": NumberDecimal("1.5") }, { "Addon.Preis": { $regularExpression: { pattern: "^1\\.50*$", options: "" } } } ] },
-                { $or: [ { "Addon.Preis._v": NumberDecimal("1.5") }, { "Addon.Preis._v": { $regularExpression: { pattern: "^1\\.50*$", options: "" } } } ] } ] } }
+                { $or: [ { "Addon.Preis": NumberDecimal("1.5") }, { "Addon.Preis": { $regularExpression: { pattern: "^1\\.50*\\z", options: "" } } } ] },
+                { $or: [ { "Addon.Preis._v": NumberDecimal("1.5") }, { "Addon.Preis._v": { $regularExpression: { pattern: "^1\\.50*\\z", options: "" } } } ] } ] } }
             """));
     }
 

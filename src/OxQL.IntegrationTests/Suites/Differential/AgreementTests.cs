@@ -287,6 +287,40 @@ public class AgreementTests
         }
     }
 
+    /// <summary>
+    /// A list of values narrowed by <c>search</c> is the values that start with the text, folded as a
+    /// comparison folds: against the stored rows, with the counts of the elements that hold each, for
+    /// texts in another case, with an accent, with the characters a pattern has a meaning for, and
+    /// one no value starts with.
+    /// </summary>
+    [Theory]
+    [InlineData("name", new[] { "al", "AL", "Äl", "mu", "MÜ", "mue", "str", "stras", "a.", "a+b(", "zulu [", "x\\", "50%", "under_", "z", "ce", "ç", "zz-none", "alphabet" })]
+    [InlineData("note", new[] { "n", "N", "no", "zz-none" })]
+    [InlineData("items.code", new[] { "a", "A-", "ä", "c.", "C.3", "d*", "b-2", "-", "zz-none" })]
+    [InlineData("items.parts.sku", new[] { "s", "S", "sku", "zz-none" })]
+    public async Task V_the_values_a_search_keeps_are_the_stored_ones_that_start_with_it(string path, string[] searches)
+    {
+        var client = await EdgeCorpus.ClientAsync();
+        var stored = EdgeCorpus.Stored().SelectMany(row => EdgeOracle.Reach(row, EdgeOracle.Storage(path)).Values).Where(value => value is BsonString).Select(value => EdgeOracle.Fold(value.AsString)).GroupBy(value => value).ToDictionary(group => group.Key, group => group.Count());
+        var kept = 0;
+
+        stored.Should().NotBeEmpty(path);
+
+        foreach (var search in searches)
+        {
+            var expected = stored.Where(value => value.Key.StartsWith(EdgeOracle.Fold(search), StringComparison.Ordinal)).ToDictionary(value => value.Key, value => value.Value);
+            var listed = await client.SendAsync(Entity, $$"""[{ "values": { "path": "{{path}}", "search": {{System.Text.Json.JsonSerializer.Serialize(search)}}, "counts": true, "limit": 500 } }]""");
+
+            listed.ShouldBeOk();
+            listed.Items.ToDictionary(row => EdgeOracle.Fold(row!["value"]!.GetValue<string>()), row => row!["count"]!.GetValue<int>()).Should().Equal(expected, $"{path} search '{search}'");
+            listed.ShouldCount("exact", expected.Count);
+
+            kept += expected.Count;
+        }
+
+        kept.Should().BeGreaterThan(0, "some search keeps a value");
+    }
+
     // ── counts in every state ─────────────────────────────────────────────────────────────
 
     /// <summary>

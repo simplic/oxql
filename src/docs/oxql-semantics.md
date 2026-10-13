@@ -163,7 +163,8 @@ that representation. Where a fleet's data is not uniform, the options under
   under the request's collation when another comparison, sort or key of the request folds, and by
   byte when none does: the two orders differ where the texts differ in punctuation (`10:00:00`
   and `10.00:00:00`). A service that orders or compares durations stores them as a number
-  (ticks or milliseconds), which orders by value.
+  (ticks or milliseconds), which orders by value. Explain says so of a request that compares or
+  sorts such a member: the note `DURATION_ORDERS_AS_TEXT`.
 - **Addon keys** (`addon.<path>` of a defined key) always match tolerantly, whatever the options:
   a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
   `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes

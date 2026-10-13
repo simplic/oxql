@@ -1043,6 +1043,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   an index that holds the organisation, the path and what the conditions before it read, built
   without a collation; `params` `scan`, `limit`, `counts`, `unwinds`, the number of collections),
   `TEXT_FOLDS` with `params.op: "values"` where the path holds text,
+  `DURATION_ORDERS_AS_TEXT` (a `gt`, `gte`, `lt` or `lte`, or a sort, on a `timeSpan` member that
+  is stored as text: the order is that of the text's characters, which is the order of the
+  durations only among values from zero to under one day; `params.op` is the comparison or
+  `sort`; a member stored as ticks or milliseconds orders by value and has no such note),
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),

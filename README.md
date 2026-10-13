@@ -562,8 +562,9 @@ What a contract 2 caller reads differently:
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
 - **A duration stored as text.** `gt`, `gte`, `lt` and `lte` on it have one answer, by the
-  characters' bytes, alone and in a request that folds case elsewhere (there they compared
-  under the collation).
+  characters' bytes, alone and in a request that folds case elsewhere and so runs
+  under the collation. Explain notes such a comparison and a sort on such a member with
+  `DURATION_ORDERS_AS_TEXT`, a new note code a client that lists the codes adds.
 - **A body sent without a declared length** (`Transfer-Encoding: chunked`) is answered like one
   with a `Content-Length`: text that is no Unicode text names its place, and in a batch refuses
   its entry while the others run.

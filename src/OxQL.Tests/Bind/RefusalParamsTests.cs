@@ -273,6 +273,34 @@ public class RefusalParamsTests
         op.Path.Should().Be("items.quantity");
     }
 
+    /// <summary>What an error inside <c>any</c> says beside the member is said as it was written: an operator, a variable or an operand spelled like the member is none.</summary>
+    [Fact]
+    public async Task An_error_inside_any_leaves_what_is_no_path_as_it_was_written()
+    {
+        var op = await Refused(Match("""{ "items": { "any": { "quantity": { "quantity": 1 } } } }"""), Codes.UnknownOperator);
+
+        op.Path.Should().Be("items.quantity");
+        op.Message.Should().Be("'quantity' is not an operator.");
+
+        var variable = await Refused(Match("""{ "items": { "any": { "quantity": { "eq": { "$var": "quantity" } } } } }"""), Codes.UnboundVariable);
+
+        variable.Path.Should().Be("items.quantity");
+        variable.Message.Should().Be("The variable 'quantity' is not bound.");
+
+        var applies = await Refused(Match("""{ "items": { "any": { "quantity": { "contains": "quantity" } } } }"""), Codes.InvalidOperand);
+
+        applies.Path.Should().Be("items.quantity");
+        applies.Message.Should().Be("'contains' does not apply to an int.");
+
+        var kind = await Refused(Match("""{ "items": { "any": { "quantity": { "eq": "quantity" } } } }"""), Codes.InvalidOperand);
+
+        kind.Message.Should().StartWith("'items.quantity' expects").And.NotContain("'quantity'");
+
+        var set = await Refused(Match("""{ "items": { "any": { "quantity": { "in": [1, "quantity"] } } } }"""), Codes.InvalidOperand);
+
+        set.Message.Should().StartWith("'items.quantity[1]' expects");
+    }
+
     /// <summary>A path under an alias a stage wrote after an inclusion projection: the refusal says the rule, and which alias.</summary>
     [Fact]
     public async Task A_path_under_an_alias_written_after_an_inclusion_projection_says_the_rule()

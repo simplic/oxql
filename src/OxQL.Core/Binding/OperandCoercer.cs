@@ -32,6 +32,14 @@ public sealed class OperandCoercer
     /// refused: a decimal is digits with one optional sign, point and exponent, and a member holding a
     /// single character takes one character.
     /// </summary>
+    /// <summary>
+    /// The collection whose elements the operands being read are compared with (inside <c>any</c>);
+    /// null elsewhere. A message names a member under it, as the row has it.
+    /// </summary>
+    public string? Under { get; set; }
+
+    private string Shown(ResolvedPath path) => Under is null ? path.Wire : Under + "." + path.Wire;
+
     public OperandCoercer(OxQLOptions options, QueryVariables? variables, List<Diagnostic>? diagnostics = null, bool contract2 = true)
     {
         this.options = options;
@@ -108,7 +116,7 @@ public sealed class OperandCoercer
                 if (path.IsRemote)
                     return new BoundOperand.Raw(element);
 
-                errors.Add(Operand($"'{path.Wire}' expects {Expected(path)}, not an object.", stage, path, op, Kinds.NameOf(path.LeafKind), element));
+                errors.Add(Operand($"'{Shown(path)}' expects {Expected(path)}, not an object.", stage, path, op, Kinds.NameOf(path.LeafKind), element));
                 return null;
             }
 
@@ -153,7 +161,7 @@ public sealed class OperandCoercer
                 foreach (var rawItem in element.EnumerateArray())
                 {
                     var item = rawItem;
-                    var label = $"{path.Wire}[{index++}]";
+                    var label = $"{Shown(path)}[{index++}]";
 
                     // An element may be a variable wrapper of its own: the whole-array form and
                     // the per-element form are both part of the contract.
@@ -236,14 +244,14 @@ public sealed class OperandCoercer
 
         if (element.ValueKind == JsonValueKind.Array)
         {
-            errors.Add(Operand($"'{path.Wire}' expects {Expected(path)}, not an array; use 'in' for a set.", stage, path, op, Kinds.NameOf(kind), element));
+            errors.Add(Operand($"'{Shown(path)}' expects {Expected(path)}, not an array; use 'in' for a set.", stage, path, op, Kinds.NameOf(kind), element));
             return null;
         }
 
-        if (!InClosedList(element, path, kind, op, stage, errors, path.Wire))
+        if (!InClosedList(element, path, kind, op, stage, errors, Shown(path)))
             return null;
 
-        var scalar = CoerceScalar(element, path, kind, op, stage, errors, path.Wire);
+        var scalar = CoerceScalar(element, path, kind, op, stage, errors, Shown(path));
 
         if (scalar is null)
             return null;
@@ -355,7 +363,7 @@ public sealed class OperandCoercer
                 if (baseName is not null)
                     known = known.Prepend(baseName);
 
-                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{path.Wire}'; its variants are {string.Join(", ", known)}.", stage, path.Wire) with
+                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{Shown(path)}'; its variants are {string.Join(", ", known)}.", stage, path.Wire) with
                 {
                     Params = contract2 ? new Dictionary<string, object?> { ["path"] = path.Wire, ["variant"] = name, ["variants"] = known.ToList() } : null,
                 });

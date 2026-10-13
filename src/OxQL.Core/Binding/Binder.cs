@@ -939,7 +939,15 @@ public sealed partial class Binder
         /// (<see cref="PathReasons"/>). A contract 1 answer is frozen: it carries the code and the message as before.
         /// </summary>
         private QueryValidationError Unresolved(PathResolution resolution, int? stage, string? path) =>
-            new() { Code = resolution.Code!, Message = resolution.Message!, Stage = stage, Path = path, Params = contract2 ? resolution.Params : null };
+            new() { Code = resolution.Code!, Message = NamedIn(resolution.Message!, path), Stage = stage, Path = path, Params = contract2 ? resolution.Params : null };
+
+        /// <summary>
+        /// What a shape says of a path that does not resolve, with the path named under its collection
+        /// inside <c>any</c>: the shape of an element knows the member by its own name, and its words
+        /// name nothing the caller wrote but paths.
+        /// </summary>
+        private string NamedIn(string message, string? path) =>
+            under is null || path is null ? message : message.Replace($"'{path}'", $"'{Named(path)}'", StringComparison.Ordinal);
 
         /// <summary>The contract 1 hint when <paramref name="contract2Construct"/> is what a contract 1 request was refused for; empty otherwise.</summary>
         private string Hint(bool contract2Construct) => !contract2 && contract2Construct ? Contract1Hint : "";
@@ -1684,7 +1692,7 @@ public sealed partial class Binder
             if (path.IsRemote && !path.Filterable)
             {
                 errors.Add(Error(Codes.ResolveNotFilterable,
-                    $"'{condition.Path}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
+                    $"'{Named(condition.Path)}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
                 return null;
             }
 
@@ -1700,8 +1708,8 @@ public sealed partial class Binder
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
                 errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
-                    ? $"'{condition.Path}' is unknown to the model; it can be projected, not filtered."
-                    : $"'{condition.Path}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
+                    ? $"'{Named(condition.Path)}' is unknown to the model; it can be projected, not filtered."
+                    : $"'{Named(condition.Path)}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
                 return null;
             }
 
@@ -1715,7 +1723,7 @@ public sealed partial class Binder
             // operators pass the kind gate above and have nothing to match against.
             if (!path.IsRemote && OperandCoercer.NeedsText(op) && OperandCoercer.IsCharRepresented(path))
             {
-                errors.Add(Operand($"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path, op, "operator", path.LeafKind));
+                errors.Add(Operand($"'{Named(condition.Path)}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path, op, "operator", path.LeafKind));
                 return null;
             }
 
@@ -1773,7 +1781,7 @@ public sealed partial class Binder
 
             if (isPattern && (foldsAccents ? !TextsOf(operand).All(text => RegexGuard.PatternFits(AccentFold.Pattern(text, options.Representation.Collation))) : !TextFits(operand)))
             {
-                errors.Add(Operand(TooLongToMatch(op, condition.Path), index, condition.Path, op, "length"));
+                errors.Add(Operand(TooLongToMatch(op, Named(condition.Path)!), index, condition.Path, op, "length"));
                 return null;
             }
 
@@ -1781,7 +1789,7 @@ public sealed partial class Binder
                 exactTexts.Add((index, condition.Path, op));
 
             if (op == "regex" && operand is BoundOperand.Single { Value: BsonString pattern } && !RegexGuard.IsAnchored(pattern.Value))
-                diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
+                diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{Named(condition.Path)}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, IsSemiJoin: false);
         }
@@ -1796,13 +1804,13 @@ public sealed partial class Binder
         {
             if (op is not ("eq" or "neq" or "in" or "nin"))
             {
-                errors.Add(Operand($"'{op}' does not apply to an outcome; compare '{condition.Path}' with eq, neq, in or nin.", index, condition.Path, op, "operator"));
+                errors.Add(Operand($"'{op}' does not apply to an outcome; compare '{Named(condition.Path)}' with eq, neq, in or nin.", index, condition.Path, op, "operator"));
                 return null;
             }
 
             if (condition.Options is not null)
             {
-                errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{condition.Path}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path), "options", "outcome"));
+                errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{Named(condition.Path)}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path), "options", "outcome"));
                 return null;
             }
 
@@ -1820,7 +1828,7 @@ public sealed partial class Binder
 
             if (named is null)
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' is an outcome; compare it with one of {string.Join(", ", Notes.Outcomes)}.", index, condition.Path));
+                errors.Add(Error(Codes.InvalidOperand, $"'{Named(condition.Path)}' is an outcome; compare it with one of {string.Join(", ", Notes.Outcomes)}.", index, condition.Path));
                 return null;
             }
 
@@ -1856,7 +1864,7 @@ public sealed partial class Binder
                 errors.Add(new QueryValidationError
                 {
                     Code = Codes.InvalidOperand,
-                    Message = $"'{op}' does not apply to '{condition.Path}', whose value follows from the variant its object is stored as; compare it with eq, neq, in or nin.",
+                    Message = $"'{op}' does not apply to '{Named(condition.Path)}', whose value follows from the variant its object is stored as; compare it with eq, neq, in or nin.",
                     Stage = index,
                     Path = condition.Path,
                     Params = new Dictionary<string, object?> { ["reason"] = PathReasons.Derived, ["can"] = new List<string> { "eq", "neq", "in", "nin" } },
@@ -1880,7 +1888,7 @@ public sealed partial class Binder
             if (texts is null)
             {
                 errors.Add(Error(Codes.InvalidOperand,
-                    $"'{condition.Path}' holds one of {string.Join(", ", derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => $"'{value}'"))} wherever its object is; compare it with one of them. Whether the object is there is a test of the object ('exists').",
+                    $"'{Named(condition.Path)}' holds one of {string.Join(", ", derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => $"'{value}'"))} wherever its object is; compare it with one of them. Whether the object is there is a test of the object ('exists').",
                     index, condition.Path));
                 return null;
             }
@@ -1943,7 +1951,7 @@ public sealed partial class Binder
             if (throughCollection && (inherited.Count > 0 || (includeBase && holding.CollectionAncestors > 0)))
             {
                 errors.Add(Error(Codes.InvalidOperand,
-                    $"'{condition.Path}' lies under a collection that is not unwound, and which value an element holds cannot be told from its stored variant without looking at one element at a time; test the elements with 'any' on the collection, or unwind it first.",
+                    $"'{Named(condition.Path)}' lies under a collection that is not unwound, and which value an element holds cannot be told from its stored variant without looking at one element at a time; test the elements with 'any' on the collection, or unwind it first.",
                     index, condition.Path));
                 return null;
             }
@@ -1970,13 +1978,13 @@ public sealed partial class Binder
             {
                 var what = type is null ? Kinds.WithArticle(path.LeafKind) : "an object of one type only";
 
-                errors.Add(Operand($"'is' applies to a member that holds one of several variants; '{condition.Path}' is {what}.", index, condition.Path, "is", "operator", path.LeafKind));
+                errors.Add(Operand($"'is' applies to a member that holds one of several variants; '{Named(condition.Path)}' is {what}.", index, condition.Path, "is", "operator", path.LeafKind));
                 return null;
             }
 
             if (path.CollectionAncestors > 0)
             {
-                errors.Add(Operand($"'{condition.Path}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path, "is", "collection"));
+                errors.Add(Operand($"'{Named(condition.Path)}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path, "is", "collection"));
                 return null;
             }
 
@@ -2056,8 +2064,8 @@ public sealed partial class Binder
 
             var applies = path.IsRemote || OperandCoercer.IgnoreCaseApplies(op, path.LeafKind);
             var why = path.LeafKind == Kind.String && !path.IsRemote && OperandCoercer.FoldsByDefault(op, path)
-                ? $"'{op}' on '{condition.Path}' orders under the collation of the whole request and cannot opt out of it"
-                : $"'{condition.Path}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'";
+                ? $"'{op}' on '{Named(condition.Path)}' orders under the collation of the whole request and cannot opt out of it"
+                : $"'{Named(condition.Path)}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'";
             bool? caseSensitive = null;
 
             if (conditionOptions.CaseSensitive is { } sensitive)
@@ -2190,10 +2198,10 @@ public sealed partial class Binder
             if (path.IsRemote || path.Path is null || path.Kind != Kind.Array || path.Shape?.Of?.Kind != Kind.Object || path.CollectionAncestors > 0)
             {
                 errors.Add(Error(Codes.AnyNotApplicable, path.Kind != Kind.Array
-                    ? $"'{condition.Path}' is not a collection here; 'any' applies to a collection of objects that is not unwound."
+                    ? $"'{Named(condition.Path)}' is not a collection here; 'any' applies to a collection of objects that is not unwound."
                     : path.CollectionAncestors > 0
-                        ? $"'{condition.Path}' lies under another collection; unwind the outer one first."
-                        : $"'{condition.Path}' is a collection of scalars; the plain form already matches some element.", index, condition.Path));
+                        ? $"'{Named(condition.Path)}' lies under another collection; unwind the outer one first."
+                        : $"'{Named(condition.Path)}' is a collection of scalars; the plain form already matches some element.", index, condition.Path));
                 return null;
             }
 
@@ -2206,16 +2214,33 @@ public sealed partial class Binder
 
             // The inner paths are relative to one element; the ledger has them under the collection.
             var errorsBefore = errors.Count;
-            var inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
+            // What the conditions of an element say of a member, they say of it as the row has it: under its collection.
+            (under, coercer.Under) = (condition.Path, condition.Path);
 
-            // So has an error: it names the path as the row has it (the collection, then the element's member), in its path, its params and its words.
+            BoundCondition? inner;
+
+            try
+            {
+                inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
+            }
+            finally
+            {
+                (under, coercer.Under) = (null, null);
+            }
+
+            // So has an error: it names the path as the row has it (the collection, then the element's member), in its path and its params.
             for (var position = errorsBefore; position < errors.Count; position++)
                 errors[position] = UnderCollection(errors[position], condition.Path!);
 
             return inner is null ? null : new BoundCondition.Any(path, inner);
         }
 
-        /// <summary>An error of a condition inside <c>any</c>, with the element's member named under its collection.</summary>
+        /// <summary>
+        /// An error of a condition inside <c>any</c>, with the element's member named under its
+        /// collection in its path and its params. Its words are written with that name where they are
+        /// written (<see cref="Named"/>), so nothing else in them is touched: an operator, a variable or
+        /// an operand spelled like the member stays what the caller wrote.
+        /// </summary>
         private static QueryValidationError UnderCollection(QueryValidationError error, string collection)
         {
             if (error.Path is not { Length: > 0 } relative || error.Code == Shape.PoisonedCode)
@@ -2227,8 +2252,14 @@ public sealed partial class Binder
             if (parameters is not null && parameters.TryGetValue("path", out var named) && named is string text && text == relative)
                 parameters = new Dictionary<string, object?>(parameters) { ["path"] = full };
 
-            return error with { Path = full, Message = error.Message.Replace($"'{relative}'", $"'{full}'", StringComparison.Ordinal), Params = parameters };
+            return error with { Path = full, Params = parameters };
         }
+
+        /// <summary>The collection whose elements the conditions being bound are of (inside <c>any</c>); null elsewhere.</summary>
+        private string? under;
+
+        /// <summary>A member as a message names it: under the collection whose element it is a member of, inside <c>any</c>.</summary>
+        private string? Named(string? path) => under is null || path is null ? path : under + "." + path;
 
         // ---- lookup --------------------------------------------------------------------------
 

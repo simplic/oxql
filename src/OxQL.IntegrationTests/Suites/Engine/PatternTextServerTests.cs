@@ -112,4 +112,34 @@ public class PatternTextServerTests
             (await NamesAsync(engine, """{ "text": { "contains": "\n" } }""")).Should().Equal(Names("one-lf", "lf-one", "one-crlf", "a-lf-one", "one-lf-a", "one-word-lf"));
         }
     }
+
+    /// <summary>
+    /// A NUL is a character of a text like any other: a pattern built from a text that holds one
+    /// finds the values a plain comparison finds, and a caller's own pattern that holds one is
+    /// refused as the pattern it is, since a pattern is sent as text that ends at its first NUL.
+    /// </summary>
+    [Fact]
+    public async Task A_text_that_holds_a_NUL_is_matched_as_a_plain_comparison_matches_it()
+    {
+        var (owned, engine) = await SeedAsync("pattern_nul", [("nul", "x\0y"), ("plain", "xy"), ("upper", "X\0Y"), ("x", "x")]);
+
+        await using (owned)
+        {
+            (await NamesAsync(engine, """{ "text": { "eq": "x\u0000y", "options": { "caseSensitive": true } } }""")).Should().Equal(Names("nul"));
+            (await NamesAsync(engine, $$"""{ "text": { "eq": "x\u0000y", "options": { "caseSensitive": true } }, {{Folding}} }""")).Should().Equal(Names("nul"));
+            (await NamesAsync(engine, $$"""{ "text": { "in": ["x\u0000y", "x"], "options": { "caseSensitive": true } }, {{Folding}} }""")).Should().Equal(Names("nul", "x"));
+            (await NamesAsync(engine, $$"""{ "text": { "neq": "x\u0000y", "options": { "caseSensitive": true } }, {{Folding}} }""")).Should().Equal(Names("plain", "upper", "x"));
+            (await NamesAsync(engine, """{ "text": { "contains": "\u0000" } }""")).Should().Equal(Names("nul", "upper"));
+            (await NamesAsync(engine, """{ "text": { "contains": "x\u0000", "options": { "caseSensitive": true } } }""")).Should().Equal(Names("nul"));
+            (await NamesAsync(engine, """{ "text": { "endsWith": "\u0000Y" } }""")).Should().Equal(Names("nul", "upper"));
+            (await NamesAsync(engine, """{ "text": { "endsWith": "\u0000y", "options": { "caseSensitive": true } } }""")).Should().Equal(Names("nul"));
+            (await NamesAsync(engine, """{ "text": { "startsWith": "x\u0000", "options": { "caseSensitive": true } } }""")).Should().Equal(Names("nul"));
+            (await NamesAsync(engine, """{ "text": { "contains": { "$var": "part" } } }""", """{ "part": "\u0000y" }""")).Should().Equal(Names("nul", "upper"));
+            (await NamesAsync(engine, """{ "text": { "regex": "^x\\x00y$" } }""")).Should().Equal(Names("nul"));
+
+            var refused = await engine.ExecuteAsync(EngineDirect.Request(Entity, """[{ "match": { "text": { "regex": "^x\u0000" } } }]"""), Direct.Context());
+
+            refused.Should().BeOfType<QueryOutcome.Refused>().Which.Refusal.Errors!.Select(error => error.Code).Should().Equal(Codes.InvalidRegex);
+        }
+    }
 }

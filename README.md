@@ -558,6 +558,9 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **A NUL character in an operand.** A text operand that holds one (`"\u0000"`) is matched as
+  the character it is by every operator; a `regex` that holds one is 400 `INVALID_REGEX` (the
+  pattern writes it `\x00`).
 - **Text that ends in a line feed.** `endsWith`, and an exact `eq`, `neq`, `in` or `nin` in a
   request that folds case elsewhere, read the end of the text as the end of the value: `"1"` is
   not found at the end of `"1

@@ -1082,13 +1082,26 @@ internal sealed class KeyedFetch
         var aliases = call.Sent.Select(entry => entry.Target.Stage.As).Distinct().ToList();
         var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
 
-        var nulled = $"'{string.Join("', '", aliases)}' is null on this page.";
+        // What the owner was asked for is null. A record kept from an earlier answer is in its row all
+        // the same, so where some were, the text and the params say for how many keys the alias is null.
+        var asked = call.Sent.Sum(entry => entry.Keys.Count);
+        var kept = call.Sent.Select(entry => entry.Target).Distinct().Sum(target => target.CacheHits);
+        var named = $"'{string.Join("', '", aliases)}'";
+        var nulled = kept == 0
+            ? $"{named} is null on this page."
+            : $"{named} is null on this page for the {asked} {(asked == 1 ? "key" : "keys")} asked for; the rows of {kept} {(kept == 1 ? "key" : "keys")} kept from an earlier answer carry their record.";
         var remembered = call.Outcome.Remembered;
         var reason = ReasonOf(call.Outcome);
         var parameters = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases, ["reason"] = reason };
 
         if (call.Outcome.Status is { } answered)
             parameters["status"] = answered;
+
+        if (kept > 0)
+        {
+            parameters["keys"] = asked;
+            parameters["cached"] = kept;
+        }
 
         if (remembered is not null)
         {

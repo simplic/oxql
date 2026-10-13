@@ -695,6 +695,9 @@ What a caller without the contract header reads differently:
   called with; `RemoteServiceState.Route`) and `pending` (nothing measured yet;
   `RemoteServiceState.Pending`, on the entries that carried no `reason`); an explain's owner
   entry says `route` for an owner whose explain route answered 404.
+- **`RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` beside kept records.** Where some records of the
+  page were kept from an earlier answer, the message says for how many keys the alias is null, and
+  `params` carries `keys` and `cached`.
 - **The strict start.** The exception that stops a host whose declared remote references have no
   configured service says how many there are, that the log lines before it name them, and the
   switch; the services and the keys to set are in those lines (`OxQL.Startup`), once.

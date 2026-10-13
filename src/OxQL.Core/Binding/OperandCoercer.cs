@@ -626,13 +626,6 @@ public sealed class OperandCoercer
                 break;
 
             case Kind.TimeSpan:
-                // A year and a month are no fixed lengths of time: a duration is written in days and smaller.
-                if (contract2 && element.ValueKind == JsonValueKind.String && NamesCalendarUnit(element.GetString()!))
-                {
-                    failure = "an ISO-8601 duration of days, hours, minutes and seconds (a year or a month has no fixed length)";
-                    break;
-                }
-
                 if (element.ValueKind == JsonValueKind.String && TryDuration(element.GetString()!, out var span))
                     return representation.BsonType switch
                     {
@@ -928,15 +921,10 @@ public sealed class OperandCoercer
         return (tail[0] == '+' || tail[0] == '-') && char.IsDigit(tail[1]) && char.IsDigit(tail[2]) && tail[3] == ':' && char.IsDigit(tail[4]) && char.IsDigit(tail[5]);
     }
 
-    /// <summary>Whether a duration is written with years or months: a <c>Y</c>, or an <c>M</c> before the time part.</summary>
-    internal static bool NamesCalendarUnit(string text)
-    {
-        var date = text.IndexOf('T', StringComparison.Ordinal) is >= 0 and var time ? text[..time] : text;
-
-        return (text.StartsWith('P') || text.StartsWith("-P", StringComparison.Ordinal)) && (date.Contains('Y', StringComparison.Ordinal) || date.Contains('M', StringComparison.Ordinal));
-    }
-
-    /// <summary>An ISO-8601 duration. It is kept to 100 nanoseconds, the precision a stored duration has; finer digits of a second are dropped.</summary>
+    /// <summary>
+    /// An ISO-8601 duration. A year in it counts as 365 days and a month as 30. It is kept to 100
+    /// nanoseconds, the precision a stored duration has; finer digits of a second are dropped.
+    /// </summary>
     public static bool TryDuration(string text, out TimeSpan span)
     {
         span = default;

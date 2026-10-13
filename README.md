@@ -587,8 +587,8 @@ What a contract 2 caller reads differently:
   and `keys`; `UNKNOWN_STAGE_MEMBER` always `stage` and `reason` (and `member`, `members` where
   they are known); `OPTION_NOT_APPLICABLE` always `option` and `reason`. A code that carried
   `params` keeps what it carried.
-- **Duration operands** are days and smaller: `P1Y` and `P1M` (no fixed lengths) are 400
-  `INVALID_OPERAND`.
+- **Duration operands.** A year in a duration counts as 365 days and a month as 30 (`P1Y`,
+  `P1M`), and a duration is kept to 100 nanoseconds, the precision a stored one has.
 - **An error inside `any`** names the member as the row has it, under its collection
   (`tours.id`), in `path`, `params.path` and the message.
 - **Text that is no Unicode text.** Half of a surrogate pair written as an escape (`"\ud800"`)

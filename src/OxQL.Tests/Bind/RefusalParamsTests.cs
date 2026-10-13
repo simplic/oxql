@@ -79,24 +79,25 @@ public class RefusalParamsTests
         }
     }
 
-    /// <summary>A duration is days and smaller: a year and a month are no fixed lengths. It is kept to 100 nanoseconds.</summary>
+    /// <summary>A year in a duration counts as 365 days and a month as 30, under either contract.</summary>
     [Theory]
-    [InlineData("P1Y")]
-    [InlineData("P1M")]
-    [InlineData("-P2Y3M4DT1H")]
-    [InlineData("P1MT1M")]
-    public async Task A_duration_of_years_or_months_is_no_operand(string duration)
+    [InlineData("P1Y", "365.00:00:00")]
+    [InlineData("P1M", "30.00:00:00")]
+    [InlineData("-P2Y3M4DT1H", "-824.01:00:00")]
+    [InlineData("P1MT1M", "30.00:01:00")]
+    [InlineData("P1Y1D", "366.00:00:00")]
+    public async Task A_year_of_a_duration_is_365_days_and_a_month_30(string duration, string stored)
     {
-        var error = await Refused(Match($$"""{ "span": { "lt": "{{duration}}" } }"""), Codes.InvalidOperand);
+        foreach (var contract in new[] { 2, 1 })
+        {
+            var bound = await BindHost.BoundAsync(BindHost.Probe, Order, Match($$"""{ "span": { "eq": "{{duration}}" } }"""), BindHost.Context(contract: contract));
+            var leaf = bound.Stages.OfType<BoundStage.Match>().Single().Condition.Should().BeOfType<BoundCondition.Leaf>().Subject;
 
-        Json(error).Should().Be("""{"path":"span","operator":"lt","expected":"timeSpan","actual":"string"}""");
-        error.Message.Should().Contain("a year or a month has no fixed length");
-
-        // Under contract 1 the operand is read as it always was.
-        (await BindHost.BindAsync(BindHost.Probe, BindHost.Parse($$"""{ "entityType": "{{Order}}", "pipeline": [{ "match": { "span": { "lt": "{{duration}}" } } }] }"""), BindHost.Context(contract: 1)))
-            .Should().BeOfType<BindOutcome.Bound>();
+            leaf.Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.AsString.Should().Be(stored, $"contract {contract}");
+        }
     }
 
+    /// <summary>A duration is kept to 100 nanoseconds.</summary>
     [Theory]
     [InlineData("P1D", "1.00:00:00")]
     [InlineData("PT1M", "00:01:00")]

@@ -517,6 +517,11 @@ unchanged, and a caller reads the new members by name. Where an answer is anothe
 2.1.126.1012 gave to the same request, it is one of the following; the entries further down say
 the rest.
 
+A host that has switched the legacy pipeline off answers contract 1 through the compatibility
+rewrite, which keeps the cursor predicate and the pattern anchor contract 1 published:
+[LEGACY.md](src/docs/LEGACY.md), *A host that switches the legacy pipeline off*, lists which of
+the guarantees below hold for contract 2 only.
+
 What a contract 2 caller reads differently:
 
 - **A body the host cannot bind**, on `query`, `batch` and `explain`: the refusal envelope (400

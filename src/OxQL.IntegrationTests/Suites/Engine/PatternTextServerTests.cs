@@ -176,4 +176,56 @@ public class PatternTextServerTests
         (await CountAsync("""{ "price": { "in": [12.5, 7] } }""")).Should().Be(3);
         (await CountAsync("""{ "price": { "neq": 12.5 } }""")).Should().Be(2);
     }
+
+    /// <summary>The characters a pattern reads as more than themselves: in an operand each is the character it is.</summary>
+    private static readonly string[] Signs = ["^", "$", "|", "?", "+", "*", "{", "}", "(", ")", "[", "]", "\\", ".", "{2}", "(a|b)", "[ab]", "a.c", "^a", "c$", "\\d", "a+", ".*"];
+
+    /// <summary>
+    /// A text operand that holds a character a pattern has a meaning for is compared as text: by
+    /// <c>contains</c>, <c>startsWith</c>, <c>endsWith</c> and <c>eq</c>, folding and exact, alone
+    /// and beside a condition that folds. Against the stored values, worked out here with the text
+    /// operations of the runtime.
+    /// </summary>
+    [Fact]
+    public async Task A_character_a_pattern_has_a_meaning_for_is_matched_as_the_character_it_is()
+    {
+        // Each sign at the start, in the middle and at the end of a value and as a value of its own, in two cases of the
+        // letters around it; and values without any sign, which a sign read as a pattern would match.
+        var values = Signs.SelectMany(sign => new[] { sign, sign + "x", "a" + sign + "c", "X" + sign, "A" + sign + "C" })
+            .Concat(["abc", "aac", "aXc", "x", "ac", "a", "c", "ab", "d", "2", "aa", ""])
+            .Distinct(StringComparer.Ordinal)
+            .Select((text, index) => (Name: "v" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture), Text: text))
+            .ToList();
+
+        var (owned, engine) = await SeedAsync("pattern_signs", values);
+
+        await using (owned)
+        {
+            var differences = new List<string>();
+
+            foreach (var sign in Signs)
+            foreach (var (op, holds) in new (string, Func<string, string, StringComparison, bool>)[]
+            {
+                ("contains", (text, operand, comparison) => text.Contains(operand, comparison)),
+                ("startsWith", (text, operand, comparison) => text.StartsWith(operand, comparison)),
+                ("endsWith", (text, operand, comparison) => text.EndsWith(operand, comparison)),
+                ("eq", (text, operand, comparison) => text.Equals(operand, comparison)),
+            })
+            foreach (var operand in new[] { sign, "a" + sign, sign + "C" })
+            foreach (var exact in new[] { false, true })
+            foreach (var beside in new[] { false, true })
+            {
+                var written = System.Text.Json.JsonSerializer.Serialize(operand);
+                var options = exact ? """, "options": { "caseSensitive": true }""" : "";
+                var condition = $$"""{ "text": { "{{op}}": {{written}}{{options}} }{{(beside ? ", " + Folding : "")}} }""";
+                var expected = Names([.. values.Where(value => holds(value.Text, operand, exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase)).Select(value => value.Name)]);
+                var answered = await NamesAsync(engine, condition);
+
+                if (!answered.SequenceEqual(expected))
+                    differences.Add($"{condition}: expected {string.Join(",", expected)}; answered {string.Join(",", answered)}");
+            }
+
+            differences.Should().BeEmpty();
+        }
+    }
 }

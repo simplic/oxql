@@ -960,6 +960,11 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         MongoCommandException command when IsArithmeticRejection(command) =>
             Refusal.NotExecutable(Codes.InvalidAggregateArgument, "A row holds a value the arithmetic of an aggregate cannot take: it adds, subtracts, multiplies and divides numbers, and moves a date by a number."),
 
+        // The binder takes a zone by the host's zone table and the database computes with its own:
+        // a zone the first has and the second does not is said with the code of the zone.
+        MongoCommandException { Code: UnknownZoneCode } =>
+            Refusal.Validation([new QueryValidationError { Code = Codes.InvalidTimezone, Message = "The database does not know a timezone of this query; an offset from UTC (+02:00) names the same zone without a zone table." }]),
+
         // The binder bounds how deep a condition nests; a pipeline the driver still cannot
         // serialize this deep is the query's cost, not a fault of the host.
         BsonSerializationException =>
@@ -967,6 +972,9 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         _ => null,
     };
+
+    /// <summary>The server's code for a zone id its zone table does not have.</summary>
+    internal const int UnknownZoneCode = 40485;
 
     /// <summary>Whether the server refused an arithmetic expression for what a row holds: its codes for an operand that is no number, and for a quotient by zero.</summary>
     private static bool IsArithmeticRejection(MongoCommandException command) =>

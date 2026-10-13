@@ -73,6 +73,15 @@ public class CoreHardeningEngineTests
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidRegex);
     }
 
+    [Fact]
+    public async Task A_zone_the_database_does_not_know_is_refused_as_an_invalid_timezone()
+    {
+        var refusal = await Refused(new FakeAggregateRunner { Fail = CommandFailure(MongoQueryEngine.UnknownZoneCode, "unrecognized time zone identifier: \"Europe/Kyiv\"") }, "[]");
+
+        refusal.Status.Should().Be(400);
+        refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidTimezone);
+    }
+
     /// <summary>Fails the page asynchronously and leaves the count running until its token is cancelled or the test releases it.</summary>
     private sealed class FailingPageRunner(Exception pageFailure) : IAggregateRunner
     {

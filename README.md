@@ -565,7 +565,8 @@ What a contract 2 caller reads differently:
   with a `Content-Length`: text that is no Unicode text names its place, and in a batch refuses
   its entry while the others run.
 - **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
-  `Etc` area (`Etc/GMT-2`), on every host platform; they were `INVALID_TIMEZONE`.
+  `Etc` area (`Etc/GMT-2` to `Etc/GMT+12`), on every host platform. A zone id the
+  host's zone table has and the database's does not is `INVALID_TIMEZONE` (400) too.
 - **`first`, `last` and `push` after a sort with ties.** A sort a `group` follows is completed by
   the entity's key and the positions of the elements unwound before it, so the rows that tie in
   it reach the group in one order: the values are the same on every page and for every page size.

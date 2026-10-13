@@ -120,7 +120,7 @@ the listed status.
 | `UNKNOWN_AGG_FUNCTION` | 400 | an aggregate outside `count countDistinct sum avg min max first last push` |
 | `INVALID_AGGREGATE_ARGUMENT` | 400, or 422 | 400: `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date; arithmetic over an operand that is no number (contract 2 `params` `operator`, `kinds`: the kind of each operand), two dates added, a `subtract` or `divide` without exactly two operands. 422 (`not_executable`): a row holds a value the arithmetic cannot take where the kinds allow one (text under an `unknown` member, or what a `coalesce` answers). Test the code, not the status |
 | `INVALID_DATE_TRUNC_UNIT` | 400 | a unit outside `year quarter month week day hour minute second`; a `weekStart` that is not a day |
-| `INVALID_TIMEZONE` | 400 | a `timezone` that is not an IANA (or Windows) zone id |
+| `INVALID_TIMEZONE` | 400 | a `timezone` that is not an IANA (or Windows) zone id or an offset from UTC, or one the database's zone table does not have |
 | `INVALID_SORT_DIRECTION` | 400 | a direction other than `asc`/`desc`; the object form without `direction`; the object form under contract 1 |
 | `LOOKUP_NOT_DECLARED` | 400 | the child's `path` declares no reference to the current entity (or to the entity of the `on` alias), or the referenced key is not stored |
 | `LOOKUP_ON_NOT_ENTITY` | 400 | a lookup's `on` names a lookup array, an unwound element, a scalar or a group output |

@@ -702,7 +702,9 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
   in the zone table of the host's runtime and has to map to a Windows zone there, so that it
   binds or is refused the same on Windows and Linux: an alias without such a mapping (`CET`)
   and a spelling only a file system resolves (`Europe//Berlin`) are `INVALID_TIMEZONE`, as is
-  everything else. Write a region id (`Europe/Berlin`) or an offset.
+  everything else. Write a region id (`Europe/Berlin`) or an offset. The database computes with a
+  zone table of its own: a zone id the host's table has and the database's does not is
+  `INVALID_TIMEZONE` as well (400, without a `path`), answered when the query runs.
 - The boundary is computed in local time, so a bucket follows daylight saving: the Berlin day
   bucket of 29 March is `2026-03-28T23:00:00Z`, that of 25 October `2026-10-24T22:00:00Z`. The key
   is emitted as the UTC instant of the local boundary and is not a UTC midnight; compare it as an

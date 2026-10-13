@@ -103,86 +103,131 @@ internal static class RequestBodyReader
     /// <summary>
     /// The places of a body whose member name or text is no Unicode text, each as the JSON path of
     /// the text (of the object, for a name) and whether it is a name; empty when there is none, and
-    /// null when the body is no JSON at all, which is said in its own words.
+    /// null when the body is no JSON at all or nests deeper than <paramref name="maxDepth"/>, which
+    /// is said in its own words.
+    /// <para>
+    /// The body is read once, token by token, to the depth the host reads a body to: what the look
+    /// keeps is one entry per level it stands in, and a path is written for a place that is found.
+    /// Its cost is the body's length, whatever the body nests.
+    /// </para>
     /// </summary>
-    public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8)
+    public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8, int maxDepth)
     {
-        JsonDocument document;
+        var broken = new List<(string Path, bool Name)>();
+
+        // Where the look stands: per level the index of the element (an array) or the name of the member (an object), as its place in the body.
+        var levels = new List<Level>();
+        var characters = System.Buffers.ArrayPool<char>.Shared.Rent(256);
 
         try
         {
-            document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = int.MaxValue });
-        }
-        catch (JsonException)
-        {
-            // Bytes that are no UTF-8 may stop the reader before it has a document: they are still what is wrong.
-            return System.Text.Unicode.Utf8.IsValid(utf8.Span) ? null : [(Root, false)];
-        }
+            var reader = new Utf8JsonReader(utf8.Span, new JsonReaderOptions { MaxDepth = maxDepth });
 
-        using (document)
-        {
-            var broken = new List<(string Path, bool Name)>();
-            var pending = new Stack<(JsonElement Element, string Path)>();
-
-            pending.Push((document.RootElement, Root));
-
-            while (pending.Count > 0 && broken.Count < MaxBrokenTexts)
+            while (broken.Count < MaxBrokenTexts && reader.Read())
             {
-                var (current, at) = pending.Pop();
-
-                switch (current.ValueKind)
+                switch (reader.TokenType)
                 {
-                    case JsonValueKind.Object:
-                        foreach (var member in current.EnumerateObject())
+                    case JsonTokenType.PropertyName:
+                        if (IsText(ref reader, ref characters))
                         {
-                            if (NameOf(member) is { } name)
-                                pending.Push((member.Value, Join(at, name)));
-                            else
-                                broken.Add((at, true));
+                            levels[^1] = new Level(false, 0, (int)reader.TokenStartIndex, (int)reader.TokenStartIndex + reader.ValueSpan.Length + 2);
+                        }
+                        else
+                        {
+                            // The member is named by nothing: the object is the place, and what the member holds is passed over.
+                            broken.Add((PathOf(utf8.Span, levels, levels.Count - 1), true));
+                            reader.Skip();
                         }
 
                         break;
 
-                    case JsonValueKind.Array:
-                        var index = 0;
+                    case JsonTokenType.StartObject:
+                    case JsonTokenType.StartArray:
+                        Element(levels);
+                        levels.Add(new Level(reader.TokenType == JsonTokenType.StartArray, -1, 0, 0));
+                        break;
 
-                        foreach (var item in current.EnumerateArray())
-                            pending.Push((item, $"{at}[{index++}]"));
+                    case JsonTokenType.EndObject:
+                    case JsonTokenType.EndArray:
+                        levels.RemoveAt(levels.Count - 1);
+                        break;
+
+                    case JsonTokenType.String:
+                        Element(levels);
+
+                        if (!IsText(ref reader, ref characters))
+                            broken.Add((PathOf(utf8.Span, levels, levels.Count), false));
 
                         break;
 
-                    case JsonValueKind.String when !IsText(current):
-                        broken.Add((at, false));
+                    default:
+                        Element(levels);
                         break;
                 }
             }
+        }
+        catch (JsonException)
+        {
+            // Bytes that are no UTF-8 may stop the reader before it has read a text: they are still what is wrong.
+            return System.Text.Unicode.Utf8.IsValid(utf8.Span) ? null : [(Root, false)];
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(characters);
+        }
 
-            broken.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
+        broken.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
 
-            return broken;
+        return broken;
+
+        // A value in an array is its next element.
+        static void Element(List<Level> levels)
+        {
+            if (levels.Count > 0 && levels[^1] is { Array: true } array)
+                levels[^1] = array with { Index = array.Index + 1 };
         }
     }
+
+    /// <summary>One level the look stands in: an array with the index of its element, or an object with where the name of its member is written (from its opening quote to past its closing one).</summary>
+    private readonly record struct Level(bool Array, int Index, int NameStart, int NameEnd);
 
     /// <summary>The most places one refusal names.</summary>
     private const int MaxBrokenTexts = 20;
 
-    private static string? NameOf(JsonProperty member)
+    /// <summary>The JSON path of the first <paramref name="count"/> levels.</summary>
+    private static string PathOf(ReadOnlySpan<byte> utf8, List<Level> levels, int count)
     {
-        try
+        var path = Root;
+
+        for (var index = 0; index < count; index++)
         {
-            return member.Name;
+            var level = levels[index];
+
+            // A name above a place that is found is text: the look passes over what a name that is none holds.
+            path = level.Array
+                ? $"{path}[{level.Index}]"
+                : Join(path, JsonSerializer.Deserialize<string>(utf8[level.NameStart..level.NameEnd])!);
         }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
+
+        return path;
     }
 
-    private static bool IsText(JsonElement text)
+    /// <summary>Whether the name or the text the reader stands on is Unicode text; nothing is kept of it.</summary>
+    private static bool IsText(ref Utf8JsonReader reader, ref char[] characters)
     {
+        if (!reader.ValueIsEscaped)
+            return System.Text.Unicode.Utf8.IsValid(reader.ValueSpan);
+
+        // An escape is never longer in characters than in the bytes it is written with.
+        if (characters.Length < reader.ValueSpan.Length)
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(characters);
+            characters = System.Buffers.ArrayPool<char>.Shared.Rent(reader.ValueSpan.Length);
+        }
+
         try
         {
-            _ = text.GetString();
+            reader.CopyString(characters);
 
             return true;
         }

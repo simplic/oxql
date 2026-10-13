@@ -99,7 +99,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
 
         if (bytes is not null)
         {
-            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes) is { Count: > 0 } broken
+            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, DepthOf(http)) is { Count: > 0 } broken
                 && (contract1 || OxQLQueryService.ContractRefusal(options, http) is null))
             {
                 if (contract1)
@@ -163,9 +163,15 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     /// <summary>The names and texts that are no Unicode text in the body the binder read itself; null when it kept none or holds none.</summary>
     private static List<(string Path, bool Name)>? BrokenIn(HttpContext http) =>
         http.Items[RecorderItem] is RecordingStream { Whole: true } recorded && IsUtf8(http.Request)
-        && recorded.Recorded is var kept && RequestBodyReader.MayHoldBrokenText(kept) && RequestBodyReader.BrokenTexts(kept) is { Count: > 0 } broken
+        && recorded.Recorded is var kept && RequestBodyReader.MayHoldBrokenText(kept) && RequestBodyReader.BrokenTexts(kept, DepthOf(http)) is { Count: > 0 } broken
             ? broken
             : null;
+
+    /// <summary>How deep the host reads a body.</summary>
+    private static int DepthOf(HttpContext http) =>
+        http.RequestServices.GetService<IOptions<JsonOptions>>()?.Value.JsonSerializerOptions.MaxDepth is > 0 and var depth ? depth
+        : http.RequestServices.GetService<IOptions<JsonOptions>>() is null ? OxQLJson.MaxDepth
+        : 64;
 
     private static bool IsUtf8(HttpRequest request) =>
         !MediaTypeHeaderValue.TryParse(request.ContentType, out var media) || media.Encoding is null || media.Encoding.CodePage == Encoding.UTF8.CodePage;
@@ -437,7 +443,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             return;
         }
 
-        if (RequestBodyReader.Parse(body.Value, json.MaxDepth == 0 ? 64 : json.MaxDepth, out var document) is { } unparsed)
+        if (RequestBodyReader.Parse(body.Value, DepthOf(http), out var document) is { } unparsed)
         {
             context.Result = Refused(http, options, parameter, Refusal.Validation([unparsed]));
             return;

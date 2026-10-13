@@ -432,6 +432,99 @@ public class GoldenPipelineTests
             """));
     }
 
+    /// <summary>
+    /// The key is one leg of the order: in the direction the sort gives it, at the place the sort
+    /// gives it, and ascending at the end where the sort does not name it. The page's sort and the
+    /// rows after a cursor's position read that one direction.
+    /// </summary>
+    [Fact]
+    public async Task A_sort_naming_the_key_orders_and_continues_by_the_key_in_the_sorts_direction()
+    {
+        var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
+
+        async Task<CompiledQuery> Next(string sort, Func<CompiledQuery, CursorPayload> position)
+        {
+            var first = await Compile($$"""[{ "sort": {{sort}} }, { "page": { "limit": 2 } }]""");
+
+            return await Compile($$"""[{ "sort": {{sort}} }, { "page": { "limit": 2, "cursor": "{{BindHost.Cursors.Encode(position(first))}}" } }]""");
+        }
+
+        CursorPayload After(CompiledQuery first) => MongoQueryEngine.NextCursor(first, new BsonDocument { ["_id"] = id, ["Number"] = "abc" });
+
+        // A cursor names the row by every sort member and, last, by the key ascending, whatever the sort names.
+        var last = await Compile("""[{ "sort": [{ "number": "desc" }, { "id": "desc" }] }, { "page": { "limit": 2 } }]""");
+
+        After(last).Fields.Should().Equal(new CursorValue("number", false, new BsonString("abc")), new CursorValue("id", false, id), new CursorValue("_id", true, id));
+
+        ShouldBe((await Next("""[{ "number": "desc" }, { "id": "desc" }]""", After)).PageStages,
+            $$"""
+            { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
+                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+            """,
+            "{ $sort: { Number: -1, _id: -1 } }",
+            "{ $limit: 3 }");
+
+        ShouldBe((await Next("""[{ "number": "asc" }, { "id": "asc" }]""", After)).PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { Number: { $gte: "abc" } }, { $or: [ { Number: "abc", _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: "abc" } } ] } ] } }""",
+            "{ $sort: { Number: 1, _id: 1 } }",
+            "{ $limit: 3 }");
+
+        // The key first: what follows it orders nothing further, and still stands in the position.
+        ShouldBe((await Next("""[{ "id": "desc" }, { "number": "asc" }]""", After)).PageStages,
+            $$"""
+            { $match: { $and: [ {{OrgJson}}, { _id: { $not: { $gt: {{id.ToJson()}} } } },
+                { $or: [ { _id: {{id.ToJson()}}, Number: { $gt: "abc" } }, { _id: { $lt: {{id.ToJson()}} } }, { _id: null } ] } ] } }
+            """,
+            "{ $sort: { _id: -1, Number: 1 } }",
+            "{ $limit: 3 }");
+
+        // The key alone.
+        ShouldBe((await Next("""[{ "id": "desc" }]""", After)).PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { _id: { $lt: {{id.ToJson()}} } }, { _id: null } ] } ] } }""",
+            "{ $sort: { _id: -1 } }",
+            "{ $limit: 3 }");
+
+        ShouldBe((await Next("""[{ "id": "asc" }]""", After)).PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { _id: { $gt: {{id.ToJson()}} } } ] } }""",
+            "{ $sort: { _id: 1 } }",
+            "{ $limit: 3 }");
+
+        // Named twice, a member orders once: at its first place, in the direction written last.
+        ShouldBe((await Next("""[{ "number": "asc" }, { "id": "asc" }, { "number": "desc" }, { "id": "desc" }]""", After)).PageStages,
+            $$"""
+            { $match: { $and: [ {{OrgJson}}, { Number: { $not: { $gt: "abc" } } },
+                { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $lt: "abc" } }, { Number: null } ] } ] } }
+            """,
+            "{ $sort: { Number: -1, _id: -1 } }",
+            "{ $limit: 3 }");
+    }
+
+    /// <summary>Contract 1 on the rewrite, which emits no leading range: the key is the same one leg.</summary>
+    [Fact]
+    public async Task A_contract_1_sort_naming_the_key_orders_and_continues_by_the_key_in_the_sorts_direction()
+    {
+        var id = new BsonBinaryData(Guid.Parse("195fb742-82b3-405e-b77b-42838eb0aaa9"), GuidRepresentation.Standard);
+        var context = BindHost.Context(contract: 1);
+
+        async Task<CompiledQuery> Next(string sort)
+        {
+            var first = MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{ "sort": {{sort}} }, { "page": { "limit": 2 } }]""", context), Options with { AsWritten = true });
+            var cursor = BindHost.Cursors.Encode(MongoQueryEngine.NextCursor(first, new BsonDocument { ["_id"] = id, ["Number"] = "abc" }));
+
+            return MongoCompiler.Compile(await BindHost.BoundAsync(BindHost.Probe, Order, $$"""[{ "sort": {{sort}} }, { "page": { "limit": 2, "cursor": "{{cursor}}" } }]""", context), Options with { AsWritten = true });
+        }
+
+        ShouldBe((await Next("""[{ "id": "desc" }]""")).PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { _id: { $lt: {{id.ToJson()}} } }, { _id: null } ] } ] } }""",
+            "{ $sort: { _id: -1 } }",
+            "{ $limit: 3 }");
+
+        ShouldBe((await Next("""[{ "number": "asc" }, { "id": "desc" }]""")).PageStages,
+            $$"""{ $match: { $and: [ {{OrgJson}}, { $or: [ { Number: "abc", _id: { $lt: {{id.ToJson()}} } }, { Number: "abc", _id: null }, { Number: { $gt: "abc" } } ] } ] } }""",
+            "{ $sort: { Number: 1, _id: -1 } }",
+            "{ $limit: 3 }");
+    }
+
     [Fact]
     public async Task An_unwound_page_orders_and_cuts_the_parents_first_and_is_ordered_by_the_key_and_one_index_per_unwind()
     {

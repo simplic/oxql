@@ -334,7 +334,7 @@ internal static class MongoCompiler
         var stages = new List<BsonDocument>();
         var keyed = new List<BoundStage.Resolve>();
         var semiJoins = new List<SemiJoinSlot>();
-        var sortFields = bound.Sort?.Fields ?? [];
+        var sortFields = Ordering(bound.Sort?.Fields ?? []);
         var collated = bound.Collated;
 
         var grouped = bound.FinalShape.Grouped;
@@ -384,7 +384,7 @@ internal static class MongoCompiler
         // The rows after the cursor's position. On unwound rows the position reads the unwinds'
         // indexes, which exist only after them: it is built with the paging sort, after the loop.
         var keyset = position is null || unwoundPaging ? null
-            : KeysetConjuncts(grouped ? Legs(position, sortFields, key: false, []) : KeysetFrom(position, sortFields), !options.AsWritten);
+            : KeysetConjuncts(Legs(position, sortFields, key: !grouped, [], repeatKey: options.AsWritten && !grouped), !options.AsWritten);
 
         // A sum or an average of floating-point values is computed anew for every page, and the order
         // its terms are added in is the server's: the last group's value may differ from the one its
@@ -682,7 +682,7 @@ internal static class MongoCompiler
                 // emitted after the loop with the tie-breakers that make it total. Any earlier
                 // sort is the caller's own and stays where it was written.
                 case BoundStage.Sort sort when unwoundPaging && ReferenceEquals(sort, bound.Sort):
-                    pagingSort = sort.Fields;
+                    pagingSort = sortFields;
                     break;
 
                 case BoundStage.Sort sort:
@@ -784,7 +784,7 @@ internal static class MongoCompiler
             Offset = offset,
             PagingMode = bound.PagingMode,
             IncludeTotalCount = page.IncludeTotalCount,
-            SortFields = sortFields,
+            SortFields = bound.Sort?.Fields ?? [],
             KeyedResolves = keyed,
             SemiJoins = semiJoins,
             MaxTimeMs = options.MaxTimeMs,
@@ -833,7 +833,7 @@ internal static class MongoCompiler
         var at = bound.Stages.ToList().FindIndex(stage => stage is BoundStage.Unwind);
         var unwind = (BoundStage.Unwind)bound.Stages[at];
         var grouped = bound.FinalShape.Grouped;
-        var sortFields = bound.Sort?.Fields ?? [];
+        var sortFields = Ordering(bound.Sort?.Fields ?? []);
 
         // A sort written before the unwind over the collection itself orders by what the collection
         // holds; as written it runs after the collection has left the row. Nothing about it moves.
@@ -1375,11 +1375,45 @@ internal static class MongoCompiler
     };
 
     /// <summary>
+    /// The fields of a sort that order: a path the sort names more than once orders once, at its
+    /// first place and in the direction written last, as the <c>$sort</c> document of
+    /// <see cref="Sort"/> holds it. Everything that reads a direction off the sort reads it here, so
+    /// the order of a page and the rows after a cursor's position are one order.
+    /// </summary>
+    internal static IReadOnlyList<BoundSortField> Ordering(IReadOnlyList<BoundSortField> fields)
+    {
+        if (fields.Select(field => field.Path.Storage).Distinct(StringComparer.Ordinal).Count() == fields.Count)
+            return fields;
+
+        var ordering = new List<BoundSortField>();
+
+        foreach (var field in fields)
+        {
+            var at = ordering.FindIndex(earlier => earlier.Path.Storage == field.Path.Storage);
+
+            if (at < 0)
+                ordering.Add(field);
+            else
+                ordering[at] = ordering[at] with { Ascending = field.Ascending };
+        }
+
+        return ordering;
+    }
+
+    /// <summary>
     /// The legs of a page's total order with the values of the cursor's position: the sort fields,
     /// then the key unless a sort field is it or the rows have none (<paramref name="key"/>: groups),
-    /// then the position of each unwind not sorted on already. It mirrors the emitted <c>$sort</c>.
+    /// then the position of each unwind not sorted on already. It mirrors the emitted <c>$sort</c>:
+    /// the key is one leg, in the direction the sort gives it and ascending where the sort does not
+    /// name it. A cursor carries the key's value twice where the sort names it (under the sort's
+    /// path and, last, as the key); both are the same value of the same row, and one leg reads it.
     /// </summary>
-    private static List<KeysetField> Legs(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields, bool key, IReadOnlyList<string> indexes, (string Alias, string Storage)? renamed = null)
+    /// <remarks>
+    /// <paramref name="repeatKey"/>: a contract 1 page sends the predicate it always sent for a sort
+    /// that names the key ascending, the key once more as the last leg. That leg admits only rows
+    /// the legs before it admit, so the rows are the same.
+    /// </remarks>
+    private static List<KeysetField> Legs(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields, bool key, IReadOnlyList<string> indexes, (string Alias, string Storage)? renamed = null, bool repeatKey = false)
     {
         BsonValue At(string wire) => cursor.Fields.FirstOrDefault(value => value.Wire == wire)?.Value ?? BsonNull.Value;
 
@@ -1394,7 +1428,7 @@ internal static class MongoCompiler
             if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
                 legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)));
 
-        if (key && !legs.Any(leg => leg.Storage == KeyStorage))
+        if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
             legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
 
         foreach (var index in indexes)
@@ -1681,32 +1715,6 @@ internal static class MongoCompiler
         ArgumentNullException.ThrowIfNull(collation);
 
         return new BsonDocument { ["locale"] = collation.Locale, ["strength"] = collation.Strength };
-    }
-
-    private static List<KeysetField> KeysetFrom(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields)
-    {
-        var fields = new List<KeysetField>();
-        BsonValue key = BsonNull.Value;
-
-        foreach (var value in cursor.Fields)
-        {
-            if (value.Wire == KeyStorage)
-            {
-                key = value.Value;
-                continue;
-            }
-
-            var sortField = sortFields.FirstOrDefault(field => field.Path.Wire == value.Wire);
-
-            if (sortField is null)
-                continue;
-
-            fields.Add(new KeysetField(sortField.Path.Storage!, value.Ascending, value.Value));
-        }
-
-        fields.Add(new KeysetField(KeyStorage, true, key));
-
-        return fields;
     }
 
     // ---- filters ----------------------------------------------------------------------------

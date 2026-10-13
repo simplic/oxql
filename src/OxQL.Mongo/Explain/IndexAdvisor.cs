@@ -268,7 +268,7 @@ internal static class IndexAdvisor
     /// </summary>
     private static List<Key> SortKeys(BoundPipeline bound, CompiledQuery compiled, JsonArray unbounded)
     {
-        var fields = bound.Sort?.Fields ?? [];
+        var fields = MongoCompiler.Ordering(bound.Sort?.Fields ?? []);
         var unwinds = bound.Stages.Any(stage => stage is BoundStage.Unwind);
         var leading = fields.TakeWhile(field => !IsKey(field) && IsOfEntity(field.Path)).ToList();
         var key = fields.Skip(leading.Count).FirstOrDefault() is { } next && IsKey(next) ? next : null;

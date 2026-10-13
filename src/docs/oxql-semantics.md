@@ -242,8 +242,8 @@ with no index but `_id`. What changes with the collation is which indexes the se
 
 | shape at the page | caller wrote no sort | caller's sort | paging |
 |---|---|---|---|
-| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker | cursor: the last row's sort values and key |
-| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id`, then every unwind's position | cursor: a position in that order |
+| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker; a sort that names `id` gives it its place and its direction, and nothing is appended | cursor: the last row's sort values and key |
+| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id` (ascending, or where and as the sort names it), then every unwind's position | cursor: a position in that order |
 | after `group` | the group keys, ascending, string keys folded | the caller's fields, then every group key it did not name, ascending | cursor: a position in that order |
 | `group` with no key | one row, no order | | |
 

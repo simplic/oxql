@@ -329,7 +329,7 @@ Contract 2 has five more members:
 
 | member | default | meaning |
 |---|---|---|
-| `sort` | the child's key ascending | sort entries as in the `sort` stage, bound against the child; the child's key is appended as the tie-breaker |
+| `sort` | the child's key ascending | sort entries as in the `sort` stage, bound against the child; the child's key is appended as the tie-breaker unless the sort names it |
 | `first` | `false` | the alias holds the first child by `sort`, or `null`; a filterable, sortable entity row, not an array. Together with `limit`: `OPTION_NOT_APPLICABLE` |
 | `on` | the entity itself | the alias of the parent row, an entity row of this host: an inline `resolve` alias, a `first` lookup alias, or an unwound lookup alias; the child's reference must target its entity. An array, an unwound element, a scalar, a group output or the alias of an item target is `LOOKUP_ON_NOT_ENTITY`; a name that is no alias of the row is `UNKNOWN_PATH`. A keyed or remote `resolve` alias (or its `parentAs`) makes the lookup a continued stage that runs at that alias's owner (see *Continued stages*) |
 | `forTarget` | none | only on a continued lookup (see *Continued stages*); elsewhere `OPTION_NOT_APPLICABLE` |
@@ -755,8 +755,11 @@ Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SO
 or the object form with `direction` and `caseSensitive` (any other member is
 `UNKNOWN_STAGE_MEMBER`, a missing `direction` `INVALID_SORT_DIRECTION`). An entry that names two
 paths or none is `UNKNOWN_STAGE_MEMBER`. Paths must be scalar and sortable in the current shape (not under a
-collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
-as the tie-breaker; after `group` it appends every group key the sort does not name, ascending.
+collection); after `group` only keys and aggregates. On a root shape the entity key (`id`) breaks
+ties: ascending at the end of a sort that does not name it, and at the place and in the direction
+of a sort that does. After `group` the engine appends every group key the sort does not name,
+ascending. A path a sort names more than once orders once, at its first place and in the
+direction written last. The pages of a cursor walk are that one order, split.
 
 A string orders under the collation, case and accents folded, unless the entry says
 `caseSensitive: true`. An exact sort runs in a request where every string comparison and key is

@@ -274,12 +274,68 @@ public class BatchTests
         alone.StatusCode.Should().Be(200, "a malformed entry is a coded refusal of that entry");
         var entry = alone.Results.Should().ContainSingle().Subject;
         entry.Type.Should().Be("validation_error");
-        entry.ErrorCodes.Should().Equal("UNKNOWN_STAGE");
-        entry.Errors[0]["message"]!.GetValue<string>().Should().Be("The request is empty; a query carries an entityType and a pipeline.");
+        entry.ErrorCodes.Should().Equal("INVALID_REQUEST_BODY");
+        entry.Errors[0]["params"]!["reason"]!.GetValue<string>().Should().Be("kind");
+        entry.Errors[0]["params"]!["actual"]!.GetValue<string>().Should().Be("null");
+        entry.Errors[0]["params"]!["entry"]!.GetValue<int>().Should().Be(0);
 
         var mixed = await client.BatchBodyAsync(new JsonObject { ["queries"] = new JsonArray(Query("""[ { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 1 } } ]"""), null) });
         mixed.StatusCode.Should().Be(200);
         mixed.Results[0].ShouldHaveIds([All()[0]]);
-        mixed.Results[1].ErrorCodes.Should().Equal("UNKNOWN_STAGE");
+        mixed.Results[1].ErrorCodes.Should().Equal("INVALID_REQUEST_BODY");
+        mixed.Results[1].Errors[0]["params"]!["entry"]!.GetValue<int>().Should().Be(1);
+
+        // A caller without the contract header reads the code and the words it always read.
+        var legacy = await client.Contract(null).BatchBodyAsync("""{ "queries": [ null ] }""");
+        legacy.StatusCode.Should().Be(200);
+        legacy.Results.Should().ContainSingle().Which.ErrorCodes.Should().Equal("UNKNOWN_STAGE");
+        legacy.Results[0].Errors[0]["message"]!.GetValue<string>().Should().Be("The request is empty; a query carries an entityType and a pipeline.");
+    }
+
+    [Fact]
+    public async Task An_entry_the_host_cannot_read_is_refused_in_its_place_and_the_other_entries_are_answered()
+    {
+        var client = await Staff();
+        var good = Query("""[ { "project": { "id": 1 } }, { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 1 } } ]""");
+        var queries = new JsonArray();
+
+        for (var index = 0; index < 10; index++)
+            queries.Add(index == 6
+                ? JsonNode.Parse($$"""{ "entityType": "{{Corpus.Employee}}", "pipeline": [ { "sort": { "id": "asc" } } ] }""")
+                : good.DeepClone());
+
+        var answer = await client.BatchBodyAsync(new JsonObject { ["queries"] = queries });
+
+        answer.StatusCode.Should().Be(200, answer.ToString());
+        answer.Results.Should().HaveCount(10);
+
+        for (var index = 0; index < 10; index++)
+        {
+            if (index != 6)
+            {
+                answer.Results[index].ShouldHaveIds([All()[0]]);
+                continue;
+            }
+
+            var error = answer.Results[index].ShouldRefuse("INVALID_REQUEST_BODY");
+
+            answer.Results[index].Type.Should().Be("validation_error");
+            error["stage"]!.GetValue<int>().Should().Be(0);
+            error["params"]!["path"]!.GetValue<string>().Should().Be("$.pipeline[0].sort");
+            error["params"]!["entry"]!.GetValue<int>().Should().Be(6);
+            error["params"]!["expected"]!.GetValue<string>().Should().Be("array");
+            error["params"]!["actual"]!.GetValue<string>().Should().Be("object");
+        }
+
+        // The batch itself not being one is refused whole, in the envelope.
+        foreach (var (body, reason) in new[] { ("""{ "queries": {} }""", "kind"), ("{}", "missing") })
+        {
+            var whole = await client.BatchBodyAsync(body);
+            var refused = whole.ShouldRefuse("INVALID_REQUEST_BODY", 400);
+
+            whole.IsProblemDetails.Should().BeFalse(whole.ToString());
+            refused["params"]!["reason"]!.GetValue<string>().Should().Be(reason);
+            refused["params"]!["path"]!.GetValue<string>().Should().Be("$.queries");
+        }
     }
 }

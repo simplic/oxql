@@ -280,8 +280,10 @@ public class OutcomePolicyTests
         result.Items[0]!["contact"].Should().BeNull();
         result.Diagnostics!.Select(diagnostic => diagnostic.Code).Should().Equal(Codes.ResolveUnreachable);
 
-        // The owner answers again: the same row resolves, or is not found, and says so.
+        // The owner answers again, and the host stops remembering that it did not (as when its health
+        // probe sees it back): the same row resolves, or is not found, and says so.
         client.Unreachable.Clear();
+        engine.Availability.Succeeded("crm");
         client.Script = (_, _, _) => new FakeRemoteClient.Answer.Rows();
 
         var missing = await SuccessAsync(engine, """

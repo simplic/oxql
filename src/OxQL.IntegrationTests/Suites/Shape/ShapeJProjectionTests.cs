@@ -197,14 +197,17 @@ public class ShapeJProjectionTests
         Refused(await One($$"""{ "shipmentNumber": {{leaf}} }"""), "MIXED_PROJECTION", "shipmentNumber", stage: 1);
 
     [Fact]
-    public async Task J15_a_non_integral_projection_value_fails_before_binding_as_ProblemDetails_not_an_OxQL_envelope()
+    public async Task J15_a_non_integral_projection_value_is_refused_with_its_place()
     {
         var answer = await Send("""[ { "project": { "shipmentNumber": 1.5 } }, { "page": { "limit": 5 } } ]""");
+        var error = answer.ShouldRefuse("INVALID_REQUEST_BODY", 400);
 
-        answer.StatusCode.Should().Be(400, answer.ToString());
-        answer.ErrorCodes.Should().BeEmpty("no coded OxQL error: the JSON converter threw");
-        answer.IsProblemDetails.Should().BeTrue(answer.ToString());
-        answer.Text.Should().Contain("ProjectStage");
+        answer.IsProblemDetails.Should().BeFalse(answer.ToString());
+        error["stage"]!.GetValue<int>().Should().Be(0);
+        error["params"]!["path"]!.GetValue<string>().Should().Be("$.pipeline[0].project.shipmentNumber");
+        error["params"]!["expected"]!.GetValue<string>().Should().Be("integer");
+        error["params"]!["actual"]!.GetValue<string>().Should().Be("number");
+        answer.Text.Should().NotContain("ProjectStage");
     }
 
     [Fact]

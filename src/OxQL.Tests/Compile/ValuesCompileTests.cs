@@ -80,20 +80,36 @@ public class ValuesCompileTests
 
         Emitted(one).Should().Be(Json("""
             [ { $limit: 10 },
+              { $addFields: { __oxValE0: { $eq: [ "$Items", [] ] } } },
               { $unwind: { path: "$Items", includeArrayIndex: "__oxVal0", preserveNullAndEmptyArrays: true } },
-              { $group: { _id: "$Items.Quantity", c: { $sum: 1 }, r: { $sum: { $cond: [ { $in: [ "$__oxVal0", [ 0, null ] ] }, 1, 0 ] } } } },
+              { $group: { _id: "$Items.Quantity", c: { $sum: { $cond: [ "$__oxValE0", 0, 1 ] } }, r: { $sum: { $cond: [ { $in: [ "$__oxVal0", [ 0, null ] ] }, 1, 0 ] } } } },
               { $facet: { t: [ { $group: { _id: null, r: { $sum: "$r" } } } ],
-                          v: [ { $sort: { c: -1, _id: 1 } }, { $limit: 4 } ] } } ]
-            """));
+                          v: [ { $match: { c: { $gt: 0 } } }, { $sort: { c: -1, _id: 1 } }, { $limit: 4 } ] } } ]
+            """), "a collection that is there and empty holds no value: its row counts as a row read and for no value of the list");
 
         var two = await Compile("""[{ "values": { "path": "items.stops.city" } }]""");
 
-        Names(two).Should().Equal("$match", "$limit", "$unwind", "$unwind", "$group", "$facet");
-        two.PageStages[2]["$unwind"]["path"].AsString.Should().Be("$Items");
-        two.PageStages[3]["$unwind"]["path"].AsString.Should().Be("$Items.Stops");
-        two.PageStages[4]["$group"]["r"].ToJson().Should().Be(BsonDocument.Parse("""
+        Names(two).Should().Equal("$match", "$limit", "$addFields", "$unwind", "$addFields", "$unwind", "$group", "$facet");
+        two.PageStages[3]["$unwind"]["path"].AsString.Should().Be("$Items");
+        two.PageStages[4]["$addFields"].ToJson().Should().Be(BsonDocument.Parse("""{ __oxValE1: { $eq: [ "$Items.Stops", [] ] } }""").ToJson(), "the emptiness of an inner collection is read off the element the outer unwind left");
+        two.PageStages[5]["$unwind"]["path"].AsString.Should().Be("$Items.Stops");
+        two.PageStages[6]["$group"]["c"].ToJson().Should().Be(BsonDocument.Parse("""{ x: { $sum: { $cond: [ { $or: [ "$__oxValE0", "$__oxValE1" ] }, 0, 1 ] } } }""")["x"].ToJson());
+        two.PageStages[6]["$group"]["r"].ToJson().Should().Be(BsonDocument.Parse("""
             { x: { $sum: { $cond: [ { $and: [ { $in: [ "$__oxVal0", [ 0, null ] ] }, { $in: [ "$__oxVal1", [ 0, null ] ] } ] }, 1, 0 ] } } }
             """)["x"].ToJson(), "the first element of the first element of a row, or the row that has none, counts the row once");
+    }
+
+    [Fact]
+    public async Task A_scalar_path_notes_no_collection_and_counts_every_row()
+    {
+        var scalar = await Compile("""[{ "values": { "path": "number", "counts": true, "limit": 3, "scan": 10 } }]""");
+
+        Emitted(scalar).Should().Be(Json("""
+            [ { $limit: 10 },
+              { $group: { _id: "$Number", c: { $sum: 1 } } },
+              { $facet: { t: [ { $group: { _id: null, r: { $sum: "$c" } } } ],
+                          v: [ { $sort: { c: -1, _id: 1 } }, { $limit: 4 } ] } } ]
+            """));
     }
 
     [Fact]

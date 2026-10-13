@@ -31,8 +31,32 @@ namespace OxQL.IntegrationTests.Fleet;
 /// key chunks by the owner's page.
 /// </para>
 /// </summary>
-public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor httpContextAccessor) : IRemoteQueryClient, IRemoteOwnerInfo
+public sealed class InMemoryRemoteClient(LabFleet fleet, IHttpContextAccessor httpContextAccessor) : IRemoteQueryClient, IRemoteOwnerInfo, IRemoteSchemaSource
 {
+    /// <summary>
+    /// Whether this client reads the owners' schema documents (<see cref="IRemoteSchemaSource"/>). Off
+    /// unless a case switches it on: a read starts the owner's host, and a fleet starts its hosts on
+    /// first use, not because another host's background check asked for them.
+    /// </summary>
+    public bool ReadsSchemas { get; set; }
+
+    /// <summary>
+    /// The entities an owner of the fleet publishes, read off its model as its schema document lists
+    /// them: the ids of its entities and the ids it has retired. An owner the fleet has no host for
+    /// publishes no document here (null), as does every owner while <see cref="ReadsSchemas"/> is off.
+    /// </summary>
+    public async Task<RemoteSchemaEntities?> SchemaEntitiesAsync(string serviceKey, string? knownRevision, CancellationToken cancellationToken)
+    {
+        if (!ReadsSchemas || LabService.All.FirstOrDefault(service => service.Key == serviceKey) is not { } served)
+            return null;
+
+        var models = (await fleet.HostAsync(served).WaitAsync(cancellationToken)).Services.GetRequiredService<IEntityModelProvider>();
+        var ids = models.Model.Entities.Keys.Concat(models.Model.RetiredIds.Keys).ToList();
+        var revision = models.SchemaRevision ?? $"lab:{serviceKey}:{ids.Count}";
+
+        return knownRevision == revision ? RemoteSchemaEntities.NotModified(revision) : new RemoteSchemaEntities(revision, ids);
+    }
+
     /// <summary>The bound of a batch whose caller names no positive budget, as in the base package.</summary>
     private static readonly TimeSpan FallbackBudget = TimeSpan.FromSeconds(10);
 

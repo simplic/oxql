@@ -174,33 +174,41 @@ public class FiltersDTests
     }
 
     [Fact]
-    public async Task D18_and_given_a_non_array_is_a_ProblemDetails_400_not_an_OxQL_envelope()
+    public async Task D18_and_given_a_non_array_is_refused_with_its_place_and_both_kinds()
     {
         var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "and": { "matchCode": { "eq": "DUP" } } }""");
 
-        answer.StatusCode.Should().Be(400, answer.ToString());
-        answer.ErrorCodes.Should().BeEmpty(answer.ToString());
-        answer.IsProblemDetails.Should().BeTrue(answer.ToString());
+        ShouldRefuseKind(answer, "$.pipeline[0].match.and", "array", "object");
     }
 
     [Fact]
-    public async Task D19_not_given_a_non_object_is_a_ProblemDetails_400()
+    public async Task D19_not_given_a_non_object_is_refused_with_its_place_and_both_kinds()
     {
         var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "not": 5 }""");
 
-        answer.StatusCode.Should().Be(400, answer.ToString());
-        answer.ErrorCodes.Should().BeEmpty(answer.ToString());
-        answer.IsProblemDetails.Should().BeTrue(answer.ToString());
+        ShouldRefuseKind(answer, "$.pipeline[0].match.not", "object", "number");
     }
 
     [Fact]
-    public async Task D20_a_condition_that_is_not_a_JSON_object_is_a_ProblemDetails_400()
+    public async Task D20_a_condition_that_is_not_a_JSON_object_is_refused_with_its_place_and_both_kinds()
     {
         var answer = await (await StaffClient()).SendAsync(Corpus.Employee, """[ { "match": 5 }, { "page": { "limit": 1 } } ]""");
 
-        answer.StatusCode.Should().Be(400, answer.ToString());
-        answer.ErrorCodes.Should().BeEmpty(answer.ToString());
-        answer.IsProblemDetails.Should().BeTrue(answer.ToString());
+        ShouldRefuseKind(answer, "$.pipeline[0].match", "object", "number");
+    }
+
+    /// <summary>A value of another JSON kind than its place in the body takes: the envelope, with the place and both kinds.</summary>
+    private static void ShouldRefuseKind(OxQL.IntegrationTests.Harness.WireAnswer answer, string path, string expected, string actual)
+    {
+        var error = answer.ShouldRefuse("INVALID_REQUEST_BODY", 400);
+
+        answer.Type.Should().Be("validation_error");
+        answer.IsProblemDetails.Should().BeFalse(answer.ToString());
+        error["stage"]!.GetValue<int>().Should().Be(0);
+        error["params"]!["reason"]!.GetValue<string>().Should().Be("kind");
+        error["params"]!["path"]!.GetValue<string>().Should().Be(path);
+        error["params"]!["expected"]!.GetValue<string>().Should().Be(expected);
+        error["params"]!["actual"]!.GetValue<string>().Should().Be(actual);
     }
 
     [Fact]

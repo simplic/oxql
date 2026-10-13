@@ -327,14 +327,14 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            """{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
+            $$"""{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ {{BsonAssertions.InCalendar("""{ $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }""")}}, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
             """{ $addFields: { kinds: { $size: "$kinds" } } }""",
             """{ $project: { st: "$_id.st", wk: "$_id.wk", n: 1, total: 1, kinds: 1, x: 1, _id: 0 } }""",
             "{ $sort: { n: -1, st: 1, wk: 1 } }",
             "{ $limit: 6 }");
         ShouldBe(compiled.CountStages!,
             $"{{ $match: {OrgJson} }}",
-            """{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ { $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
+            $$"""{ $group: { _id: { st: { $ifNull: [ "$State", null ] }, wk: { $ifNull: [ {{BsonAssertions.InCalendar("""{ $dateTrunc: { date: "$When", unit: "week", timezone: "Europe/Berlin", startOfWeek: "monday" } }""")}}, null ] } }, n: { $sum: 1 }, total: { $sum: "$Amount" }, kinds: { $addToSet: "$Number" }, x: { $max: { $add: [ "$Ratio", { $literal: NumberLong(1) } ] } } } }""",
             """{ $addFields: { kinds: { $size: "$kinds" } } }""",
             """{ $project: { st: "$_id.st", wk: "$_id.wk", n: 1, total: 1, kinds: 1, x: 1, _id: 0 } }""",
             "{ $limit: 1001 }",
@@ -342,7 +342,7 @@ public class GoldenPipelineTests
 
         var single = await Compile("""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "month" }, "as": "m" }], "fields": {} } }]""");
 
-        single.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $group: { _id: { $dateTrunc: { date: "$When", unit: "month", timezone: "UTC" } } } }"""));
+        single.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $group: { _id: {{BsonAssertions.InCalendar("""{ $dateTrunc: { date: "$When", unit: "month", timezone: "UTC" } }""")}} } }"""));
         single.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $project: { m: "$_id", _id: 0 } }"""));
     }
 

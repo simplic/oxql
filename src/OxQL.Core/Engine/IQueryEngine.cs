@@ -69,6 +69,15 @@ public interface IEntityModelProvider
     /// in <c>revision.schema</c>; null when the host publishes none (the default).
     /// </summary>
     string? SchemaRevision => null;
+
+    /// <summary>
+    /// Whether the model is what a failed build left: true when the host's build threw and it
+    /// serves a model without the entities it should have, false when the model is the one the host
+    /// meant to build (also one without entities), null when the provider does not say (the
+    /// default). <c>GET /oxql/health</c> publishes it as <c>model.degraded</c>, which is true only for
+    /// a provider that says true or has no model to hand out.
+    /// </summary>
+    bool? Degraded => null;
 }
 
 /// <summary>A provider over a model the host built and handed over.</summary>

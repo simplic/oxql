@@ -101,33 +101,91 @@ public sealed class LegacyRoute
     private async Task<QueryOutcome> RunAsync(JsonElement written, QueryRequest request, RequestContext context, string reason, CancellationToken cancellationToken)
     {
         // The line is written whatever the pipeline ends in, a fault of its own included: who still
-        // sends contract 1 is counted by it.
+        // sends contract 1 is counted by it, with what the request cost and over which route it came.
         var refused = "INTERNAL_ERROR";
+        var status = StatusCodes.Status500InternalServerError;
+        var rows = 0;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
 
         try
         {
             var outcome = await pipeline!.ExecuteAsync(written, context, cancellationToken).ConfigureAwait(false);
 
             refused = (outcome as QueryOutcome.Refused)?.Refusal.Errors?[0].Code;
+            status = outcome is QueryOutcome.Refused { Refusal.Status: var answered } ? answered : StatusCodes.Status200OK;
+            rows = outcome is QueryOutcome.Success { Result.Items.Count: var served } ? served : 0;
 
             return outcome;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             refused = "CANCELLED";
+            status = 499;
             throw;
         }
         finally
         {
+            // The database's share is what the pipeline's aggregates took, when the request is measured.
+            var spent = context.Timing?.Summary();
+
             log.LogInformation(
-                "OxQL.Compat.Legacy contract 1 request for {Entity} answered by the legacy pipeline: reason={Reason} refused={Refused} user={UserId} org={OrganisationId} correlation={CorrelationId}",
+                "OxQL.Compat.Legacy contract 1 request for {Entity} answered by the legacy pipeline: reason={Reason} refused={Refused} user={UserId} org={OrganisationId} correlation={CorrelationId} route={Route} status={Status} rows={Rows} elapsedMs={ElapsedMs} dbMs={DbMs} dbCommands={DbCommands}",
                 LogText.Of(request.EntityType),
                 reason,
                 refused,
                 context.UserId,
                 context.Organisation,
-                context.CorrelationId);
+                context.CorrelationId,
+                accessor?.HttpContext?.Items[LegacyBodyFilter.Item] is LegacyBody body ? body.Route : null,
+                status,
+                rows,
+                Math.Round(System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds, 2),
+                spent?.DbMs,
+                spent?.Commands);
         }
+    }
+
+    /// <summary>
+    /// Writes the line of a contract 1 request whose body the host could not bind, so it never came
+    /// to the pipeline: it is a contract 1 request all the same, and whoever counts the callers that
+    /// still send no contract header counts this one too (<c>reason=unbound</c>). The host answered
+    /// it, as it always has. Under <see cref="LogCategory"/> while the legacy pipeline answers
+    /// contract 1, else under the compatibility category.
+    /// </summary>
+    internal static async Task UnboundAsync(HttpContext http, OxQLOptions options, string route)
+    {
+        if (!options.Compat.Enabled || http.RequestServices.GetService(typeof(ILoggerFactory)) is not ILoggerFactory loggers)
+            return;
+
+        var legacy = options.Compat.Legacy.Enabled && http.RequestServices.GetService(typeof(ILegacyPipeline)) is not null;
+        var scope = http.RequestServices.GetService(typeof(Scope.IOxQLScopeProvider)) as Scope.IOxQLScopeProvider;
+        Guid? organisation = null;
+        string? user = null, correlation = null;
+
+        try
+        {
+            if (scope is not null)
+            {
+                organisation = await scope.OrganisationAsync(http, http.RequestAborted).ConfigureAwait(false);
+                user = scope.UserId(http);
+                correlation = scope.CorrelationId(http);
+            }
+        }
+        catch (Exception)
+        {
+            // The line is written without what the scope provider could not say.
+        }
+
+        var category = legacy ? LogCategory : OxQLQueryService.CompatLogCategory;
+
+        loggers.CreateLogger(category).LogInformation(
+            "{Category} contract 1 request with a body the host could not bind, answered by the host: reason={Reason} route={Route} user={UserId} org={OrganisationId} correlation={CorrelationId}",
+            category,
+            "unbound",
+            route,
+            user,
+            organisation,
+            LogText.Of(correlation ?? http.TraceIdentifier));
     }
 
     /// <summary>Why the legacy pipeline answers a request the rewrite or the binder refused, or null when the refusal stands.</summary>
@@ -179,6 +237,9 @@ internal sealed class LegacyBody(object? bound)
 {
     private JsonDocument? document;
     private bool read;
+
+    /// <summary>The route the request came over, as the log line and the meter name it: a batch's entries are of the batch route.</summary>
+    public string Route => bound is BatchRequest ? OxQLMetrics.RouteBatch : OxQLMetrics.RouteQuery;
 
     public async Task<JsonElement?> OfAsync(HttpContext http, QueryRequest request, CancellationToken cancellationToken)
     {

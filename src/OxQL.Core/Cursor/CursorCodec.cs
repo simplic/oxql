@@ -53,9 +53,28 @@ public sealed class CursorCodec
         return Base64Url(bytes) + "." + Base64Url(HMACSHA256.HashData(key, bytes));
     }
 
+    /// <summary><c>reason</c> of a cursor that is no cursor of this engine: not two base64url parts, or a body that does not read.</summary>
+    public const string Malformed = "malformed";
+
+    /// <summary><c>reason</c> of a cursor whose signature is not this host's: altered, or issued by a host with another signing key.</summary>
+    public const string Signature = "signature";
+
+    /// <summary><c>reason</c> of a cursor this host issued for another query: another entity, filter, sort or organisation.</summary>
+    public const string OtherQuery = "query";
+
     /// <summary>Decodes and verifies a cursor; null when the signature, the form or the fingerprint does not match.</summary>
-    public CursorPayload? Decode(string cursor, string expectedFingerprint)
+    public CursorPayload? Decode(string cursor, string expectedFingerprint) => Decode(cursor, expectedFingerprint, out _);
+
+    /// <summary>
+    /// Decodes and verifies a cursor; null when it does not verify, and then <paramref name="reason"/>
+    /// says which of the three it is: <see cref="Malformed"/>, <see cref="Signature"/> or <see cref="OtherQuery"/>.
+    /// </summary>
+    public CursorPayload? Decode(string cursor, string expectedFingerprint, out string? reason)
     {
+        ArgumentNullException.ThrowIfNull(cursor);
+
+        reason = Malformed;
+
         var dot = cursor.IndexOf('.');
 
         if (dot <= 0 || dot == cursor.Length - 1)
@@ -75,14 +94,23 @@ public sealed class CursorCodec
         }
 
         if (!CryptographicOperations.FixedTimeEquals(signature, HMACSHA256.HashData(key, bytes)))
+        {
+            reason = Signature;
             return null;
+        }
 
         try
         {
             var body = JsonNode.Parse(bytes)?.AsObject();
 
-            if (body is null || body["f"]?.GetValue<string>() != expectedFingerprint)
+            if (body is null)
                 return null;
+
+            if (body["f"]?.GetValue<string>() != expectedFingerprint)
+            {
+                reason = OtherQuery;
+                return null;
+            }
 
             var mode = body["m"]?.GetValue<string>() == "o" ? PagingMode.Offset : PagingMode.Keyset;
             var offset = body["o"]?.GetValue<int>() ?? 0;
@@ -98,7 +126,11 @@ public sealed class CursorCodec
                     BsonSerializerExtensions.ParseCanonical(field["b"]!.GetValue<string>())));
             }
 
-            return new CursorPayload(expectedFingerprint, mode, fields, offset) { Served = body["n"]?.GetValue<long>() ?? 0 };
+            var payload = new CursorPayload(expectedFingerprint, mode, fields, offset) { Served = body["n"]?.GetValue<long>() ?? 0 };
+
+            reason = null;
+
+            return payload;
         }
         catch (Exception exception) when (exception is JsonException or FormatException or InvalidOperationException or InvalidCastException)
         {

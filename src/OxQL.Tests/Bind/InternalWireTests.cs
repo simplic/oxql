@@ -45,13 +45,13 @@ public class InternalWireTests
     }
 
     [Fact]
-    public async Task On_the_public_route_the_refusal_is_what_it_was()
+    public async Task On_the_public_route_the_refusal_names_the_member_and_no_other_build()
     {
-        var error = await Refused($$"""{ "entityType": "{{Order}}", "trace": true, "pipeline": [{ "page": { "limit": 1 } }] }""", internalCall: false);
+        var error = await Refused($$"""{ "entityType": "{{Order}}", "trace": true, "hint": 1, "pipeline": [{ "page": { "limit": 1 } }] }""", internalCall: false);
 
         error.Code.Should().Be(Codes.UnknownRequestMember);
-        error.Message.Should().Be("'trace' is not a member of a request; a request carries " + Binder.RequestMembers + ".");
-        error.Params.Should().BeNull();
+        error.Message.Should().Be("'trace, hint' is not a member of a request; a request carries " + Binder.RequestMembers + ".");
+        JsonSerializer.Serialize(error.Params).Should().Be("""{"reason":"unknown","members":["trace","hint"],"member":"trace"}""");
     }
 
     [Fact]

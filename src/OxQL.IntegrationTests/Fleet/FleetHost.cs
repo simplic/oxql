@@ -139,6 +139,10 @@ public sealed class FleetHost : IAsyncDisposable
         new("OxQL:Explain:OwnerRateBurst", "100000"),
         new("OxQL:Explain:MaxConcurrentPerUser", "1000"),
         new("OxQL:Explain:MaxConcurrentPerHost", "1000"),
+        // The suites drive one owner through a failure and back within a case, and read what each call
+        // makes of it. What a host remembers of an owner that failed has tests of its own, on a variant
+        // that sets the time (RemoteChaosTests, the M cases).
+        new("OxQL:Cache:OwnerUnavailableTtlSeconds", "0"),
     ];
 
     /// <summary>A client for one organisation (organisation A when null) under the given contract; an anonymous client sends no identity.</summary>

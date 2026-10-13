@@ -43,9 +43,14 @@ internal sealed class TimedAggregateRunner(IAggregateRunner inner) : IAggregateR
     /// <summary>The runner underneath.</summary>
     public IAggregateRunner Inner => inner;
 
+    /// <summary>The deadline every aggregate has on this host's side beside its time limit; null runs them without one.</summary>
+    public AggregateDeadline? Deadline { get; init; }
+
     /// <inheritdoc/>
     public Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken) =>
-        inner.AggregateAsync(entity, stages, options, cancellationToken);
+        Deadline is { } deadline
+            ? deadline.RunAsync(inner, entity, stages, options, cancellationToken)
+            : inner.AggregateAsync(entity, stages, options, cancellationToken);
 
     /// <summary>Runs the aggregate and records it in <paramref name="timing"/> as a command of <paramref name="kind"/>; without a collector it runs unmeasured.</summary>
     public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(string kind, QueryTiming? timing, EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
@@ -53,7 +58,7 @@ internal sealed class TimedAggregateRunner(IAggregateRunner inner) : IAggregateR
         ArgumentNullException.ThrowIfNull(entity);
 
         if (timing is null)
-            return await inner.AggregateAsync(entity, stages, options, cancellationToken).ConfigureAwait(false);
+            return await AggregateAsync(entity, stages, options, cancellationToken).ConfigureAwait(false);
 
         var command = timing.Begin(kind, entity.Id);
         var stats = AggregateRunStats.Begin();
@@ -61,7 +66,7 @@ internal sealed class TimedAggregateRunner(IAggregateRunner inner) : IAggregateR
 
         try
         {
-            rows = await inner.AggregateAsync(entity, stages, options, cancellationToken).ConfigureAwait(false);
+            rows = await AggregateAsync(entity, stages, options, cancellationToken).ConfigureAwait(false);
         }
         catch
         {

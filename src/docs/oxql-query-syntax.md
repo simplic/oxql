@@ -49,6 +49,8 @@ means is in
   retired id the host declared is answered as the current entity with an `ENTITY_ID_RETIRED`
   diagnostic whose `params.currentId` names it. A retired id in `lookup.from` joins the current
   entity and carries the same diagnostic, with the lookup's `stage`.
+- A member written twice in one JSON object is read once, the last one written (a second
+  `pipeline` replaces the first); nothing is merged.
 - Each pipeline element is an object with exactly one stage key: `match`, `lookup`, `resolve`,
   `unwind`, `group`, `project`, `sort`, `page`, or `values`, which ends a pipeline in place of
   `page` and answers the distinct values of one path instead of rows. Two keys in one element is
@@ -264,6 +266,12 @@ storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 
 What the service returns for a `long` and a `decimal` is a JSON number (see the semantics guide,
 *Storage representations per kind*); an operand may be that number or its digits as a string.
+
+An operand of the right kind is compared as it is written, also where no stored value can equal
+it: a whole number beyond what an `int` member holds (`99999999999`), or the text `"NaN"` on a
+`double`, binds and matches the rows the comparison is true for, which for `eq` is none. The
+strings of a `bool` are read in any case (`"TRUE"`). An enum name is matched as it is written
+(`"Customer"`, not `"customer"`): `UNKNOWN_ENUM_MEMBER` lists the names in `params.values`.
 
 `{ "$var": "name" }` is the only wrapper: the value comes from `variables` in the same
 encoding and is checked at the place of use (`UNBOUND_VARIABLE` when missing;
@@ -639,7 +647,8 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   `dateTrunc` over a member that is no `date` or `dateTime`.
 - **A group over no key** (`"by": []`) is the totals of the rows that reach it: one row with the
   aggregates, no order, no next page. Over no row at all there is no group and so no row: an
-  empty `items` is the total of nothing.
+  empty `items` is the total of nothing. A `group` that names neither keys nor fields (`{}`) is
+  that group without aggregates: one row without members when any row reaches it.
 - A string key folds case and accents under the collation: `Open` and `OPEN` are one group,
   reported under the first value met. `countDistinct`, `min` and `max` over a string fold the
   same way.
@@ -672,10 +681,13 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 { "project": { "internalNotes": 0 } }                             // exclusion: everything else
 ```
 
-A path is kept with `1` or `true` and removed with `0` or `false`; a projection is all one or
-all the other (`MIXED_PROJECTION`; `"id": 0` may stand in an inclusion). Any other value (`null`,
-a string, an array) is `MIXED_PROJECTION` with `params { stage: "project", paths }`, and so is a
-projection that names no path. A nested object is the dotted path: `{ "department": { "name": 1 } }`
+A path is kept with `1` or `true` and removed with `0` or `false`; any other whole number keeps
+it, as `1` does. A projection is all one or all the other (`MIXED_PROJECTION`), `id` aside:
+`"id": 0` may stand in an inclusion, and `"id": 1` beside removed paths makes the projection the
+inclusion of `id` alone (`{ "id": 1, "notes": 0 }` answers rows that hold `id` and nothing else;
+to keep everything but `notes`, write `{ "notes": 0 }`). A value that is no number and no boolean
+(`null`, a string, an array) is `MIXED_PROJECTION` with `params { stage: "project", paths }`, and
+so is a projection that names no path; a number that is not whole is `INVALID_REQUEST_BODY`. A nested object is the dotted path: `{ "department": { "name": 1 } }`
 is `"department.name": 1`. `id` is kept in an inclusion unless excluded explicitly; at most
 `MaxProjectionFields` paths. The reserved key `"$default": 1` includes the
 entity's key and display members; it applies to the entity's own shape, not after a `group` or
@@ -878,8 +890,9 @@ POST query { "entityType": "transport.shipment",
 - **The row** is `{ "value": … }`, with `"count": n` under `counts`. The value is written as a row
   writes the member: an enum as its number, a `long` and a `decimal` as numbers, a date as
   `YYYY-MM-DD`, a `dateTime` as an ISO instant, a guid as text. `count` is a JSON number.
-- **`null` is a value**: the member null or absent (and, under a collection, the row that holds no
-  element) is the one row `{ "value": null }`. The empty string is a value of its own.
+- **`null` is a value**: the member null or absent is the one row `{ "value": null }`. The empty
+  string is a value of its own. Under a collection `null` is what a comparison with `null`
+  selects (see below).
 - **A string folds as a group key folds**: spellings the collation calls equal are one value,
   reported under the first spelling met.
 - **Order**: with `counts`, by the count, most first, then by value; without, by value. Values
@@ -893,7 +906,11 @@ POST query { "entityType": "transport.shipment",
   as soon as the bound is reached, so a request that matches exactly `scan` rows carries it too.
   It stays a diagnostic under `strict`.
 - **Under a collection that is not unwound** a value is one some element holds, and **`count`
-  counts elements**, a row without any once under `null`; `scan` still counts rows.
+  counts elements**; `scan` still counts rows. `null` is listed for the elements that hold no
+  value and for a row whose collection is not there, which is what `{ "<path>": { "in": [null] } }`
+  selects. A row whose collection is there and empty holds no value: no entry counts it and no
+  value of the list selects it. The rows without any element are asked for with `exists: false`
+  on a member every element has: `{ "items.id": { "exists": false } }`.
 - **Under an alias whose rows come from an owner after the page** (another service's record, a
   keyed join) the stage is refused: `NOT_CONTINUABLE`. Explain says it beforehand
   (`can.values: false`, `why.values: "owner"` or `"joinedAfterPage"`).
@@ -1096,7 +1113,7 @@ sixteen marked †); the legacy pipeline answers with the contract 1 codes
 | area | codes |
 |---|---|
 | entity | `UNKNOWN_ENTITY` |
-| request | `UNKNOWN_REQUEST_MEMBER`† (a top-level member a request or a batch does not have; a contract header that names neither contract) |
+| request | `UNKNOWN_REQUEST_MEMBER`† (a top-level member a request, a batch or an explain envelope does not have; a contract header that names neither contract), `INVALID_REQUEST_BODY`† (a body that does not read into a request: no JSON, empty, a value of another JSON kind than its place takes, a required member missing; see *A body that does not read* in [`oxql-operations.md`](oxql-operations.md)) |
 | path | `INVALID_PATH`, `UNKNOWN_PATH`, `NOT_STORED`, `NOT_FILTERABLE`, `NOT_SORTABLE`, `NOT_A_COLLECTION`, `UNWIND_ORDER`, `ALIAS_COLLISION`, `INVALID_ALIAS` |
 | operand | `INVALID_OPERAND`, `UNKNOWN_ENUM_MEMBER`, `OPERAND_NOT_ARRAY`, `DECIMAL_TEXT_NOT_ORDERABLE` (an ordered comparison on a decimal stored as text), `UNBOUND_VARIABLE`, `INVALID_VARIABLE` |
 | condition | `UNKNOWN_OPERATOR`, `EMPTY_LOGICAL_GROUP`, `OPTION_NOT_APPLICABLE` (also a stage option where it does not apply), `INVALID_REGEX`, `REGEX_TOO_LONG`, `ANY_NOT_APPLICABLE`, `UNKNOWN_VARIANT`† (`is`) |
@@ -1147,8 +1164,9 @@ of every code: [`oxql-operations.md`](oxql-operations.md#codes).
 
 - A body with `entityType` at the top is a plain query, which is the envelope with its defaults:
   `include` `shape` and `notes`, remote `check`, no catalog. An envelope
-  member other than these five, or a member of the wrong kind, is a 400 ProblemDetails (`budget`,
-  the internal route's member, is 400 `UNKNOWN_REQUEST_MEMBER`). More than
+  member other than these five is 400 `UNKNOWN_REQUEST_MEMBER` (`params.member`; so is `budget`,
+  the internal route's member), a member of the wrong kind 400 `INVALID_REQUEST_BODY`
+  (`params.path`, `expected`, `actual`). More than
   `Explain:MaxStages` stages or `MaxCatalogEntries` catalog entries, a `shape.depth` above
   `MaxShapeDepth`, and an `include` or `remote` value the engine does not know are 400
   `EXPLAIN_LIMIT`, before anything is bound.
@@ -1193,7 +1211,9 @@ full success body or a refusal envelope. `maxTimeMs` bounds the whole batch: the
 after another, each under what is left, never above the host's ceiling. The batch itself is
 refused whole, with 400: more than `MaxBatchQueries` queries (`BATCH_TOO_LARGE`), a member other
 than `queries` and `maxTimeMs` under contract 2 (`UNKNOWN_REQUEST_MEMBER`; `strict` is each
-query's own), a body without `queries` (`UNKNOWN_STAGE`).
+query's own), a body without a `queries` array (`INVALID_REQUEST_BODY`). An entry the host cannot
+read (a `sort` that is an object, a `null`) is refused in its place with `INVALID_REQUEST_BODY` and
+`params.entry`; the other entries run.
 
 ## Contract 1 (compatibility mode)
 

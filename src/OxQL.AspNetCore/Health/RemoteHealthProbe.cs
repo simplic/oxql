@@ -10,8 +10,83 @@ namespace OxQL.AspNetCore.Health;
 /// One service the model references remotely: known to this host, and answering when last
 /// asked. <see cref="Reachable"/> is null for a service that is not configured, and for a
 /// configured one that has not been measured yet.
+/// <para>
+/// What the owner can do for this host is said beside it, from what the remote client read of the
+/// owner's shallow health (<see cref="IRemoteOwnerInfo"/>): the <see cref="Contract"/> it speaks and
+/// its <see cref="EngineVersion"/>, and whether this host can join into it (<see cref="Usable"/>).
+/// A client without that capability leaves the three unknown (null).
+/// </para>
 /// </summary>
-public sealed record RemoteServiceState(string Service, bool Configured, bool? Reachable);
+public sealed record RemoteServiceState(string Service, bool Configured, bool? Reachable)
+{
+    /// <summary><see cref="Reason"/> of a service without an <c>InternalHosts</c> entry.</summary>
+    public const string NotConfigured = "notConfigured";
+
+    /// <summary><see cref="Reason"/> of a service whose health did not answer.</summary>
+    public const string Unreachable = "unreachable";
+
+    /// <summary><see cref="Reason"/> of a service that answered and does not speak this engine's contract.</summary>
+    public const string Engine = "engine";
+
+    /// <summary>The contract the owner's engine speaks, as its health named it; null when it named none or nothing is known.</summary>
+    public int? Contract { get; init; }
+
+    /// <summary>The owner's engine version, as its health named it; null when it named none or nothing is known.</summary>
+    public string? EngineVersion { get; init; }
+
+    /// <summary>
+    /// Whether this host can send the owner its joins: true only for an owner that answered and
+    /// speaks this engine's contract (<see cref="EngineCapabilities.Contract"/>); false for one that is
+    /// not configured, did not answer, or answered without naming that contract; null while nothing
+    /// is measured or the client does not say what the owner runs.
+    /// </summary>
+    public bool? Usable { get; init; }
+
+    /// <summary>Why the owner is not usable (<see cref="NotConfigured"/>, <see cref="Unreachable"/>, <see cref="Engine"/>); null otherwise.</summary>
+    public string? Reason { get; init; }
+
+    /// <summary>
+    /// The targets of the references this host declares into the service, checked against the owner's
+    /// schema document (<see cref="RemoteReferenceValidator"/>): how many are declared, whether the
+    /// check could be made, and the target entities the owner does not publish. Null when the host
+    /// runs no such check.
+    /// </summary>
+    public RemoteReferenceValidation? References { get; init; }
+
+    /// <summary>
+    /// Whether the state is a finding: the status a contract 2 caller reads on <c>/oxql/health</c> is
+    /// <c>degraded</c> with one. A caller without the contract header reads the status by the first
+    /// two conditions alone (not configured, not reachable).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool Degrades => !Configured || Reachable == false || Usable == false || References is { UnknownTargets.Count: > 0 };
+
+    /// <summary>The state of a service this host has no <c>InternalHosts</c> entry for.</summary>
+    public static RemoteServiceState Unconfigured(string service) => new(service, false, null) { Usable = false, Reason = NotConfigured };
+
+    /// <summary>
+    /// The state of a configured service after one measurement: whether its health answered, and
+    /// what the client then knows of it (<paramref name="owner"/>; null when it knows nothing).
+    /// </summary>
+    public static RemoteServiceState Measured(string service, bool reachable, RemoteOwnerInfo? owner)
+    {
+        if (!reachable)
+            return new RemoteServiceState(service, true, false) { Usable = false, Reason = Unreachable };
+
+        if (owner is null)
+            return new RemoteServiceState(service, true, true);
+
+        var speaks = owner.Contract == EngineCapabilities.Contract;
+
+        return new RemoteServiceState(service, true, true)
+        {
+            Contract = owner.Contract,
+            EngineVersion = owner.EngineVersion,
+            Usable = speaks,
+            Reason = speaks ? null : Engine,
+        };
+    }
+}
 
 /// <summary>
 /// The reachability behind <c>/oxql/health</c>, measured at most once per
@@ -38,6 +113,17 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
 
     /// <summary>How long one service may take to answer before it counts as not reachable.</summary>
     public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// The host's record of owners that did not answer, which the keyed fetch reads before it calls.
+    /// A measurement that finds an owner answering forgets it there, so a join asks the owner again
+    /// as soon as health sees it back. A measurement writes an outage there only when no connection
+    /// to the owner could be made (refused, no address for the name, the connect timed out): one that
+    /// ran out of the probe's time, was answered false or failed in any other way says nothing a join
+    /// should go by, since the owner's health route is not the route a join calls. Null: the probe
+    /// only reports.
+    /// </summary>
+    public OwnerAvailability? Availability { get; init; }
 
     /// <summary>The measurement that is running, or a completed task when none is. The request path never awaits it.</summary>
     public Task Refreshing
@@ -71,7 +157,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             if (due && refresh is null)
                 refresh = Task.Run(() => RefreshAsync(services, client));
 
-            return measured ?? services.Select(service => new RemoteServiceState(service, client.IsConfigured(service), null)).ToList();
+            return measured ?? services.Select(service => client.IsConfigured(service) ? new RemoteServiceState(service, true, null) : RemoteServiceState.Unconfigured(service)).ToList();
         }
     }
 
@@ -103,20 +189,54 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     private async Task<RemoteServiceState> ProbeAsync(string service, IRemoteQueryClient client)
     {
         if (!client.IsConfigured(service))
-            return new RemoteServiceState(service, false, null);
+            return RemoteServiceState.Unconfigured(service);
 
         using var timeout = new CancellationTokenSource(ProbeTimeout);
 
         try
         {
             // WaitAsync bounds a client that does not observe the token.
-            return new RemoteServiceState(service, true, await client.IsReachableAsync(service, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false));
+            var reachable = await client.IsReachableAsync(service, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
+
+            // An answering health says the owner's host is up, not that it has the internal query route.
+            // One that says false does not say why, and a join finds out for itself.
+            if (reachable)
+                Availability?.Succeeded(service, keepRoute: true);
+
+            // The client keeps what the owner's health said of it where it measures reachability.
+            return RemoteServiceState.Measured(service, reachable, reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null);
         }
         catch (Exception exception)
         {
             logger.LogDebug(exception, "OxQL health probe of {Service} failed", service);
 
-            return new RemoteServiceState(service, true, false);
+            if (NoConnection(exception))
+                Availability?.Failed(service, OwnerAvailability.Unreachable);
+
+            return RemoteServiceState.Measured(service, false, null);
         }
+    }
+
+    /// <summary>
+    /// Whether a probe failed because no connection to the owner could be made: the client's HTTP
+    /// stack says so (a connection error, a name that does not resolve), or a socket error is what it
+    /// failed on. A probe that was cancelled or timed out is none, whatever it was waiting for.
+    /// </summary>
+    private static bool NoConnection(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case OperationCanceledException or TimeoutException:
+                    return false;
+
+                case HttpRequestException { StatusCode: null, HttpRequestError: HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError }:
+                case System.Net.Sockets.SocketException:
+                    return true;
+            }
+        }
+
+        return false;
     }
 }

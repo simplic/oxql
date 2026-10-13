@@ -113,9 +113,24 @@ public sealed class Binder
         {
             return new BindOutcome.Bound(session.Result(scope, decodeCursor: !explain)) { Trace = trace, Diagnostics = diagnostics.ToList() };
         }
-        catch (CursorException)
+        catch (CursorException invalid)
         {
-            return new BindOutcome.Failed(Refusal.Validation([Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null)])) { Trace = trace, Diagnostics = diagnostics.ToList() };
+            // Under contract 2 the refusal says which of the three it is; a contract 1 caller reads what it always read.
+            var error = Error(Codes.CursorInvalid, "The cursor is not valid for this query: it was issued for another query, was altered, or is malformed.", null, null);
+
+            if (context.Contract != 1 && invalid.Reason is { } reason)
+                error = error with
+                {
+                    Message = reason switch
+                    {
+                        CursorCodec.OtherQuery => "The cursor was issued for another query: a cursor continues the query it came from, with the same entity, conditions and sort.",
+                        CursorCodec.Signature => "The cursor is not one this host issued: it was altered, or it comes from another host.",
+                        _ => "The cursor is malformed: it is the 'nextCursor' of the page before, as it was answered.",
+                    },
+                    Params = new Dictionary<string, object?> { ["reason"] = reason },
+                };
+
+            return new BindOutcome.Failed(Refusal.Validation([error])) { Trace = trace, Diagnostics = diagnostics.ToList() };
         }
     }
 
@@ -305,7 +320,7 @@ public sealed class Binder
             ReadFilter();
 
             if (request.Variables is not null && request.Variables.Values.Count > options.Limits.MaxVariables)
-                errors.Add(Error(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null));
+                errors.Add(Limit(Codes.MaxVariablesExceeded, $"The request binds {request.Variables.Values.Count} variables; the limit is {options.Limits.MaxVariables}.", null, null, "maxVariables", options.Limits.MaxVariables, request.Variables.Values.Count));
 
             // A name that starts with '$' is the engine's to bind: a request that supplies
             // one is refused, so a variable the engine binds later never changes what a request means.
@@ -321,7 +336,7 @@ public sealed class Binder
             var pipeline = request.Pipeline ?? [];
 
             if (pipeline.Count > options.Limits.MaxPipelineStages)
-                errors.Add(Error(Codes.MaxPipelineStagesExceeded, $"The pipeline has {pipeline.Count} stages; the limit is {options.Limits.MaxPipelineStages}.", null, null));
+                errors.Add(Limit(Codes.MaxPipelineStagesExceeded, $"The pipeline has {pipeline.Count} stages; the limit is {options.Limits.MaxPipelineStages}.", null, null, "maxPipelineStages", options.Limits.MaxPipelineStages, pipeline.Count));
 
             for (var index = 0; index < pipeline.Count; index++)
             {
@@ -416,7 +431,7 @@ public sealed class Binder
             errors.RemoveAll(error => error.Code == Shape.PoisonedCode);
 
             if (conditions > options.Limits.MaxConditions)
-                errors.Add(Error(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null));
+                errors.Add(Limit(Codes.MaxConditionsExceeded, $"The request has {conditions} conditions; the limit is {options.Limits.MaxConditions}.", null, null, "maxConditions", options.Limits.MaxConditions, conditions));
 
             // One aggregate runs under one collation, and a sort has no form the collation
             // does not reach: an exact sort needs every string comparison and key in the
@@ -428,7 +443,7 @@ public sealed class Binder
 
                 // Inside a collated aggregate an exact comparison is a pattern, with the pattern's limit.
                 foreach (var (stage, path, op) in exactTexts)
-                    errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, path), stage, path));
+                    errors.Add(Operand(TooLongToMatch(op, path), stage, path, op, "length"));
             }
 
             LabelFilterFindings();
@@ -693,8 +708,8 @@ public sealed class Binder
             }
 
             if (request.Unknown is { Count: > 0 } unknown)
-                errors.Add(OtherBuild(Error(Codes.UnknownRequestMember,
-                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", null, null), unknown.Keys));
+                errors.Add(OtherBuild(NoRequestMember(
+                    $"'{string.Join(", ", unknown.Keys)}' is not a member of a request; a request carries {(context.Internal ? InternalRequestMembers : RequestMembers)}.", unknown.Keys, "unknown"), unknown.Keys));
 
             // The two members a request is read with as written (contract 1 ignores them whatever they
             // hold): under contract 2 each has one kind, and another is refused with the member's name.
@@ -738,6 +753,20 @@ public sealed class Binder
         };
 
         /// <summary>
+        /// A member a request does not have. Under contract 2 it carries the members (<c>member</c> is
+        /// the first of them) and why: <c>unknown</c> (no member of a request), or <c>internal</c> (a
+        /// member only the internal route between services takes).
+        /// </summary>
+        private QueryValidationError NoRequestMember(string message, IEnumerable<string> members, string reason)
+        {
+            var error = Error(Codes.UnknownRequestMember, message, null, null);
+
+            return contract2
+                ? error with { Params = new Dictionary<string, object?> { ["reason"] = reason, ["members"] = members.ToList(), ["member"] = members.First() } }
+                : error;
+        }
+
+        /// <summary>
         /// The internal <c>keyedBy</c>: the owner's rows grouped per key, at most
         /// <c>perKey</c> per key. Only an internal call carries it; anywhere else it is a member a
         /// request does not have. The path is a stored member of the entity, or of one item
@@ -753,8 +782,7 @@ public sealed class Binder
             // header is what is missing, which it is not.
             if (!context.Internal || !contract2)
             {
-                errors.Add(Error(Codes.UnknownRequestMember,
-                    $"'keyedBy' is not a member of a request; a request carries {RequestMembers}.", null, null));
+                errors.Add(NoRequestMember($"'keyedBy' is not a member of a request; a request carries {RequestMembers}.", ["keyedBy"], "internal"));
                 return;
             }
 
@@ -766,8 +794,8 @@ public sealed class Binder
 
             if (keyedBy.Unknown is { Count: > 0 } unknownMembers)
             {
-                errors.Add(OtherBuild(Error(Codes.UnknownRequestMember,
-                    $"'{string.Join(", ", unknownMembers.Keys.Select(name => "keyedBy." + name))}' is not a member of keyedBy; it carries path, keys, perKey, references and rows.", null, null), unknownMembers.Keys.Select(name => "keyedBy." + name)));
+                errors.Add(OtherBuild(NoRequestMember(
+                    $"'{string.Join(", ", unknownMembers.Keys.Select(name => "keyedBy." + name))}' is not a member of keyedBy; it carries path, keys, perKey, references and rows.", unknownMembers.Keys.Select(name => "keyedBy." + name), "unknown"), unknownMembers.Keys.Select(name => "keyedBy." + name)));
                 return;
             }
 
@@ -819,8 +847,8 @@ public sealed class Binder
             // limit plus that one.
             if (perKey < 1 || perKey > options.Limits.MaxLookupLimit + 1)
             {
-                errors.Add(Error(Codes.LookupLimitExceeded,
-                    $"'keyedBy.perKey' is {perKey}; this host answers between 1 and {options.Limits.MaxLookupLimit + 1} rows per key (a lookup's limit of at most {options.Limits.MaxLookupLimit}, plus one).", null, keyedBy.Path));
+                errors.Add(Limit(Codes.LookupLimitExceeded,
+                    $"'keyedBy.perKey' is {perKey}; this host answers between 1 and {options.Limits.MaxLookupLimit + 1} rows per key (a lookup's limit of at most {options.Limits.MaxLookupLimit}, plus one).", null, keyedBy.Path, "maxLookupLimit", options.Limits.MaxLookupLimit + 1, perKey));
                 return;
             }
 
@@ -1035,10 +1063,10 @@ public sealed class Binder
             // The cursor is verified against the finished fingerprint; explain ignores it.
             if (decodeCursor && pageIndex >= 0 && request.Pipeline![pageIndex].Page!.Cursor is { } cursor)
             {
-                var payload = binder.cursors.Decode(cursor, fingerprint);
+                var payload = binder.cursors.Decode(cursor, fingerprint, out var reason);
 
                 if (payload is null)
-                    throw new CursorException();
+                    throw new CursorException { Reason = reason };
 
                 page = page! with { Cursor = payload, Offset = payload.Mode == PagingMode.Offset ? payload.Offset : page.Offset };
                 stages[stages.Count - 1] = page;
@@ -1541,7 +1569,7 @@ public sealed class Binder
             if (conditionDepth >= MaxConditionDepth)
             {
                 if (!conditionDepthReported)
-                    errors.Add(Error(Codes.MaxConditionsExceeded, $"A condition nests more than {MaxConditionDepth} levels of and, or, not and any; flatten the groups.", index, null));
+                    errors.Add(Limit(Codes.MaxConditionsExceeded, $"A condition nests more than {MaxConditionDepth} levels of and, or, not and any; flatten the groups.", index, null, "maxConditionDepth", MaxConditionDepth, null));
 
                 conditionDepthReported = true;
                 return null;
@@ -1648,7 +1676,7 @@ public sealed class Binder
 
             if (!path.IsRemote && !OperandCoercer.Applies(op, path.LeafKind))
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not apply to {Kinds.WithArticle(path.LeafKind)}.", index, condition.Path));
+                errors.Add(Operand($"'{op}' does not apply to {Kinds.WithArticle(path.LeafKind)}.", index, condition.Path, op, "operator", path.LeafKind));
                 return null;
             }
 
@@ -1656,7 +1684,7 @@ public sealed class Binder
             // operators pass the kind gate above and have nothing to match against.
             if (!path.IsRemote && OperandCoercer.NeedsText(op) && OperandCoercer.IsCharRepresented(path))
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path));
+                errors.Add(Operand($"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path, op, "operator", path.LeafKind));
                 return null;
             }
 
@@ -1712,7 +1740,7 @@ public sealed class Binder
 
             if (isPattern && (foldsAccents ? !TextsOf(operand).All(text => RegexGuard.PatternFits(AccentFold.Pattern(text, options.Representation.Collation))) : !TextFits(operand)))
             {
-                errors.Add(Error(Codes.InvalidOperand, TooLongToMatch(op, condition.Path), index, condition.Path));
+                errors.Add(Operand(TooLongToMatch(op, condition.Path), index, condition.Path, op, "length"));
                 return null;
             }
 
@@ -1735,7 +1763,7 @@ public sealed class Binder
         {
             if (op is not ("eq" or "neq" or "in" or "nin"))
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not apply to an outcome; compare '{condition.Path}' with eq, neq, in or nin.", index, condition.Path));
+                errors.Add(Operand($"'{op}' does not apply to an outcome; compare '{condition.Path}' with eq, neq, in or nin.", index, condition.Path, op, "operator"));
                 return null;
             }
 
@@ -1909,13 +1937,13 @@ public sealed class Binder
             {
                 var what = type is null ? Kinds.WithArticle(path.LeafKind) : "an object of one type only";
 
-                errors.Add(Error(Codes.InvalidOperand, $"'is' applies to a member that holds one of several variants; '{condition.Path}' is {what}.", index, condition.Path));
+                errors.Add(Operand($"'is' applies to a member that holds one of several variants; '{condition.Path}' is {what}.", index, condition.Path, "is", "operator", path.LeafKind));
                 return null;
             }
 
             if (path.CollectionAncestors > 0)
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path));
+                errors.Add(Operand($"'{condition.Path}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path, "is", "collection"));
                 return null;
             }
 
@@ -1947,8 +1975,21 @@ public sealed class Binder
             if (condition.Options is not { } conditionOptions)
                 return null;
 
-            if (conditionOptions.Unknown is { Count: > 0 } unknown)
-                errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option.", index, condition.Path));
+            // A name the engine knows, written with a value that is no boolean, is not an unknown option; neither is an 'options' that is no object.
+            foreach (var name in conditionOptions.Unknown ?? [])
+            {
+                var (message, reason) = name switch
+                {
+                    "options" => ("'options' is an object of options: { \"caseSensitive\": true }.", "kind"),
+                    "caseSensitive" or "ignoreCase" => ($"'{name}' is true or false.", "kind"),
+                    _ => ($"'{name}' is not an option; a condition's option is {(contract2 ? "caseSensitive" : "ignoreCase")}.", "unknown"),
+                };
+
+                errors.Add(Error(Codes.OptionNotApplicable, message, index, condition.Path) with
+                {
+                    Params = contract2 ? new Dictionary<string, object?> { ["option"] = name, ["reason"] = reason } : null,
+                });
+            }
 
             var applies = path.IsRemote || OperandCoercer.IgnoreCaseApplies(op, path.LeafKind);
             var why = path.LeafKind == Kind.String && !path.IsRemote && OperandCoercer.FoldsByDefault(op, path)
@@ -2093,6 +2134,13 @@ public sealed class Binder
                 return null;
             }
 
+            // An 'any' written with no condition in it is said as that, not as the group it is read into.
+            if (ReferenceEquals(condition.Any, FilterCondition.EmptyAny))
+            {
+                errors.Add(Error(Codes.EmptyLogicalGroup, "'any' has no conditions; it takes the conditions one element of the collection must meet.", index, condition.Path));
+                return null;
+            }
+
             // The inner paths are relative to one element; the ledger has them under the collection.
             var inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
 
@@ -2158,7 +2206,7 @@ public sealed class Binder
             }
 
             if (++lookups > options.Limits.MaxLookupStages)
-                errors.Add(Error(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null));
+                errors.Add(Limit(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null, "maxLookupStages", options.Limits.MaxLookupStages, lookups));
 
             // The parent: the implicit root, or the entity row the alias 'on' names.
             var parent = entity;
@@ -2294,7 +2342,7 @@ public sealed class Binder
                 limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
 
                 if (limit < 1 || limit > options.Limits.MaxLookupLimit)
-                    errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
+                    errors.Add(Limit(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null, "maxLookupLimit", options.Limits.MaxLookupLimit, limit));
             }
 
             var parentKeyStorage = parentPrefix.Length == 0 ? parentKey.Storage! : parentPrefix + "." + parentKey.Storage;
@@ -2484,7 +2532,7 @@ public sealed class Binder
                 limit = lookup.Limit ?? options.Limits.MaxLookupLimit;
 
                 if (limit < 1 || limit > options.Limits.MaxLookupLimit)
-                    errors.Add(Error(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null));
+                    errors.Add(Limit(Codes.LookupLimitExceeded, $"A lookup returns at most {options.Limits.MaxLookupLimit} children per parent; '{limit}' is outside that.", index, null, "maxLookupLimit", options.Limits.MaxLookupLimit, limit));
             }
 
             foreach (var entry in lookup.Sort ?? [])
@@ -2502,7 +2550,7 @@ public sealed class Binder
             errors.AddRange(substitution);
 
             if (++lookups > options.Limits.MaxLookupStages)
-                errors.Add(Error(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null));
+                errors.Add(Limit(Codes.MaxLookupStagesExceeded, $"The pipeline has more than {options.Limits.MaxLookupStages} lookup stages.", index, null, "maxLookupStages", options.Limits.MaxLookupStages, lookups));
 
             if (errors.Count > 0 && errors.Any(error => error.Stage == index))
                 return;
@@ -2635,7 +2683,7 @@ public sealed class Binder
             }
 
             if (++resolves > options.Limits.MaxResolveStages)
-                errors.Add(Error(Codes.MaxResolveStagesExceeded, $"The pipeline has more than {options.Limits.MaxResolveStages} resolve stages.", index, null));
+                errors.Add(Limit(Codes.MaxResolveStagesExceeded, $"The pipeline has more than {options.Limits.MaxResolveStages} resolve stages.", index, null, "maxResolveStages", options.Limits.MaxResolveStages, resolves));
 
             // forTarget picks one target of an alias a stage continues under; a resolve this host
             // runs continues nothing.
@@ -2933,8 +2981,8 @@ public sealed class Binder
 
             if (count > options.Limits.MaxContinuedStages)
             {
-                errors.Add(Error(Codes.MaxContinuedStagesExceeded,
-                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, root));
+                errors.Add(Limit(Codes.MaxContinuedStagesExceeded,
+                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, root, "maxContinuedStages", options.Limits.MaxContinuedStages, count));
                 return;
             }
 
@@ -3198,8 +3246,8 @@ public sealed class Binder
 
             if (count > options.Limits.MaxContinuedStages)
             {
-                errors.Add(Error(Codes.MaxContinuedStagesExceeded,
-                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, roots[0].Branch.Path));
+                errors.Add(Limit(Codes.MaxContinuedStagesExceeded,
+                    $"More than {options.Limits.MaxContinuedStages} stages continue under '{anchor.Stage.As}'.", index, roots[0].Branch.Path, "maxContinuedStages", options.Limits.MaxContinuedStages, count));
                 return;
             }
 
@@ -3674,7 +3722,7 @@ public sealed class Binder
             }
 
             if (++unwinds > options.Limits.MaxUnwindStages)
-                errors.Add(Error(Codes.MaxUnwindStagesExceeded, $"The pipeline has more than {options.Limits.MaxUnwindStages} unwind stages.", index, null));
+                errors.Add(Limit(Codes.MaxUnwindStagesExceeded, $"The pipeline has more than {options.Limits.MaxUnwindStages} unwind stages.", index, null, "maxUnwindStages", options.Limits.MaxUnwindStages, unwinds));
 
             if (shape.Grouped)
             {
@@ -4046,8 +4094,9 @@ public sealed class Binder
 
             if (path.CollectionAncestors > 0 || path.Kind is not (Kind.DateTime or Kind.Date))
             {
-                errors.Add(Error(path.CollectionAncestors > 0 ? Codes.GroupOnCollection : Codes.InvalidAggregateArgument,
-                    $"'{trunc.Path}' is not a date under no collection.", index, trunc.Path));
+                errors.Add(path.CollectionAncestors > 0
+                    ? Error(Codes.GroupOnCollection, $"'{trunc.Path}' lies under a collection that is not unwound; a dateTrunc key is one date per row. Unwind the collection first.", index, trunc.Path)
+                    : Error(Codes.InvalidAggregateArgument, $"'{trunc.Path}' is {Kinds.WithArticle(path.Kind)}; dateTrunc takes a date or a dateTime.", index, trunc.Path));
                 return null;
             }
 
@@ -4256,7 +4305,7 @@ public sealed class Binder
             }
 
             if (project.Fields.Count > options.Limits.MaxProjectionFields)
-                errors.Add(Error(Codes.MaxProjectionFieldsExceeded, $"The projection names {project.Fields.Count} paths; the limit is {options.Limits.MaxProjectionFields}.", index, null));
+                errors.Add(Limit(Codes.MaxProjectionFieldsExceeded, $"The projection names {project.Fields.Count} paths; the limit is {options.Limits.MaxProjectionFields}.", index, null, "maxProjectionFields", options.Limits.MaxProjectionFields, project.Fields.Count));
 
             var included = project.Fields.Where(pair => pair.Value != 0 && pair.Key != WireNames.IdWire).Select(pair => pair.Key).ToList();
             var excluded = project.Fields.Where(pair => pair.Value == 0 && pair.Key != WireNames.IdWire).Select(pair => pair.Key).ToList();
@@ -4621,9 +4670,9 @@ public sealed class Binder
             else if (limit < 1 && !countOnly)
                 errors.Add(Error(Codes.InvalidPageLimit, $"The page limit {limit} is not positive.", index, null));
             else if (limit > maximum)
-                errors.Add(Error(Codes.PageSizeExceeded, report
+                errors.Add(Limit(Codes.PageSizeExceeded, report
                     ? $"The page limit {limit} exceeds the report page maximum of {maximum}."
-                    : $"The page limit {limit} exceeds the maximum of {maximum}." + ReportPageNote(), index, null));
+                    : $"The page limit {limit} exceeds the maximum of {maximum}." + ReportPageNote(), index, null, report && maximum != options.Limits.MaxPageSize ? "maxReportPageSize" : "maxPageSize", maximum, limit));
 
             // A report page multiplies what its lookups fetch: each brings up to its limit of
             // child rows for every row of the page. Beyond the ordinary page the joined rows are
@@ -4641,7 +4690,7 @@ public sealed class Binder
                 var budget = (long)options.Limits.MaxPageSize * options.Limits.MaxLookupLimit * options.Limits.MaxLookupStages;
 
                 if (joined > budget)
-                    errors.Add(Error(Codes.PageSizeExceeded, $"The report page of {limit} rows with lookups of up to {perRow} child rows per row could join {joined} rows; the limit is {budget}. Lower the page limit or the lookups' limits.", index, null));
+                    errors.Add(Limit(Codes.PageSizeExceeded, $"The report page of {limit} rows with lookups of up to {perRow} child rows per row could join {joined} rows; the limit is {budget}. Lower the page limit or the lookups' limits.", index, null, "maxReportedRows", budget, joined));
             }
 
             var offset = stage.Offset ?? 0;
@@ -4649,7 +4698,7 @@ public sealed class Binder
             if (offset < 0)
                 errors.Add(Error(Codes.InvalidPageLimit, $"The offset {offset} is negative.", index, null));
             else if (offset > options.Limits.MaxOffset)
-                errors.Add(Error(Codes.MaxOffsetExceeded, $"The offset {offset} exceeds the maximum of {options.Limits.MaxOffset}; use a cursor beyond it.", index, null));
+                errors.Add(Limit(Codes.MaxOffsetExceeded, $"The offset {offset} exceeds the maximum of {options.Limits.MaxOffset}; use a cursor beyond it.", index, null, "maxOffset", options.Limits.MaxOffset, offset));
 
             if (stage.Cursor is not null && stage.Offset is not null)
                 errors.Add(Error(Codes.InvalidPageLimit, "A page continues from a cursor or jumps by an offset, not both.", index, null));
@@ -4913,8 +4962,47 @@ public sealed class Binder
             Code = Codes.ValuesLimitExceeded,
             Message = message,
             Stage = index,
-            Params = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["value"] = value },
+            Params = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max, ["value"] = value, ["count"] = value },
         };
+
+        /// <summary>
+        /// A request over one of the host's limits. Under contract 2 it carries what a client renders
+        /// it from: <c>limit</c>, the limit's name as health publishes it, <c>max</c>, its value on
+        /// this host, and <c>count</c>, what the request asked for (absent where the binder stops counting).
+        /// </summary>
+        private QueryValidationError Limit(string code, string message, int? stage, string? path, string limit, long max, long? count)
+        {
+            var error = Error(code, message, stage, path);
+
+            if (!contract2)
+                return error;
+
+            var parameters = new Dictionary<string, object?> { ["limit"] = limit, ["max"] = max };
+
+            if (count is { } asked)
+                parameters["count"] = asked;
+
+            return error with { Params = parameters };
+        }
+
+        /// <summary>
+        /// A condition whose operand or operator does not fit its member, for a reason the member
+        /// itself gives. Under contract 2 it carries the path, the operator and that reason.
+        /// </summary>
+        private QueryValidationError Operand(string message, int? stage, string? path, string op, string reason, Kind? kind = null)
+        {
+            var error = Error(Codes.InvalidOperand, message, stage, path);
+
+            if (!contract2)
+                return error;
+
+            var parameters = new Dictionary<string, object?> { ["path"] = path, ["operator"] = op, ["reason"] = reason };
+
+            if (kind is { } member)
+                parameters["kind"] = Kinds.NameOf(member);
+
+            return error with { Params = parameters };
+        }
 
         // ---- helpers -------------------------------------------------------------------------
 
@@ -4942,7 +5030,11 @@ public sealed class Binder
     }
 
     /// <summary>Raised inside the session when the cursor does not verify; turned into <c>CURSOR_INVALID</c> by the caller.</summary>
-    internal sealed class CursorException : Exception;
+    internal sealed class CursorException : Exception
+    {
+        /// <summary>Why the cursor does not verify (<see cref="CursorCodec.Malformed"/>, <see cref="CursorCodec.Signature"/>, <see cref="CursorCodec.OtherQuery"/>).</summary>
+        public string? Reason { get; init; }
+    }
 }
 
 internal static class ResolvedPathExtensions

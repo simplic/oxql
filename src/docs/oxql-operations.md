@@ -28,20 +28,50 @@ at once. The HTTP status follows from `type` and is not repeated in the body:
 The engine turns every exception on the query path into an `INTERNAL_ERROR` envelope, so a 500
 from the query routes without an envelope did not come from the engine.
 
+**A body that does not read.** A contract 2 request whose body cannot be read into the request
+model is refused in the envelope like every other caller error: 400 `validation_error` with
+`INVALID_REQUEST_BODY` (or the stage's own code where one names the mistake: `INVALID_PAGE_LIMIT`
+for a page `limit` or `offset` that is no whole number, `LOOKUP_LIMIT_EXCEEDED` for such a lookup
+`limit`, `UNKNOWN_REQUEST_MEMBER` for a member an explain envelope does not have). `params` says
+what a client needs to render it, and neither it nor the message ever names a type of the runtime:
+
+| `params.reason` | when | further `params` |
+|---|---|---|
+| `json` | the body is no well-formed JSON (a trailing comma, a body cut short) | `line`, `position`: where the reader stopped, both counted from 1, the position in bytes within the line |
+| `empty` | the body is empty | — |
+| `depth` | the body nests deeper than the host reads | `max` |
+| `kind` | a value is of another JSON kind than its place takes: a body or a stage that is no object, a `pipeline`, `sort`, `and`, `or`, `group.by` or `queries` that is no array, a condition, a `not`, an aggregate or a `variables` that is no object, an `entityType` that is no string, a `strict` that is no boolean, a fraction where a whole number is read | `path`, `expected` and `actual` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`); a place only known as a whole (a stage) carries `path` alone |
+| `missing` | a required member is not written: `entityType`, `pipeline`, a batch's `queries`, an explain envelope's `query`, the `path` or `unit` of a `dateTrunc` | `path` |
+
+`params.path` is the place in the body as a JSON path from its root (`$.pipeline[2].sort`,
+`$.pipeline[0].match['address.city'].any.and`), and the error carries `stage` when the place lies in
+a stage. In a batch an entry that does not read is refused in its place of `results` and the other
+entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.entry` is its index
+in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
+itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
+that is no whole number.
+
+The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
+`OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the
+attribute on it. It runs before the framework's automatic 400 and before a host's own filters at
+the default order, so a host changes nothing for it. A request without the contract header is not
+touched: the host answers it as before (below).
+
 **Framework responses** come from the host's ASP.NET Core pipeline before the engine sees the
 request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | the body cannot be read into the request model: not JSON; `entityType` or `pipeline` missing or `null`; a pipeline element that is a number, string or array; a condition that is not an object; `and`/`or` that is not an array; `not` that is not an object; an aggregate that is not an object; a `group.by` or `sort` of the wrong JSON type; a non-integral number where an integer is read; an explain envelope with a member other than `query`, `include`, `shape`, `remote`, `catalog`, or one of the wrong JSON kind (an `include` or `remote` value the engine does not know is the 400 `EXPLAIN_LIMIT` envelope) |
+| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
 | 415 | the request is not `application/json` |
 
 A client that maps statuses to messages treats a 400 ProblemDetails as a caller error, like a
-`validation_error`, never as an unreachable service. A pipeline element that is `null` and a
-`null` entry of a batch are refusals (`UNKNOWN_STAGE`), not ProblemDetails.
+`validation_error`, never as an unreachable service. A pipeline element that is `null` is a
+refusal (`UNKNOWN_STAGE`) under both contracts; a `null` entry of a batch is `UNKNOWN_STAGE` for a
+contract 1 caller and `INVALID_REQUEST_BODY` under contract 2.
 
 ### Codes
 
@@ -60,8 +90,8 @@ the listed status.
 | `UNWIND_ORDER` | 400 | an inner collection unwound before its outer one; under contract 2 an unwind of a collection a join of an earlier stage reads its keys from (`params` `reason: "joinReadsCollection"`, `join`, `alias`: join after the unwind) |
 | `ALIAS_COLLISION` | 400 | an alias equal to a member's wire or storage name or an earlier alias; two group outputs of one name; an unwind's `as` equal to its `includeIndex` |
 | `INVALID_ALIAS` | 400 | an alias that is not a plain identifier, is `_id`, starts with `__` or ends in `__arr`; a contract 2 `unwind` without `as` (`params` `stage: "unwind"`, `member: "as"`, `reason: "required"`) |
-| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names |
-| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes) |
+| `INVALID_OPERAND` | 400 | the wrong JSON kind for the member; an operator the kind does not take (`gt` on a `bool`); `null` with an ordered or text operator; an array without `in`/`nin`; a text operator on a single-character member; a text too long for the server's pattern limit; `exists` without a boolean; `is` on a member without variants or under a collection that is not unwound, or with an operand that is not a name or a non-empty array of names. Contract 2 `params`: for an operand of another kind `path`, `operator`, `expected` (the kind the place takes: a kind of the schema such as `string`, `int`, `dateTime`, `enum`; `boolean` for `exists`) and `actual` (the JSON kind written: `string`, `number`, `boolean`, `null`, `array`, `object`); for an operator that does not fit the member `path`, `operator`, `reason` (`operator`, `length`, `collection`) and, with `operator`, the member's `kind` |
+| `UNKNOWN_ENUM_MEMBER` | 400 | an enum name or number the enum does not declare; a value outside an addon key's closed list; a name that is no outcome in a condition on a member named by `outcomeAs` (`params.values` lists the outcomes). Contract 2 `params`: `path`, `operator`, `value` (what was written) and `values` (the member names of the enum, or the key's list). An enum name is matched as it is written, so `values` says how the names are spelled |
 | `OPERAND_NOT_ARRAY` | 400 | `in` or `nin` without an array |
 | `DECIMAL_TEXT_NOT_ORDERABLE` | 400 | `gt gte lt lte` on a decimal member whose declared storage is text |
 | `UNBOUND_VARIABLE` | 400 | `{ "$var": … }` names a variable the request does not bind |
@@ -70,19 +100,20 @@ the listed status.
 | `MAX_FILTER_ENTRIES_EXCEEDED` | 400 | contract 2: the request's `filter` carries more entries than `Limits:MaxFilterEntries`; one error, no entry is read; `params` `limit: "maxFilterEntries"`, `max`, `count`. (The filter's conditions over `MaxConditions`: `MAX_CONDITIONS_EXCEEDED` with `filter` = the entry and `params` `limit: "maxConditions"`, `max`, before any is placed) |
 | `FILTER_NOT_PLACEABLE` | 400 | contract 2: a condition of the request's `filter` reads paths that are never in the row at the same point of the pipeline; `params.paths`, `params.births` (per path `{ path, before: 0 }` or `{ path, after: i }`); `filter` names the entry |
 | `UNKNOWN_OPERATOR` | 400 | an operator outside the list (they are case-sensitive); `is` under contract 1 |
-| `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants |
-| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason` |
+| `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants, and so does `params` under contract 2 (`path`, `variant`, `variants`) |
+| `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason`. Contract 2 `params` on the public routes: `members` (every such member), `member` (the first) and `reason`: `unknown` (no member of a request, a batch or an explain envelope), `internal` (a member only the internal route takes: `keyedBy`, an explain's `budget`), `contract` (the header) |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
 | `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
-| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; a `null` query in a batch |
+| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind` or `missing`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
+| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; contract 1: a `null` query in a batch |
 | `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
 | `MULTIPLE_PAGE_STAGES` | 400 | two `page` stages |
-| `MIXED_PROJECTION` | 400 | inclusion and exclusion in one projection (other than `"id": 0`); an empty projection |
+| `MIXED_PROJECTION` | 400 | paths kept and paths removed in one projection, `id` aside (`"id": 0` may stand in an inclusion; `"id": 1` beside removed paths is the inclusion of `id` alone); a value that is neither a number nor a boolean; an empty projection |
 | `GROUP_ON_COLLECTION` | 400 | a group key or aggregate argument under a collection that is not unwound |
 | `UNKNOWN_AGG_FUNCTION` | 400 | an aggregate outside `count countDistinct sum avg min max first last push` |
 | `INVALID_AGGREGATE_ARGUMENT` | 400 | `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date |
@@ -99,7 +130,7 @@ the listed status.
 | `RESOLVE_PARENT_NOT_ITEM` | 400 | a resolve's `parentAs` on a reference whose (narrowed) targets include an entity rather than an item |
 | `RESOLVE_NOT_FILTERABLE` | 400 | a condition on a remote resolve alias itself (`{"veh":{"eq":null}}`, `{"veh":{"exists":true}}`); the owner is not called. A condition on a member of a plain remote alias (`veh.matchCode`) is a semi-join; under a keyed, typed, item, converted, element-wise or continued alias any condition is refused, since the alias is joined after the page |
 | `RESOLVE_NOT_SORTABLE` | 400 | a sort on a path under a remote or keyed alias; a sort on a join's outcome (`outcomeAs`), wherever the join runs |
-| `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*) |
+| `MAX_PIPELINE_STAGES_EXCEEDED` … `MAX_VARIABLES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | 400 | the matching limit (see *Limits*). Every limit code carries `params { limit, max, count }` under contract 2: see *What a limit refusal carries* below |
 | `INVALID_PAGE_LIMIT` | 400 | `limit` below 1 (contract 2: `limit: 0` without `count` or with a cursor, `params` `limit: 0`, `needs: "count"`); a `count` that is not `true`, `false` or an object, or whose `upTo` or `budgetMs` is not a positive integer; contract 1 and internal calls: a negative `offset`, a cursor together with an offset, a count cap that is not a positive integer |
 | `PAGE_SIZE_EXCEEDED` | 400 | `limit` above `MaxPageSize` |
 | `LOOKUP_LIMIT_EXCEEDED` | 400 | a lookup `limit` below 1 or above `MaxLookupLimit` |
@@ -108,16 +139,37 @@ the listed status.
 | `BATCH_TOO_LARGE` | 400 | a batch of more than `MaxBatchQueries` queries; the whole batch is refused |
 | `REQUEST_TOO_LARGE` | 413 | a body over `MaxRequestBytes`, refused before it is read |
 | `EXPLAIN_LIMIT` | 400, or 429 | 400: an explain past its bounds (`Explain:MaxStages`, `MaxCatalogEntries`, `MaxShapeDepth`) or naming an `include` or `remote` value the engine does not know, refused before anything is bound. 429 (`rate_limited`, with `Retry-After`): more explains than a caller may send or have in flight, refused before the body is read; `params` `limit`, `max`, `retryAfter`. As an explain note: a cost limit was hit mid-way and a part was left out |
-| `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered |
+| `CURSOR_INVALID` | 400 | a cursor from another pipeline, organisation or signing key, or altered. Contract 2 `params.reason`: `query` (this host issued it for another query: another entity, condition, sort or organisation), `signature` (altered, or issued under another signing key), `malformed` (no cursor at all), `kind` (the member is no string) |
 | `ACCESS_DENIED` | 403, or 400 | 403: no organisation in the request, or the entity has no root `organizationId`. 400 (inside a `validation_error`): a lookup child or resolve target without one. Test the code, not the status |
-| `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error |
-| `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
+| `RESOLVE_UNAVAILABLE` | 422 | a remote resolve or semi-join on a host without a remote query client (explain answers it as `valid: false`); a semi-join whose owner did not answer or answered with an HTTP error. `params`: `reason: "noClient"` for the first; for an owner `service` and `reason` (`timeout`, `unreachable`, `route`, `status` with the HTTP `status`), and `remembered` with `retryAfterMs` when the owner was not called because it had just failed, as the `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` diagnostics carry them |
+| `RESOLVE_REFUSED` | 422 | the owner refused its part, or answered a row without the key it was asked for. Contract 2: the head is followed by the owner's errors as the caller's, exactly as explain says them: the owner's `code`, `message` and `params`, `params.owner { service, entity, target, stage, path }`, and the caller's place and path (a continued stage: its `stage` and path; a remote `resolve`'s or `lookup`'s own `filter`: the stage, the path as written in the filter; a condition on another service's member: the `match` stage or the `filter` entry (`filter`, no `stage`), the path as written, `recipient.id`; an error about the owner query as a whole, which names no stage, such as `UNKNOWN_ENTITY` for a target the owner does not have: the `resolve` stage, `params.owner.stage: null`, and the head says that the reference declares a target its owner does not publish). The head lies where the first of them lies. A chain's errors are said once: an owner's own `RESOLVE_REFUSED` head is not repeated. Contract 1: as before, the owner's errors of a semi-join and of a resolve's filter as the owner wrote them (its path, no stage, no params) |
 | `PAGE_INCOMPLETE` | 422 | a `strict` request without a `cursor` matches more rows than its page holds; `params` `limit`, `max` |
 | `SEMI_JOIN_TOO_LARGE` | 422 | a condition under a remote alias selects more than `MaxSemiJoinIds` rows of the owner |
 | `QUERY_TOO_EXPENSIVE` | 422 | a sort or group over the server's memory limit with `AllowDiskUse` off; a `push` or `countDistinct` value over the server's size limits |
-| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's |
+| `QUERY_TIMEOUT` | 504 | an aggregate exceeded `Execution:MaxTimeMs`, the request's own `maxTimeMs` or the batch's; `params.maxTimeMs` is the time the request had |
 | `INTERNAL_ERROR` | 500 | any other fault |
 | `LEGACY_STAGE_UNSUPPORTED` | 400 | contract 1 only: a `lookup` or `resolve` (in the v1 form only where the legacy pipeline is switched off or the request is an explain; in the contract 2 form always), an unknown stage member (the contract 2 stage members included), `strict`, the number form of `includeTotalCount` |
+
+**What a limit refusal carries.** Under contract 2 a refusal for a limit of the host carries
+`params { limit, max, count }`: `limit` is the limit's name as `GET /oxql/health` publishes it under
+`limits`, `max` its value on this host and `count` what the request asked for, so one message
+template renders every one of them:
+
+| code | `limit` |
+|---|---|
+| `MAX_PIPELINE_STAGES_EXCEEDED` | `maxPipelineStages` |
+| `MAX_LOOKUP_STAGES_EXCEEDED`, `MAX_UNWIND_STAGES_EXCEEDED`, `MAX_RESOLVE_STAGES_EXCEEDED`, `MAX_CONTINUED_STAGES_EXCEEDED` | `maxLookupStages`, `maxUnwindStages`, `maxResolveStages`, `maxContinuedStages` (`count` is the stage that went over) |
+| `MAX_GROUP_FIELDS_EXCEEDED`, `MAX_PROJECTION_FIELDS_EXCEEDED`, `MAX_VARIABLES_EXCEEDED`, `MAX_FILTER_ENTRIES_EXCEEDED` | `maxGroupFields`, `maxProjectionFields`, `maxVariables`, `maxFilterEntries` |
+| `MAX_CONDITIONS_EXCEEDED` | `maxConditions`; `maxConditionDepth` for conditions nested too deep (no `count`: the binder stops there) |
+| `REGEX_TOO_LONG` | `regexMaxLength` (`count` is the pattern's length) |
+| `PAGE_SIZE_EXCEEDED` | `maxPageSize`, `maxReportPageSize` for a report page, `maxReportedRows` for the rows its lookups could join |
+| `LOOKUP_LIMIT_EXCEEDED` | `maxLookupLimit` |
+| `MAX_OFFSET_EXCEEDED` | `maxOffset` |
+| `VALUES_LIMIT_EXCEEDED` | `maxValuesLimit`, `valuesScanRows`, `regexMaxLength` (also `value`, the same number as `count`) |
+| `BATCH_TOO_LARGE` | `maxBatchQueries` |
+| `REQUEST_TOO_LARGE` (413) | `maxRequestBytes`, or `explainMaxRequestBytes` where an explain's own bound is the smaller one (`count` is the body's length in bytes) |
+
+A caller without the contract header reads these codes without `params`, as before.
 
 Diagnostics travel in `diagnostics` of a successful answer. Those marked *loss* refuse a `strict`
 request instead (422 `not_executable`, the diagnostic as the error); `RESOLVE_MISSING` refuses by its
@@ -127,8 +179,8 @@ stage's effective `onMissing`:
 |---|---|---|
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
 | `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
-| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases` | an owner did not answer within its budget; the aliases are `null` on this page |
-| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases` | an owner was not reached, or answered with an HTTP error (the message names the status) |
+| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"`; `remembered: true` and `retryAfterMs` when no call went out | an owner did not answer within its budget; the aliases are `null` on this page. While the host remembers that call (`Cache:OwnerUnavailableTtlSeconds`) the owner is not called and the diagnostic says so under the same code |
+| `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered); `remembered: true` and `retryAfterMs` when no call went out | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner did not answer on its query route (the message says no more than that; the causes are for the host's operator, see *An owner without the query route* under *Keyed fetch and remote continuation*), `reason: "status"` with the status for any other. An owner that just failed is not called again for `Cache:OwnerUnavailableTtlSeconds`: the diagnostic then says so, with the code, the `reason` and the `status` of the call that failed, `remembered: true` and the milliseconds until the owner is tried again |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
 | `RESOLVE_MISSING` (loss by `onMissing`) | `alias`, `count`, `truncated`, `rows` `[{ row, element?, key, outcome }]` | under `onMissing` `report` or `refuse`: references that resolved to `not_found`, `invalid_key` or `owner_unanswered`; one per stage; `rows` capped at `MaxReportedRows` |
 | `RESOLVE_AMBIGUOUS` (loss) | as `RESOLVE_MISSING` | always: keys more than one record holds; the alias holds the first by target order, then key |
@@ -215,6 +267,55 @@ neither ([below](#contract-1-answers)). What a host should know:
   one escapes it there. The schema document is the base package's and keeps its own spelling (its
   revision is the hash of its bytes).
 
+### The API description of the routes
+
+The four routes describe themselves to whatever generates an API document from the host's API
+explorer (an OpenAPI generator such as Swashbuckle), without a dependency on one. The document
+says what a route is for and how it is called; the language stays in the documentation, which
+every description points to (`OxQLDocumentation.Url`).
+
+| what | where it comes from |
+|---|---|
+| summary and description of a route | `[EndpointSummary]` and `[EndpointDescription]` on the action, from the constants of `OxQLDocumentation` |
+| the header `X-OxQL-Contract` (and `X-OxQL-Timing` on query and batch) as an optional header parameter | `[OxQLOperation(Headers = …)]`, applied by `OxQLApiDescriptionProvider`, which `AddOxQLAspNetCore` registers. The parameter is description only: the header is read and checked where it always was |
+| the request body of contract 2 (`OxQLQueryBody` with its stages, `page.count` among them; `OxQLBatchBody`; `OxQLExplainBody`) | `[OxQLOperation(Body = …)]`: the engine binds a body with converters of its own, so the model of the wire is a documentation model (`OxQL.AspNetCore.OpenApi`). Nothing is bound into it, and the member of the route between services (`keyedBy`) is not part of it |
+| every status with its body and what it means | `[ProducesResponseType(type, status, "application/json", Description = …)]`: `OxQLQueryAnswer`, `OxQLBatchAnswer`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, and the refusal envelope `OxQLError` for 400, 403, 413, 422, 429, 500 and 504. 401 and 404 are the host's own answers |
+| the descriptions of parameters and of the models' members | the XML comments of `OxQL.AspNetCore`, which ship in the package (`lib/net10.0/OxQL.AspNetCore.xml`) |
+| the contract 1 body and answer (legacy) | named by `OxQLOperationAttribute.Contract1Body` and `Contract1Answer` in the endpoint's metadata, for a host that documents them as alternatives; the document describes contract 2 |
+
+What is left to the host: to include the XML comments in its generator (the file has to be beside
+the assembly: `CopyDocumentationFilesFromPackages` in the project that references the package), its
+security scheme, examples, and hiding routes of its own. The Sample host shows the first.
+
+No media type constraint is put on the routes for the sake of the description: a body is read by
+the host's JSON formatters as before.
+
+### What a host measures
+
+The engine has one meter, named `OxQL` (`OxQLMetrics.MeterName`), which a host exports with its
+metrics pipeline (`AddMeter("OxQL")`; the base package does). It costs nothing while nobody listens.
+
+| instrument | kind, unit | what one measurement is |
+|---|---|---|
+| `oxql.requests` | counter, `{request}` | one query answered: a request of the query route, each entry of a batch, an explain |
+| `oxql.request.duration` | histogram, `s` | the time that query took on this host, from when the host had read it to its answer |
+
+Both carry the same four tags, and no other:
+
+| tag | values |
+|---|---|
+| `contract` | `1` or `2`: the contract the request was written for (no header is `1` while `Compat:Enabled`) |
+| `route` | `query`, `batch` (each entry of a batch, and a batch refused whole), `explain` |
+| `entity` | the id of the entity the request names, as the host's model has it (a retired id is its current one); `(unknown)` for a name the model does not have, `(none)` for a request refused before the host looked at the entity it names (a body that does not read, a batch refused whole, an explain past its bounds). What a caller types is never a tag |
+| `outcome` | `ok`, or the first code of the refusal (`UNKNOWN_PATH`, `QUERY_TIMEOUT`, `INTERNAL_ERROR`, …); `cancelled` for a request its caller gave up on; `unbound` for a contract 1 request whose body the host could not bind and answered itself |
+
+The tags are bounded by the model and the code list. Neither the user nor the organisation is a
+tag: they are in the log lines (the request line of the engine, and `OxQL.Compat.Legacy` for a
+contract 1 request, see [`LEGACY.md`](LEGACY.md#who-still-sends-contract-1)). An explain that
+answers `valid: false` is `ok`: it was answered. `sum(rate(oxql_requests{contract="1"}))` by
+`entity` is the contract 1 traffic of a service; the same by `outcome` says how much of it is
+refused.
+
 ### Contract 1 answers
 
 While `Compat:Enabled` is true, the header `X-OxQL-Contract` decides the contract: absent or
@@ -260,8 +361,9 @@ next goes behind it.
 ### Batch
 
 `POST /oxql/batch` answers 200 with `{ "results": [ … ] }`, one entry per query in order, unless
-the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a framework
-response (a body without a `queries` array is a 400 ProblemDetails). An entry is either a success body (it has `items`)
+the batch itself is refused: 400 `BATCH_TOO_LARGE`, 413 `REQUEST_TOO_LARGE`, or a body that is no
+batch (without a `queries` array: 400 `INVALID_REQUEST_BODY` under contract 2, the host's 400
+ProblemDetails for a caller without the header). An entry is either a success body (it has `items`)
 or a refusal envelope (it has `type`); an entry carries no status of its own, so a caller derives
 it from `type` with the table above. Queries of a public batch run one after another on the host;
 `maxTimeMs` bounds the whole batch: it is one deadline, and each query runs under what is left of it
@@ -318,6 +420,7 @@ a caller checks a request against before sending it are also published in the sc
 | `Values:ScanRows` | 50 000 | binder and compiler: the most rows a `values` stage reads, and what it reads when the request names no `scan` (health `valuesScanRows`); a request may lower it | `VALUES_LIMIT_EXCEEDED` (`params.limit: "valuesScanRows"`) above it; diagnostic `VALUES_SCAN_CAPPED` when a run reaches it | no | — |
 | `Values:DefaultLimit` | 100, never above `MaxValuesLimit` | binder: the `limit` of a `values` stage that names none (health `valuesDefaultLimit`) | — | no | — |
 | `Execution:MaxTimeMs` | 10 000, clamped to 1–60 000 | `maxTimeMS` of the page and the count aggregate, and of a `strict` request's truncation checks, which are sent with them and so end within the same limit; a request's own `maxTimeMs` (contract 2) and a batch's only lower it, the lower of the two holding, and a value below 1 is 1 | 504 `QUERY_TIMEOUT` | no | the server ends a command at its next interrupt check after the limit, so a command that finishes within milliseconds of it is still answered (a page that comes in one reply has no later check to fail at); the time left of this budget, capped by `ResolveTimeoutMs` or `ChainTimeoutMs`, is sent to the owner as the batch's `maxTimeMs`, which the owner applies as its own ceiling |
+| `Execution:ClientDeadlineMarginMs` | 5 000 (below 0, e.g. `-1`: off) | every aggregate, the legacy pipeline's included: how long after an aggregate's `maxTimeMS` the host still waits for the database to answer before it gives the aggregate up (its cancellation is asked for) and answers itself | 504 `QUERY_TIMEOUT`, as the limit's own expiry; a count step leaves the count `unknown` (`timeout`) | no | the database ends a command at its limit and says so, which is the answer in every ordinary case. The deadline is for the case in which nothing comes back (a connection that stays open and silent): the request then ends after the limit and this margin instead of waiting as long as the connection does. It is wall-clock time on the host from when the aggregate is handed to the driver until its rows are read, so it includes the selection of a server, the wait for a pooled connection and the transfer of the rows, none of which the database's `maxTimeMS` counts; the margin is the room for them, and a host whose pool is often exhausted or whose large pages arrive slowly raises it. A value below 0 switches the deadline off. The database keeps to its own limit whatever the margin is: `maxTimeMS` is sent unchanged and ends the command there |
 | `Execution:ResolveTimeoutMs` | 2 000, never above `MaxTimeMs` | keyed fetch: one owner call of a plain remote resolve | `RESOLVE_TIMEOUT` (resolve), 422 `RESOLVE_UNAVAILABLE` (semi-join) | no | the whole semi-join phase is also bounded by the request's remaining budget |
 | `Execution:ChainTimeoutMs` | 6 000, never above `MaxTimeMs` | keyed fetch: one owner call carrying continued stages or a typed, item, converted or element-wise resolve; the time left less 50 ms, at most this | `RESOLVE_TIMEOUT` | no | the owner budgets its own owner calls from what is left of it, so time bounds the whole chain |
 | `Execution:BatchConcurrency` | 4, clamped to 1–16 | how many queries of one internal batch run at once, at the owner and at a host answering its own targets; `1` runs them one after another | — | no | each query in flight holds a connection (two with a count); a public batch always runs one query after another |
@@ -327,8 +430,9 @@ a caller checks a request against before sending it are also published in the sc
 | `Cache:NegativeResolveTtlSeconds` | 10 (`0` caches none) | the owner-fetch cache: keys an owner answered as not found; a `strict` request reads past them | — | no | — |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | the host's addon definition cache | — | no | — |
 | `Cache:HealthProbeTtlSeconds` | 10 | reachability measurements behind `/oxql/health` | — | no | the same measurement reads each owner's engine version and `maxBatchQueries` |
+| `Cache:OwnerUnavailableTtlSeconds` | 5 (`0` remembers nothing) | keyed fetch and semi-join: how long an owner is not called again after a call that reached nobody, got no answer within a whole call budget, or found no internal query route (HTTP 404; also 502, 503, 504). Until then the request gets the failed call's answer at once | the failed call's `RESOLVE_UNREACHABLE` or `RESOLVE_TIMEOUT` with `params.remembered: true`, `retryAfterMs`; a semi-join 422 `RESOLVE_UNAVAILABLE` | no (health only, contract 2: `ownerUnavailableTtlSeconds`) | one record per host, which its health probe writes too: a measurement that finds the owner answering ends the wait early, and one that can make no connection to the owner starts it |
 | `Explain:Enabled` | `true` | `POST /oxql/explain` answers; 404 otherwise | — | no | — |
-| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries) | note `REMOTE_UNCHECKED` | no | — |
+| `Explain:RemoteTimeoutMs` | 1 500 | one explain's wait for owners' internal explain in all (the remote check and forwarded catalog entries), from the first round an owner is asked in | note `REMOTE_UNCHECKED` (`reason: "timeout"` for an owner that was asked, `"budget"` for a part nothing was sent for) | no | — |
 | `Explain:TimeoutMs` | 2 000 | the wall time of one explain; once it is spent no further owner is asked | note `EXPLAIN_LIMIT` (`time`) | no | an internal explain carries what is left, so an owner never outlasts its origin |
 | `Explain:MaxRequestBytes` | 65 536 | request-size filter on `POST /oxql/explain`, before the body is read (the lower of it and `Limits:MaxRequestBytes`) | 413 `REQUEST_TOO_LARGE` | no | explain is rare and cheap to refuse; no bound is a way to load a service |
 | `Explain:MaxStages` / `MaxCatalogEntries` / `MaxShapeDepth` | 30 / 10 / 3 | the parsed explain body, before the model, the binder or an owner is touched | 400 `EXPLAIN_LIMIT` | no | an unknown `include` or `remote` value is `EXPLAIN_LIMIT` too |
@@ -351,6 +455,7 @@ Fixed bounds, not configurable:
 | `Execution:MaxTimeMs` ceiling | 60 000 ms | — |
 | health reachability probe | 2 s per service | the service counts as not reachable |
 | listed indexes for the explain advisory | cached 60 s per collection | — |
+| what a run or an explain learned a union target lacks (the paths dropped for it) | kept for `Cache:ResolveTtlSeconds` per organisation, owner and target, under the revision of the owner's schema an answer last named; what was learned before any revision was named counts as learned of the first one named | — |
 | owner answers to explain's remote check and forwarded catalog entries | kept 30 s per organisation, user, owner, owner schema revision and forwarded body, at most 1 000 entries and 16 MB; failures and answers that were not complete are not kept, and an answer naming another revision of a service retires what was kept for the old one | — |
 | records per key a grouped owner query returns | 2 (the second means `ambiguous`) | — |
 | ask-again rounds for a remote union target without the paths it lacks | 2 per request | — |
@@ -362,7 +467,7 @@ Anonymous, always 200, and never waits for another service:
 
 ```jsonc
 {
-  "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable
+  "status": "healthy",                    // "degraded" when a referenced service is not configured or was last measured unreachable; contract 2 also when one is not usable, a declared target is unknown to its owner, or the model is degraded
   "service": "oxql",
   "engine": { "version": "2.1.0.0", "contract": 2 },
   "capabilities": ["resolve.remote", "semiJoin", "resolve.chain", "lookup.remote", "explain", "compat.v1"],
@@ -374,14 +479,21 @@ Anonymous, always 200, and never waits for another service:
     "maxBatchQueries": 10, "regexMaxLength": 200, "maxLookupLimit": 100,
     "maxFlattenDepth": 5, "maxContinuedStages": 8, "maxReportPageSize": 5000, "maxReportedRows": 50,
     "maxValuesLimit": 500, "valuesScanRows": 50000, "valuesDefaultLimit": 100,
-    "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10,
+    "chainTimeoutMs": 6000, "negativeResolveTtlSeconds": 10, "ownerUnavailableTtlSeconds": 5,
+    "countStepRows": 1000, "countBudgetMs": 500, "countMaxBudgetMs": 5000,
     "explainRemoteTimeoutMs": 1500, "explainTimeoutMs": 2000,
     "explainMaxRequestBytes": 65536, "explainMaxStages": 30, "explainMaxCatalogEntries": 10, "explainMaxShapeDepth": 3,
     "explainDefaultShapeDepth": 2, "explainMaxTypeMembers": 300, "explainMaxAnswerBytes": 262144,
     "explainMaxOwnerServices": 4, "explainMaxOwnerCalls": 8, "explainMaxBatchChecks": 64, "explainRatePerMinute": 120, "explainRateBurst": 30, "explainOwnerRatePerMinute": 20, "explainOwnerRateBurst": 5,
     "explainMaxConcurrentPerUser": 2, "explainMaxConcurrentPerHost": 8, "explainMaxConcurrentPerCaller": 4
   },
-  "remote": [ { "service": "vehicle", "configured": true, "reachable": true } ]
+  "remote": [
+    { "service": "vehicle", "configured": true, "reachable": true, "contract": 2, "engineVersion": "2.1.0.0", "usable": true,
+      "references": { "declared": 3, "validated": true, "revision": "sha256:…", "unknownTargets": [] } },
+    { "service": "staff", "configured": true, "reachable": true, "usable": false, "reason": "engine",
+      "references": { "declared": 14, "validated": false, "unknownTargets": [], "reason": "unavailable" } }
+  ],
+  "model": { "entities": 12, "degraded": false }
 }
 ```
 
@@ -408,12 +520,21 @@ Anonymous, always 200, and never waits for another service:
   limits it sizes its batches by.
   On a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`, or the
   legacy support off) a request without the header reads, ahead of the host's own names,
-  `batch`, `group.page`, `page.offset`, `any`, and every limit. That
+  `batch`, `group.page`, `page.offset`, `any`, and the limits that caller has always read (what is
+  added to the list later is a contract 2 caller's: `ownerUnavailableTtlSeconds`, `countStepRows`,
+  `countBudgetMs`, `countMaxBudgetMs`). That
   host does all four for that caller, and a contract 1 client may gate on a name.
   For a contract 2 caller health is read by name: members and
   limits are added, never removed or renamed.
 - `limits` are the values in force after registration adjusted them, not the configured ones;
   `chainTimeoutMs` is the effective value (clamped to `MaxTimeMs`).
+- **Where a count ends** is published for a client that shows one: `countStepRows` is how many
+  rows the count beside a page counts (`Count:StepRows`). Up to it `pageInfo.count` is `exact`;
+  above it the page answers `atLeast` that number with `stoppedBy: "step"`, and a client that needs
+  the number sends the count alone (`limit: 0` with `count`), which goes on to `countCap`.
+  `countBudgetMs` is the time a count has when the request names none and `countMaxBudgetMs` the
+  most a request's `count.budgetMs` is given. A request's `count.upTo` lowers the step, never
+  raises it.
 - `remote` lists every service the model references remotely, from a root member, a member of
   an embedded object or a member of a collection element alike, and every target of a typed
   reference, and is absent when the host has no remote query client or the request says
@@ -421,6 +542,41 @@ Anonymous, always 200, and never waits for another service:
   measurement, taken at most once per `Cache:HealthProbeTtlSeconds` in the background, and
   absent before the first one has finished or for a service that is not configured; an absent
   `reachable` does not degrade `status`.
+- Under contract 2 each `remote` entry also says what the owner can do for this host, from what the
+  remote client read of the owner's shallow health when it measured reachability
+  (`IRemoteOwnerInfo`): `contract` and `engineVersion` as the owner named them (absent when it named
+  none), and `usable`: `true` only for an owner that answered and speaks this engine's contract,
+  `false` with a `reason` otherwise, absent while nothing is measured or the client keeps no owner
+  facts. `reason` is `notConfigured` (no `InternalHosts` entry), `unreachable` (its health did not
+  answer; a wrong `InternalApiVersions` entry looks the same) or `engine` (it answered and names no
+  contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
+  `usable: false` degrades the `status` a contract 2 caller reads, as `reachable: false` does. A
+  caller without the contract header reads the three members `service`, `configured`, `reachable`,
+  and a `status` that only a service that is not configured or not reachable degrades.
+- `references` of a `remote` entry (contract 2) is the host's check of the references it declares
+  into that service against the owner's schema document: `declared` (how many), `validated`
+  (whether the check could be made), the `revision` of the document it was made against, and
+  `unknownTargets`: the declared target entity ids the owner does not publish, each once. A target
+  listed there degrades `status`: a join over it is refused when it runs. While `validated` is
+  false nothing is known and nothing degrades; `reason` says why: `pending` (no check has
+  finished), `unsupported` (the host's remote client cannot read schema documents,
+  `IRemoteSchemaSource`), `notConfigured`, or `unavailable` (the owner did not answer or serves no
+  document). The check runs in the background: once after the host has started, then when health
+  or an explain is asked and one is due (30 s after a check that left a service not validated,
+  5 min after one that validated all, the read conditional on the revision last seen). It never
+  delays the start, never fails a request, and what it validated stays when the owner stops
+  answering. A host logs a warning under `OxQL.Startup` per service with unknown targets.
+- `model` (contract 2, also with `?shallow=true`) says what the host binds against: `entities`, the
+  number of entities of its model, and `degraded`, with a `reason` when true: `build` (the model
+  provider says the host's build failed and it serves what was left, `IEntityModelProvider.Degraded`)
+  or `unavailable` (the provider has no model). A degraded model degrades the `status` a contract 2
+  caller reads: every request for an entity the model lacks is `UNKNOWN_ENTITY`. A model without
+  entities is degraded only when its provider says so (`Degraded: true`): a service that has no
+  entities of its own is healthy and shows `entities: 0`.
+- `status` for a caller without the contract header is `degraded` while a referenced service is
+  not configured or was last measured unreachable, and `healthy` otherwise. What an owner's engine
+  can do, the check of the declared references and the model count for the status a contract 2
+  caller reads only.
 - `?shallow=true` starts no measurement. It is the form one host uses to ask another, so a probe
   never sets off the probed service's own probes. The same answer tells the asking host the owner's
   `engine.version` and `limits.maxBatchQueries`.
@@ -742,7 +898,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `params.addon { key, state }`, `state` one of `undefined`, `retired`, `object`, `defined`.
   `owner`: a part could not be checked (`RESOLVE_UNAVAILABLE`; the notes `REMOTE_UNCHECKED`,
   `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). `data`: only a run can tell (never an explain error; the
-  note `SEMI_JOIN_NOT_BY_KEY` has it).
+  note `SEMI_JOIN_NOT_BY_KEY` has it). The note `REFERENCE_TARGET_UNKNOWN` has `model`.
   `advisory`: the query runs. `RESOLVE_REFUSED` beside the errors it wraps has the strongest of
   theirs. The top-level `executable` is derived: `never` with an error whose basis is `request`,
   `model` or `limits`; `unknown` with no such error and another error or `cache.complete: false`;
@@ -813,9 +969,15 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   keyed stage of its own (`remote: false`): `via` (the owner it was reached through, absent when this
   host asks it itself), `route` (`apiVersion` is the version the remote client routes the service to,
   `IRemoteOwnerInfo.ApiVersionOf`, absent when it does not say), `answered` (`null`: never asked),
-  `reason` when it did not (`unsupported`, `unreachable`, `timeout`, `limit`), `calls` (one per round
+  `reason` when it did not (`unsupported`, `unreachable`, `timeout`, `limit`, `cached`; `budget` for
+  a part nothing was sent for because what was asked before it spent the owners' budget, so
+  `timeout` always means the owner was asked and did not answer in time), `calls` (one per round
   it was asked in), `cached`, `ms` and its `engine`; its schema revision is
-  `revision.schema[service]`. With `include: ["plan"]` an owner also lists the
+  `revision.schema[service]`. An owner no check asked (`answered: null`, `calls: 0`) carries, under
+  `remote: "check"`, the `engine` its health named, as far as the host's remote client knows it,
+  and a `reason` when it is not taken to answer: `unknown` (nothing is known of it), `engine` (its
+  health names another contract than this engine's, or none), or what the last call this host made
+  to it ended in (`unreachable`, `timeout`, `route`). With `include: ["plan"]` an owner also lists the
   `queries` it is sent, each once: `stage`, `alias`, `target`, `grouped`, the `query` with keys and
   the page limit elided as `"…"`, and the stages `continued` and `notApplicable`.
 - **`catalog`**: one answer per `catalog` entry of the request, in order: `id`, `entity`, the `type`
@@ -868,9 +1030,14 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   `REPORT_PAGE`, `INDEX_ADVICE` (only with `include: ["indexes"]`: one per index of the advisory, at
   the part of the request the index serves, `params` `id`, `for`, `collection`, `existing`, `used`,
   `index`; an index list that cannot be read is one more `INDEX_ADVICE` note saying so, `params.reason`),
-  `REMOTE_LOOKUP`, `EXPLAIN_LIMIT` and `EXPLAIN_TRIMMED`. Codes
+  `REMOTE_LOOKUP`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED` and `REFERENCE_TARGET_UNKNOWN` (a join's
+  target is an entity its owner does not publish, by the host's check of its declared remote
+  references against the owner's schema document; at the join's stage, basis `model`, `params`
+  `service`, `target`, `revision`; the answer is then not complete and `executable` is not `yes`.
+  It is a note because the check reads the owner's document from time to time and may be behind
+  it; an owner this explain asks says the error itself, `UNKNOWN_ENTITY` under `RESOLVE_REFUSED`). Codes
   are stable; messages may change. Without `include: "notes"` only the notes about the answer itself
-  are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`). A remote union target's
+  are answered (`REMOTE_UNCHECKED`, `EXPLAIN_LIMIT`, `EXPLAIN_TRIMMED`, `REFERENCE_TARGET_UNKNOWN`). A remote union target's
   `SELECT_PATH_NOT_ON_TARGET` comes from its owner's internal explain (the remote check), which then
   checks that target again without the paths it lacks, as a run asks again, so the stages continued
   at it are checked as the run binds them; a run reports the paths an owner dropped as diagnostics,
@@ -885,10 +1052,32 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   owner's error keeps its own `params` and gains `params.owner`. A contract 1 answer carries none.
 - **`remote`.** With `check` (the default) the owner queries of every keyed stage are bound by their
   owners' internal explain: an owner error becomes this request's error at the caller's stage
-  (`params.owner` as in a refusal) and the stage's status `error`. All owner calls of one explain
-  share `Explain:RemoteTimeoutMs` (1 500 ms); a part no owner answered (a client that cannot explain,
-  unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED` note with `params.reason`,
-  never an error.
+  (`params.owner` as in a refusal) and the stage's status `error`. An owner error about the owner
+  query as a whole (it names no stage: the target is no entity of the owner's model,
+  `UNKNOWN_ENTITY`) is an error at the `resolve` stage, under a `RESOLVE_REFUSED` head, with the two
+  errors a run is refused with; an owner error at a stage this host added to the owner query (the
+  key match, the page) stays this host's own and is not the request's. All owner calls of one explain
+  share `Explain:RemoteTimeoutMs` (1 500 ms), which runs from the first round an owner is asked in
+  (binding and reading the owners' health facts come before it; the facts are read within the
+  slice a run gives them, a tenth of the time left and at most 250 ms); a part no owner answered (a
+  client that cannot explain, unreachable, timed out, not configured) leaves a `REMOTE_UNCHECKED`
+  note with `params.reason`, never an error.
+  - *Owners that are not asked.* An owner is asked when there is something for it to bind: stages
+    continued at it, paths asked under its alias, a filter, or the target's type (`include` with
+    `shape`, the default). A join that shows the owner's row whole under an `include` without
+    `shape` gives the owner nothing to bind, and no check asks it. The answer then goes by what
+    the host knows of the owner and never says more than was checked: an owner whose health names
+    this engine's contract is taken to answer (`executable` may be `yes`, the owner's entry carries
+    its `engine`); an owner nothing is known of, one on another contract or none, and one the host
+    remembers as not answering (`Cache:OwnerUnavailableTtlSeconds`) leaves a `REMOTE_UNCHECKED` note
+    at the join's stage with `params { service, target, reason }` (`unknown`, `engine`,
+    `unreachable`, `timeout`, `route`), `cache.complete: false` and `executable: "unknown"`. The
+    cached tier asks nobody and is not judged this way. Neither is a host whose remote client keeps
+    no owner facts (it does not implement `IRemoteOwnerInfo`): it has nothing to judge the owner
+    by, so the join is answered without a note and without `engine` or `reason` on the owner's
+    entry, and `executable` is what the rest of the request makes it. The note with
+    `reason: "unknown"` is for a client that keeps facts and has none of this owner yet (its
+    health was not read, or not within the slice).
   - *Conditions at owners.* A condition on a member of another service's rows (a semi-join) is bound
     by that owner when the query runs, before the page. Explain has the owner bind the query the run
     sends it first for the condition (the condition relative to the target, the target field
@@ -915,7 +1104,7 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     a run stops at the first owner that refuses. A condition no owner was asked
     for is never valid by silence: it leaves a `REMOTE_UNCHECKED` note at the same place, with
     `path` and `params { service, target, reason, condition }` (`reason: "cached"` under the cached
-    tier without a kept answer, else `unsupported`, `unreachable`, `timeout`), or the
+    tier without a kept answer, else `unsupported`, `unreachable`, `timeout`, `budget`), or the
     `EXPLAIN_LIMIT` note of the limit that left it out (once per limit and service, and once more
     with `filter` for each entry of the request's `filter` a left-out condition belongs to);
     `cache.complete` is then false and
@@ -951,9 +1140,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
     owner answer is kept, the cached answer is the answer a `check` gives, with the same `etag`.
 - **The validator.** `etag` is a hash of the request (but not of `remote`), of who asks (the
   organisation and the user) and of the answer as it is written, less what differs between two
-  tellings of one answer: the `etag` itself and what each owner cost this time (`owners[].ms`,
-  `calls`, `cached`). So it covers `valid`, every error, note, stage, alias, type, column and
-  catalog entry, what each owner answered (`owners[].answered`, `reason`, `engine`), the revisions and
+  tellings of one answer: the `etag` itself, what each owner cost this time (`owners[].ms`,
+  `calls`, `cached`), and the `engine` of an owner no check asked (what the host knew of it at that
+  moment, which the cached tier does not list). So it covers `valid`, every error, note, stage, alias, type, column and
+  catalog entry, what each owner answered (`owners[].answered`, `reason`, and its `engine` when it was asked), the revisions and
   `cache`: two answers that differ in anything a caller reads never share it, also when an owner
   answers differently under an unchanged revision (an addon defined at the owner, an owner that
   publishes no revision and was redeployed, an index created for `include: "indexes"`). One identity's
@@ -1224,6 +1414,56 @@ owning service, owners in parallel:
   `RESOLVE_UNAVAILABLE`). Listed by mistake, it is not reached: a run reports
   `RESOLVE_UNREACHABLE` (and refuses under `strict`) and explain notes the part `REMOTE_UNCHECKED`. There is no probe and no
   gate.
+- **Owners that are not configured.** When the host starts it checks every declared remote
+  reference against the services it knows (`IRemoteQueryClient.IsConfigured`, the `InternalHosts`
+  entries). A service without an entry is one error line under `OxQL.Startup`, whatever number of
+  reference paths need it (those are listed at debug level): the service, how many references
+  need it, the first of them, and the keys to add: `InternalHosts:<service>`, and
+  `InternalApiVersions:<service>` when the owner does not answer on API version `v1`. Whether the
+  host then refuses to start is `OxQL:Startup:StrictRemoteReferences` (`OxQLEndpointOptions.StrictRemoteReferences`
+  in code wins over it): `true` in every environment, `false` in none; unset, the host refuses in
+  `Development`, `Local` and under continuous integration, and elsewhere starts and reports the
+  service as `configured: false` on health. The owner need not run for this check; it reads the
+  configuration only.
+- **Owners that do not answer.** A host keeps one record of the owners whose last call failed
+  (`OwnerAvailability`, a singleton `AddOxQLCore` registers): a call no connection reached, a call
+  that got no answer although it had at least half of its ceiling (`ResolveTimeoutMs`, or
+  `ChainTimeoutMs` for a chain), and an owner whose host answered 404, 502, 503 or 504. For
+  `Cache:OwnerUnavailableTtlSeconds` such an owner is not called and not asked for its facts: its keys
+  are `owner_unanswered` at once, with the diagnostic of the call that failed (`RESOLVE_UNREACHABLE`,
+  or `RESOLVE_TIMEOUT` after a timeout, the same `params.reason` and `status`) and
+  `params.remembered: true`, a semi-join into it is refused at once, exactly as the failed call
+  answered, without the wait. When the time
+  is over nothing is remembered: every request asks the owner again, also those that arrive
+  together, so the queries one page sends side by side are all answered by an owner that is back
+  and none from memory; a call that fails starts the time again, and an answer ends
+  the record. Any other HTTP error (401, 413, 400, 500) is the owner's word on one request and is
+  not remembered, and neither is an answer the host's client could not read (it is
+  `RESOLVE_UNREACHABLE` for that request, and the next request asks the owner again). A caller
+  that gives up while an owner is being asked leaves no record either. The health probe writes the same record: an owner it measures as answering is
+  called again at once (a remembered missing route stays, since a health answer says nothing of the
+  internal route), and an owner it could make no connection to (refused, a name without an address,
+  a connect that timed out at the socket) is not called. A probe that ran out of its own time, was
+  answered `false` or got an HTTP error leaves the record as it is: the health route is not the
+  route a join calls, so only a join's own call says that one fails. A request whose own time was
+  nearly spent when it called says nothing of the owner and leaves no record.
+- **An owner without the query route.** A call answered with HTTP 404 means that the owner does
+  not serve the internal query route under the configured API version. A caller reads only that
+  the owner did not answer on its query route (`RESOLVE_UNREACHABLE`, or a semi-join's
+  `RESOLVE_UNAVAILABLE`, with `params.reason: "route"` and `status: 404`). The host that made the
+  call writes a warning line (category `OxQL.Mongo.MongoQueryEngine`, `OxQL owner call found no
+  query route`) with the service, the API version it called and the request's correlation id, once
+  per call that went out, so at most once per `Cache:OwnerUnavailableTtlSeconds` and owner. There
+  are two likely causes. The owner's host does not map the route: its internal OxQL routes are
+  mapped by the base package, and a host that does not reference it in a version with those routes
+  has none. Or this host calls the owner under another API version than the owner serves:
+  `InternalApiVersions:<service>` names it and defaults to `v1`. Check that entry and the
+  `InternalHosts:<service>` address; the owner's `GET /oxql/health` under contract 2 says which
+  contract its engine speaks.
+- **What a page asks.** The keys a page needs are collected first, from its rows and less what the
+  cache holds; only owners with at least one key are asked for their facts and sent a query. A page
+  without rows, a page the cache answers, and a typed reference whose other case no row of the page
+  has cost no owner anything.
 - **Remote lookups** rank each key's children at the owner in the lookup's sort, then by record key;
   elements of one owning row that tie there come back in no guaranteed order (sort by an element
   member to fix it).

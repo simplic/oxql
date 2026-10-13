@@ -182,7 +182,7 @@ public class FiltersEOptionsTests
     {
         var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "eq": "DUP", "options": { "collation": "de" } } }""");
 
-        answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'collation' is not an option.");
+        answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'collation' is not an option; a condition's option is caseSensitive.");
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class FiltersEOptionsTests
     {
         var answer = await (await StaffClient()).MatchRawAsync(Corpus.Employee, """{ "matchCode": { "eq": "DUP", "options": 5 } }""");
 
-        answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'options' is not an option.");
+        answer.ShouldRefuseExactly("OPTION_NOT_APPLICABLE").Should().Be("'options' is an object of options: { \"caseSensitive\": true }.");
     }
 
     [Fact]

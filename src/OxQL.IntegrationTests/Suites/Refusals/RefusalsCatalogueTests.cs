@@ -62,6 +62,7 @@ public class RefusalsCatalogueTests
         ["FILTER_NOT_PLACEABLE"] = nameof(Filters.FilterPlacementTests.A_condition_that_cannot_be_placed_is_FILTER_NOT_PLACEABLE_and_names_its_entry_and_the_births_of_its_paths),
         ["MAX_FILTER_ENTRIES_EXCEEDED"] = nameof(Filters.FilterPlacementTests.A_filter_over_its_bounds_is_refused_once_before_anything_is_placed),
         ["VALUES_LIMIT_EXCEEDED"] = nameof(Values.ValuesTests.What_it_refuses_is_refused_before_anything_runs),
+        ["INVALID_REQUEST_BODY"] = nameof(Contract.ContractATests.A11_A12_A13_a_body_that_does_not_read_is_an_OxQL_refusal_under_contract_2),
     };
 
     /// <summary>Codes no request raises today, with the defect that says why.</summary>
@@ -102,9 +103,10 @@ public class RefusalsCatalogueTests
         // PAGE_INCOMPLETE with the diagnostics RESOLVE_MISSING, RESOLVE_AMBIGUOUS and RESOLVE_TRUNCATED, then
         // MAX_CONTINUED_STAGES_EXCEEDED, then EXPLAIN_LIMIT, then UNION_CARDINALITY_MISMATCH, then
         // INVALID_FILTER and FILTER_NOT_PLACEABLE, then VALUES_LIMIT_EXCEEDED with the diagnostic VALUES_SCAN_CAPPED,
-        // then (the bound on the filter's entries) MAX_FILTER_ENTRIES_EXCEEDED.
-        catalogue.Should().HaveCount(90);
-        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(76);
+        // then (the bound on the filter's entries) MAX_FILTER_ENTRIES_EXCEEDED, then (a body that does not read)
+        // INVALID_REQUEST_BODY.
+        catalogue.Should().HaveCount(91);
+        catalogue.Count(code => !DiagnosticCodes.Contains(code)).Should().Be(77);
         catalogue.Count(DiagnosticCodes.Contains).Should().Be(14);
     }
 

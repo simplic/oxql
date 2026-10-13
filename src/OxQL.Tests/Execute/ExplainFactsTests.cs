@@ -47,7 +47,7 @@ public class ExplainFactsTests
         string Of(string basis) => string.Join(" ", Basis.OfCode.Where(pair => pair.Value == basis).Select(pair => pair.Key).Order(StringComparer.Ordinal));
 
         Of(Basis.Request).Should().Be("EMPTY_LOGICAL_GROUP FILTER_NOT_PLACEABLE INVALID_ALIAS INVALID_DATE_TRUNC_UNIT INVALID_FILTER INVALID_PAGE_LIMIT INVALID_PATH INVALID_REGEX "
-            + "INVALID_SORT_DIRECTION INVALID_TIMEZONE INVALID_VARIABLE LEGACY_STAGE_UNSUPPORTED MIXED_PROJECTION MULTIPLE_PAGE_STAGES OPERAND_NOT_ARRAY STAGE_AFTER_PAGE "
+            + "INVALID_REQUEST_BODY INVALID_SORT_DIRECTION INVALID_TIMEZONE INVALID_VARIABLE LEGACY_STAGE_UNSUPPORTED MIXED_PROJECTION MULTIPLE_PAGE_STAGES OPERAND_NOT_ARRAY STAGE_AFTER_PAGE "
             + "UNBOUND_VARIABLE UNKNOWN_AGG_FUNCTION UNKNOWN_OPERATOR UNKNOWN_REQUEST_MEMBER UNKNOWN_STAGE UNKNOWN_STAGE_MEMBER");
         Of(Basis.Model).Should().Be("ALIAS_COLLISION ANY_NOT_APPLICABLE DECIMAL_TEXT_NOT_ORDERABLE FLATTEN_NOT_RECURSIVE GROUP_ON_COLLECTION INVALID_AGGREGATE_ARGUMENT INVALID_OPERAND "
             + "LOOKUP_NOT_DECLARED LOOKUP_ON_NOT_ENTITY NOT_A_COLLECTION NOT_CONTINUABLE NOT_FILTERABLE NOT_SORTABLE NOT_STORED OPTION_NOT_APPLICABLE RESOLVE_NOT_DECLARED "
@@ -63,7 +63,8 @@ public class ExplainFactsTests
         Of(Basis.Organisation).Should().BeEmpty("a code is the organisation's only by its path: one under an addon bag");
         Basis.OfNote.Where(pair => pair.Value == Basis.Owner).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.RemoteUnchecked, Notes.ExplainLimit, Notes.ExplainTrimmed]);
         Basis.OfNote.Where(pair => pair.Value == Basis.Data).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.SemiJoinNotByKey], "what only an owner's rows decide");
-        Basis.OfNote.Where(pair => pair.Value is not (Basis.Owner or Basis.Data)).Should().OnlyContain(pair => pair.Value == Basis.Advisory);
+        Basis.OfNote.Where(pair => pair.Value == Basis.Model).Select(pair => pair.Key).Should().BeEquivalentTo([Notes.ReferenceTargetUnknown], "the host's model declares a target the owner's does not have");
+        Basis.OfNote.Where(pair => pair.Value is not (Basis.Owner or Basis.Data or Basis.Model)).Should().OnlyContain(pair => pair.Value == Basis.Advisory);
     }
 
     [Fact]

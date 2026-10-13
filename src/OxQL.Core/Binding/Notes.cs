@@ -146,6 +146,14 @@ public static class Notes
     /// </summary>
     public const string ValuesScans = "VALUES_SCANS";
 
+    /// <summary>
+    /// A join's target is an entity its owner does not publish: the host checked its declared remote
+    /// references against the owner's schema document (<c>RemoteReferenceValidator</c>) and the id
+    /// is not in it (params <c>service</c>, <c>target</c>, <c>revision</c>: the document's). Said at
+    /// the join's stage; the declaration has to change, or the owner has to publish the entity.
+    /// </summary>
+    public const string ReferenceTargetUnknown = "REFERENCE_TARGET_UNKNOWN";
+
     /// <summary>Every note code, in a fixed order; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -153,6 +161,7 @@ public static class Notes
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
         PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans, ValuesScans,
+        ReferenceTargetUnknown,
     ];
 
     /// <summary>The outcomes that lose data, in the table's order.</summary>

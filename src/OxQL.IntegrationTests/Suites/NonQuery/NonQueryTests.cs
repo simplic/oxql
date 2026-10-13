@@ -154,7 +154,11 @@ public class NonQueryTests
             // the report limits
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
-            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
+            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds, 
+            // what a host remembers of an owner that failed, which the fleet's hosts switch off for the suites
+            ["ownerUnavailableTtlSeconds"] = 0,
+            // where the count beside a page ends, and the time a count has and may ask for
+            ["countStepRows"] = options.Count.EffectiveStepRows, ["countBudgetMs"] = options.Count.EffectiveBudgetMs, ["countMaxBudgetMs"] = options.Count.EffectiveMaxBudgetMs,
             ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["explainTimeoutMs"] = options.Explain.TimeoutMs,
             // the explain protection bounds, refused before anything is bound
             ["explainMaxRequestBytes"] = Math.Min(defaults.MaxRequestBytes, options.Explain.MaxRequestBytes), ["explainMaxStages"] = options.Explain.MaxStages,
@@ -169,7 +173,7 @@ public class NonQueryTests
             // the bounds of a values stage
             ["maxValuesLimit"] = defaults.MaxValuesLimit, ["valuesScanRows"] = options.Values.ScanRows, ["valuesDefaultLimit"] = options.Values.DefaultLimit,
         };
-        expected.Should().HaveCount(48);
+        expected.Should().HaveCount(52);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();
@@ -206,6 +210,57 @@ public class NonQueryTests
         RemoteServicesOf(LabService.Ledger).Should().Equal(["directory", "staff", "transport"]);
         RemoteServicesOf(LabService.Conformance).Should().Equal(["owner", "staff"]);
         RemoteServicesOf(LabService.Staff).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Y13_every_remote_reference_the_fleet_declares_names_an_entity_its_owner_publishes()
+    {
+        // Each host's declared references, checked against the owners' own models as a host checks them
+        // against the owners' schema documents. The check is the case's own, on its own clock: the
+        // hosts' checks do not read schemas in a fleet (InMemoryRemoteClient.ReadsSchemas).
+        foreach (var service in LabService.All)
+        {
+            var host = await (await Lab.ClientAsync(service)).HostAsync();
+            var model = host.Services.GetRequiredService<OxQL.Core.Engine.IEntityModelProvider>().Model;
+            var remote = (InMemoryRemoteClient)host.Services.GetRequiredService<OxQL.Core.Engine.IRemoteQueryClient>();
+            var reading = new InMemoryRemoteClient((await CorpusFleet.SharedAsync()).Fleet, host.Services.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>()) { ReadsSchemas = true };
+            var validator = new OxQL.Core.Engine.RemoteReferenceValidator { ReadTimeout = TimeSpan.FromSeconds(60) };
+
+            validator.State(model, reading);
+            await validator.Refreshing;
+
+            var states = validator.State(model, reading);
+
+            states.Select(state => state.Service).Should().Equal(RemoteServicesOf(service), service.Key);
+
+            foreach (var state in states)
+            {
+                // The fleet has a host for each of its services; what it only names (an owner served by a handler, a service without a server) publishes no document.
+                var served = LabService.All.Any(owner => owner.Key == state.Service);
+
+                state.Validated.Should().Be(served, $"{service.Key} -> {state.Service}");
+                state.UnknownTargets.Should().BeEmpty($"{service.Key} -> {state.Service}: a declared target its owner does not publish is refused when a join runs");
+
+                if (!served)
+                    state.Reason.Should().Be(OxQL.Core.Engine.RemoteReferenceValidation.Unavailable);
+            }
+
+            // On the host itself the references are listed and not validated: nothing is read, nothing degrades.
+            await (await Lab.ClientAsync(service)).HealthAsync();
+            await host.Services.GetRequiredService<RemoteHealthProbe>().Refreshing;
+            await host.Services.GetRequiredService<OxQL.Core.Engine.RemoteReferenceValidator>().Refreshing;
+
+            var health = await (await Lab.ClientAsync(service)).HealthAsync();
+
+            remote.ReadsSchemas.Should().BeFalse();
+            health.Body!["remote"]!.AsArray().Should().AllSatisfy(entry =>
+            {
+                entry!["references"]!["validated"]!.GetValue<bool>().Should().BeFalse();
+                entry["references"]!["declared"]!.GetValue<int>().Should().BePositive();
+                entry["references"]!["unknownTargets"]!.AsArray().Should().BeEmpty();
+            });
+            health.Body!["status"]!.GetValue<string>().Should().Be("healthy");
+        }
     }
 
     [Fact]

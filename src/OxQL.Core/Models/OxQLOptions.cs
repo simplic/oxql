@@ -36,6 +36,9 @@ public sealed class OxQLOptions
     /// <summary>Cursor signing.</summary>
     public CursorOptions Cursor { get; set; } = new();
 
+    /// <summary>What the host checks when it starts.</summary>
+    public StartupOptions Startup { get; set; } = new();
+
     /// <inheritdoc cref="LimitOptions.MaxPageSize"/>
     public int MaxPageSize { get => Limits.MaxPageSize; set => Limits.MaxPageSize = value; }
 
@@ -496,6 +499,18 @@ public sealed class ExecutionOptions
     /// <summary><c>maxTimeMS</c> on every aggregate; a timeout is 504 <c>QUERY_TIMEOUT</c>.</summary>
     public int MaxTimeMs { get; set; } = 10_000;
 
+    /// <summary>
+    /// How long after an aggregate's time limit this host still waits for the database to answer
+    /// before it gives the aggregate up and answers 504 <c>QUERY_TIMEOUT</c> itself, in
+    /// milliseconds. The database ends an aggregate at its limit and says so; this is the deadline
+    /// for the case in which nothing comes back. The deadline is wall-clock time on the host from
+    /// when the aggregate is handed to the driver, so the selection of a server, the wait for a
+    /// pooled connection and the transfer of the rows count against it while the database's limit
+    /// counts its own work only; the margin is the room for them. A value below zero switches the
+    /// deadline off; the database keeps to its limit either way.
+    /// </summary>
+    public int ClientDeadlineMarginMs { get; set; } = 5_000;
+
     /// <summary>The budget of one remote resolve call.</summary>
     public int ResolveTimeoutMs { get; set; } = 2_000;
 
@@ -621,6 +636,28 @@ public sealed class CacheOptions
     /// endpoint is asked. Freshness is worth less here than the endpoint staying cheap.
     /// </summary>
     public int HealthProbeTtlSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// How long an owner that did not answer is not called again (<c>OwnerAvailability</c>): after
+    /// a call that reached nobody, ran out of its budget, or found no internal query route (HTTP 404)
+    /// at the owner's host. Until then a request that needs the owner gets the answer of a failed call
+    /// at once (the alias <c>null</c> with that call's <c>RESOLVE_UNREACHABLE</c> or <c>RESOLVE_TIMEOUT</c>, a semi-join refused) instead of
+    /// waiting for the call's budget again; afterwards the owner is called again. 0 remembers nothing.
+    /// </summary>
+    public int OwnerUnavailableTtlSeconds { get; set; } = 5;
+}
+
+/// <summary>The checks a host runs when it starts.</summary>
+public sealed class StartupOptions
+{
+    /// <summary>
+    /// Whether a declared remote reference whose owning service is not configured on the host
+    /// (no <c>InternalHosts</c> entry) stops the host from starting: <c>true</c> stops it in every
+    /// environment, <c>false</c> in none (the finding is logged as an error and health lists the
+    /// service as not configured either way), unset leaves the rule by environment: it stops in
+    /// <c>Development</c>, <c>Local</c> and under continuous integration.
+    /// </summary>
+    public bool? StrictRemoteReferences { get; set; }
 }
 
 /// <summary>Cursor signing.</summary>

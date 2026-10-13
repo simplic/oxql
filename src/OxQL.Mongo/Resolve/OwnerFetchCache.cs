@@ -77,7 +77,7 @@ internal sealed record OwnerAnswer(IReadOnlyList<JsonObject> Rows, bool Excluded
 /// reading it, or a request that asks without it, does not renew it, so within one TTL the owner is
 /// asked for the path again and a member it has gained since is found. Where the owner's schema
 /// revision is known (<see cref="Revise"/>: an explain answer names it), what was learned of another
-/// revision is not read at all.
+/// revision is not read at all; what was learned before any was named counts as learned of the first.
 /// </para>
 /// <para>
 /// Entries are keyed by organisation, not by user: the cache assumes an owner answers every user of
@@ -95,6 +95,7 @@ public sealed class OwnerFetchCache : IDisposable
     private readonly TimeSpan negativeTtl;
     private readonly TimeProvider time;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> revisions = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> firstRevisions = new(StringComparer.Ordinal);
     private readonly object dropsGate = new();
 
     /// <summary>An empty cache sized and timed by <paramref name="options"/>' <c>Cache</c> section; <paramref name="time"/> is the clock by-keys answers expire by.</summary>
@@ -277,20 +278,33 @@ public sealed class OwnerFetchCache : IDisposable
 
     /// <summary>
     /// Takes the revision of <paramref name="service"/>'s schema document as an answer of it named it.
-    /// What was learned a target of the service lacks under another revision, or before any was known,
-    /// is not read any more: the next request asks the owner for those paths again.
+    /// What was learned a target of the service lacks under another revision is not read any more: the
+    /// next request asks the owner for those paths again. What was learned before any revision of the
+    /// service was named (a run names none) is taken to be of the first one named, so that it stays
+    /// known when an explain first names the owner's revision, and goes with it when another follows.
     /// </summary>
     internal void Revise(string service, string revision)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(revision);
 
+        firstRevisions.TryAdd(service, revision);
         revisions[service] = revision;
     }
 
-    /// <summary>Whether what is kept was learned of the revision of its service's schema known now (or none is known).</summary>
-    private bool Current(string key, Drops kept) =>
-        !revisions.TryGetValue(ServiceOfDrops(key), out var known) || known == kept.Revision;
+    /// <summary>
+    /// Whether what is kept was learned of the revision of its service's schema known now (or none is
+    /// known): kept under that revision, or kept before any was named while the first one named still holds.
+    /// </summary>
+    private bool Current(string key, Drops kept)
+    {
+        var service = ServiceOfDrops(key);
+
+        if (!revisions.TryGetValue(service, out var known) || known == kept.Revision)
+            return true;
+
+        return kept.Revision is null && firstRevisions.TryGetValue(service, out var first) && first == known;
+    }
 
     /// <summary>The service of a drops key (<see cref="DropsKeyOf"/>: its third segment).</summary>
     private static string ServiceOfDrops(string key) => key.Split('|') is { Length: >= 3 } parts ? parts[2] : "";

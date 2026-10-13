@@ -108,7 +108,7 @@ public sealed class OperandCoercer
                 if (path.IsRemote)
                     return new BoundOperand.Raw(element);
 
-                errors.Add(Error(Codes.InvalidOperand, $"'{path.Wire}' expects {Expected(path)}, not an object.", stage, path.Wire));
+                errors.Add(Operand($"'{path.Wire}' expects {Expected(path)}, not an object.", stage, path, op, Kinds.NameOf(path.LeafKind), element));
                 return null;
             }
 
@@ -136,7 +136,7 @@ public sealed class OperandCoercer
                 if (element.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     return new BoundOperand.Single(BsonBoolean.Create(element.ValueKind == JsonValueKind.True));
 
-                errors.Add(Error(Codes.InvalidOperand, $"'exists' takes a boolean.", stage, path.Wire));
+                errors.Add(Operand("'exists' takes a boolean.", stage, path, op, "boolean", element));
                 return null;
 
             case "in":
@@ -192,7 +192,7 @@ public sealed class OperandCoercer
             case "regex":
                 if (element.ValueKind != JsonValueKind.String)
                 {
-                    errors.Add(Error(Codes.InvalidOperand, "'regex' takes a pattern string.", stage, path.Wire));
+                    errors.Add(Operand("'regex' takes a pattern string.", stage, path, op, "string", element));
                     return null;
                 }
 
@@ -201,7 +201,13 @@ public sealed class OperandCoercer
 
                 if (check is { } failure)
                 {
-                    errors.Add(Error(failure.Code, failure.Message, stage, path.Wire));
+                    // A pattern over the host's length carries the limit, as every limit a request can meet does.
+                    errors.Add(Error(failure.Code, failure.Message, stage, path.Wire) with
+                    {
+                        Params = contract2 && failure.Code == Codes.RegexTooLong && pattern.Length > options.Limits.RegexMaxLength
+                            ? new Dictionary<string, object?> { ["limit"] = "regexMaxLength", ["max"] = options.Limits.RegexMaxLength, ["count"] = pattern.Length }
+                            : null,
+                    });
                     return null;
                 }
 
@@ -212,7 +218,7 @@ public sealed class OperandCoercer
             case "endsWith":
                 if (element.ValueKind != JsonValueKind.String)
                 {
-                    errors.Add(Error(Codes.InvalidOperand, $"'{op}' takes a string.", stage, path.Wire));
+                    errors.Add(Operand($"'{op}' takes a string.", stage, path, op, "string", element));
                     return null;
                 }
 
@@ -224,13 +230,13 @@ public sealed class OperandCoercer
             if (op is "eq" or "neq")
                 return BoundOperand.NullValue;
 
-            errors.Add(Error(Codes.InvalidOperand, $"'{op}' does not take null.", stage, path.Wire));
+            errors.Add(Operand($"'{op}' does not take null.", stage, path, op, Kinds.NameOf(kind), element));
             return null;
         }
 
         if (element.ValueKind == JsonValueKind.Array)
         {
-            errors.Add(Error(Codes.InvalidOperand, $"'{path.Wire}' expects {Expected(path)}, not an array; use 'in' for a set.", stage, path.Wire));
+            errors.Add(Operand($"'{path.Wire}' expects {Expected(path)}, not an array; use 'in' for a set.", stage, path, op, Kinds.NameOf(kind), element));
             return null;
         }
 
@@ -322,7 +328,7 @@ public sealed class OperandCoercer
             names.AddRange(element.EnumerateArray().Select(item => item.GetString()!));
         else
         {
-            errors.Add(Error(Codes.InvalidOperand, "'is' takes a variant name or a non-empty array of variant names.", stage, path.Wire));
+            errors.Add(Operand("'is' takes a variant name or a non-empty array of variant names.", stage, path, "is", "string", element));
             return null;
         }
 
@@ -349,7 +355,10 @@ public sealed class OperandCoercer
                 if (baseName is not null)
                     known = known.Prepend(baseName);
 
-                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{path.Wire}'; its variants are {string.Join(", ", known)}.", stage, path.Wire));
+                errors.Add(Error(Codes.UnknownVariant, $"'{name}' is not a variant of '{path.Wire}'; its variants are {string.Join(", ", known)}.", stage, path.Wire) with
+                {
+                    Params = contract2 ? new Dictionary<string, object?> { ["path"] = path.Wire, ["variant"] = name, ["variants"] = known.ToList() } : null,
+                });
                 failed = true;
                 continue;
             }
@@ -597,7 +606,10 @@ public sealed class OperandCoercer
                     return addon ? [midnight, new BsonString(element.GetString()!)] : [midnight];
                 }
 
-                failure = "a date as YYYY-MM-DD";
+                // Written as a date and no day of the calendar (a 30th of February) is said as that.
+                failure = element.ValueKind == JsonValueKind.String && IsDateShaped(element.GetString()!)
+                    ? $"a day of the calendar; '{element.GetString()}' is written as a date and names none"
+                    : "a date as YYYY-MM-DD";
                 break;
 
             case Kind.DateTime:
@@ -608,7 +620,9 @@ public sealed class OperandCoercer
                     return addon ? [stored, new BsonString(element.GetString()!)] : [stored];
                 }
 
-                failure = "an ISO-8601 date-time with 'Z' or an offset";
+                failure = element.ValueKind == JsonValueKind.String && HasExplicitOffset(element.GetString()!) && IsDateShaped(element.GetString()![..10])
+                    ? $"a date and time that exist; '{element.GetString()}' is written as an ISO-8601 date-time and names no day of the calendar or no time of day"
+                    : "an ISO-8601 date-time with 'Z' or an offset";
                 break;
 
             case Kind.TimeSpan:
@@ -636,14 +650,14 @@ public sealed class OperandCoercer
 
                     if (byValue is null)
                     {
-                        errors.Add(Error(Codes.UnknownEnumMember, $"'{number}' is not a member of the enum at '{label}'.", stage, path.Wire));
+                        errors.Add(NoMember($"'{number}' is not a member of the enum at '{label}'.", stage, path, op, number, type?.EnumValues.Select(value => value.Name)));
                         return null;
                     }
 
                     if (representation.BsonType == BsonType.String)
                         return [new BsonString(byValue.Name)];
 
-                    return Enumeral(byValue.Value, representation, path, stage, errors, label);
+                    return Enumeral(byValue.Value, representation, path, op, stage, errors, label, element);
                 }
 
                 if (element.ValueKind == JsonValueKind.String)
@@ -653,14 +667,14 @@ public sealed class OperandCoercer
 
                     if (member is null)
                     {
-                        errors.Add(Error(Codes.UnknownEnumMember, $"'{name}' is not a member of the enum at '{label}'.", stage, path.Wire));
+                        errors.Add(NoMember($"'{name}' is not a member of the enum at '{label}'.", stage, path, op, name, type?.EnumValues.Select(value => value.Name)));
                         return null;
                     }
 
                     if (representation.BsonType == BsonType.String)
                         return [new BsonString(member.Name)];
 
-                    return Enumeral(member.Value, representation, path, stage, errors, label);
+                    return Enumeral(member.Value, representation, path, op, stage, errors, label, element);
                 }
 
                 failure = "an enum member name or number";
@@ -687,9 +701,13 @@ public sealed class OperandCoercer
                 break;
         }
 
-        errors.Add(Error(Codes.InvalidOperand, $"'{label}' expects {failure ?? Expected(path)}.", stage, path.Wire));
+        errors.Add(Operand($"'{label}' expects {failure ?? Expected(path)}.", stage, path, op, Kinds.NameOf(kind), element));
         return null;
     }
+
+    /// <summary>Whether a text is written as a date: four digits, two and two, with hyphens between.</summary>
+    private static bool IsDateShaped(string text) =>
+        text.Length == 10 && text[4] == '-' && text[7] == '-' && text.Where((_, index) => index is not (4 or 7)).All(char.IsAsciiDigit);
 
     /// <summary>
     /// The alternatives a decimal operand is compared against.
@@ -763,18 +781,20 @@ public sealed class OperandCoercer
     /// value outside <c>Int32</c> under an <c>Int32</c> representation is checked here and
     /// refused, the way a value above <c>long.MaxValue</c> is refused one parse earlier.
     /// </summary>
-    private static IReadOnlyList<BsonValue>? Enumeral(long value, Representation representation, ResolvedPath path, int stage, List<QueryValidationError> errors, string label)
+    private IReadOnlyList<BsonValue>? Enumeral(long value, Representation representation, ResolvedPath path, string op, int stage, List<QueryValidationError> errors, string label, JsonElement written)
     {
         if (representation.BsonType == BsonType.Int64)
             return [new BsonInt64(value)];
 
         if (value is < int.MinValue or > int.MaxValue)
         {
-            errors.Add(Error(
-                Codes.InvalidOperand,
+            errors.Add(Operand(
                 $"'{value}' is outside the range the enum at '{label}' is stored in ({int.MinValue} to {int.MaxValue}).",
                 stage,
-                path.Wire));
+                path,
+                op,
+                Kinds.NameOf(Kind.Enum),
+                written));
 
             return null;
         }
@@ -787,7 +807,7 @@ public sealed class OperandCoercer
     /// <c>neq</c>, <c>in</c> and <c>nin</c>: a string as written, an integer by its digits.
     /// Anything else is <c>UNKNOWN_ENUM_MEMBER</c>, the same refusal an enum member off the list gets.
     /// </summary>
-    private static bool InClosedList(JsonElement element, ResolvedPath path, Kind kind, string op, int stage, List<QueryValidationError> errors, string label)
+    private bool InClosedList(JsonElement element, ResolvedPath path, Kind kind, string op, int stage, List<QueryValidationError> errors, string label)
     {
         if (path.Addon?.Values is not { Count: > 0 } allowed || !ClosedListOperators.Contains(op))
             return true;
@@ -801,11 +821,13 @@ public sealed class OperandCoercer
         if (written is not null && allowed.Any(value => string.Equals(value.Value, written, StringComparison.Ordinal)))
             return true;
 
-        errors.Add(Error(
-            Codes.UnknownEnumMember,
+        errors.Add(NoMember(
             $"'{written ?? element.GetRawText()}' is not one of the values defined for '{label}': {string.Join(", ", allowed.Select(value => value.Value))}.",
             stage,
-            path.Wire));
+            path,
+            op,
+            written ?? element.GetRawText(),
+            allowed.Select(value => value.Value)));
 
         return false;
     }
@@ -921,4 +943,34 @@ public sealed class OperandCoercer
 
     private static QueryValidationError Error(string code, string message, int stage, string? path) =>
         new() { Code = code, Message = message, Stage = stage, Path = path };
+
+    /// <summary>
+    /// An operand of another kind than the member or the operator takes. Under contract 2 it carries
+    /// what a client renders it from: the path, the operator, the kind the place takes (a kind of
+    /// the schema: <c>string</c>, <c>int</c>, <c>dateTime</c>, <c>enum</c>; <c>boolean</c> for
+    /// <c>exists</c>) and the JSON kind that was written.
+    /// </summary>
+    private QueryValidationError Operand(string message, int stage, ResolvedPath path, string op, string expected, JsonElement actual) =>
+        Error(Codes.InvalidOperand, message, stage, path.Wire) with
+        {
+            Params = contract2 ? new Dictionary<string, object?> { ["path"] = path.Wire, ["operator"] = op, ["expected"] = expected, ["actual"] = JsonKind(actual) } : null,
+        };
+
+    /// <summary>A value that is none of a closed list: an enum's members, or the values an organisation defined for an addon key. Under contract 2 it carries the list.</summary>
+    private QueryValidationError NoMember(string message, int stage, ResolvedPath path, string op, object value, IEnumerable<string>? values) =>
+        Error(Codes.UnknownEnumMember, message, stage, path.Wire) with
+        {
+            Params = contract2 ? new Dictionary<string, object?> { ["path"] = path.Wire, ["operator"] = op, ["value"] = value, ["values"] = (values ?? []).ToList() } : null,
+        };
+
+    /// <summary>The JSON kind of a written value, as an error names it.</summary>
+    internal static string JsonKind(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Object => "object",
+        JsonValueKind.Array => "array",
+        JsonValueKind.String => "string",
+        JsonValueKind.Number => "number",
+        JsonValueKind.True or JsonValueKind.False => "boolean",
+        _ => "null",
+    };
 }

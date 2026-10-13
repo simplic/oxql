@@ -49,6 +49,15 @@ public static class Codes
     /// <summary>A contract 2 request carries a top-level member a request does not have.</summary>
     public const string UnknownRequestMember = "UNKNOWN_REQUEST_MEMBER";
 
+    /// <summary>
+    /// A contract 2 request body that cannot be read into a request: no JSON, empty, a member of
+    /// another JSON kind than the member takes, or a required member that is missing.
+    /// <c>params.reason</c> is <c>json</c> (with <c>line</c> and <c>position</c>), <c>empty</c>,
+    /// <c>depth</c> (with <c>max</c>), <c>kind</c> (with <c>expected</c> and <c>actual</c>) or
+    /// <c>missing</c>; <c>params.path</c> names the place in the body as a JSON path.
+    /// </summary>
+    public const string InvalidRequestBody = "INVALID_REQUEST_BODY";
+
     // stage
     public const string UnknownStage = "UNKNOWN_STAGE";
     public const string UnknownStageMember = "UNKNOWN_STAGE_MEMBER";

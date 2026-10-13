@@ -1,5 +1,6 @@
 using System.Net;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OxQL.AspNetCore.Resolve;
 using OxQL.Core.Engine;
@@ -68,6 +69,139 @@ public class HostHardeningStrictStartupTests
     {
         RemoteReferenceCheck.ReadContinuousIntegration(ci, tfBuild).Should().Be(expected);
         RemoteReferenceCheck.IsStrict("Production", RemoteReferenceCheck.ReadContinuousIntegration(ci, tfBuild)).Should().Be(expected);
+    }
+
+    // ---- one line per service ------------------------------------------------------------------
+
+    [Fact]
+    public void The_findings_are_said_once_per_service_with_the_configuration_to_add()
+    {
+        RemoteReference[] findings =
+        [
+            new("transport.tour", "driver.id", "staff.employee"),
+            new("transport.tour", "codriver.id", "staff.employee"),
+            new("transport.shipment", "vehicleId", "fleet.vehicle"),
+            new("transport.tour", "resource.id", "staff.employee"),
+        ];
+
+        var lines = RemoteReferenceCheck.DescribeByService(findings);
+
+        lines.Should().HaveCount(2, "a line per service, not per reference path");
+        lines[1].Should().StartWith("service 'staff' is not configured on this host: 3 declared references need it ('transport.tour#driver.id' -> 'staff.employee' and 2 more)")
+            .And.Contain("InternalHosts:staff").And.Contain("""  "InternalHosts": { "staff": "<host:port>" }  """.Trim())
+            .And.Contain("when the owner does not answer on API version v1, also InternalApiVersions:staff").And.Contain("""  "InternalApiVersions": { "staff": "<version>" }  """.Trim());
+        lines[0].Should().StartWith("service 'fleet' is not configured on this host: 1 declared reference needs it ('transport.shipment#vehicleId' -> 'fleet.vehicle')")
+            .And.Contain("InternalHosts:fleet").And.Contain("InternalApiVersions:fleet");
+    }
+
+    [Fact]
+    public async Task A_host_logs_one_error_per_service_and_the_reference_paths_at_debug()
+    {
+        using var host = new SampleHost(configure: services =>
+        {
+            services.AddSingleton<IRemoteQueryClient>(new FakeRemoteClient { Configured = [] });
+            services.Configure<Microsoft.Extensions.Logging.LoggerFilterOptions>(filter => filter.Rules.Add(new Microsoft.Extensions.Logging.LoggerFilterRule(null, "OxQL.Startup", Microsoft.Extensions.Logging.LogLevel.Debug, null)));
+        })
+        {
+            Model = OxQL.Tests.Bind.Fixtures.Resolve.ResolveModel.Model,
+            Environment = "Production",
+        };
+
+        (await host.CreateClient().GetAsync("/OxQL/health?shallow=true")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var startup = host.Logs.Entries.Where(entry => entry.Category == "OxQL.Startup").ToList();
+        var references = RemoteReferences.Of(host.Model);
+
+        references.Count.Should().BeGreaterThan(2, "the model declares more reference paths than services");
+        startup.Where(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Error).Select(entry => entry.Message).Should().SatisfyRespectively(
+            crm => crm.Should().Contain("service 'crm'").And.Contain("InternalHosts:crm"),
+            transport => transport.Should().Contain("service 'transport'").And.Contain("InternalHosts:transport"));
+        startup.Count(entry => entry.Level == Microsoft.Extensions.Logging.LogLevel.Debug && entry.Message.StartsWith("OxQL remote reference without a configured service", StringComparison.Ordinal))
+            .Should().Be(references.Count, "every reference path is still listed for whoever asks");
+    }
+
+    // ---- strictness the host states ----------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Development")]
+    [InlineData("Local")]
+    public async Task A_host_whose_configuration_says_not_strict_starts_in_a_strict_environment_and_still_logs_the_finding(string environment)
+    {
+        using var host = new SampleHost(options => options.Startup.StrictRemoteReferences = false, services => services.AddSingleton<IRemoteQueryClient>(new FakeRemoteClient { Configured = ["vehicle"] }))
+        {
+            Environment = environment,
+            ContinuousIntegration = true,
+        };
+
+        var response = await host.Client().GetAsync("/OxQL/health");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.Logs.Entries.Should().ContainSingle(entry => entry.Category == "OxQL.Startup" && entry.Level == Microsoft.Extensions.Logging.LogLevel.Error)
+            .Which.Message.Should().Contain("service 'crm'");
+        host.Logs.Entries.Should().NotContain(entry => entry.Category == "OxQL.Startup" && entry.Level == Microsoft.Extensions.Logging.LogLevel.Critical);
+
+        var crm = (await SampleHost.Body(response))!["remote"]!.AsArray().Single(entry => entry!["service"]!.GetValue<string>() == "crm")!;
+
+        crm["configured"]!.GetValue<bool>().Should().BeFalse("health keeps saying what is missing");
+    }
+
+    [Fact]
+    public void A_host_whose_configuration_says_strict_refuses_to_start_in_production()
+    {
+        using var host = new SampleHost(options => options.Startup.StrictRemoteReferences = true, services => services.AddSingleton<IRemoteQueryClient>(new FakeRemoteClient { Configured = ["vehicle"] }))
+        {
+            Environment = "Production",
+        };
+
+        var act = () => host.CreateClient();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*service 'crm'*InternalHosts:crm*OxQL:Startup:StrictRemoteReferences*");
+    }
+
+    [Fact]
+    public async Task What_the_host_sets_in_code_wins_over_its_configuration()
+    {
+        using var host = new SampleHost(options => options.Startup.StrictRemoteReferences = true, services =>
+        {
+            services.AddSingleton<IRemoteQueryClient>(new FakeRemoteClient { Configured = ["vehicle"] });
+            services.PostConfigure<OxQL.AspNetCore.OxQLEndpointOptions>(endpoint => endpoint.StrictRemoteReferences = false);
+        })
+        {
+            Environment = "Development",
+        };
+
+        (await host.CreateClient().GetAsync("/OxQL/health?shallow=true")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public void The_option_is_bound_from_the_configuration_section()
+    {
+        static bool? Bound(string? value)
+        {
+            var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["OxQL:Cursor:SigningKey"] = "test-signing-key", ["OxQL:Startup:StrictRemoteReferences"] = value })
+                .Build();
+            var services = new ServiceCollection();
+
+            OxQL.Core.ServiceCollectionExtensions.AddOxQLCore(services, configuration.GetSection("OxQL"));
+
+            return services.BuildServiceProvider().GetRequiredService<OxQL.Core.Models.OxQLOptions>().Startup.StrictRemoteReferences;
+        }
+
+        Bound("false").Should().BeFalse();
+        Bound("true").Should().BeTrue();
+        Bound(null).Should().BeNull("unset leaves the rule by environment");
+    }
+
+    [Fact]
+    public void An_explicit_choice_decides_and_none_leaves_the_environment()
+    {
+        RemoteReferenceCheck.IsStrict(endpoint: null, configured: null, "Development", continuousIntegration: false).Should().BeTrue();
+        RemoteReferenceCheck.IsStrict(endpoint: null, configured: null, "Production", continuousIntegration: false).Should().BeFalse();
+        RemoteReferenceCheck.IsStrict(endpoint: null, configured: false, "Development", continuousIntegration: true).Should().BeFalse();
+        RemoteReferenceCheck.IsStrict(endpoint: null, configured: true, "Production", continuousIntegration: false).Should().BeTrue();
+        RemoteReferenceCheck.IsStrict(endpoint: true, configured: false, "Production", continuousIntegration: false).Should().BeTrue();
+        RemoteReferenceCheck.IsStrict(endpoint: false, configured: true, "Development", continuousIntegration: true).Should().BeFalse();
     }
 
     [Fact]

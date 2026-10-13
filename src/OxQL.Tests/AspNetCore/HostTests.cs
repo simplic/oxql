@@ -109,6 +109,42 @@ public class HostTests
         lines[1].Should().Contain("firstLegacyPath=(null)").And.Contain("legacyPaths=0");
     }
 
+    [Fact]
+    public async Task A_contract_1_group_by_a_date_bucket_answered_by_the_rewrite_keeps_its_key_within_the_calendar()
+    {
+        const string group = """{ "entityType": "probe.order", "pipeline": [{ "group": { "by": [{ "dateTrunc": { "path": "CreateDateTime", "unit": "month" }, "as": "month" }], "fields": { "n": { "count": {} } } } }] }""";
+
+        using var rewritten = new SampleHost(options => options.Compat.Legacy.Enabled = false);
+
+        var response = await rewritten.Client(contract: null).PostAsync(Query, SampleHost.Json(group));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, (await SampleHost.Body(response))?.ToJsonString());
+
+        // The key is the bucket where it lies within the calendar, and the first or the last instant where it does not.
+        var key = BucketKey(rewritten);
+
+        key["$let"]["vars"]["bucket"].AsBsonDocument.Contains("$dateTrunc").Should().BeTrue();
+
+        var branches = key["$let"]["in"]["$switch"]["branches"].AsBsonArray;
+
+        branches.Select(branch => branch["then"]).Should().Equal(OxQL.Mongo.MongoCompiler.FirstInstant, OxQL.Mongo.MongoCompiler.LastInstant);
+        key["$let"]["in"]["$switch"]["default"].AsString.Should().Be("$$bucket");
+
+        // A contract 2 request for the same group is keyed the same.
+        using var second = new SampleHost();
+
+        (await second.Client(contract: 2).PostAsync(Query, SampleHost.Json(group.Replace("CreateDateTime", "createDateTime")))).StatusCode.Should().Be(HttpStatusCode.OK);
+        BucketKey(second).ToJson().Should().Be(key.ToJson());
+    }
+
+    /// <summary>The expression a host's one group keys its date bucket with, alone or among the keys.</summary>
+    private static BsonDocument BucketKey(SampleHost host)
+    {
+        var id = host.Runner.Calls.SelectMany(call => call.Stages).Single(stage => stage.Contains("$group"))["$group"]["_id"].AsBsonDocument;
+
+        return id.Contains("$let") ? id : id.Values.OfType<BsonDocument>().Single(value => value.Contains("$let"));
+    }
+
     // LEGACY(compat.v1): the three tests below are one again when the legacy pipeline goes (src/docs/LEGACY.md):
     // a v1 join under contract 1 is refused as a legacy stage.
     private const string V1Join = """{ "entityType": "probe.order", "pipeline": [{ "lookup": { "from": "customers", "localPath": "CustomerId", "foreignPath": "id", "as": "customer" } }] }""";
@@ -255,7 +291,7 @@ public class HostTests
         var current = (await SampleHost.Body(await host.Client(contract: 2).GetAsync("/OxQL/health")))!.AsObject();
 
         Names(current["capabilities"]).Should().Equal("explain", "compat.v1");
-        current["limits"]!.AsObject().Count.Should().Be(48);
+        current["limits"]!.AsObject().Count.Should().Be(52);
 
         // Always off: the rewrite answers a caller without the header first, and health lists what it does.
         using var rewrite = new SampleHost(options =>
@@ -266,7 +302,9 @@ public class HostTests
         var listed = (await SampleHost.Body(await rewrite.Client(contract: null).GetAsync("/OxQL/health")))!.AsObject();
 
         Names(listed["capabilities"]).Should().Equal("batch", "group.page", "page.offset", "any", "explain", "compat.v1");
-        listed["limits"]!.AsObject().Count.Should().Be(48);
+        listed["limits"]!.AsObject().Count.Should().Be(48, "a caller without the header reads the list it always read; what is added since is a contract 2 caller's");
+        listed["limits"]!.AsObject().ContainsKey("ownerUnavailableTtlSeconds").Should().BeFalse();
+        listed["limits"]!.AsObject().Select(limit => limit.Key).Should().NotContain(["countStepRows", "countBudgetMs", "countMaxBudgetMs"]);
         listed["limits"]!.AsObject().ContainsKey("maxOffset").Should().BeTrue();
 
         var named = (await SampleHost.Body(await rewrite.Client(contract: 2).GetAsync("/OxQL/health")))!.AsObject();
@@ -672,7 +710,12 @@ public class HostTests
         limits["valuesScanRows"]!.GetValue<int>().Should().Be(50_000);
         limits["valuesDefaultLimit"]!.GetValue<int>().Should().Be(100);
         limits["maxFilterEntries"]!.GetValue<int>().Should().Be(64);
-        limits.Count.Should().Be(48,"health publishes every limit the engine enforces, not only the ones the document carries");
+        limits["ownerUnavailableTtlSeconds"]!.GetValue<int>().Should().Be(5);
+        limits["countStepRows"]!.GetValue<int>().Should().Be(1_000, "the rows the count beside a page counts before it answers a lower bound");
+        limits["countBudgetMs"]!.GetValue<int>().Should().Be(500);
+        limits["countMaxBudgetMs"]!.GetValue<int>().Should().Be(5_000);
+        limits["countCap"]!.GetValue<int>().Should().Be(100_000);
+        limits.Count.Should().Be(52, "health publishes every limit the engine enforces, not only the ones the document carries");
         capabilities.Should().NotContain(["resolve.remote", "semiJoin", "resolve.chain"], "the Sample host installs no remote query client");
     }
 
@@ -798,8 +841,13 @@ public class HostTests
         var body = await SampleHost.Body(response);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "a batch answers per query");
-        body!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
+        body!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.InvalidRequestBody);
         body["results"]![0]!["type"]!.GetValue<string>().Should().Be("validation_error");
+
+        // A caller without the contract header reads the code it always read.
+        var legacy = await SampleHost.Body(await host.Client(contract: null).PostAsync("/OxQL/batch", SampleHost.Json("""{ "queries": [null] }""")));
+
+        legacy!["results"]![0]!["errors"]![0]!["code"]!.GetValue<string>().Should().Be(Codes.UnknownStage);
     }
 
     /// <summary>R5. A null pipeline element is a caller error too, not a fault.</summary>

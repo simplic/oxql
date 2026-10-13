@@ -212,12 +212,14 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     private readonly bool tables;
     private readonly bool docs;
     private readonly int? depth;
-    private readonly TimeSpan budget;
-    private readonly bool wallBound;
+    private readonly TimeSpan wall;
+    private readonly TimeSpan? given;
+    private readonly TimeSpan ownersBudget;
     private readonly int wallMs;
     private readonly int maxServices;
     private readonly int maxCalls;
-    private readonly Stopwatch clock = Stopwatch.StartNew();
+    private readonly Stopwatch wallClock = Stopwatch.StartNew();
+    private readonly Stopwatch ownersClock = new();
     private readonly List<ExplainOwnerUse> uses = [];
     private readonly List<Diagnostic> limitNotes = [];
     private readonly ExplainOwnerPool pool;
@@ -257,17 +259,20 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
         var options = context.Options.Explain;
         // Only an internal call carries a budget of its origin; a public one has its own.
         var given = context.Internal ? request.Budget : null;
-        var remote = TimeSpan.FromMilliseconds(Math.Max(1, options.RemoteTimeoutMs));
-        var wall = TimeSpan.FromMilliseconds(Math.Max(1, options.TimeoutMs)) - elapsed;
+        var left = TimeSpan.FromMilliseconds(Math.Max(1, options.TimeoutMs)) - elapsed;
 
-        if (given is not null && TimeSpan.FromMilliseconds(given.Ms) < wall)
-            wall = TimeSpan.FromMilliseconds(given.Ms);
-
-        wallBound = wall < remote;
-        budget = wallBound ? (wall > TimeSpan.Zero ? wall : TimeSpan.Zero) : remote;
-        wallMs = (int)Math.Min(int.MaxValue, budget.TotalMilliseconds);
-        // A nested explain whose outer one spent the budget asks no owner at all.
-        spent = budget == TimeSpan.Zero;
+        // Two bounds hold together. The explain's own wall time runs from here on, whatever the
+        // explain does with it: running out of it is a limit. The owners' time is the owners' budget,
+        // which runs from the first round an owner is asked in (binding, reading the owners' facts and
+        // placing the joins come before it and are not the owners' time), and under it what an origin
+        // gave this explain, which is that origin's owners' time and runs from here on.
+        wall = left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        this.given = given is null ? null : TimeSpan.FromMilliseconds(Math.Max(0, given.Ms));
+        ownersBudget = TimeSpan.FromMilliseconds(Math.Max(1, options.RemoteTimeoutMs));
+        wallMs = (int)Math.Min(int.MaxValue, wall.TotalMilliseconds);
+        // An explain whose own time is spent, and a nested one whose outer one spent the budget, ask no owner at all.
+        spentWall = wall == TimeSpan.Zero;
+        spent = spentWall || this.given == TimeSpan.Zero;
         maxServices = Math.Max(0, options.MaxOwnerServices);
         maxCalls = Math.Max(0, options.MaxOwnerCalls);
         // The explains that belong together share what is left of the calls; an explain alone has its own.
@@ -281,7 +286,23 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// keyed stage's continued stages) gets it for its own owners, so they cannot stretch the explain
     /// past its budget, while this host's own binding is still checked.
     /// </summary>
-    public TimeSpan Remaining => spent ? TimeSpan.Zero : budget - clock.Elapsed is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+    public TimeSpan Remaining => spent ? TimeSpan.Zero : Left().Time is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+
+    /// <summary>
+    /// What is left of the time an owner may be asked in, and whether what ends it is the explain's
+    /// own wall time (a limit) rather than the owners' time (an unchecked part).
+    /// </summary>
+    private (TimeSpan Time, bool ByWall) Left()
+    {
+        var elapsed = wallClock.Elapsed;
+        var ofWall = wall - elapsed;
+        var ofOwners = ownersBudget - ownersClock.Elapsed;
+
+        if (given is { } granted && granted - elapsed < ofOwners)
+            ofOwners = granted - elapsed;
+
+        return ofWall <= ofOwners ? (ofWall, true) : (ofOwners, false);
+    }
 
     /// <summary>The owner calls this explain may still cause.</summary>
     public int CallsLeft => pool.CallsLeft;
@@ -295,8 +316,21 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// <summary>The <c>reason</c> of a part whose owner's call failed.</summary>
     public const string Unreachable = "unreachable";
 
-    /// <summary>The <c>reason</c> of a part the remote budget ran out before.</summary>
+    /// <summary>The <c>reason</c> of a part whose owner was asked and did not answer within the owners' budget.</summary>
     public const string Timeout = "timeout";
+
+    /// <summary>
+    /// The <c>reason</c> of a part nothing was sent for: the owners' budget was spent by what was asked
+    /// before it (an earlier round, another owner). The owner was not asked, so nothing is said of
+    /// whether it answers.
+    /// </summary>
+    public const string Budget = "budget";
+
+    /// <summary>The <c>reason</c> of an owner no check asked and of which nothing is known: its health was not read, so whether it answers is not checked.</summary>
+    public const string Unknown = "unknown";
+
+    /// <summary>The <c>reason</c> of an owner no check asked whose health names no contract this engine can send a join to.</summary>
+    public const string Engine = "engine";
 
     /// <summary>The <c>reason</c> of a part an explain limit left out (<c>EXPLAIN_LIMIT</c>).</summary>
     public const string Limit = "limit";
@@ -374,6 +408,15 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// <summary>After <see cref="CheckAsync"/>: whether the owner of <paramref name="target"/> of the keyed stage creating <paramref name="alias"/> did not answer its check.</summary>
     public bool Unanswered(string alias, string target) => unanswered.Contains(alias + "\n" + target);
 
+    private readonly HashSet<string> considered = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether a round of this explain had something to ask <paramref name="service"/>: it was asked,
+    /// answered from what is kept, or left out by a limit or the cached tier, and the answer says which.
+    /// An owner no round considered was never a subject of the remote check.
+    /// </summary>
+    public bool Considered(string service) => considered.Contains(service);
+
     /// <summary>The owners this explain reached, in the order they were first asked; the ones reached through another owner after it.</summary>
     public IReadOnlyList<ExplainOwnerUse> Owners => uses;
 
@@ -384,6 +427,9 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// owner's own and those of the owners it asked. Null for a service that publishes none.
     /// </summary>
     public IReadOnlyDictionary<string, string?> Revisions => revisions;
+
+    /// <summary>Something the answer would say was not checked by an owner's answer: it is not complete.</summary>
+    public void Incomplete() => Complete = false;
 
     /// <summary>The <c>EXPLAIN_LIMIT</c> notes of the parts a limit left out.</summary>
     public IReadOnlyList<Diagnostic> LimitNotes => limitNotes;
@@ -620,11 +666,18 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
 
                 Remember(check, answer);
 
+                // What the owner refuses of the owner query as a whole (the target is no entity of its
+                // model, say) lies at no stage the caller wrote: it is the resolve's, as a run's refusal says it.
+                var ofWhole = new List<JsonObject>();
+                var mappedAny = false;
+
                 if (answer["errors"] is JsonArray owned)
                     foreach (var error in owned.OfType<JsonObject>())
                     {
                         if (check.Map(error) is { } mapped)
                         {
+                            mappedAny = true;
+
                             if (mapped.Stage is { } at && check.Bound is { } refusing)
                                 refusedAt.Add((at, refusing.Declared.Entity));
 
@@ -635,7 +688,28 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
                         {
                             own.Add(miss);
                         }
+                        else if (!each.Local && KeyedFetch.IsOfTheWholeQuery(error))
+                        {
+                            ofWhole.Add(error);
+                        }
                     }
+
+                if (ofWhole.Count > 0 && check.Bound is { } refused)
+                {
+                    var entity = refused.Declared.Entity;
+                    var said = ofWhole.Select(error => KeyedFetch.OfTheWholeQuery(error, check.Service, entity, check.Target, check.Stage)).ToList();
+                    var head = new QueryValidationError
+                    {
+                        Code = Codes.ResolveRefused,
+                        // Beside an error at a stage the caller wrote, the head is the run's plain one.
+                        Message = mappedAny ? $"The owner of '{entity}' refused the query." : KeyedFetch.RefusedAsAWhole(check.Service, entity, said[0].Code),
+                        Stage = check.Stage,
+                    };
+
+                    foreach (var error in new[] { head }.Concat(said))
+                        if (!errors.Any(other => other.Code == error.Code && other.Stage == error.Stage && other.Path == error.Path && other.Message == error.Message))
+                            errors.Add(error);
+                }
 
                 Said();
 
@@ -1075,6 +1149,14 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// </summary>
     private async Task<(JsonObject? Answer, string? Reason)[]> RoundAsync(IReadOnlyList<Ask> asks, int round, CancellationToken cancellationToken)
     {
+        // The owners' budget runs from the first round that asks anything.
+        if (asks.Count > 0 && !ownersClock.IsRunning)
+            ownersClock.Start();
+
+        foreach (var ask in asks)
+            if (ask.Service.Length > 0)
+                considered.Add(ask.Service);
+
         var results = new (JsonObject? Answer, string? Reason)[asks.Count];
         var keys = new string?[asks.Count];
         var open = new List<(string Service, List<int> Indexes)>();
@@ -1145,7 +1227,7 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
         // What may go out: within the time, the services and the calls an explain has, each service's
         // checks as one call. A limit leaves a part out and notes it; nothing is retried.
         var sending = new List<(ExplainOwnerUse Use, List<int> Indexes)>();
-        var remaining = budget - clock.Elapsed;
+        var (remaining, byWall) = Left();
 
         foreach (var (service, indexes) in open)
         {
@@ -1156,7 +1238,7 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
             // fire a hair before the elapsed time reaches the budget).
             if (spent || remaining <= TimeSpan.Zero)
             {
-                var late = OutOfTime(use ?? Use(service, null), service, head.Target, head.Stage, head.Filter);
+                var late = OutOfTime(use ?? Use(service, null), service, head.Target, head.Stage, spent ? spentWall : byWall, sent: false, head.Filter);
 
                 foreach (var index in indexes)
                     results[index] = late;
@@ -1223,8 +1305,8 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
                     failed = Limited(outcome.Failure == ExplainOwnerPool.NoCalls ? "ownerCalls" : "checks", outcome.Failure == ExplainOwnerPool.NoCalls ? maxCalls : maxChecks, use.Service, head.Target, head.Stage, filter: head.Filter);
                 else if (outcome.Failure == Timeout)
                 {
-                    Spend();
-                    failed = OutOfTime(use, use.Service, head.Target, head.Stage, head.Filter);
+                    Spend(byWall);
+                    failed = OutOfTime(use, use.Service, head.Target, head.Stage, byWall, sent: true, head.Filter);
                 }
                 else
                 {
@@ -1340,21 +1422,33 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
         }
     }
 
-    /// <summary>A part the time ran out before: the explain's own wall time is a limit, the owners' budget an unchecked part.</summary>
-    private (JsonObject? Answer, string? Reason) OutOfTime(ExplainOwnerUse use, string service, string target, int? stage, object? filter = null)
+    /// <summary>
+    /// A part the time ran out before. The explain's own wall time (<paramref name="byWall"/>) is a
+    /// limit; the owners' budget is an unchecked part, and says which: an owner that was
+    /// <paramref name="sent"/> the part and did not answer in time is <see cref="Timeout"/>, a part
+    /// nothing was sent for is <see cref="Budget"/>.
+    /// </summary>
+    private (JsonObject? Answer, string? Reason) OutOfTime(ExplainOwnerUse use, string service, string target, int? stage, bool byWall, bool sent, object? filter = null)
     {
         use.Answered ??= false;
 
-        if (!wallBound)
+        if (byWall)
+        {
+            use.Reason ??= Limit;
+
+            return Limited("time", wallMs, service, target, stage, filter: filter);
+        }
+
+        if (sent)
         {
             use.Reason = Timeout;
 
             return (null, Timeout);
         }
 
-        use.Reason ??= Limit;
+        use.Reason ??= Budget;
 
-        return Limited("time", wallMs, service, target, stage, filter: filter);
+        return (null, Budget);
     }
 
     /// <summary>A part a limit left out: noted once per limit and service, and once more per entry of the request's filter a left-out condition belongs to; never retried.</summary>
@@ -1412,15 +1506,63 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
     /// <summary>Whether a call already ran out of the shared budget.</summary>
     private bool spent;
 
+    /// <summary>Whether the bound that call ran out of was the explain's wall time (else the owners' budget).</summary>
+    private bool spentWall;
+
     /// <summary>
     /// A call was cut by the budget: it is spent, for this explain and for the one it runs at this host
     /// for, whose time it was given. That one does not go by its clock afterwards, which may read a
     /// moment less than the budget when the timer fired (it runs on a coarser clock, in whole milliseconds).
     /// </summary>
-    private void Spend()
+    private void Spend(bool byWall)
     {
         for (var each = this; each is not null; each = each.origin)
+        {
+            // The first cut says which bound it was: this explain's by the call that was cut, the
+            // one it runs for by which of its own two bounds is the nearer.
+            if (!each.spent)
+                each.spentWall = ReferenceEquals(each, this) ? byWall : each.Left().ByWall;
+
             each.spent = true;
+        }
+    }
+
+    /// <summary>
+    /// A remote owner no check of this explain asked (nothing is continued at it and nothing is asked
+    /// under its alias beyond the whole row): what the host knows of it decides whether the answer may
+    /// say the join runs. An owner known to speak this engine's contract is taken to answer. One of
+    /// which nothing is known, one whose health names another contract or none, and one the host
+    /// remembers as not answering is noted <c>REMOTE_UNCHECKED</c> at the join's stage, and the answer
+    /// is not complete: it never says more than was checked.
+    /// </summary>
+    /// <returns>The reason the owner is not taken to answer, or null when it is.</returns>
+    public string? Unasked(string service, string target, string alias, int? stage, RemoteOwnerInfo? facts, OwnerOutage? outage, List<Diagnostic> notes)
+    {
+        ArgumentNullException.ThrowIfNull(notes);
+
+        var reason = outage is not null ? outage.Reason
+            : facts is null ? Unknown
+            : facts.Contract != EngineCapabilities.Contract ? Engine
+            : null;
+
+        if (reason is null)
+            return null;
+
+        Complete = false;
+        notes.Add(new Diagnostic
+        {
+            Code = Notes.RemoteUnchecked,
+            Message = reason switch
+            {
+                Unknown => $"Nothing is known of '{service}', the owner of '{target}': its health was not read, so whether it answers the join '{alias}' was not checked. The owner is asked when the query runs.",
+                Engine => $"'{service}', the owner of '{target}', does not name contract {EngineCapabilities.Contract} on its health ({(facts?.Contract is { } contract ? $"it names contract {contract}" : "it names none")}): it was not asked, and the join '{alias}' is null when the query runs against it as it is.",
+                _ => $"'{service}', the owner of '{target}', did not answer the last call this host made to it ({reason}): it was not asked, and the join '{alias}' is null when the query runs while that holds.",
+            },
+            Stage = stage,
+            Params = new Dictionary<string, object?> { ["service"] = service, ["target"] = target, ["reason"] = reason },
+        });
+
+        return reason;
     }
 
     /// <summary>A semi-join's condition no owner was asked for: where the caller wrote it, with its path.</summary>

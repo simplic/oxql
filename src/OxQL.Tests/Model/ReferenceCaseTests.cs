@@ -147,6 +147,48 @@ public class ReferenceCaseTests
             .Which.Should().Match<BuildFinding>(finding => finding.Code == BuildCodes.ReferenceCaseTargetUnknown && finding.Detail == "refs.nothing");
     }
 
+    [Fact]
+    public void A_target_without_a_service_prefix_that_is_no_entity_of_this_host_is_no_remote_reference()
+    {
+        Broken.Path("unprefixedTarget")!.References.Should().BeEmpty("an id without a prefix names no owning service");
+        Broken.Path("unprefixedTarget")!.Reference.Should().BeNull();
+
+        var finding = FindingsAt("refs.broken#unprefixedTarget").Should().ContainSingle().Subject;
+
+        finding.Code.Should().Be(BuildCodes.ReferenceTargetUnprefixed);
+        finding.Detail.Should().Be("transaction");
+        finding.Message.Should().Contain("'transaction'").And.Contain("no reference is emitted").And.Contain("'<service>.<entity>'");
+
+        RemoteReferences.Of(Model).Should().NotContain(reference => reference.TargetEntity == "transaction" || reference.Service == "transaction",
+            "nothing asks a host to configure a service named after an entity");
+    }
+
+    [Fact]
+    public void An_unprefixed_case_target_drops_that_case_only()
+    {
+        Render(Broken.Path("unprefixedCaseTarget")!).Should().Be("when kind=b -> refs.tour.id");
+        FindingsAt("refs.broken#unprefixedCaseTarget").Should().ContainSingle()
+            .Which.Should().Match<BuildFinding>(finding => finding.Code == BuildCodes.ReferenceTargetUnprefixed && finding.Detail == "transaction" && finding.Message.Contains("the case is dropped"));
+    }
+
+    [Fact]
+    public void On_a_host_whose_own_ids_have_no_prefix_an_unknown_id_is_not_taken_for_another_service()
+    {
+        var model = ClrModelBuilder.Build(
+            new EntityDeclaration[]
+            {
+                new("billing_line", "billing_line", typeof(UnprefixedLine), "billing_lines", null, false),
+                new("ledger", "ledger", typeof(UnprefixedLedger), "ledgers", null, false),
+            }, retiredIds: null, new ReferenceDeclarations());
+        var line = model.Entities["billing_line"];
+
+        line.Path("ledgerId")!.Reference!.Targets.Should().ContainSingle().Which.Should().Match<ReferenceTarget>(target => target.Entity == "ledger" && !target.IsRemote);
+        line.Path("mistypedId")!.References.Should().BeEmpty();
+        model.Findings.Should().ContainSingle(finding => finding.Target == "billing_line#mistypedId")
+            .Which.Should().Match<BuildFinding>(finding => finding.Code == BuildCodes.ReferenceTargetUnprefixed && finding.Detail == "ledgers");
+        RemoteReferences.ServicesOf(model).Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("both", "more than one way")]
     [InlineData("differentPaths", "different paths")]

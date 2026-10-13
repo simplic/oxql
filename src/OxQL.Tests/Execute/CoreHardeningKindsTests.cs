@@ -166,23 +166,26 @@ public class CoreHardeningKindsTests
     /// before, so the calendar parts are re-read as a local date in the caller's zone first.
     /// In UTC the two are the same instant, and a dateTime is an instant already.
     /// </summary>
+    /// <summary>The group stage of one <c>dateTrunc</c> key: the truncation given, kept within the calendar.</summary>
+    private static BsonDocument Bucketed(string dateTrunc) => BsonDocument.Parse($$"""{ $group: { _id: {{BsonAssertions.InCalendar(dateTrunc)}} } }""");
+
     [Fact]
     public async Task A_date_truncates_on_its_calendar_day_in_the_callers_zone()
     {
         var day = await GroupStage("""[{ "group": { "by": [{ "dateTrunc": { "path": "day", "unit": "day", "timezone": "America/New_York" }, "as": "bucket" }], "fields": {} } }]""");
 
-        day.ShouldBeBson(BsonDocument.Parse("""
-            { $group: { _id: { $dateTrunc: {
+        day.ShouldBeBson(Bucketed("""
+            { $dateTrunc: {
                 date: { $dateFromParts: { year: { $year: "$Day" }, month: { $month: "$Day" }, day: { $dayOfMonth: "$Day" }, timezone: "America/New_York" } },
-                unit: "day", timezone: "America/New_York" } } } }
+                unit: "day", timezone: "America/New_York" } }
             """));
 
         var week = await GroupStage("""[{ "group": { "by": [{ "dateTrunc": { "path": "day", "unit": "week", "timezone": "Europe/Berlin", "weekStart": "sunday" }, "as": "bucket" }], "fields": {} } }]""");
 
-        week.ShouldBeBson(BsonDocument.Parse("""
-            { $group: { _id: { $dateTrunc: {
+        week.ShouldBeBson(Bucketed("""
+            { $dateTrunc: {
                 date: { $dateFromParts: { year: { $year: "$Day" }, month: { $month: "$Day" }, day: { $dayOfMonth: "$Day" }, timezone: "Europe/Berlin" } },
-                unit: "week", timezone: "Europe/Berlin", startOfWeek: "sunday" } } } }
+                unit: "week", timezone: "Europe/Berlin", startOfWeek: "sunday" } }
             """));
     }
 
@@ -190,10 +193,10 @@ public class CoreHardeningKindsTests
     public async Task A_date_in_utc_and_a_dateTime_in_any_zone_truncate_as_stored()
     {
         (await GroupStage("""[{ "group": { "by": [{ "dateTrunc": { "path": "day", "unit": "month" }, "as": "bucket" }], "fields": {} } }]"""))
-            .ShouldBeBson(BsonDocument.Parse("""{ $group: { _id: { $dateTrunc: { date: "$Day", unit: "month", timezone: "UTC" } } } }"""));
+            .ShouldBeBson(Bucketed("""{ $dateTrunc: { date: "$Day", unit: "month", timezone: "UTC" } }"""));
 
         (await GroupStage("""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "day", "timezone": "America/New_York" }, "as": "bucket" }], "fields": {} } }]"""))
-            .ShouldBeBson(BsonDocument.Parse("""{ $group: { _id: { $dateTrunc: { date: "$When", unit: "day", timezone: "America/New_York" } } } }"""));
+            .ShouldBeBson(Bucketed("""{ $dateTrunc: { date: "$When", unit: "day", timezone: "America/New_York" } }"""));
     }
 
     // ---- ignoreCase on a char ---------------------------------------------------------------

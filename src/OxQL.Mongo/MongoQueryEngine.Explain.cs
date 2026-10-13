@@ -113,11 +113,12 @@ public sealed partial class MongoQueryEngine
         draft.Strict = strict;
 
         // Explain plans the owner queries by the owners' facts a run plans by, so it reads them first
-        // as a run does, within the explain budget: those of the keyed stages' owners and of the
-        // semi-joins', whose page they size. The cached tier asks no owner anything: it plans by the
-        // facts already known.
+        // as a run does, within the slice of the time a run gives them: those of the keyed stages'
+        // owners and of the semi-joins', whose page they size. An owner whose health is slow leaves
+        // its facts unknown rather than taking the time its check needs. The cached tier asks no owner
+        // anything: it plans by the facts already known.
         if (request.Remote != ExplainRequest.RemoteCached)
-            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled, owners.Remaining, cancellationToken).ConfigureAwait(false);
+            await KeyedFetch.ReadOwnerFactsAsync(remote, compiled, KeyedFetch.OwnerFactsSlice(owners.Remaining), cancellationToken).ConfigureAwait(false);
 
         draft.Indexes = Notes.CallerIndexes(bound, request.Query);
         draft.Notes.AddRange(Notes.Of(bound, request.Query, draft.Indexes, strict, context.Contract, options));
@@ -150,7 +151,7 @@ public sealed partial class MongoQueryEngine
         // path gives, as an error.
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
             return new ExplainOutcome.Success(await AnswerAsync(draft, valid: false,
-                [new QueryValidationError { Code = Codes.ResolveUnavailable, Message = "This host has no remote query client; a remote resolve cannot run." }], cancellationToken).ConfigureAwait(false));
+                [NoRemoteClient()], cancellationToken).ConfigureAwait(false));
 
         // The remote check: the owner queries of every keyed stage are bound by their
         // owners' internal explain; an owner error there is this request's, at the caller's stage. So
@@ -418,11 +419,13 @@ public sealed partial class MongoQueryEngine
         var catalog = await draft.Types.CatalogAsync(request, draft.Owners).ConfigureAwait(false);
 
         owners.Read(draft.Owners);
+        Unasked(draft, owners);
+        UnknownTargets(draft);
 
         var notes = draft.Notes.Concat(draft.Owners.LimitNotes)
             .Where(note => request.IncludesNotes || IsAboutTheAnswer(note) || (note.Code == Notes.IndexAdvice && request.IncludesIndexes))
             .ToList();
-        // Complete while every owner asked answered, no limit left a part out, and every alias has its type.
+        // Complete while every owner asked answered, every owner not asked is known to answer, no limit left a part out, and every alias has its type.
         var complete = draft.Owners.Complete && aliases.All(alias => alias.Value?["complete"]?.GetValue<bool>() != false);
         // This host's document, and each owner's as its answer named it (its own owners' among them).
         var schema = new SortedDictionary<string, string?>(StringComparer.Ordinal);
@@ -692,7 +695,7 @@ public sealed partial class MongoQueryEngine
     }
 
     /// <summary>The notes that say what the answer itself lacks; they are answered also without <c>include: "notes"</c>.</summary>
-    private static bool IsAboutTheAnswer(Diagnostic note) => note.Code is Notes.RemoteUnchecked or Notes.ExplainLimit or Notes.ExplainTrimmed;
+    private static bool IsAboutTheAnswer(Diagnostic note) => note.Code is Notes.RemoteUnchecked or Notes.ExplainLimit or Notes.ExplainTrimmed or Notes.ReferenceTargetUnknown;
 
     /// <summary>The notes in stage order, request-wide ones (no stage) last; within a stage as they were found.</summary>
     private static IReadOnlyList<Diagnostic> Ordered(List<Diagnostic> notes) =>
@@ -763,10 +766,13 @@ public sealed partial class MongoQueryEngine
     /// <summary>
     /// A weak validator of the answer itself: the request, who asked (organisation and user), and the
     /// answer as it is written, without what differs between two tellings of one answer (the
-    /// validator, and what each owner cost this time: <c>owners[].ms</c>, <c>calls</c>, <c>cached</c>).
+    /// validator, what each owner cost this time: <c>owners[].ms</c>, <c>calls</c>, <c>cached</c>, and
+    /// the <c>engine</c> of an owner that was not asked, which is what the host happened to know of
+    /// it and no part of what was checked: the tier that asks nobody leaves it out, and it comes and
+    /// goes with the host's last read of the owner's health).
     /// So two answers that differ in anything a caller reads (<c>valid</c>, an error, a note, an alias,
-    /// what an owner said, a revision, whether it is complete) never share it, and one identity's
-    /// validator never stands for another's answer.
+    /// what an owner said, a revision, whether it is complete) never share it, two that say the same
+    /// of the request share it, and one identity's validator never stands for another's answer.
     /// </summary>
     private static string EtagOf(ExplainRequest request, ExplainResult answer, RequestContext context)
     {
@@ -786,6 +792,10 @@ public sealed partial class MongoQueryEngine
 
                 foreach (var cost in OwnerCosts)
                     (said as JsonObject)?.Remove(cost);
+
+                // An owner no check asked says nothing of itself: its engine is the host's knowledge of the moment.
+                if (said is JsonObject entry && entry["answered"] is null)
+                    entry.Remove("engine");
 
                 return said;
             }).ToList(),
@@ -845,6 +855,105 @@ public sealed partial class MongoQueryEngine
 
                 if (use.Engine is not null)
                     entry["engine"] = use.Engine.DeepClone();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The remote owners no check asked, under <c>remote: "check"</c>: each is listed with what the
+    /// host knows of it (<c>engine</c> from its health facts, a <c>reason</c> when it is not taken to
+    /// answer), and one that is not is noted <c>REMOTE_UNCHECKED</c> (<see cref="RemoteExplain.Unasked"/>),
+    /// which makes the verdict <c>unknown</c>. The cached tier asks nobody and says so by its own notes.
+    /// <para>
+    /// A host whose remote client keeps no owner facts (it is no <see cref="IRemoteOwnerInfo"/>) has
+    /// nothing to judge such an owner by, and never will have: the join is answered as one whose
+    /// owner was not a subject of the check, without a note, and the verdict is what the rest of the
+    /// request makes it. Only a client that keeps facts and has none of this owner, within the slice
+    /// of time the read of them had, leaves the owner unchecked.
+    /// </para>
+    /// </summary>
+    private void Unasked(Draft draft, OwnerList owners)
+    {
+        if (draft.Request.Remote == ExplainRequest.RemoteCached || draft.Bound is not { } bound || remote is not IRemoteOwnerInfo known)
+            return;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>())
+        {
+            if (!draft.Explained.TryGetValue(resolve.As, out var explained))
+                continue;
+
+            foreach (var query in explained)
+            {
+                if (!query.Remote || draft.Owners.Considered(query.Service) || !seen.Add(query.Service))
+                    continue;
+
+                var entry = owners.Entries[owners.IndexOf(query.Service, remote: true)];
+                var facts = known.OwnerOf(query.Service);
+
+                if (facts is not null && (facts.EngineVersion is not null || facts.Contract is not null))
+                {
+                    var engine = new JsonObject();
+
+                    if (facts.EngineVersion is { } version)
+                        engine["version"] = version;
+
+                    if (facts.Contract is { } contract)
+                        engine["contract"] = contract;
+
+                    entry["engine"] = engine;
+                }
+
+                if (draft.Owners.Unasked(query.Service, query.Target, resolve.As, bound.CallerIndexOf(resolve), facts, availability.OutageOf(query.Service), draft.Notes) is { } reason)
+                    entry["reason"] = reason;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The joins whose target the owner does not publish, by the host's check of its declared remote
+    /// references (<see cref="RemoteReferenceValidator"/>): each is noted
+    /// <c>REFERENCE_TARGET_UNKNOWN</c> at its stage, once per target, and the answer is not complete,
+    /// so the verdict is not <c>yes</c>. The check reads the owner's document from time to time and
+    /// may be behind it, which is why this is a note and not an error: an owner asked by this
+    /// explain says the error itself.
+    /// </summary>
+    private void UnknownTargets(Draft draft)
+    {
+        if (ReferenceValidator is not { } validator || remote is null || draft.Bound is not { } bound)
+            return;
+
+        // Reading the state starts a check that is due; it never waits for one.
+        validator.State(models.Model, remote);
+
+        var said = new HashSet<(int? Stage, string Target)>();
+
+        foreach (var resolve in bound.Stages.OfType<BoundStage.Resolve>())
+        {
+            if (!draft.Explained.TryGetValue(resolve.As, out var explained))
+                continue;
+
+            foreach (var query in explained.Where(query => query.Remote))
+            {
+                var entity = query.Target.Split('#')[0];
+
+                if (validator.Of(query.Service) is not { Validated: true } validation || !validation.UnknownTargets.Contains(entity, StringComparer.Ordinal))
+                    continue;
+
+                var stage = bound.CallerIndexOf(resolve);
+
+                if (!said.Add((stage, entity)))
+                    continue;
+
+                draft.Owners.Incomplete();
+                draft.Notes.Add(new Diagnostic
+                {
+                    Code = Notes.ReferenceTargetUnknown,
+                    Message = $"'{query.Service}' does not publish the entity '{entity}' that '{resolve.As}' joins: the reference declares a target its owner does not have under that id, and a run is refused for it. Correct the declared target id, or have the owner publish the entity.",
+                    Stage = stage,
+                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision },
+                });
             }
         }
     }

@@ -77,7 +77,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<IEntityModelProvider>(),
             provider.GetRequiredService<IAggregateRunner>(),
             provider.GetRequiredService<OxQLOptions>(),
-            provider.GetService<ILogger<Legacy.LegacyPipeline>>()));
+            provider.GetService<ILogger<Legacy.LegacyPipeline>>(),
+            provider.GetService<TimeProvider>()));
 
         services.AddSingleton<IQueryEngine>(provider =>
         {
@@ -96,7 +97,12 @@ public static class ServiceCollectionExtensions
                 logger,
                 mongoOptions.IncludeErrorDetails,
                 provider.GetService<IIndexSource>(),
-                provider.GetRequiredService<OwnerFetchCache>());
+                provider.GetRequiredService<OwnerFetchCache>())
+            {
+                // The host's one record, shared with its health probe; an engine built by hand has its own.
+                Availability = provider.GetService<OwnerAvailability>() ?? new OwnerAvailability(provider.GetRequiredService<OxQLOptions>()),
+                ReferenceValidator = provider.GetService<RemoteReferenceValidator>(),
+            };
         });
 
         return services;

@@ -70,6 +70,8 @@ steps:
     inputs:
       command: 'test'
       projects: '**/*.slnx'
+      # The tests run against what the build step built and the pack step ships: the same configuration, not built again.
+      arguments: '--configuration $(buildConfiguration) --no-build'
 
   - task: DotNetCoreCLI@2
     displayName: 'Create nuget packages'

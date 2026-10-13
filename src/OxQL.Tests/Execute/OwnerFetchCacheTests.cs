@@ -206,9 +206,22 @@ public class OwnerFetchCacheTests
         cache.TryGetDrops(transport, out select, out _).Should().BeTrue();
         select.Should().Equal("colour");
 
-        // A drop learned before any revision of its service was known is not trusted once one is.
+        // A drop learned before any revision of its service was named is taken to be of the first one named,
+        // and goes when another follows.
         cache.Revise("fleet", "sha256:f1");
-        cache.TryGetDrops(fleet, out _, out _).Should().BeFalse();
+        cache.TryGetDrops(fleet, out select, out _).Should().BeTrue("a run names no revision; the first explain's naming one retires nothing the run learned");
+        select.Should().Equal("plate");
+
+        cache.Revise("fleet", "sha256:f1");
+        cache.TryGetDrops(fleet, out _, out _).Should().BeTrue();
+
+        cache.Revise("fleet", "sha256:f2");
+        cache.TryGetDrops(fleet, out _, out _).Should().BeFalse("the owner's model changed since");
+
+        cache.Revise("fleet", "sha256:f1");
+        cache.SetDrops(fleet, ["plate"], []);
+        cache.Revise("fleet", "sha256:f2");
+        cache.TryGetDrops(fleet, out _, out _).Should().BeFalse("what is learned under a named revision is of that revision, also when it is the first one again");
     }
 
     [Fact]

@@ -190,10 +190,14 @@ public class ValuesTests
 
     // ---- collections --------------------------------------------------------------------------
 
-    /// <summary>The values at a storage path below the elements of a stored array; a row without elements holds one null.</summary>
+    /// <summary>
+    /// The values at a storage path below the elements of a stored array, as a condition on the path
+    /// reads them: a collection that is not there holds one null, one that is there and empty holds
+    /// no value at all.
+    /// </summary>
     private static IEnumerable<BsonValue> Under(BsonDocument stored, string collection, params string[] member)
     {
-        var elements = stored.TryGetValue(collection, out var array) && array is BsonArray { Count: > 0 } items ? items.ToList() : [BsonNull.Value];
+        var elements = stored.TryGetValue(collection, out var array) && array is BsonArray items ? items.ToList() : [BsonNull.Value];
 
         foreach (var element in elements)
         {
@@ -214,14 +218,21 @@ public class ValuesTests
         var answer = await Ask(Corpus.Shipment, """ "path": "items.status.name", "counts": true """);
 
         Listed(answer).ToDictionary(entry => entry.Value == "null" ? "\0" : JsonNode.Parse(entry.Value)!.GetValue<string>(), entry => entry.Count!.Value).Should().BeEquivalentTo(expected);
-        expected.Should().ContainKey("\0", "a shipment without items is one null");
-        Listed(answer).Sum(entry => entry.Count!.Value).Should().BeGreaterThan(Shipments.Count, "a count counts elements");
+        expected.Should().ContainKey("\0", "an item without a status name is one null");
+        Listed(answer).Sum(entry => entry.Count!.Value).Should().BeGreaterThan(Shipments.Count(row => row.Stored.GetValue("Items", BsonNull.Value) is BsonArray { Count: > 0 }), "a count counts elements");
 
-        // The hand-written form: the unwind that keeps the row without elements, then the group.
-        const string Unwind = """{ "unwind": { "path": "items", "as": "item", "preserveNull": true } }""";
+        // Without counts the list holds the same values, by value.
+        Listed(await Ask(Corpus.Shipment, """ "path": "items.status.name" """)).Select(entry => entry.Value)
+            .Should().Equal(Listed(answer).Select(entry => entry.Value).OrderBy(value => value == "null" ? "" : value, StringComparer.Ordinal));
 
-        Texts(answer).Should().Be(Texts(await ByHand(Corpus.Shipment, "item.status.name", before: Unwind)));
-        Texts(await Ask(Corpus.Shipment, """ "path": "items.status.name" """)).Should().Be(Texts(await ByHand(Corpus.Shipment, "item.status.name", before: Unwind, counts: false)));
+        // And every value of the list, null among them, sent back as a condition finds the rows that hold it in some element.
+        foreach (var (value, _) in Listed(answer))
+        {
+            var holding = Shipments.Where(row => Under(row.Stored, "Items", "Status", "Name").Any(held => value == "null" ? held.IsBsonNull : !held.IsBsonNull && held.AsString == JsonNode.Parse(value)!.GetValue<string>())).Select(row => row.Id).ToList();
+            var selected = await (await Transport()).SendAsync(Corpus.Shipment, $$"""[ { "match": { "items.status.name": { "in": [{{value}}], "options": { "caseSensitive": true } } } }, { "page": { "limit": 500 } } ]""");
+
+            selected.ShouldHaveIds(holding.Order(), value);
+        }
 
         // The bound is on the rows, however many elements each holds.
         (await Ask(Corpus.Shipment, $$""" "path": "items.status.name", "scan": {{Shipments.Count + 1}} """)).ShouldHaveNoDiagnostics();
@@ -231,23 +242,33 @@ public class ValuesTests
     [Fact]
     public async Task Under_two_collections_both_are_unwound_for_the_values()
     {
-        const string Unwinds = """{ "unwind": { "path": "items", "as": "item", "preserveNull": true } }, { "unwind": { "path": "item.parts", "as": "part", "preserveNull": true } }""";
         var rows = Corpus.Rows(Corpus.Conformance);
-        var expected = rows.SelectMany(row => Under(row.Stored, "Items", "Parts").SelectMany(parts => parts is BsonArray { Count: > 0 } held ? held.Select(part => (BsonValue)part["Sku"]) : [BsonNull.Value]))
+
+        // A collection that is not there is one null at its level; one that is there and empty holds no value.
+        var expected = rows.SelectMany(row => Under(row.Stored, "Items", "Parts").SelectMany(parts => parts is BsonArray held ? held.Select(part => (BsonValue)part["Sku"]) : [BsonNull.Value]))
             .GroupBy(sku => sku.IsBsonNull ? "null" : $"\"{sku.AsString}\"").ToDictionary(group => group.Key, group => group.Count());
         var answer = await Ask(Corpus.Conformance, """ "path": "items.parts.sku", "counts": true, "limit": 500 """);
 
         Listed(answer).ToDictionary(entry => entry.Value, entry => entry.Count!.Value).Should().BeEquivalentTo(expected);
-        expected.Keys.Should().Contain(key => key != "null", "the corpus holds parts").And.Contain("null", "and items or rows without any");
-        Texts(answer).Should().Be(Texts(await ByHand(Corpus.Conformance, "part.sku", before: Unwinds)));
-        Listed(answer).Sum(entry => entry.Count!.Value).Should().BeGreaterThan(rows.Count);
+        expected.Keys.Should().Contain(key => key != "null", "the corpus holds parts");
+        Listed(answer).Sum(entry => entry.Count!.Value).Should().BeGreaterThan(rows.Count(row => row.Stored.TryGetValue("Items", out var items) && items is BsonArray { Count: > 0 }) / 2);
+
+        // Null is in the list exactly when a comparison with null selects a row.
+        var nulls = await (await Lab.ClientForAsync(Corpus.Conformance)).SendAsync(Corpus.Conformance, """[ { "match": { "items.parts.sku": { "in": [null] } } }, { "page": { "limit": 500 } } ]""");
+
+        nulls.ShouldBeOk();
+        expected.ContainsKey("null").Should().Be(nulls.Items.Count > 0);
 
         // The rows read are rows, not elements of elements.
         (await Ask(Corpus.Conformance, $$""" "path": "items.parts.sku", "scan": {{rows.Count + 1}} """)).ShouldHaveNoDiagnostics();
         (await Ask(Corpus.Conformance, $$""" "path": "items.parts.sku", "scan": {{rows.Count}} """)).ShouldHaveDiagnostic("VALUES_SCAN_CAPPED");
 
-        // The same on the shipments, whose items hold no weight note: every row is the one null.
-        Listed(await Ask(Corpus.Shipment, """ "path": "items.weightNotes.number" """)).Should().Equal(("null", (int?)null));
+        // The same on the shipments, whose items hold no weight note: a collection of notes that is there
+        // and empty holds no value, so the list is what the stored rows say and nothing more.
+        var notes = Shipments.SelectMany(row => Under(row.Stored, "Items", "WeightNotes").SelectMany(held => held is BsonArray written ? written.Select(note => note is BsonDocument document && document.TryGetValue("Number", out var number) ? number : BsonNull.Value) : [BsonNull.Value]))
+            .Select(number => number.IsBsonNull ? "null" : $"\"{number.AsString}\"").Distinct().Order(StringComparer.Ordinal).ToList();
+
+        Listed(await Ask(Corpus.Shipment, """ "path": "items.weightNotes.number" """)).Select(entry => entry.Value).Order(StringComparer.Ordinal).Should().Equal(notes);
     }
 
     [Fact]
@@ -292,7 +313,7 @@ public class ValuesTests
         remote["path"]!.GetValue<string>().Should().Be("dep.name");
 
         (await Ask(Corpus.Shipment, """ "path": "status.name", "limit": 501 """)).ShouldRefuse("VALUES_LIMIT_EXCEEDED", 400).ToJsonString(Plain).Should().Be(
-            """{"code":"VALUES_LIMIT_EXCEEDED","message":"The values limit 501 exceeds the maximum of 500; narrow the values with 'search' instead.","stage":0,"params":{"limit":"maxValuesLimit","max":500,"value":501}}""");
+            """{"code":"VALUES_LIMIT_EXCEEDED","message":"The values limit 501 exceeds the maximum of 500; narrow the values with 'search' instead.","stage":0,"params":{"limit":"maxValuesLimit","max":500,"value":501,"count":501}}""");
         (await Ask(Corpus.Shipment, """ "path": "status.name", "scan": 50001 """)).ShouldRefuse("VALUES_LIMIT_EXCEEDED", 400)["params"]!["limit"]!.GetValue<string>().Should().Be("valuesScanRows");
         (await Ask(Corpus.Shipment, """ "path": "status" """)).ShouldRefuse("NOT_FILTERABLE", 400);
         (await Ask(Corpus.Shipment, """ "path": "items" """)).ShouldRefuse("GROUP_ON_COLLECTION", 400);

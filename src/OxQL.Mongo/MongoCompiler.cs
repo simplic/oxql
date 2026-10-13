@@ -263,6 +263,9 @@ internal static class MongoCompiler
     /// <summary>The prefix of the position a values stage numbers the elements of a collection it unwinds by; no row keeps it.</summary>
     private const string ReservedValuesIndex = Aliases.ReservedPrefix + "oxVal";
 
+    /// <summary>The member a values stage notes under, per collection it unwinds, whether the collection is there and holds no element.</summary>
+    private const string ReservedValuesEmpty = Aliases.ReservedPrefix + "oxValE";
+
     /// <summary>The member of a values answer that holds the values: each its <c>_id</c> and, under <see cref="ValuesCount"/>, the rows that hold it.</summary>
     public const string ValuesList = "v";
 
@@ -2428,9 +2431,14 @@ internal static class MongoCompiler
     /// <list type="bullet">
     /// <item>The bound on the rows stands first, so nothing after it reads more than that many rows,
     /// and an index that holds the organisation and the path answers them without reading a document.</item>
-    /// <item>A collection is unwound keeping the row that holds none (its value is null), and with the
-    /// position of each element: the first element of a row, or the row without one, counts the row,
-    /// so the rows read are known however many elements they hold.</item>
+    /// <item>A collection is unwound keeping the row that holds none, and with the position of each
+    /// element: the first element of a row, or the row without one, counts the row, so the rows read
+    /// are known however many elements they hold.</item>
+    /// <item>A value is listed for what a condition on the path selects, and null is no exception: a
+    /// collection that is not there is a null (a comparison with null matches the row), a collection
+    /// that is there and empty holds no value at all (no comparison matches it). So the emptiness of
+    /// each collection is noted before its unwind, such a row adds nothing to a value's count, and a
+    /// value nothing was counted for is not listed. The row is still one of the rows read.</item>
     /// <item>The search runs on the groups, not on the rows: there are as many comparisons as there
     /// are distinct values, and the rows read are counted whatever the search keeps.</item>
     /// <item>With counts the values lead by their number of rows, then by value; without, by value.
@@ -2442,11 +2450,16 @@ internal static class MongoCompiler
         yield return new BsonDocument("$limit", values.Scan);
 
         var positions = new List<string>();
+        var empties = new List<BsonValue>();
 
         foreach (var collection in values.Collections)
         {
-            positions.Add(ReservedValuesIndex + positions.Count);
+            var empty = ReservedValuesEmpty + positions.Count;
 
+            positions.Add(ReservedValuesIndex + positions.Count);
+            empties.Add("$" + empty);
+
+            yield return new BsonDocument("$addFields", new BsonDocument(empty, new BsonDocument("$eq", new BsonArray { "$" + collection, new BsonArray() })));
             yield return new BsonDocument("$unwind", new BsonDocument
             {
                 ["path"] = "$" + collection,
@@ -2458,7 +2471,10 @@ internal static class MongoCompiler
         var group = new BsonDocument
         {
             ["_id"] = "$" + values.Path.Storage,
-            [ValuesCount] = new BsonDocument("$sum", 1),
+            // What an empty collection left of its row holds no value: it counts for none.
+            [ValuesCount] = new BsonDocument("$sum", empties.Count == 0
+                ? 1
+                : new BsonDocument("$cond", new BsonArray { empties.Count == 1 ? empties[0] : new BsonDocument("$or", new BsonArray(empties)), 0, 1 })),
         };
 
         // One element per row counts the row: the first of each collection, or the row that has none.
@@ -2472,6 +2488,10 @@ internal static class MongoCompiler
         yield return new BsonDocument("$group", group);
 
         var list = new BsonArray();
+
+        // The null nothing but empty collections stood for is no value of the list.
+        if (empties.Count > 0)
+            list.Add(new BsonDocument("$match", new BsonDocument(ValuesCount, new BsonDocument("$gt", 0))));
 
         if (values.Search is { } search)
             list.Add(new BsonDocument("$match", Filter(search, null, collated)));
@@ -2568,8 +2588,50 @@ internal static class MongoCompiler
         if (key.Trunc.Unit == "week")
             trunc["startOfWeek"] = key.Trunc.WeekStart ?? "monday";
 
-        return new BsonDocument("$dateTrunc", trunc);
+        return InCalendar(new BsonDocument("$dateTrunc", trunc));
     }
+
+    /// <summary>The first instant a date on the wire can name: midnight of 1 January of year 1, UTC.</summary>
+    internal static readonly BsonDateTime FirstInstant = new(DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc));
+
+    /// <summary>The last instant a date on the wire can name, in the milliseconds the database keeps: the end of year 9999, UTC.</summary>
+    internal static readonly BsonDateTime LastInstant = new(DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc));
+
+    /// <summary>
+    /// A bucket's key, kept within the calendar a date on the wire can name. A bucket starts at a
+    /// local boundary, so the bucket of a row at the very start of the calendar can start before
+    /// it (the first of January of year 1 lies in the last hours of the year before in every zone
+    /// east of its meridian, and in the week before for a week that starts on another day): that
+    /// bucket is keyed with the first instant, and one past the end with the last. The key is
+    /// clamped in the group itself, so the rows of every bucket outside the calendar are one
+    /// group, and a sort and a cursor read the key the row shows. No date gives no key, as before.
+    /// </summary>
+    private static BsonDocument InCalendar(BsonDocument bucket) => new("$let", new BsonDocument
+    {
+        ["vars"] = new BsonDocument("bucket", bucket),
+        ["in"] = new BsonDocument("$switch", new BsonDocument
+        {
+            ["branches"] = new BsonArray
+            {
+                // Null sorts below every date, so the lower bound asks for a date first.
+                new BsonDocument
+                {
+                    ["case"] = new BsonDocument("$and", new BsonArray
+                    {
+                        new BsonDocument("$gt", new BsonArray { "$$bucket", BsonNull.Value }),
+                        new BsonDocument("$lt", new BsonArray { "$$bucket", FirstInstant }),
+                    }),
+                    ["then"] = FirstInstant,
+                },
+                new BsonDocument
+                {
+                    ["case"] = new BsonDocument("$gt", new BsonArray { "$$bucket", LastInstant }),
+                    ["then"] = LastInstant,
+                },
+            },
+            ["default"] = "$$bucket",
+        }),
+    });
 
     /// <summary>
     /// The instant a truncation starts from. A date has no time of day and is stored as the

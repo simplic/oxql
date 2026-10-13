@@ -96,7 +96,7 @@ public class RemoteReferencesTests
 
         var act = () => host.CreateClient();
 
-        act.Should().Throw<InvalidOperationException>().WithMessage("*nest.order#department.id*InternalHosts*'fleet'*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*'fleet'*nest.order#department.id*InternalHosts:fleet*");
     }
 
     [Fact]

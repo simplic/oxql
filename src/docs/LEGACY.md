@@ -39,8 +39,37 @@ with `reason=unreadable`.
 
 Every answer of the legacy pipeline writes one line in the log category `OxQL.Compat.Legacy`: the
 entity, the reason, the refusal code if any (`INTERNAL_ERROR` for a fault, `CANCELLED` for a
-request its caller abandoned), the user, the organisation and the correlation id. Counting those
-lines per service says who still calls without the header, and when the pipeline can go.
+request its caller abandoned), the user, the organisation and the correlation id, then the route
+(`query` or `batch`), the status it was answered with, the rows it returned, the time it took and
+the database's share of it. Counting those lines per service says who still calls without the
+header, and when the pipeline can go.
+
+### Who still sends contract 1
+
+Two sources answer it, and they agree:
+
+- **The log**, per request and with the caller. The line of the category `OxQL.Compat.Legacy`:
+
+  ```
+  OxQL.Compat.Legacy contract 1 request for {Entity} answered by the legacy pipeline: reason={Reason}
+    refused={Refused} user={UserId} org={OrganisationId} correlation={CorrelationId}
+    route={Route} status={Status} rows={Rows} elapsedMs={ElapsedMs} dbMs={DbMs} dbCommands={DbCommands}
+  ```
+
+  `UserId` and `OrganisationId` are what the host's scope provider says of the request, so a
+  report server's technical user and a person's session are told apart; `CorrelationId` leads to
+  the caller's own log. Group the lines by `UserId` and `Entity` to get the list of callers to
+  move; `rows` and `elapsedMs` say how heavy each is, `status` and `refused` whether it works at
+  all. A contract 1 request whose body the host could not bind never reaches the pipeline and
+  is answered by the host; it writes the line `… with a body the host could not bind, answered by
+  the host: reason=unbound route={Route} …` in the same category, so it is counted too. With
+  `Compat:Legacy:Enabled` off the lines of contract 1 requests are in the category `OxQL.Compat`.
+- **The meter**, as a rate without the caller. `oxql.requests` and `oxql.request.duration` of the
+  meter `OxQL` carry the tag `contract` (`1` or `2`) beside `route`, `entity` and `outcome` (see
+  *What a host measures* in [`oxql-operations.md`](oxql-operations.md#what-a-host-measures)). The
+  series with `contract="1"` is the traffic that still depends on this pipeline, per entity; when
+  it has been flat at zero for the agreed time on every service, nobody sends contract 1 any more.
+  The meter has no user and no organisation on purpose: who it is, the log says.
 
 ## What it answers
 
@@ -135,7 +164,7 @@ Held by `LegacyPipelineTests` (S01 to S07, F01 to F04) and the legacy block of `
 | `Always` | `true` | off: the rewrite answers first (see above) |
 | `OrganisationPath` | `OrganizationId` | the stored member every collection is filtered by |
 | `AllowedLookupSources` | empty | the collections a `lookup` may read, without regard to case; empty means any collection of the entity's database |
-| `MaxTimeMs` | 600 000 | ten minutes, so a long-running report still answers; not clamped; 0 or less takes the default. It is not the contract 2 engine's `Execution:MaxTimeMs` |
+| `MaxTimeMs` | 600 000 | ten minutes, so a long-running report still answers; not clamped; 0 or less takes the default. It is not the contract 2 engine's `Execution:MaxTimeMs`. An aggregate the database has said nothing of by then, and `Execution:ClientDeadlineMarginMs` (5 000) after it on the host's clock, is given up on and answered `QUERY_TIMEOUT` like the limit's own expiry |
 
 The pipeline checks a request against the host's `OxQL:Limits` (`MaxPageSize`, `DefaultPageSize`,
 `MaxPipelineStages`, `MaxLookupStages`, `MaxUnwindStages`, `MaxGroupFields`,
@@ -164,7 +193,9 @@ where the legacy pipeline answers it first reads that pipeline's capabilities an
 
 - `engine` and `remote` say what the host is and are the same for every caller: a host that reads
   another host's shallow health sends no contract header and takes `engine.version`,
-  `engine.contract`, `limits.maxBatchQueries` and `limits.maxPageSize` from it.
+  `engine.contract`, `limits.maxBatchQueries` and `limits.maxPageSize` from it. A `remote` entry
+  has the three members shown; what a contract 2 caller reads beside them (`contract`,
+  `engineVersion`, `usable`, `reason`) is not written here.
 - `capabilities` has `batch` and `compat.v1` and nothing else: no `page.offset`, no `any`, no
   `group.page`, none of the remote names, no `explain`.
 - `limits` has the ten values the pipeline and its two routes check. `regexMaxLength` is the
@@ -250,6 +281,7 @@ Edited (each place carries the marker unless said otherwise; remove the marked l
 | `OxQL.AspNetCore/ServiceCollectionExtensions.cs` | the registration of `LegacyRoute` |
 | `OxQL.AspNetCore/Controllers/OxQLController.cs` | the `LegacyBodyFilter` attribute; in `Health` the marked line and the two `legacy?.… ??` it feeds, so `capabilities` and `limits` are `EngineCapabilities.Of(…)` and `Limits(options)` again; the sentence on the legacy pipeline in `Health`'s summary (no marker: it is an XML doc) |
 | `OxQL.AspNetCore/OxQLQueryService.cs` | the `legacy` field and constructor parameter; in the contract 1 branch `return await Rewritten();` remains |
+| `OxQL.AspNetCore/Binding/OxQLRequestBodyAttribute.cs` | the marked branch that writes the line of a contract 1 request the host could not bind (`LegacyRoute.UnboundAsync`); a contract 1 request is then left to the host without a line |
 | `OxQL.AspNetCore/Compat/CompatBinder.cs` | the wording of `LEGACY_STAGE_UNSUPPORTED` for a join names the legacy pipeline; reword it |
 
 ## Removing it
@@ -262,7 +294,9 @@ contract 1 request is the rewrite's (the published 2.0 behaviour), until contrac
 the constructor of `OxQLQueryService` loses a parameter. A host that names any of them no longer
 compiles. `OxQL:Compat:Legacy:*` configuration keys are then ignored without a word.
 
-1. Confirm in each service's log that `OxQL.Compat.Legacy` has had no line for the agreed time.
+1. Confirm in each service's log that `OxQL.Compat.Legacy` has had no line for the agreed time, and
+   on its metrics that `oxql.requests` with `contract="1"` has stayed at zero
+   (see [Who still sends contract 1](#who-still-sends-contract-1)).
    (`OxQL:Compat:Legacy:Enabled=false` on one service is the rehearsal.)
 2. Delete the three `Legacy` folders, `OxQL.IntegrationTests/Suites/Legacy`,
    `OxQL.Tests/AspNetCore/LegacyIsolationTests.cs`, `OxQL.Tests/Fixtures/contract1/http.json` and

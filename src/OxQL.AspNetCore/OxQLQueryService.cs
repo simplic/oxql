@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OxQL.AspNetCore.Batch;
+using OxQL.AspNetCore.Binding;
 using OxQL.AspNetCore.Compat;
 using OxQL.AspNetCore.Scope;
 using OxQL.Core.Binding;
@@ -77,24 +78,81 @@ public sealed class OxQLQueryService : IOxQLQueryService
         ExecuteAsync(request, maxTimeMs, internalCall: false, cancellationToken);
 
     private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, CancellationToken cancellationToken) =>
-        ExecuteAsync(request, maxTimeMs, internalCall, null, cancellationToken);
+        ExecuteAsync(request, maxTimeMs, internalCall, null, OxQLMetrics.RouteQuery, cancellationToken);
 
-    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken) =>
-        Guarded(QueryOutcome.Of, () => RunAsync(request, maxTimeMs, internalCall, shared, cancellationToken), cancellationToken);
+    private Task<QueryOutcome> ExecuteAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, string route, CancellationToken cancellationToken) =>
+        Measured(
+            route,
+            request?.EntityType,
+            outcome => (outcome as QueryOutcome.Refused)?.Refusal,
+            reached => Guarded(QueryOutcome.Of, () => RunAsync(request!, maxTimeMs, internalCall, shared, reached, cancellationToken), cancellationToken));
 
-    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs one query and counts it on the engine's meter (<see cref="OxQLMetrics"/>): the contract it
+    /// was written for, the route, the entity and how it ended, with the time it took. A query its
+    /// caller gave up on is counted as that and the cancellation travels on.
+    /// </summary>
+    private async Task<T> Measured<T>(string route, string? entity, Func<T, Refusal?> refused, Func<System.Runtime.CompilerServices.StrongBox<bool>, Task<T>> work)
+    {
+        // Set by the work once it is past what refuses a request before the model is read.
+        var reached = new System.Runtime.CompilerServices.StrongBox<bool>();
+
+        if (!OxQLMetrics.Enabled)
+            return await work(reached).ConfigureAwait(false);
+
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        try
+        {
+            var outcome = await work(reached).ConfigureAwait(false);
+
+            Count(route, reached.Value ? entity : null, OxQLMetrics.OutcomeOf(refused(outcome)), started);
+
+            return outcome;
+        }
+        catch (OperationCanceledException)
+        {
+            Count(route, reached.Value ? entity : null, OxQLMetrics.Cancelled, started);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Counts one query that ended in <paramref name="outcome"/>. The model is read only for the tag
+    /// of an entity the request came to name: a request refused before that (<paramref name="entity"/>
+    /// null) costs the model nothing, and a model that cannot be read tags the entity unknown.
+    /// </summary>
+    private void Count(string route, string? entity, string outcome, long started)
+    {
+        if (!OxQLMetrics.Enabled)
+            return;
+
+        Model.EntityModel? model = null;
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(entity))
+                model = models.Model;
+        }
+        catch (Exception)
+        {
+            // A host without a model still counts its requests.
+        }
+
+        OxQLMetrics.Record(ContractOf(options, httpContextAccessor?.HttpContext), route, OxQLMetrics.EntityOf(model, entity), outcome, System.Diagnostics.Stopwatch.GetElapsedTime(started));
+    }
+
+    private async Task<QueryOutcome> RunAsync(QueryRequest request, int? maxTimeMs, bool internalCall, RequestContext? shared, System.Runtime.CompilerServices.StrongBox<bool> reached, CancellationToken cancellationToken)
     {
         // A null query is a caller error, not a fault: the batch route can carry one
         // ({"queries":[null]}) and the body of the query route can be the literal `null`.
         if (request is null)
-            return QueryOutcome.Of(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The request is empty; a query carries an entityType and a pipeline.",
-            }]));
+            return QueryOutcome.Of(NoRequest(RequestBodyReader.Root, "a query carries an entityType and a pipeline", "The request is empty; a query carries an entityType and a pipeline."));
 
         if (shared is null && ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return QueryOutcome.Of(unknownContract);
+
+        reached.Value = true;
 
         // The queries of a batch that run side by side share the context their batch read once;
         // each is measured on its own, from when it starts.
@@ -128,17 +186,25 @@ public sealed class OxQLQueryService : IOxQLQueryService
         BatchAsync(batch, internalCall: false, cancellationToken);
 
     /// <inheritdoc/>
-    public Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, internalCall, cancellationToken), cancellationToken);
+    public async Task<BatchOutcome> BatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken = default)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var outcome = await Guarded(refusal => (BatchOutcome)new BatchOutcome.Refused(refusal), () => RunBatchAsync(batch, internalCall, cancellationToken), cancellationToken).ConfigureAwait(false);
+
+        // A batch that runs is counted by its entries; one refused whole is counted once, without an entity.
+        if (outcome is BatchOutcome.Refused refused)
+            Count(OxQLMetrics.RouteBatch, null, OxQLMetrics.OutcomeOf(refused.Refusal), started);
+
+        return outcome;
+    }
 
     private async Task<BatchOutcome> RunBatchAsync(BatchRequest batch, bool internalCall, CancellationToken cancellationToken)
     {
         if (batch is null || batch.Queries is null)
-            return new BatchOutcome.Refused(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The batch is empty; a batch carries a queries array.",
-            }]));
+            return new BatchOutcome.Refused(NoRequest(
+                batch is null ? RequestBodyReader.Root : RequestBodyReader.Join(RequestBodyReader.Root, "queries"),
+                "a batch carries a queries array",
+                "The batch is empty; a batch carries a queries array."));
 
         if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return new BatchOutcome.Refused(unknownContract);
@@ -151,7 +217,10 @@ public sealed class OxQLQueryService : IOxQLQueryService
                 Code = Codes.UnknownRequestMember,
                 // On the internal route the batch is written by the calling service's engine: an unknown member is another build's.
                 Message = $"'{string.Join(", ", unknown.Keys)}' is not a member of a batch; a batch carries queries and maxTimeMs, and each query its own strict." + (internalCall ? " " + Binder.OtherBuildHint : ""),
-                Params = internalCall ? new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = unknown.Keys.ToList() } : null,
+                // What another build of the engine reads between two services stays as it is; a caller reads the member too.
+                Params = internalCall
+                    ? new Dictionary<string, object?> { ["reason"] = "engineBuild", ["members"] = unknown.Keys.ToList() }
+                    : new Dictionary<string, object?> { ["reason"] = "unknown", ["members"] = unknown.Keys.ToList(), ["member"] = unknown.Keys.First() },
             }]));
 
         if (batch.Queries.Count > options.Limits.MaxBatchQueries)
@@ -159,6 +228,8 @@ public sealed class OxQLQueryService : IOxQLQueryService
             {
                 Code = Codes.BatchTooLarge,
                 Message = $"The batch carries {batch.Queries.Count} queries; the limit is {options.Limits.MaxBatchQueries}.",
+                Params = ContractOf(options, httpContextAccessor?.HttpContext) == 1 ? null
+                    : new Dictionary<string, object?> { ["limit"] = "maxBatchQueries", ["max"] = options.Limits.MaxBatchQueries, ["count"] = batch.Queries.Count },
             }]));
 
         // A batch's maxTimeMs bounds the whole batch, not each query: it is one deadline, and each
@@ -184,12 +255,25 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         var measured = new System.Collections.Concurrent.ConcurrentQueue<QueryTiming>();
 
-        var results = await BatchRun.RunAsync(batch.Queries, degree, async (query, token) =>
+        // The entries the host could not read are answered in their places with what is wrong with them.
+        var unread = httpContextAccessor?.HttpContext?.Items[OxQLRequestBodyAttribute.EntriesItem] as IReadOnlyDictionary<int, Refusal>;
+        var contract2 = ContractOf(options, httpContextAccessor?.HttpContext) != 1;
+
+        var results = await BatchRun.RunAsync(Enumerable.Range(0, batch.Queries.Count).ToList(), degree, async (index, token) =>
         {
+            var query = batch.Queries[index];
             var left = deadline is { } until ? Math.Max(1, (int)Math.Ceiling((until - DateTime.UtcNow).TotalMilliseconds)) : (int?)null;
-            var outcome = unscoped is not null && query is not null
-                ? QueryOutcome.Of(unscoped)
-                : await ExecuteAsync(query!, left, internalCall, shared, token).ConfigureAwait(false);
+            var entered = System.Diagnostics.Stopwatch.GetTimestamp();
+            var outcome = query is null && unread is not null && unread.TryGetValue(index, out var wrong) ? QueryOutcome.Of(wrong)
+                : query is null && contract2 ? QueryOutcome.Of(NullEntry(index))
+                : unscoped is not null && query is not null ? QueryOutcome.Of(unscoped)
+                : null;
+
+            // An entry answered here never reaches a query of its own: it is counted here, the others where they run.
+            if (outcome is QueryOutcome.Refused answered)
+                Count(OxQLMetrics.RouteBatch, query?.EntityType, OxQLMetrics.OutcomeOf(answered.Refusal), entered);
+
+            outcome ??= await ExecuteAsync(query!, left, internalCall, shared, OxQLMetrics.RouteBatch, token).ConfigureAwait(false);
 
             if (outcome is QueryOutcome.Success { Result.Measured: { } timing })
                 measured.Enqueue(timing);
@@ -211,16 +295,16 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
     /// <inheritdoc/>
     public Task<ExplainOutcome> ExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken = default) =>
-        Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request, internalCall, cancellationToken), cancellationToken);
+        Measured(
+            OxQLMetrics.RouteExplain,
+            request?.Query?.EntityType,
+            outcome => (outcome as ExplainOutcome.Refused)?.Refusal,
+            reached => Guarded(refusal => (ExplainOutcome)new ExplainOutcome.Refused(refusal), () => RunExplainAsync(request!, internalCall, reached, cancellationToken), cancellationToken));
 
-    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, CancellationToken cancellationToken)
+    private async Task<ExplainOutcome> RunExplainAsync(ExplainRequest request, bool internalCall, System.Runtime.CompilerServices.StrongBox<bool> reached, CancellationToken cancellationToken)
     {
         if (request?.Query is null)
-            return new ExplainOutcome.Refused(Refusal.Validation([new QueryValidationError
-            {
-                Code = Codes.UnknownStage,
-                Message = "The request is empty; a query carries an entityType and a pipeline.",
-            }]));
+            return new ExplainOutcome.Refused(NoRequest(RequestBodyReader.Root, "a query carries an entityType and a pipeline", "The request is empty; a query carries an entityType and a pipeline."));
 
         // An explain past its bounds costs its parse and nothing else: no scope, model, binder or owner.
         if (ExplainLimits.Check(request, options.Explain) is { } limited)
@@ -232,10 +316,13 @@ public sealed class OxQLQueryService : IOxQLQueryService
             {
                 Code = Codes.UnknownRequestMember,
                 Message = "'budget' is not a member of an explain envelope; it carries query, include, shape, remote and catalog.",
+                Params = new Dictionary<string, object?> { ["reason"] = "internal", ["members"] = new[] { "budget" }, ["member"] = "budget" },
             }]));
 
         if (ContractRefusal(options, httpContextAccessor?.HttpContext) is { } unknownContract)
             return new ExplainOutcome.Refused(unknownContract);
+
+        reached.Value = true;
 
         var context = await ContextAsync(null, internalCall, cancellationToken);
 
@@ -326,6 +413,32 @@ public sealed class OxQLQueryService : IOxQLQueryService
 
         return new ExplainBatchOutcome.Success(new ExplainBatchResponse { Answers = answers });
     }
+
+    /// <summary>
+    /// The refusal of a request that is not there (a body that is the literal <c>null</c>, a batch
+    /// without its <c>queries</c>): under contract 2 a body that does not read, said with the place
+    /// that is missing; under contract 1 the code and the words that caller has always read.
+    /// </summary>
+    private Refusal NoRequest(string at, string carries, string contract1)
+    {
+        if (ContractOf(options, httpContextAccessor?.HttpContext) == 1)
+            return Refusal.Validation([new QueryValidationError { Code = Codes.UnknownStage, Message = contract1 }]);
+
+        return Refusal.Validation([new QueryValidationError
+        {
+            Code = Codes.InvalidRequestBody,
+            Message = $"'{at}' is missing; {carries}.",
+            Params = new Dictionary<string, object?> { ["reason"] = RequestBodyReader.ReasonMissing, ["path"] = at },
+        }]);
+    }
+
+    /// <summary>The refusal of a batch entry written as <c>null</c> under contract 2: it is no query, and the others run.</summary>
+    private static Refusal NullEntry(int index) => Refusal.Validation([new QueryValidationError
+    {
+        Code = Codes.InvalidRequestBody,
+        Message = $"The entry {index} of 'queries' is null; an entry is a query: an object with an entityType and a pipeline.",
+        Params = new Dictionary<string, object?> { ["reason"] = RequestBodyReader.ReasonKind, ["path"] = RequestBodyReader.Root, ["expected"] = "object", ["actual"] = "null", ["entry"] = index },
+    }]);
 
     /// <summary>The engine block of an explain answer: the version and this host's capabilities.</summary>
     private ExplainEngine EngineOf() => new()

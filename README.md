@@ -75,8 +75,8 @@ app.MapOxQLStudio();
 | contract | who implements it | what it does |
 |---|---|---|
 | `IOxQLScopeProvider` (`OxQL.AspNetCore.Scope`) | the host, always | `OrganisationAsync(HttpContext?)` is the caller's organisation, applied as `organizationId eq <value>` at every entry into an entity; `UserId` and `CorrelationId` feed the log line and the remote forwarding. |
-| `IEntityModelProvider` (`OxQL.Core.Engine`) | the host, optionally | The model the engine binds against. Default: `LazyEntityModelProvider` over the scanned assemblies, built on the first request. `ClrModelBuilder` must run after every serializer and class-map registration, never during `ConfigureServices`: the driver freezes a type's serializer on first lookup. |
-| `IRemoteQueryClient` (`OxQL.Core.Engine`) | the host, when entities reference entities of other services | `BatchAsync(serviceKey, BatchRequest, budget, ct)` sends a batch to the owner's internal batch route, `IsConfigured` says whether the host knows the service, `IsReachableAsync` feeds `/health`. `ExplainBatchAsync(serviceKey, ExplainBatchRequest, budget, ct)` sends what one round of an explain asks one owner (its checks, with the time and owner calls left) as one call to the owner's internal explain, for explain's remote check and its catalog entries of the owner's entities; its default asks check by check through `ExplainAsync(serviceKey, ExplainRequest, budget, ct)`, whose default answers `null` (the parts are noted `REMOTE_UNCHECKED`). A client that also implements `IRemoteOwnerInfo` reports what each owner's shallow health said (engine version, `maxBatchQueries`), from which the engine splits batches. Without a client every remote resolve is refused with 422 `RESOLVE_UNAVAILABLE`. The service key is the target entity's namespace (`vehicle` of `vehicle.vehicle`). |
+| `IEntityModelProvider` (`OxQL.Core.Engine`) | the host, optionally | The model the engine binds against. Default: `LazyEntityModelProvider` over the scanned assemblies, built on the first request. `ClrModelBuilder` must run after every serializer and class-map registration, never during `ConfigureServices`: the driver freezes a type's serializer on first lookup. A provider may say what its build left (`Degraded`: `true` after a failed build, `false` for the model the host meant to build, also one without entities); health publishes it as `model.degraded`, and a provider that does not say is not degraded, with or without entities. |
+| `IRemoteQueryClient` (`OxQL.Core.Engine`) | the host, when entities reference entities of other services | `BatchAsync(serviceKey, BatchRequest, budget, ct)` sends a batch to the owner's internal batch route, `IsConfigured` says whether the host knows the service, `IsReachableAsync` feeds `/health`. `ExplainBatchAsync(serviceKey, ExplainBatchRequest, budget, ct)` sends what one round of an explain asks one owner (its checks, with the time and owner calls left) as one call to the owner's internal explain, for explain's remote check and its catalog entries of the owner's entities; its default asks check by check through `ExplainAsync(serviceKey, ExplainRequest, budget, ct)`, whose default answers `null` (the parts are noted `REMOTE_UNCHECKED`). A client that also implements `IRemoteOwnerInfo` reports what each owner's shallow health said (engine version and contract, `maxBatchQueries`), from which the engine splits batches, health says whether the owner is usable, and explain judges a join whose owner no check asked: with facts that name contract 2 the owner is taken to answer, and while the client has no facts of that owner (its health was not read within the slice of time the read has) the join is noted `REMOTE_UNCHECKED` (`reason: "unknown"`) and `executable` is `unknown`. A client that does not implement it keeps no facts: health leaves `usable` out, batches are split at this host's own cap, and explain answers such a join without a note, `executable` being what the rest of the request makes it. A client that also implements `IRemoteSchemaSource` (`SchemaEntitiesAsync(serviceKey, knownRevision, ct)`: one conditional `GET` of the owner's schema document, answering the ids the owner publishes and the document's revision) lets the host check the targets of its declared remote references against their owners in the background; without it they stay not validated. Without a client every remote resolve is refused with 422 `RESOLVE_UNAVAILABLE`. The service key is the target entity's namespace (`vehicle` of `vehicle.vehicle`). |
 | `IOxQLQueryService` (`OxQL.AspNetCore`) | the engine; called by the host's internal routes | `BatchAsync(batch, internalCall: true, ct)` and `ExplainBatchAsync(batch, ct)` run a batch or the checks of one explain round as an owner call: only they (and `ExplainAsync(request, internalCall: true, ct)`, one check) admit the keyed fetch's `keyedBy`. A host that serves other services' remote resolves routes its internal batch and explain routes through them; implementers and fakes of the interface add the overloads they are called with. |
 | `IAddonDefinitionSource` (`OxQL.Model.Addon`) | the host, when entities are extendable | An organisation's addon definitions per entity, read per request. Default: `EmptyAddonDefinitionSource` (every addon key is `unknown`: projectable, never filterable). A source that reads a database implements `IReportingAddonDefinitionSource` and says each wait to the call's `AddonReadReport`, so a request's timing counts it as database time (`db.list[]`, `kind: "addon"`) and not as the host's own. |
 
@@ -89,7 +89,7 @@ One immutable model per host, built once from every class carrying `[OxQLType("<
 - **Kinds:** `string int long double decimal bool guid date dateTime timeSpan enum binary object array dictionary unknown`.
 - **Polymorphic members.** A member typed as a base class or interface whose subtypes are registered class maps publishes the base's members plus every member of its variants, each marked `onlyFor` its variants; rows render the stored variant's members, and `is` filters by variant. A polymorphic entity keeps its declared class as the root. See [`oxql-semantics.md`](src/docs/oxql-semantics.md#polymorphic-values).
 - **Descriptions** come from `[OxQLDescription]`, then `[Description]`, then the XML `<summary>` of the documentation file beside the assembly (`<inheritdoc/>` resolved; the service sets `GenerateDocumentationFile`). They are normalised: a leading "Gets or sets", "Gets" or "Represents" is dropped and the rest kept as written (the article stays: "Gets or sets the billing line" becomes "The billing line"), the first letter capitalised, `<see cref>` rendered as the simple name, paragraphs separated by a blank line, whitespace collapsed, at most 500 characters cut at a word boundary. `[Obsolete]` publishes `deprecated`, `[MaxLength]`/`[StringLength]`, `[Range]` and `[RegularExpression]` publish `constraints`. None of this enters the model fingerprint.
-- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property, at any depth (a nested object or a collection element counts as much as a root member). `[OxQLReference]` takes `Item` (the key names an element of a keyed item collection) and `KeyAs = OxQLKeyAs.Guid` (a string member holding a guid); the repeatable `[OxQLReferenceWhen(path, equals, targets…)]` declares a typed reference whose target depends on a sibling's stored value or, with `OxQLReferenceWhenAttribute.Variant`, on the holding object's variant; and `ReferenceDeclarations` declares references the host cannot annotate, passed to `ClrModelBuilder.Build(assemblies, retiredIds, references)`. See [`oxql-semantics.md`](src/docs/oxql-semantics.md#references). A target on another host is a remote reference; the model marks it and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs an error and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`).
+- **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property, at any depth (a nested object or a collection element counts as much as a root member). `[OxQLReference]` takes `Item` (the key names an element of a keyed item collection) and `KeyAs = OxQLKeyAs.Guid` (a string member holding a guid); the repeatable `[OxQLReferenceWhen(path, equals, targets…)]` declares a typed reference whose target depends on a sibling's stored value or, with `OxQLReferenceWhenAttribute.Variant`, on the holding object's variant; and `ReferenceDeclarations` declares references the host cannot annotate, passed to `ClrModelBuilder.Build(assemblies, retiredIds, references)`. See [`oxql-semantics.md`](src/docs/oxql-semantics.md#references). A target on another host is a remote reference: its id carries the owning service's prefix (`vehicle.vehicle`); an id without a prefix that is no entity of this host is the build finding `reference-target-unprefixed` and emits no reference. The model marks a remote reference and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs one error per missing service, with the configuration keys to add (`InternalHosts:<service>`, and `InternalApiVersions:<service>` for an owner that does not answer on `v1`), and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`). `Startup:StrictRemoteReferences` (or `OxQLEndpointOptions.StrictRemoteReferences` in code, which wins) states it for the host instead: `true` refuses in every environment, `false` in none.
 - **Addon bags.** An extendable entity carries an `addon` dictionary. A key the organisation has defined binds with the definition's kind and matches tolerantly across storage representations; an undefined, retired or `object` key is `unknown`.
 
 ## A request in one look
@@ -130,7 +130,7 @@ and every code: [`src/docs/oxql-query-syntax.md`](src/docs/oxql-query-syntax.md)
 |---|---|
 | `POST /oxql/query` | One request; 200 with rows, or the refusal envelope with its status (400, 403, 413, 422, 504, 500). |
 | `POST /oxql/batch` | `{ "queries": [ <request>, … ], "maxTimeMs"? }`; 200 with `{ "results": [ … ] }` in order, each entry a full success body or a refusal envelope. The batch itself is refused with 400: more than `Limits:MaxBatchQueries` queries (`BATCH_TOO_LARGE`), a member it does not have, a body without `queries`. Queries run sequentially on one host. |
-| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable" } ] }`. `engine.contract` 2 is the marker of this package: every contract 2 construct and the explain answer. Capabilities, only what depends on the host: with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. The two lists are read per caller: a contract 1 caller reads what the legacy pipeline honours (`batch`, `compat.v1` and ten limits), and on a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`) `batch`, `group.page`, `page.offset`, `any` ahead of the host's own. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and absent until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
+| `GET /oxql/health` | Anonymous. `{ "status", "service": "oxql", "engine": { "version", "contract": 2 }, "capabilities": [ … ], "limits": { … }, "remote": [ { "service", "configured", "reachable", "contract"?, "engineVersion"?, "usable"?, "reason"?, "references"? } ], "model": { "entities", "degraded", "reason"? } }`. `engine.contract` 2 is the marker of this package: every contract 2 construct and the explain answer. Capabilities, only what depends on the host: with a remote client `resolve.remote`, `semiJoin`, `resolve.chain`, `lookup.remote`; `explain` and `compat.v1` when enabled. The two lists are read per caller: a contract 1 caller reads what the legacy pipeline honours (`batch`, `compat.v1` and ten limits), and on a host that answers contract 1 by the rewrite first (`Compat:Legacy:Always=false`) `batch`, `group.page`, `page.offset`, `any` ahead of the host's own. `status` is `degraded` when a referenced service is not configured or did not answer when last measured. For a contract 2 caller it is also `degraded` when a service answered without speaking contract 2 (`usable: false` with `reason` `notConfigured`, `unreachable` or `engine`; a contract 2 caller reads these and the owner's `contract` and `engineVersion`, a caller without the header the first three members), when an owner does not publish an entity this host declares a reference to (`references.unknownTargets`, checked in the background against the owner's schema document where the remote client can read it), and when the host's entity model is what a failed build left or the provider has none (`model.degraded`; a model without entities is not degraded unless its provider says so). The answer never waits for another service: `reachable` is the last measurement, refreshed in the background at most once per `Cache:HealthProbeTtlSeconds`, and absent until the first one has finished. `?shallow=true` leaves `remote` out and starts no measurement; it is the form one host asks of another. |
 | `POST /oxql/explain` | On by default; 404 while `Explain:Enabled` is false. Takes a query or the envelope `{ query, include?, shape?, remote?, catalog? }` and never executes it. Answers 200 with `valid`, every error, each stage with its placement and the shape of the row after it, the aliases, the types of the row's roots by reference to the services' schema documents (entity, service, revision) with a rule per root and stage that says where the members stand (`include: ["types"]` writes the member rows and their flags out for a caller without schema documents), the result columns, the owners asked, engine-behaviour notes, and on request the plan (`include: ["plan"]`: the canonical bound form, the emitted page and count stages, the collation, the owner queries) and the index advisory (`include: ["indexes"]`, which reads only `listIndexes`). Rate-limited per user (429 with `Retry-After`) and bounded in what one explain may ask of other services. See [`oxql-operations.md`](src/docs/oxql-operations.md#post-oxqlexplain). |
 
 Every request body is capped at `Limits:MaxRequestBytes` (413 `REQUEST_TOO_LARGE`).
@@ -202,6 +202,7 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Limits:MaxRequestBytes` / `MaxBatchQueries` / `RegexMaxLength` | 262 144 / 10 / 200 | |
 | `Limits:MaxLookupLimit` | 100 | rows one lookup returns per parent |
 | `Execution:MaxTimeMs` | 10 000 | `maxTimeMS` on every aggregate, clamped to 60 000; a timeout is 504 `QUERY_TIMEOUT` |
+| `Execution:ClientDeadlineMarginMs` | 5 000 | how long after an aggregate's `maxTimeMS` the host waits for the database's answer before it gives the aggregate up and answers 504 `QUERY_TIMEOUT` itself. The deadline is wall-clock on the host, so server selection, the wait for a pooled connection and the transfer of the rows count against it; below 0 switches it off, and the database keeps to its `maxTimeMS` either way |
 | `Execution:ResolveTimeoutMs` | 2 000 | budget of one plain remote resolve call, clamped to the effective `MaxTimeMs` |
 | `Execution:ChainTimeoutMs` | 6 000 | budget of one owner call carrying continued stages or a typed, item, converted or element-wise resolve (the time left less 50 ms, at most this), clamped to the effective `MaxTimeMs` |
 | `Execution:BatchConcurrency` | 4 | queries of one internal batch that run at once (1 to 16); a public batch runs one after another |
@@ -215,7 +216,9 @@ Where each limit is enforced, and how it reaches calls between services, is in
 | `Cache:NegativeResolveTtlSeconds` | 10 | how long a key an owner answered as not found is cached; a `strict` request reads past it; `0` caches none |
 | `Cache:AddonDefinitionTtlSeconds` | 30 | a host's addon definition cache |
 | `Cache:HealthProbeTtlSeconds` | 10 | how long `/oxql/health` reuses the last reachability measurement |
+| `Cache:OwnerUnavailableTtlSeconds` | 5 | how long an owner that did not answer (no connection, no answer within its call budget, HTTP 404 on the internal query route) is not called again: its aliases are `null` at once instead of after the call budget, with the code and `params.reason` of the call that failed (`RESOLVE_UNREACHABLE`, or `RESOLVE_TIMEOUT` after a timeout) and `params.remembered`; `0` remembers nothing |
 | `Cursor:SigningKey` | — | required; the host does not start without it; cursors are HMAC-signed with a key derived from it |
+| `Startup:StrictRemoteReferences` | unset | whether a declared remote reference into a service the host has no `InternalHosts` entry for stops the host from starting: `true` in every environment, `false` in none (the error line per service and health's `configured: false` stay); unset, it stops in `Development`, `Local` and under continuous integration |
 
 The flat 1.x key names `MaxPageSize`, `DefaultPageSize`, `MaxPipelineStages`, `MaxLookupStages`,
 `MaxUnwindStages`, `MaxGroupFields`, `MaxProjectionFields` and `RegexMaxLength` are still bound,
@@ -360,6 +363,11 @@ In short:
 4. Every service's schema revision changes once.
 5. To turn the legacy pipeline off: `OxQL:Compat:Legacy:Enabled=false` (the rewrite alone answers
    contract 1) or `OxQL:Compat:Enabled=false` (every request is contract 2).
+6. `GET /OxQL/types` is not a route of this package: the host's `GET /schema` document describes
+   the entities, their members and what each can be filtered, sorted and joined by.
+7. A caller that moves to contract 2 sends `X-OxQL-Contract: 2` with its first contract 2 body.
+   Without the header the body is read as contract 1 (see *What a caller meets when it moves to
+   contract 2* in [`src/docs/UPGRADING-1.x.md`](src/docs/UPGRADING-1.x.md)).
 
 ### What changes with no configuration change
 
@@ -502,10 +510,163 @@ For code outside the packages (the Simplic base package is adapted with its pin)
   `NotSupportedException` for an internal call); `IEntityModelProvider.SchemaRevision`;
   `IRemoteOwnerInfo`; `IReportingAddonDefinitionSource`; `OxQLQueryService.ContractRefusal`.
 
+### Added since 2.1.126.1012
+
+Everything here is additive for a host: one built against 2.1.126.1012 compiles and runs
+unchanged, and a caller reads the new members by name. Where an answer is another than
+2.1.126.1012 gave to the same request, it is one of the following; the entries further down say
+the rest.
+
+What a contract 2 caller reads differently:
+
+- **A body the host cannot bind**, on `query`, `batch` and `explain`: the refusal envelope (400
+  `validation_error`, `INVALID_REQUEST_BODY` or the stage's own code, with `params`) in place of
+  the host's own 400. A batch answers an entry that does not read in its place and runs the
+  others.
+- **No request at all**: the literal `null` as a body, a batch without `queries`, an explain
+  without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason` is
+  `"missing"` for a member that is not there and `"kind"` for a `null`); the code was
+  `UNKNOWN_STAGE`.
+- **`OPTION_NOT_APPLICABLE`** is one error per option of a condition that is no option, each with
+  `params.option`; several unknown options were one error.
+- **Message texts.** `OPTION_NOT_APPLICABLE` says which of three mistakes was made (a name that
+  is no option, an option that is no boolean, an `options` that is no object); a `dateTrunc` key
+  says whether its path is no date (`INVALID_AGGREGATE_ARGUMENT`) or lies under a collection
+  (`GROUP_ON_COLLECTION`); a request that is not there says the place that is missing;
+  `RESOLVE_UNREACHABLE` for an owner that answered 404 says that the owner did not answer on its
+  query route; `RESOLVE_REFUSED` for a refusal that lies at none of the request's stages says
+  that the owner refused the query as a whole, or that it has no such entity. A client goes by
+  `code` and `params`; no text is part of the contract.
+- **Grouping.** A `dateTrunc` key is a date in every answer: a bucket whose local start lies
+  outside the calendar a date on the wire can name is keyed with the first or the last instant.
+- **Values under a collection.** The `null` of a `values` list counts what a comparison with
+  `null` selects, and a row whose collection is empty is counted under no value.
+- **Joins into an owner that just failed.** For `Cache:OwnerUnavailableTtlSeconds` (5) after a
+  call that got no answer the owner is not called: the alias is `null` at once, with the
+  diagnostic of the call that failed and `params.remembered`, and a semi-join is refused at once.
+  `0` calls the owner for every request.
+- **`RESOLVE_REFUSED` for a target the owner does not have** lies at the `resolve` stage.
+- **Health.** `status` is also `degraded` for an owner that answers and does not speak contract 2,
+  for a declared target its owner does not publish, and for a model its provider calls degraded
+  or cannot hand out.
+- **Explain.** `executable` is `unknown`, with a `REMOTE_UNCHECKED` note and `cache.complete:
+  false`, for a join whose owner no check asked and that the host cannot take to answer: its
+  remote client keeps owner facts (`IRemoteOwnerInfo`) and has none of that owner, or the facts
+  name another contract, or the host remembers the owner as not answering. A join into a target
+  the host's check found its owner not to publish is noted `REFERENCE_TARGET_UNKNOWN` and is not
+  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for; it was
+  `timeout`), `unknown`, `engine` and `route` beside the ones it had.
+- **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
+  by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **The API description.** The schemas of the OxQL routes in a document generated from the API
+  explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
+  `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in
+  place of the engine's request and result types, so a client regenerated from the document has
+  other type names. The wire is the same.
+
+What a caller without the contract header reads differently:
+
+- Where the legacy pipeline answers it (the default): 504 `QUERY_TIMEOUT`, in the words that
+  pipeline has for its limit's expiry, when the database has said nothing by
+  `Compat:Legacy:MaxTimeMs` and `Execution:ClientDeadlineMarginMs`. Nothing else: every status,
+  header and body is the one it read, a body the host cannot bind is the host's answer, and
+  health has its members and its `status` by the rule it had.
+- Where the rewrite answers it (`Compat:Legacy:Enabled=false`, or `Compat:Legacy:Always=false`
+  for what the rewrite can express), the request is bound and run by this release's engine: it
+  reads the binder's message texts named above and `OPTION_NOT_APPLICABLE` once per option (a
+  binder's error carries no `params` for this caller), a `dateTrunc` key that is always a date,
+  and the 504 by the host's deadline, whose `QUERY_TIMEOUT` carries `params.maxTimeMs` as that of
+  the database's own expiry now does.
+
+- **Health (contract 2).** Per remote service `contract`, `engineVersion`, `usable`, `reason` and
+  `references { declared, validated, revision, unknownTargets, reason }`; `model { entities,
+  degraded, reason }`; the limits `ownerUnavailableTtlSeconds`, `countStepRows`, `countBudgetMs`
+  and `countMaxBudgetMs` (where the count beside a page ends and the time a count has). The
+  `status` a contract 2 caller reads is also `degraded` for an owner that is not usable, a
+  declared target its owner does not publish, and a degraded model. A caller without the contract
+  header reads the members it always read and the `status` by the rule it always had.
+- **Diagnostics.** `RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` carry `params.reason` (`timeout`,
+  `unreachable`, `route`, `status`), `status` when the owner answered, and `remembered` with
+  `retryAfterMs` when the owner was not called; an answer given from memory has the code, the
+  reason and the status of the call that failed. A refusal for a target the owner does not have
+  says so at the `resolve` stage, in a run and in explain.
+- **Explain.** On a host whose remote client keeps owner facts (`IRemoteOwnerInfo`), an owner no
+  check asked carries `engine` and a `reason` (`unknown`, `engine`, `unreachable`, `timeout`,
+  `route`) and is noted `REMOTE_UNCHECKED` unless it is known to speak contract 2; a host whose
+  client keeps none answers such a join without a note. The owner reason `budget`; the note
+  `REFERENCE_TARGET_UNKNOWN`.
+- **A body that does not read (contract 2).** A request whose body the host cannot bind is
+  answered in the refusal envelope: 400 `validation_error` with the new code
+  `INVALID_REQUEST_BODY` and `params { reason, path, expected, actual, line, position }`
+  (`reason`: `json`, `empty`, `depth`, `kind`, `missing`), or with `INVALID_PAGE_LIMIT`,
+  `LOOKUP_LIMIT_EXCEEDED` or `UNKNOWN_REQUEST_MEMBER` where one of them names the mistake. A batch
+  answers an entry that does not read in its place (`params.entry`) and runs the others; a `null`
+  entry is such an entry. A caller without the contract header gets the host's answer, as before.
+  The filter is public (`OxQLRequestBodyAttribute`, `OxQL.AspNetCore.Binding`) for a host's own
+  controller over an OxQL body. See *A body that does not read* in
+  [`oxql-operations.md`](src/docs/oxql-operations.md).
+- **Refusals a client can render (contract 2).** `params` on the codes whose message alone named
+  the values: `INVALID_OPERAND` (`path`, `operator`, `expected`, `actual`, or `reason` and `kind`),
+  `UNKNOWN_ENUM_MEMBER` (`path`, `operator`, `value`, `values`), `UNKNOWN_VARIANT` (`path`,
+  `variant`, `variants`), every limit code (`limit`, `max`, `count`; the table is in
+  [`oxql-operations.md`](src/docs/oxql-operations.md)), `UNKNOWN_REQUEST_MEMBER` (`members`,
+  `member`, `reason`), `CURSOR_INVALID` (`reason`: `query`, `signature`, `malformed`),
+  `OPTION_NOT_APPLICABLE` (`option`, `reason`), `QUERY_TIMEOUT` (`maxTimeMs`) and
+  `RESOLVE_UNAVAILABLE` (`service`, `reason`, `status`). Nothing a code carried before is renamed
+  or removed, and a caller without the contract header reads the codes as before. A `null` entry
+  of a batch is `INVALID_REQUEST_BODY` under contract 2 (it was `UNKNOWN_STAGE`, which a caller
+  without the header still reads).
+- **Values under a collection.** The `null` of a `values` list over a path through a collection
+  is what `{ "<path>": { "in": [null] } }` selects: the elements without a value and the rows
+  whose collection is not there. A row whose collection is there and empty holds no value and is
+  counted under none; it is asked for with `exists: false` on a member of the element (see
+  *Distinct values* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
+- **Grouping.** A `dateTrunc` key is a date for every stored date, unit and zone: a bucket that
+  starts before `0001-01-01T00:00:00Z` is keyed with that instant, one past year 9999 with the last
+  (see *Grouping* in [`oxql-semantics.md`](src/docs/oxql-semantics.md)).
+- **The routes describe themselves.** Each of `POST /OxQL/query`, `batch`, `explain` and
+  `GET /OxQL/health` carries a summary and a description that points to the documentation, the
+  header `X-OxQL-Contract` as a parameter, the contract 2 body and answers as models of the wire
+  (`OxQL.AspNetCore.OpenApi`) and every status with its body, for a generator that reads the
+  API explorer. See *The API description of the routes* in
+  [`oxql-operations.md`](src/docs/oxql-operations.md).
+- **What a host measures.** The meter `OxQL` (`OxQLMetrics`) with the counter `oxql.requests` and
+  the histogram `oxql.request.duration` (seconds), tagged `contract`, `route`, `entity` and
+  `outcome`, for both contracts. The line of the log category `OxQL.Compat.Legacy` also carries
+  `route`, `status`, `rows`, `elapsedMs`, `dbMs` and `dbCommands`, and a contract 1 request whose
+  body the host could not bind writes a line there too (`reason=unbound`). See *Who still sends
+  contract 1* in [`LEGACY.md`](src/docs/LEGACY.md).
+- **A deadline on the host's side.** Every aggregate, the legacy pipeline's included, is given up
+  on when the database has said nothing by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs`
+  (5 000) after it, and the request is answered 504 `QUERY_TIMEOUT` as the limit's own expiry is.
+  The deadline runs on the host's clock from when the aggregate is handed to the driver, so the
+  selection of a server, the wait for a pooled connection and the transfer of the rows are in it;
+  a margin below 0 switches it off, and the database's own limit holds either way.
+- **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
+  `OxQLEndpointOptions.StrictRemoteReferences`, `Execution:ClientDeadlineMarginMs` (5 000).
+- **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix
+  that is no entity of the host names no owning service and emits no reference.
+- **API.** `OwnerAvailability` and `OwnerOutage`; `RemoteReferenceValidator`,
+  `RemoteReferenceValidation`, `IRemoteSchemaSource` and `RemoteSchemaEntities` (a remote client
+  may implement the source; without it the references stay not validated);
+  `IEntityModelProvider.Degraded` (default: not said); `RemoteServiceState.Contract`,
+  `EngineVersion`, `Usable`, `Reason`, `References`, `Degrades`; `MongoQueryEngine.Availability`
+  and `ReferenceValidator`; `RemoteHealthProbe.Availability`;
+  `OxQLRequestBodyAttribute` (`OxQL.AspNetCore.Binding`); `Codes.InvalidRequestBody`;
+  `OxQLMetrics` (`OxQL.Core.Engine`); `ExecutionOptions.ClientDeadlineMarginMs`;
+  `OxQLDocumentation`, `OxQLOperationAttribute`, `OxQLHeaders`, `OxQLRequestHeaders`,
+  `OxQLApiDescriptionProvider` and the documentation models (`OxQL.AspNetCore.OpenApi`), which
+  `AddOxQLAspNetCore` registers the provider for;
+  `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
+  and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
+  `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
+  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`.
+  `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.
+
 ### Turning the legacy pipeline off
 
-Count the lines of the log category `OxQL.Compat.Legacy` per service: each is a caller without
-the header. When it is quiet, `OxQL:Compat:Legacy:Enabled=false` leaves contract 1 to the rewrite
+Count the lines of the log category `OxQL.Compat.Legacy` per service, or read `oxql.requests`
+with `contract="1"` on its metrics: each is a caller without the header. When it is quiet, `OxQL:Compat:Legacy:Enabled=false` leaves contract 1 to the rewrite
 (what it cannot express is refused), and `OxQL:Compat:Enabled=false` ends contract 1 on the host.
 Removing the code is described in [`src/docs/LEGACY.md`](src/docs/LEGACY.md#removing-it) and is a
 breaking change of the packages' public API.

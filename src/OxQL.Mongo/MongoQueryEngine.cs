@@ -31,6 +31,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
     private readonly IRemoteQueryClient? remote;
     private readonly ExplainForwardCache explainCache;
     private readonly OwnerFetchCache ownerCache;
+    private readonly OwnerAvailability availability;
     private readonly IIndexSource? indexes;
     private readonly ILogger<MongoQueryEngine> logger;
     private readonly bool includeErrorDetails;
@@ -54,14 +55,19 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         TimeProvider? time = null)
     {
         this.models = models ?? throw new ArgumentNullException(nameof(models));
-        this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)));
         this.cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        // Every aggregate is measured and has a deadline on this side beside the limit the database applies to it.
+        this.runner = runner as TimedAggregateRunner ?? new TimedAggregateRunner(runner ?? throw new ArgumentNullException(nameof(runner)))
+        {
+            Deadline = new AggregateDeadline(time ?? TimeProvider.System, options.Execution.ClientDeadlineMarginMs),
+        };
         // The keyed fetch always exists: this host answers its own targets (SelfOwner); only a
         // remote target needs the remote client.
         ownerCache = cache ?? new OwnerFetchCache(this.options);
         this.logger = logger ?? NullLogger<MongoQueryEngine>.Instance;
-        fetch = new KeyedFetch(remote, this, ownerCache, this.options, this.logger);
+        availability = new OwnerAvailability(this.options, time);
+        fetch = new KeyedFetch(remote, this, ownerCache, this.options, this.logger) { Availability = availability };
         remoteClient = remote is not null;
         this.remote = remote;
         this.explainCache = explainCache ?? new ExplainForwardCache();
@@ -75,6 +81,27 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
     /// <summary>What this engine keeps of its owners' keyed fetches and of what they said a target lacks.</summary>
     public OwnerFetchCache OwnerCache => ownerCache;
+
+    /// <summary>
+    /// What this engine remembers of owners that did not answer, so that the next request does not
+    /// wait for them again. An engine has a record of its own; a host hands in the one its health
+    /// probe writes too (<c>AddOxQLMongo</c> does), so both say the same of an owner.
+    /// </summary>
+    public OwnerAvailability Availability
+    {
+        get => availability;
+        init
+        {
+            availability = value ?? throw new ArgumentNullException(nameof(value));
+            fetch.Availability = availability;
+        }
+    }
+
+    /// <summary>
+    /// The host's check of its declared remote references against the owners' schema documents
+    /// (null: none): explain notes a join whose target the owner does not publish.
+    /// </summary>
+    public RemoteReferenceValidator? ReferenceValidator { get; init; }
 
     /// <inheritdoc/>
     public bool RemoteResolve => remoteClient;
@@ -112,7 +139,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         timing.Compile(compiling);
 
         if ((compiled.KeyedResolves.Any(resolve => resolve.IsRemote) || compiled.SemiJoins.Count > 0) && !remoteClient)
-            return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "This host has no remote query client; a remote resolve cannot run."));
+            return QueryOutcome.Of(Refusal.NotExecutable(Codes.ResolveUnavailable, "", inner: [NoRemoteClient()]));
 
         var diagnostics = new List<Diagnostic>(bound.Diagnostics);
 
@@ -267,7 +294,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         {
             Abandon();
 
-            var refusal = MapDriverError(exception, context);
+            var refusal = MapDriverError(exception, context, compiled.MaxTimeMs);
 
             Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
@@ -484,7 +511,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            var refusal = MapDriverError(exception, context);
+            var refusal = MapDriverError(exception, context, compiled.MaxTimeMs);
 
             Log(compiled, timer, 0, refusal.Status == 504, false, context, refusal, resolveCalls, 0);
 
@@ -873,15 +900,27 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             RemoveAt(nested, storage[(cut + 1)..]);
     }
 
-    private Refusal MapDriverError(Exception exception, RequestContext context)
+    /// <summary>The error of a join into another service on a host that has no client to reach one.</summary>
+    internal static QueryValidationError NoRemoteClient() => new()
+    {
+        Code = Codes.ResolveUnavailable,
+        Message = "This host has no remote query client; a remote resolve cannot run.",
+        Params = new Dictionary<string, object?> { ["reason"] = "noClient" },
+    };
+
+    private Refusal MapDriverError(Exception exception, RequestContext context, int maxTimeMs)
     {
         switch (exception)
         {
             case MongoExecutionTimeoutException:
-                return Refusal.Timeout("The query exceeded its time budget.");
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case MongoCommandException command when command.Code == 50:
-                return Refusal.Timeout("The query exceeded its time budget.");
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
+
+            // The database said nothing by the deadline this host keeps beside its limit: the same answer.
+            case AggregateDeadlineException:
+                return Refusal.Timeout("The query exceeded its time budget.", maxTimeMs);
 
             case var _ when RequestError(exception) is { } refusal:
                 return refusal;

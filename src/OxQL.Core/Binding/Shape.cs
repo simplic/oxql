@@ -903,15 +903,34 @@ public sealed class Shape
     }
 
     /// <summary>Whether a wire path survives the projection (and every unwind that dropped its collection) at this shape.</summary>
-    public bool IsVisible(string wire) =>
-        LazyInitializer.EnsureInitialized(ref visibility, static () => new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal))
-            .GetOrAdd(wire, static (path, shape) => shape.Visible(path), this);
+    public bool IsVisible(string wire)
+    {
+        var answered = LazyInitializer.EnsureInitialized(ref visibility, static () => new System.Collections.Concurrent.ConcurrentDictionary<string, bool>(StringComparer.Ordinal));
+
+        if (answered.TryGetValue(wire, out var visible))
+            return visible;
+
+        visible = Visible(wire);
+
+        // Past what is kept the answer is worked out each time: rows whose members are named by their data (a bag
+        // of values under an unwound alias) ask for as many paths as they have names.
+        if (Volatile.Read(ref kept) < MaxKeptVisibility && answered.TryAdd(wire, visible))
+            Interlocked.Increment(ref kept);
+
+        return visible;
+    }
+
+    /// <summary>The most paths a shape keeps the answer of <see cref="IsVisible"/> for.</summary>
+    public const int MaxKeptVisibility = 4096;
 
     /// <summary>
     /// What <see cref="IsVisible"/> answered, by path: a shape does not change, and the row encoder
-    /// asks the same few paths for every row of a page.
+    /// asks the same few paths for every row of a page. A shape is built for one request and let go
+    /// with it; what it keeps is bounded all the same (<see cref="MaxKeptVisibility"/>).
     /// </summary>
     private System.Collections.Concurrent.ConcurrentDictionary<string, bool>? visibility;
+
+    private int kept;
 
     private bool Visible(string wire)
     {

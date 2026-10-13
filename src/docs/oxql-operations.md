@@ -550,9 +550,21 @@ Anonymous, always 200, and never waits for another service:
   (`IRemoteOwnerInfo`): `contract` and `engineVersion` as the owner named them (absent when it named
   none), and `usable`: `true` only for an owner that answered and speaks this engine's contract,
   `false` with a `reason` otherwise, absent while nothing is measured or the client keeps no owner
-  facts. `reason` is `notConfigured` (no `InternalHosts` entry), `unreachable` (its health did not
-  answer; a wrong `InternalApiVersions` entry looks the same) or `engine` (it answered and names no
-  contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
+  facts. `reason` is one of:
+  `pending` (configured, and nothing was measured of it yet: the entry carries neither `reachable`
+  nor `usable`, and `status` says nothing of it; the first answer after a start reads so, since
+  health never waits for a measurement);
+  `notConfigured` (no `InternalHosts` entry);
+  `unreachable` (its health did not answer);
+  `route` (the owner's host answers and has no internal query route under the API version this
+  host calls it with, a wrong `InternalApiVersions` entry: its health answered 404, or a join of
+  this host found the route missing, which the host remembers for
+  `Cache:OwnerUnavailableTtlSeconds`; a join says the same word, `RESOLVE_UNREACHABLE` with
+  `params.reason: "route"`, and so does explain's owner entry. A remote client that reports a 404
+  of the owner's health as "not reachable" without the status reads `unreachable` here until a
+  join has met the route);
+  `engine` (it answered and names no contract 2: a join into it is `null` with
+  `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
   `usable: false` degrades the `status` a contract 2 caller reads, as `reachable: false` does. A
   caller without the contract header reads the three members `service`, `configured`, `reachable`,
   and a `status` that only a service that is not configured or not reachable degrades.

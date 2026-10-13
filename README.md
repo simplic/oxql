@@ -690,6 +690,11 @@ What a caller without the contract header reads differently:
   The deadline runs on the host's clock from when the aggregate is handed to the driver, so the
   selection of a server, the wait for a pooled connection and the transfer of the rows are in it;
   a margin below 0 switches it off, and the database's own limit holds either way.
+- **Health and explain name a missing query route.** A remote entry of health has the `reason`
+  values `route` (the owner answers and has no internal query route under the API version it is
+  called with; `RemoteServiceState.Route`) and `pending` (nothing measured yet;
+  `RemoteServiceState.Pending`, on the entries that carried no `reason`); an explain's owner
+  entry says `route` for an owner whose explain route answered 404.
 - **The strict start.** The exception that stops a host whose declared remote references have no
   configured service says how many there are, that the log lines before it name them, and the
   switch; the services and the keys to set are in those lines (`OxQL.Startup`), once.

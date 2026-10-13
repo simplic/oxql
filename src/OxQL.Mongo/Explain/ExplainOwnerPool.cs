@@ -287,6 +287,11 @@ internal sealed class ExplainOwnerPool : IExplainShare
         {
             return (null, RemoteExplain.Timeout, watch.ElapsedMilliseconds);
         }
+        catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The owner's host answered and has no such route: the word a join into it says.
+            return (null, OxQL.Core.Engine.OwnerAvailability.Route, watch.ElapsedMilliseconds);
+        }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             return (null, RemoteExplain.Unreachable, watch.ElapsedMilliseconds);

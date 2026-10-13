@@ -28,6 +28,17 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// <summary><see cref="Reason"/> of a service that answered and does not speak this engine's contract.</summary>
     public const string Engine = "engine";
 
+    /// <summary>
+    /// The <see cref="Reason"/> of an owner that does not answer on the internal query route under the
+    /// API version this host calls it with: its health answered 404, or a join of this host found the
+    /// route missing while its health answers. A join into it says the same word
+    /// (<c>RESOLVE_UNREACHABLE</c>, <c>params.reason: "route"</c>).
+    /// </summary>
+    public const string Route = "route";
+
+    /// <summary>The <see cref="Reason"/> of a configured service nothing was measured of yet: its entry says neither that it answers nor that it does not.</summary>
+    public const string Pending = "pending";
+
     /// <summary>The contract the owner's engine speaks, as its health named it; null when it named none or nothing is known.</summary>
     public int? Contract { get; init; }
 
@@ -68,6 +79,13 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// The state of a configured service after one measurement: whether its health answered, and
     /// what the client then knows of it (<paramref name="owner"/>; null when it knows nothing).
     /// </summary>
+    /// <summary>A configured service before its first measurement.</summary>
+    public static RemoteServiceState Unmeasured(string service) => new(service, true, null) { Reason = Pending };
+
+    /// <summary>A service whose internal query route does not answer; <paramref name="reachable"/> is what its health said.</summary>
+    public static RemoteServiceState WithoutRoute(string service, bool reachable, RemoteOwnerInfo? owner) =>
+        new(service, true, reachable) { Contract = owner?.Contract, EngineVersion = owner?.EngineVersion, Usable = false, Reason = Route };
+
     public static RemoteServiceState Measured(string service, bool reachable, RemoteOwnerInfo? owner)
     {
         if (!reachable)
@@ -157,7 +175,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             if (due && refresh is null)
                 refresh = Task.Run(() => RefreshAsync(services, client));
 
-            return measured ?? services.Select(service => client.IsConfigured(service) ? new RemoteServiceState(service, true, null) : RemoteServiceState.Unconfigured(service)).ToList();
+            return measured ?? services.Select(service => client.IsConfigured(service) ? RemoteServiceState.Unmeasured(service) : RemoteServiceState.Unconfigured(service)).ToList();
         }
     }
 
@@ -203,8 +221,22 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             if (reachable)
                 Availability?.Succeeded(service, keepRoute: true);
 
+            var owner = reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null;
+
+            // A join that found the owner's query route missing said so; health says the same of the owner
+            // until a call finds the route, whether or not its health answers.
+            if (Availability?.OutageOf(service) is { Reason: OwnerAvailability.Route })
+                return RemoteServiceState.WithoutRoute(service, reachable, owner);
+
             // The client keeps what the owner's health said of it where it measures reachability.
-            return RemoteServiceState.Measured(service, reachable, reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null);
+            return RemoteServiceState.Measured(service, reachable, owner);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The owner's host answered and has no such route: the API version it is called with, not its reach.
+            logger.LogDebug(exception, "OxQL health probe of {Service} found no route", service);
+
+            return RemoteServiceState.WithoutRoute(service, reachable: false, null);
         }
         catch (Exception exception)
         {

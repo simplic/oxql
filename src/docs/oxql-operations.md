@@ -41,6 +41,7 @@ what a client needs to render it, and neither it nor the message ever names a ty
 | `empty` | the body is empty | — |
 | `depth` | the body nests deeper than the host reads | `max` |
 | `kind` | a value is of another JSON kind than its place takes: a body or a stage that is no object, a `pipeline`, `sort`, `and`, `or`, `group.by` or `queries` that is no array, a condition, a `not`, an aggregate or a `variables` that is no object, an `entityType` that is no string, a `strict` that is no boolean, a fraction where a whole number is read | `path`, `expected` and `actual` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`); a place only known as a whole (a stage) carries `path` alone |
+| `encoding` | a member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape (`"\ud800"`, which is well-formed JSON), or bytes that are no UTF-8. It is said before anything else about the body, one error per place (at most 20) | `path` (the text; for a name, the object that holds it), `in`: `name` or `value` |
 | `missing` | a required member is not written: `entityType`, `pipeline`, a batch's `queries`, an explain envelope's `query`, the `path` or `unit` of a `dateTrunc` | `path` |
 
 `params.path` is the place in the body as a JSON path from its root (`$.pipeline[2].sort`,
@@ -49,7 +50,9 @@ a stage. In a batch an entry that does not read is refused in its place of `resu
 entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.entry` is its index
 in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
 itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
-that is no whole number.
+that is no whole number. Text that is no Unicode text (`encoding`) in an entry refuses that
+entry, in a member of the batch itself the batch; a batch sent without a declared length
+(`Content-Length`) is refused whole for either.
 
 The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
 `OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the
@@ -62,7 +65,7 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above |
+| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above; a member name or a text that is no Unicode text is answered so by the engine's filter, in the same form |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
 | 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
@@ -107,7 +110,7 @@ the listed status.
 | `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse, a pattern that holds a NUL character (written `\x00` it matches one; a text operand of `eq`, `contains` and the like may hold the character itself); or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
-| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind` or `missing`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
+| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind`, `missing` or `encoding`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
 | `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; contract 1: a `null` query in a batch |
 | `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |

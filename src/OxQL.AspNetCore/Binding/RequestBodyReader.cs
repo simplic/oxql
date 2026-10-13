@@ -32,6 +32,9 @@ internal static class RequestBodyReader
     public const string ReasonKind = "kind";
     public const string ReasonMissing = "missing";
 
+    /// <summary>A member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape, or bytes that are no UTF-8.</summary>
+    public const string ReasonEncoding = "encoding";
+
     private static readonly string[] ExplainMembers = ["query", "remote", "include", "catalog", "shape", "budget"];
 
     // ---- the body as a whole ------------------------------------------------------------------
@@ -85,6 +88,119 @@ internal static class RequestBodyReader
 
         return null;
     }
+
+    // ---- text that is no text -----------------------------------------------------------------
+
+    /// <summary>
+    /// Whether a body may hold a name or a text that is no Unicode text: bytes that are no UTF-8, or
+    /// an escape of half a surrogate pair (every such escape starts <c>\ud</c>). A body without
+    /// either holds none, which is every body but a few: the full look (<see cref="BrokenTexts"/>)
+    /// is taken only then.
+    /// </summary>
+    public static bool MayHoldBrokenText(ReadOnlySpan<byte> utf8) =>
+        utf8.IndexOf("\\ud"u8) >= 0 || utf8.IndexOf("\\uD"u8) >= 0 || !System.Text.Unicode.Utf8.IsValid(utf8);
+
+    /// <summary>
+    /// The places of a body whose member name or text is no Unicode text, each as the JSON path of
+    /// the text (of the object, for a name) and whether it is a name; empty when there is none, and
+    /// null when the body is no JSON at all, which is said in its own words.
+    /// </summary>
+    public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8)
+    {
+        JsonDocument document;
+
+        try
+        {
+            document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = int.MaxValue });
+        }
+        catch (JsonException)
+        {
+            // Bytes that are no UTF-8 may stop the reader before it has a document: they are still what is wrong.
+            return System.Text.Unicode.Utf8.IsValid(utf8.Span) ? null : [(Root, false)];
+        }
+
+        using (document)
+        {
+            var broken = new List<(string Path, bool Name)>();
+            var pending = new Stack<(JsonElement Element, string Path)>();
+
+            pending.Push((document.RootElement, Root));
+
+            while (pending.Count > 0 && broken.Count < MaxBrokenTexts)
+            {
+                var (current, at) = pending.Pop();
+
+                switch (current.ValueKind)
+                {
+                    case JsonValueKind.Object:
+                        foreach (var member in current.EnumerateObject())
+                        {
+                            if (NameOf(member) is { } name)
+                                pending.Push((member.Value, Join(at, name)));
+                            else
+                                broken.Add((at, true));
+                        }
+
+                        break;
+
+                    case JsonValueKind.Array:
+                        var index = 0;
+
+                        foreach (var item in current.EnumerateArray())
+                            pending.Push((item, $"{at}[{index++}]"));
+
+                        break;
+
+                    case JsonValueKind.String when !IsText(current):
+                        broken.Add((at, false));
+                        break;
+                }
+            }
+
+            broken.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
+
+            return broken;
+        }
+    }
+
+    /// <summary>The most places one refusal names.</summary>
+    private const int MaxBrokenTexts = 20;
+
+    private static string? NameOf(JsonProperty member)
+    {
+        try
+        {
+            return member.Name;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsText(JsonElement text)
+    {
+        try
+        {
+            _ = text.GetString();
+
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A name or a text that is no Unicode text, at its place.</summary>
+    public static QueryValidationError Broken(string at, bool name) => new()
+    {
+        Code = Codes.InvalidRequestBody,
+        Message = name
+            ? $"A member name in '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8."
+            : $"The text at '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.",
+        Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding, ["path"] = at, ["in"] = name ? "name" : "value" },
+    };
 
     private static bool IsBlank(ReadOnlySpan<byte> utf8)
     {

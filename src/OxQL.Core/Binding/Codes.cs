@@ -53,8 +53,9 @@ public static class Codes
     /// A contract 2 request body that cannot be read into a request: no JSON, empty, a member of
     /// another JSON kind than the member takes, or a required member that is missing.
     /// <c>params.reason</c> is <c>json</c> (with <c>line</c> and <c>position</c>), <c>empty</c>,
-    /// <c>depth</c> (with <c>max</c>), <c>kind</c> (with <c>expected</c> and <c>actual</c>) or
-    /// <c>missing</c>; <c>params.path</c> names the place in the body as a JSON path.
+    /// <c>depth</c> (with <c>max</c>), <c>kind</c> (with <c>expected</c> and <c>actual</c>),
+    /// <c>missing</c> or <c>encoding</c> (a name or a text that is no Unicode text, with <c>in</c>);
+    /// <c>params.path</c> names the place in the body as a JSON path.
     /// </summary>
     public const string InvalidRequestBody = "INVALID_REQUEST_BODY";
 

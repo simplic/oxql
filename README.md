@@ -558,6 +558,10 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **Text that is no Unicode text.** Half of a surrogate pair written as an escape (`"\ud800"`)
+  or bytes that are no UTF-8, in a member name or a text anywhere in a body, is 400
+  `INVALID_REQUEST_BODY` with `params { reason: "encoding", path, in: "name" | "value" }` (a new
+  `reason`), on `query`, `batch` and `explain`; an entry of a batch is answered in its place.
 - **Arithmetic in an aggregate's argument.** A quotient by zero or by `null` is `null`, which an
   aggregate skips, whatever rows the request meets; a quotient is a `double` (a `decimal` with a
   `decimal` operand), so `sum` and `avg` over one carry its fraction. An operand that is no
@@ -595,6 +599,8 @@ What a contract 2 caller reads differently:
 
 What a caller without the contract header reads differently:
 
+- On either path: a body with a member name or a text that is no Unicode text (half of a
+  surrogate pair, bytes that are no UTF-8) is the host's 400 in its problem form.
 - Where the legacy pipeline answers it (the default): 504 `QUERY_TIMEOUT`, in the words that
   pipeline has for its limit's expiry, when the database has said nothing by
   `Compat:Legacy:MaxTimeMs` and `Execution:ClientDeadlineMarginMs`. Nothing else: every status,

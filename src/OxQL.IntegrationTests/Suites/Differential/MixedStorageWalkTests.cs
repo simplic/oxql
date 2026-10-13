@@ -191,9 +191,10 @@ public class MixedStorageWalkTests
     /// The position rule of a contract 1 cursor over these rows: it continues by one comparison per
     /// sort member with the last value of the page, and a comparison is made within the stored type
     /// of that value. What holds for every walk: the one page of all rows is the order of the sort,
-    /// every page of a walk is in that order, a row is served once, and the walk ends. The rows each
-    /// walk continues to from the positions its pages of five end on are held by their number. A
-    /// walk that continues across the stored types is a contract 2 walk (<c>X-OxQL-Contract: 2</c>).
+    /// every page of a walk is in that order, no row is answered twice, and the walk ends. Each case
+    /// names, with its sort, the number of rows the positions of a walk in pages of five continue
+    /// to: the rule applied to the values those pages end on. A walk whose position continues
+    /// across the stored types is a contract 2 walk (<c>X-OxQL-Contract: 2</c>).
     /// </summary>
     [Theory]
     [InlineData("""[{ "count": "asc" }, { "note": "desc" }]""", 12)]
@@ -208,7 +209,7 @@ public class MixedStorageWalkTests
     [InlineData("""[{ "optionalCount": "desc" }]""", 30)]
     [InlineData("""[{ "optionalRatio": "asc" }]""", 10)]
     [InlineData("""[{ "optionalRatio": "desc" }]""", 31)]
-    public async Task A_contract_1_walk_over_such_a_member_continues_by_comparison_with_the_last_value_in_the_order_of_the_sort(string sort, int served)
+    public async Task A_contract_1_walk_over_such_a_member_continues_by_comparison_with_the_last_value_in_the_order_of_the_sort(string sort, int continued)
     {
         var fleet = await Fleet.Value;
         var query = new Walks.Query(Entity, $$"""[{ "sort": {{sort}} }, { "project": { "id": 1 } }]""");
@@ -242,7 +243,7 @@ public class MixedStorageWalkTests
 
         cursor.Should().BeNull($"{sort}: the walk ends");
         rows.Should().OnlyHaveUniqueItems(sort);
-        rows.Should().BeSubsetOf(whole).And.Equal(whole.Where(rows.Contains), $"{sort}: the rows served are in the order of the sort");
-        rows.Should().HaveCount(served, sort);
+        rows.Should().BeSubsetOf(whole).And.Equal(whole.Where(rows.Contains), $"{sort}: the rows of the walk are in the order of the sort");
+        rows.Should().HaveCount(continued, $"{sort}: the rows the positions of this walk continue to");
     }
 }

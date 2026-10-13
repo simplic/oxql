@@ -115,6 +115,62 @@ public class KeysetPredicateTests
                 """));
     }
 
+    // ---- across a NaN and across stored types: what a contract 2 page sends ----
+
+    private static BsonDocument Typed(bool inclusive, params KeysetField[] legs) => KeysetPredicate.After(legs, inclusive, everyType: true);
+
+    private static readonly KeysetField Key = new("_id", true, Id);
+
+    [Fact]
+    public void An_ascending_number_and_text_of_a_member_of_one_type_are_asked_as_before()
+    {
+        Typed(false, new KeysetField("n", true, new BsonInt32(5)), Key).ShouldBeBson(Build(new KeysetField("n", true, new BsonInt32(5))));
+        Typed(false, new KeysetField("n", false, new BsonString("x")), Key).ShouldBeBson(Build(new KeysetField("n", false, new BsonString("x"))));
+        Typed(false, new KeysetField("n", true, new BsonDouble(1.5)), Key).ShouldBeBson(Build(new KeysetField("n", true, new BsonDouble(1.5))));
+    }
+
+    [Fact]
+    public void Descending_after_a_number_the_NaN_follows_the_smaller_numbers()
+    {
+        Typed(false, new KeysetField("n", false, new BsonDouble(1.5)), Key)
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: 1.5, _id: { $gt: 120 } }, { n: { $lt: 1.5 } }, { n: { $numberDouble: "NaN" } }, { n: null } ] }"""));
+    }
+
+    [Fact]
+    public void After_a_NaN_every_number_follows_ascending_and_none_descending()
+    {
+        Typed(false, new KeysetField("n", true, new BsonDouble(double.NaN)), Key)
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $numberDouble: "NaN" }, _id: { $gt: 120 } }, { n: { $gte: { $numberDouble: "-Infinity" } } } ] }"""));
+
+        Typed(false, new KeysetField("n", false, new BsonDecimal128(Decimal128.Parse("NaN"))), Key)
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $numberDecimal: "NaN" }, _id: { $gt: 120 } }, { n: null } ] }"""));
+    }
+
+    [Fact]
+    public void A_leg_of_several_stored_types_admits_the_types_that_order_beyond_the_positions()
+    {
+        // Ascending after a number: the larger numbers, then text and every type after it.
+        Typed(false, new KeysetField("n", true, new BsonDecimal128(5m)) { SeveralTypes = true }, Key)
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $numberDecimal: "5" }, _id: { $gt: 120 } }, { n: { $gt: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 4, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
+
+        // Descending after text: the smaller text, then every number (a NaN is one), then the nulls.
+        Typed(false, new KeysetField("n", false, new BsonString("7")) { SeveralTypes = true }, Key)
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: "7", _id: { $gt: 120 } }, { n: { $lt: "7" } }, { n: { $type: [1, 16, 18, 19] } }, { n: null } ] }"""));
+    }
+
+    [Fact]
+    public void The_leading_range_of_such_a_leg_holds_the_later_types_and_from_a_NaN_on_everything()
+    {
+        KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDecimal128(5m)) { SeveralTypes = true }, Key], everyType: true)!
+            .ShouldBeBson(BsonDocument.Parse("""{ $or: [ { n: { $gte: { $numberDecimal: "5" } } }, { n: { $type: [2, 14, 3, 4, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] }"""));
+        KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDouble(double.NaN)), Key], everyType: true)!
+            .ShouldBeBson(BsonDocument.Parse("""{ n: { $ne: null } }"""));
+        KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDouble(1.5)), Key], everyType: true)!
+            .ShouldBeBson(BsonDocument.Parse("""{ n: { $gte: 1.5 } }"""));
+        KeysetPredicate.LeadingRange([new KeysetField("n", true, new BsonDecimal128(5m)) { SeveralTypes = true }, Key])!
+            .ShouldBeBson(BsonDocument.Parse("""{ n: { $gte: { $numberDecimal: "5" } } }"""), "without the flag the range is the one it was");
+    }
+
     [Fact]
     public void No_sort_fields_is_the_key_alone()
     {

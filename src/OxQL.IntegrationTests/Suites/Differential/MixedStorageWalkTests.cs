@@ -1,0 +1,120 @@
+using FluentAssertions;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using OxQL.IntegrationTests.Fixtures;
+using OxQL.IntegrationTests.Fleet;
+using OxQL.IntegrationTests.Fleet.Models.Conformance;
+using OxQL.IntegrationTests.Harness;
+using Xunit;
+
+namespace OxQL.IntegrationTests.Suites.Differential;
+
+/// <summary>
+/// A walk by cursor over a member whose rows hold values of more than one stored type, or a value
+/// that is no number: a decimal written as text before a migration beside the migrated rows, a
+/// double that is NaN or infinite, a Decimal128 NaN. The database orders such rows in one order
+/// (by type first, NaN before every number), and the pages of a walk are that order, split: no row
+/// twice, none left out, whatever value a page ends on.
+/// </summary>
+[Trait("Category", "Integration")]
+public class MixedStorageWalkTests
+{
+    private const string Entity = EdgeCorpus.Entity;
+
+    private const int Rows = 36;
+
+    private static readonly Lazy<Task<CorpusFleet>> Fleet = new(() => CorpusFleet.CreateAsync("mixed-storage", seed: [], extra: async fleet =>
+    {
+        var database = await fleet.DatabaseAsync(LabService.Conformance);
+
+        await database.GetCollection<BsonDocument>(LabService.Conformance.Model.Entities[Entity].Collection).InsertManyAsync(Enumerable.Range(1, Rows).Select(Row));
+    }), LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private static BsonDocument Row(int n)
+    {
+        var row = new ConformanceEntity { Id = EdgeCorpus.IdOf(Org.A, n), OrganizationId = Org.A.Id(), Name = "row " + n, Count = n % 3 }.ToBsonDocument();
+
+        // A decimal as the migrated rows hold it, as text of two scales, as no number at all, null and not stored.
+        row["OptionalAmount"] = (n % 9) switch
+        {
+            0 => new BsonDecimal128(12.5m),
+            1 => new BsonString("12.50"),
+            2 => new BsonString("7"),
+            3 => new BsonDecimal128(-3m),
+            4 => new BsonString("n/a"),
+            5 => BsonNull.Value,
+            6 => new BsonDecimal128(Decimal128.Parse("NaN")),
+            7 => new BsonDecimal128(Decimal128.PositiveInfinity),
+            _ => new BsonDecimal128(700m),
+        };
+
+        if (n % 9 == 5 && n % 2 == 0)
+            row.Remove("OptionalAmount");
+
+        // A double that is a number, NaN, infinite either way, null.
+        row["OptionalRatio"] = (n % 7) switch
+        {
+            0 => new BsonDouble(double.NaN),
+            1 => new BsonDouble(double.NegativeInfinity),
+            2 => new BsonDouble(double.PositiveInfinity),
+            3 => BsonNull.Value,
+            4 => new BsonDouble(-0.0),
+            5 => new BsonDouble(0.0),
+            _ => new BsonDouble(1.5),
+        };
+
+        // A count four versions of a service wrote, each in its own numeric type.
+        row["OptionalCount"] = (n % 6) switch
+        {
+            0 => new BsonInt32(2),
+            1 => new BsonInt64(2),
+            2 => new BsonDouble(2.5),
+            3 => new BsonDecimal128(1m),
+            4 => new BsonDouble(double.NaN),
+            _ => BsonNull.Value,
+        };
+
+        return row;
+    }
+
+    public static TheoryData<string> Sorts() =>
+    [
+        """[{ "optionalAmount": "asc" }]""", """[{ "optionalAmount": "desc" }]""", """[{ "optionalAmount": "desc" }, { "id": "desc" }]""", """[{ "count": "asc" }, { "optionalAmount": "desc" }]""",
+        """[{ "optionalRatio": "asc" }]""", """[{ "optionalRatio": "desc" }]""", """[{ "optionalRatio": "asc" }, { "optionalAmount": "asc" }]""", """[{ "count": "desc" }, { "optionalRatio": "desc" }, { "id": "desc" }]""",
+        """[{ "optionalCount": "asc" }]""", """[{ "optionalCount": "desc" }]""", """[{ "optionalCount": "asc" }, { "optionalRatio": "desc" }]""",
+    ];
+
+    [Theory]
+    [MemberData(nameof(Sorts))]
+    public async Task A_walk_over_a_member_of_several_stored_types_is_the_one_page_split(string sort)
+    {
+        var client = (await Fleet.Value).Client(LabService.Conformance);
+        var query = new Walks.Query(Entity, $$"""[{ "sort": {{sort}} }, { "project": { "id": 1, "optionalAmount": 1, "optionalRatio": 1, "optionalCount": 1 } }]""");
+        var whole = await Walks.WholeAsync(client, query);
+
+        whole.Should().HaveCount(Rows).And.OnlyHaveUniqueItems();
+
+        (await Walks.DifferencesAsync(client, query, whole, [1, 2, 5, Rows - 1, Rows, Rows + 1])).Should().BeEmpty(sort);
+    }
+
+    /// <summary>The groups of such a member page the same way: a key of every stored type, the group of NaN, the group of null.</summary>
+    [Theory]
+    [InlineData("optionalAmount")]
+    [InlineData("optionalRatio")]
+    [InlineData("optionalCount")]
+    public async Task A_walk_over_the_groups_of_such_a_member_is_the_one_page_split(string member)
+    {
+        var client = (await Fleet.Value).Client(LabService.Conformance);
+
+        foreach (var sort in new[] { "", """, { "sort": [{ "k": "desc" }] }""", """, { "sort": [{ "n": "desc" }, { "k": "asc" }] }""", """, { "sort": [{ "top": "asc" }] }""" })
+        {
+            var query = new Walks.Query(Entity, $$"""[{ "group": { "by": [{ "path": "{{member}}", "as": "k" }], "fields": { "n": { "count": true }, "top": { "max": "optionalRatio" } } } }{{sort}}]""");
+            var whole = await Walks.WholeAsync(client, query);
+
+            // The group of NaN and the group of null are two groups, and a row writes both keys as null.
+            whole.Should().NotBeEmpty();
+
+            (await Walks.DifferencesAsync(client, query, whole, [1, 2, 3])).Should().BeEmpty($"{member}{sort}");
+        }
+    }
+}

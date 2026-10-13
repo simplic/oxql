@@ -1426,7 +1426,7 @@ internal static class MongoCompiler
 
         foreach (var field in sortFields)
             if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
-                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)));
+                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = HoldsSeveralTypes(field.Path) });
 
         if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
             legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
@@ -1439,6 +1439,14 @@ internal static class MongoCompiler
     }
 
     /// <summary>
+    /// Whether the rows may hold values of more than one stored type under a sort path: a decimal,
+    /// which the rows written before a migration hold as text, and a value of an addon bag, which is
+    /// stored as it was written. A sort orders such rows by type first, and a page continues across
+    /// the types.
+    /// </summary>
+    private static bool HoldsSeveralTypes(ResolvedPath path) => path.LeafKind == Kind.Decimal || path.Kind == Kind.Unknown || path.Addon is not null;
+
+    /// <summary>
     /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it
     /// on): the null-aware predicate over every leg and, with <paramref name="ranged"/>, the one range
     /// on the leading leg it implies, first.
@@ -1447,10 +1455,11 @@ internal static class MongoCompiler
     {
         var conjuncts = new List<BsonDocument>();
 
-        if (ranged && KeysetPredicate.LeadingRange(legs) is { } range)
+        // A contract 2 page follows the sort across stored types; a contract 1 page sends the predicate it always sent.
+        if (ranged && KeysetPredicate.LeadingRange(legs, everyType: true) is { } range)
             conjuncts.Add(range);
 
-        conjuncts.Add(KeysetPredicate.After(legs, inclusive));
+        conjuncts.Add(KeysetPredicate.After(legs, inclusive, everyType: ranged));
 
         return conjuncts;
     }

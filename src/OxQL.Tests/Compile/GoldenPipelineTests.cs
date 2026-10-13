@@ -308,6 +308,7 @@ public class GoldenPipelineTests
                 { "Items.Quantity": 7, _id: {{id.ToJson()}}, i: { $gt: 2 } },
                 { "Items.Quantity": 7, _id: { $gt: {{id.ToJson()}} } },
                 { "Items.Quantity": { $lt: 7 } },
+                { "Items.Quantity": { $numberDouble: "NaN" } },
                 { "Items.Quantity": null } ] } ] } }
             """,
             """{ $sort: { "Items.Quantity": -1, _id: 1, i: 1 } }""",
@@ -875,9 +876,9 @@ public class GoldenPipelineTests
         next.PageStages[^3].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $and: [
                 { total: { $not: { $gt: 0.30000000000000004 } } },
-                { $or: [ { total: 0.30000000000000004, st: 1, no: { $ne: null } }, { total: 0.30000000000000004, st: { $gt: 1 } }, { total: { $lt: 0.30000000000000004 } }, { total: null } ] },
+                { $or: [ { total: 0.30000000000000004, st: 1, no: { $ne: null } }, { total: 0.30000000000000004, st: { $gt: 1 } }, { total: { $lt: 0.30000000000000004 } }, { total: { $numberDouble: "NaN" } }, { total: null } ] },
                 { $nor: [ { st: 1, no: null } ] } ] } }
-            """), "the range, the position by value, and the served group by its keys");
+            """), "the range, the position by value (below every number stands the NaN, which no range reaches), and the served group by its keys");
         next.PageStages[^2].ShouldBeBson(BsonDocument.Parse("""{ $sort: { total: -1, st: 1, no: 1 } }"""));
 
         // A count is exact however often it is computed: its page continues by value alone, as before.

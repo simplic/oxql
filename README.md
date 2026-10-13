@@ -558,6 +558,10 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **A walk by cursor over a number, a `decimal` or an addon key.** The pages are the order of
+  the sort, split, also where rows hold the decimal as text beside the migrated rows, a NaN, or
+  an addon value of another stored type: each row is served once. A cursor issued before is
+  continued as it was issued.
 - **Joins on a text key.** In a request that folds case, a join over a reference stored as text
   joins a row whose reference is null, not stored or no text as it joins it in a request that
   folds nothing; the rows beside it join byte for byte.
@@ -667,7 +671,9 @@ What a caller without the contract header reads differently:
   `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
   and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
-  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`.
+  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`;
+  `KeysetField.SeveralTypes`, `KeysetPredicate.After(legs, inclusive, everyType)` and
+  `KeysetPredicate.LeadingRange(legs, everyType)`.
   `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.
 
 ### Turning the legacy pipeline off

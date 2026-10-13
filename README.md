@@ -698,6 +698,9 @@ What a caller without the contract header reads differently:
 - **`RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` beside kept records.** Where some records of the
   page were kept from an earlier answer, the message says for how many keys the alias is null, and
   `params` carries `keys` and `cached`.
+- **Timing.** `timing.resolve.localCalls` counts the owner queries a host ran in process for join
+  targets of its own (`calls` counts those to other services), and `Server-Timing` says
+  `… / n local` beside them.
 - **The strict start.** The exception that stops a host whose declared remote references have no
   configured service says how many there are, that the log lines before it name them, and the
   switch; the services and the keys to set are in those lines (`OxQL.Startup`), once.

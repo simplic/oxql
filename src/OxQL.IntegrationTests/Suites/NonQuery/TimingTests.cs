@@ -197,7 +197,7 @@ public class TimingTests
     public async Task A_keyed_join_on_this_host_lists_its_owner_query_as_a_resolve_command()
     {
         await using var fleet = await CorpusFleet.CreateAsync("timing_self", [LabService.Transport, LabService.Fleet]);
-        var (_, body) = await PostOnAsync(fleet, LabService.Transport, $$"""
+        var (response, body) = await PostOnAsync(fleet, LabService.Transport, $$"""
             { "entityType": "transport.shipment", "timing": true, "pipeline": [
                 { "resolve": { "path": "tours.tourId", "as": "tour", "elements": "first", "onMissing": "null" } },
                 { "project": { "shipmentNumber": 1, "tour.number": 1 } },
@@ -215,6 +215,11 @@ public class TimingTests
         timing["resolve"]!["owners"]!.AsArray().Should().OnlyContain(owner => !owner!["remote"]!.GetValue<bool>() && owner["service"]!.GetValue<string>() == "transport");
         Number(timing["resolve"]!["remoteMs"]).Should().Be(0);
         (Number(timing["totalMs"]) - Number(timing["db"]!["ms"])).Should().BeApproximately(Number(timing["oursMs"]), 0.011);
+
+        // What ran is said where the joins are counted: no call to another service, and as many of this host's own as it sent commands.
+        timing["resolve"]!["calls"]!.GetValue<int>().Should().Be(0);
+        timing["resolve"]!["localCalls"]!.GetValue<int>().Should().Be(sent.Count - 1);
+        string.Join(", ", response.Headers.GetValues("Server-Timing")).Should().Contain(sent.Count > 1 ? $"0 calls / 0 cached / {sent.Count - 1} local" : "0 calls / 0 cached\"");
     }
 
     private static async Task<(HttpResponseMessage Response, JsonNode Body)> PostOnAsync(CorpusFleet fleet, LabService service, string body)

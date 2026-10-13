@@ -1050,7 +1050,7 @@ breakdown as `timing`, the last member of the answer, unless the host keeps it t
   "db": { "ms": 47.6, "commands": 1, "roundTrips": 1, "rttMs": 0.8, "networkEstimateMs": 0.8,
           "list": [ { "kind": "page", "collection": "transport.shipment", "ms": 47.6, "firstBatchMs": 47.59, "drainMs": 0.01,
                       "docs": 101, "bytes": 45322, "getMores": 0, "parallelWith": null } ] },
-  "resolve": { "ms": 0, "calls": 0, "cacheHits": 0, "remoteMs": 0, "owners": [] },
+  "resolve": { "ms": 0, "calls": 0, "localCalls": 0, "cacheHits": 0, "remoteMs": 0, "owners": [] },
   "countWaitMs": 0, "convertMs": 0.64, "rows": 100, "build": "Release" }
 ```
 
@@ -1073,6 +1073,9 @@ breakdown as `timing`, the last member of the answer, unless the host keeps it t
 - `addonMs` is the time the host's addon source was asked. Where the source waited for its
   database and says so, that wait is listed under `db.list[]` (`kind: "addon"`) and is database
   time, not `oursMs`; a host that answers from its cache lists nothing. `bindMs` never holds it.
+- `resolve.calls` counts the calls to other services' owners; `resolve.localCalls` the owner
+  queries this host ran in process for join targets of its own, each a command of kind `resolve`
+  under `db.list[]` (the header says `… / n local` when there are any).
 - `resolve.owners[]`: one entry per join target: `service`, `entity`, `remote` (another service's
   owner), `ms` of the calls that carried its keys, `keys` asked, `cacheHits`. An owner of another
   service that was asked answers with its own `timing` per query (`timing: [ … ]`), so the

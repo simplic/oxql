@@ -42,6 +42,9 @@ internal sealed record ResolveResult
     /// <summary>How many calls went to remote owners.</summary>
     public int Calls { get; init; }
 
+    /// <summary>The owner queries this host ran in process for join targets of its own: no call to another service, and a command at its own database each.</summary>
+    public int LocalCalls { get; init; }
+
     /// <summary>How many keys were answered from the cache.</summary>
     public int CacheHits { get; init; }
 }
@@ -868,6 +871,7 @@ internal sealed class KeyedFetch
 
         var cacheHits = targets.Sum(target => target.CacheHits);
         var calls = 0;
+        var localCalls = 0;
 
         // Round one: the filtered owner queries of every chunk. A remote target of a union whose
         // owner refuses only paths it lacks is asked again without them (the paths of a union are flat).
@@ -886,6 +890,7 @@ internal sealed class KeyedFetch
             foreach (var call in round)
             {
                 calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
+                localCalls += call.Service == SelfService ? call.Outcome.Calls : 0;
 
                 if (Failed(call, diagnostics))
                     continue;
@@ -949,6 +954,7 @@ internal sealed class KeyedFetch
         foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline, cancellationToken).ConfigureAwait(false))
         {
             calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
+            localCalls += call.Service == SelfService ? call.Outcome.Calls : 0;
 
             if (Failed(call, diagnostics))
                 continue;
@@ -1012,7 +1018,7 @@ internal sealed class KeyedFetch
                 timing.Called(target.Service == SelfService ? compiled.Bound.Entity.Namespace : target.Service, target.TargetName, target.Service != SelfService,
                     target.OwnerKeys, target.CacheHits, target.OwnerMs, target.OwnerTimings);
 
-        return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Dropped = dropped, Calls = calls, CacheHits = cacheHits };
+        return new ResolveResult { Rows = perRow, Diagnostics = diagnostics, Outcomes = outcomes, Truncations = truncations, Dropped = dropped, Calls = calls, LocalCalls = localCalls, CacheHits = cacheHits };
     }
 
     /// <summary>One owner query of a round: the target it asks for, the keys it carries, and the query.</summary>

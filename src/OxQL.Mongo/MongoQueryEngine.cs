@@ -390,6 +390,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;
             timing.ResolveCalls = resolveCalls;
+            timing.ResolveLocalCalls += resolution.LocalCalls;
             timing.ResolveCacheHits = cacheHits;
 
             if (resolution.Refusal is not null)

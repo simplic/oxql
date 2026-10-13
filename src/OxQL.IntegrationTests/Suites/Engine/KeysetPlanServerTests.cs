@@ -29,11 +29,11 @@ public class KeysetPlanServerTests(ITestOutputHelper output)
     private const int Page = 51;
 
     /// <summary>
-    /// The most keys a page may read: its rows and the one that says another page follows, once more
-    /// for the rows that share the position's value on a leading member, and a constant for the
-    /// bounds the server seeks between.
+    /// The most keys a page may read: its rows, the one that says another page follows, and a few
+    /// for the ranges the server seeks between, one per alternative of the position. MongoDB 6, 7
+    /// and 8 read 52 to 55 for the sorts below; the bound leaves three above that.
     /// </summary>
-    private const int Bound = 2 * Page + 12;
+    private const int Bound = Page + 1 + 6;
 
     public sealed class RowModel
     {

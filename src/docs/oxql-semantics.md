@@ -358,8 +358,8 @@ included, as it always has; a cursor of one contract is never one of the other.
   on its own and merges them in the order of the sort, so a page reads the keys of its rows,
   whatever the position ties on. Held on a server in `KeysetPlanServerTests`: on 20 000 rows of
   one organisation with the index of the sort, a page of 51 from the middle of a walk reads 52 to
-  54 keys, for one, two and three sort members in every mix of directions, with and without a
-  condition. A contract 1 page sends the predicate as one condition beside the scope, as it
+  55 keys on MongoDB 6, 7 and 8 (the test holds at most 58), for one, two and three sort members
+  in every mix of directions, with and without a condition. A contract 1 page sends the predicate as one condition beside the scope, as it
   always did.
 - **A page continues in the order of its sort whatever the member holds.** A range comparison
   stays inside the stored type of its operand and holds for nothing against a NaN, while a sort

@@ -466,6 +466,8 @@ internal static class MongoCompiler
         // have no order of their own, and the database is free to hand them over in another one for
         // another page: so such a sort is completed by the entity's key and the position of every
         // element unwound before it, and the same rows are first and last whatever page is asked.
+        // A group without such an aggregate reads no order: its sort stays as written, so an index
+        // that serves it still does and the database may fold it into the group.
         // (A contract 1 request is compiled as written.)
         var groupOrders = new HashSet<int>();
         var orderIndexes = new List<string>();
@@ -475,9 +477,9 @@ internal static class MongoCompiler
             {
                 if (bound.Stages[at] is BoundStage.Sort)
                     pending = at;
-                else if (bound.Stages[at] is BoundStage.Group)
+                else if (bound.Stages[at] is BoundStage.Group group)
                 {
-                    if (pending >= 0)
+                    if (pending >= 0 && group.Fields.Any(field => field.Function is "first" or "last" or "push"))
                         groupOrders.Add(pending);
 
                     // After a group the rows have neither the key nor a position.

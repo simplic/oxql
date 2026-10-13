@@ -273,10 +273,12 @@ with no index but `_id`. What changes with the collation is which indexes the se
   wants a stable business order sorts by a member.
 - The last `sort` of a pipeline decides the page order; an earlier one only orders what a
   following `group` sees (`first`, `last`, `push`). A sort before a `group` is dropped from
-  paging. Under contract 2 that sort is completed like the page's: by the entity's key, ascending
-  unless the sort names it, and by the position of every element unwound before it. Rows that tie
-  on the sort's members therefore reach the group in one order, and `first`, `last` and `push`
-  answer the same values on every page of a walk and for every page size.
+  paging. Under contract 2, where the group has a `first`, a `last` or a `push`, that sort is
+  completed like the page's: by the entity's key, ascending unless the sort names it, and by the
+  position of every element unwound before it. Rows that tie on the sort's members therefore
+  reach the group in one order, and `first`, `last` and `push` answer the same values on every
+  page of a walk and for every page size. Before a group of other aggregates, which read no
+  order, the sort is sent as written.
 - `null` and absent values come first in ascending and last in descending order. An enum sorts
   by its stored value (its number, or its name when stored as text); a `timeSpan` stored as text
   by character; a mixed member by BSON type bracket.

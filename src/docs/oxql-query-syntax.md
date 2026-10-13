@@ -707,7 +707,10 @@ entity's key and display members; it applies to the entity's own shape, not afte
 **The projection alone decides the row's shape.** Under a join alias it names the paths the alias
 shows (`"vehicle.registrationPlate": 1`): exactly those, without the key unless it names it, and the
 join loads them. What a stage only reads (a `match` on `vehicle.status`, the key of a later
-`resolve`, the member a `lookup` joins on) is loaded and never shown.
+`resolve`, the member a `lookup` joins on) is loaded and never shown. The same holds under the
+alias of an `unwind`: `"item.id": 1` shows the element's `id`, and a reference of the element a
+join reads (`item.billingLineId`) is read and not shown. An alias the projection names nothing
+under, written by a stage after it, shows the whole element.
 
 **A member no row can carry is refused.** A member the service returns over REST and does not
 store (`stored: false` in the schema document: computed, `[BsonIgnore]`, without a setter) is in

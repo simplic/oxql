@@ -609,6 +609,9 @@ What a contract 2 caller reads differently:
   that is not unwound (`items.text`, a collection of text) answers the rows in which one element
   starts with the text, in a `match`, the request's `filter`, a join's `filter` and under `not`;
   it reads every candidate row there, as `contains` does.
+- **Under the alias of an unwind** a row shows the members its projection names there. A
+  reference a join read from the element (`item.billingLineId` beside a projected `item.id`) is
+  not in the row: what a join reads is read, and the projection decides what is shown.
 - **A walk by cursor.** The pages are the order of the sort, split, also where rows hold a NaN
   or a value of another stored type than the member declares (a decimal as text beside the
   migrated rows, an addon value of any type, text under an `int`, a number under a `string`):

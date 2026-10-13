@@ -75,11 +75,10 @@ public class RequestTextTests
         {
             var answer = await SendAsync(await Staff(contract: null), "OxQL/query", Encoding.UTF8.GetBytes(body), declared, contract: null);
 
-            // What the legacy pipeline reads past (a member a contract 1 request does not have) it still reads past.
-            answer.StatusCode.Should().BeOneOf([200, 400], $"{what}: {answer}");
-
-            if (answer.StatusCode == 400 && answer.Errors.Count == 0)
-                answer.IsProblemDetails.Should().BeTrue($"{what}: {answer}");
+            // Wherever it stands, also in a member a contract 1 request does not have: the host's 400, in its problem form.
+            answer.StatusCode.Should().Be(400, $"{what}: {answer}");
+            answer.IsProblemDetails.Should().BeTrue($"{what}: {answer}");
+            answer.Text.Should().NotContain("INVALID_REQUEST_BODY", what).And.NotContain("validation_error", what);
         }
     }
 

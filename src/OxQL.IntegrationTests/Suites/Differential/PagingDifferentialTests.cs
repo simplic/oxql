@@ -286,7 +286,13 @@ public class PagingDifferentialTests
         data.Add("unwound/optionalCount+item.quantity", Stages(Unwound, """{ "match": { "item.quantity": { "neq": 2 } } }""", """{ "group": { "by": [{ "path": "optionalCount", "as": "k" }, { "path": "item.quantity", "as": "q" }], "fields": { "n": { "count": true } } } }""", Sort(("n", "asc"))));
         data.Add("group-of-groups", Stages("""{ "group": { "by": [{ "path": "note", "as": "k" }, { "path": "count", "as": "c" }], "fields": { "n": { "count": true } } } }""", """{ "group": { "by": [{ "path": "k", "as": "note" }], "fields": { "groups": { "count": true }, "rows": { "sum": "n" } } } }""", Sort(("rows", "desc"))));
         data.Add("group-then-resolve", Stages("""{ "group": { "by": [{ "path": "refCode", "as": "code" }], "fields": { "n": { "count": true } } } }""", """{ "resolve": { "path": "code", "as": "r" } }""", """{ "project": { "code": 1, "n": 1, "r.name": 1 } }""", Sort(("n", "desc"))));
-        data.Add("sort-before-group", Stages(Sort(("optionalMoment", "desc"), ("id", "asc")), """{ "group": { "by": [{ "path": "optionalCount", "as": "k" }], "fields": { "first": { "first": "name" }, "last": { "last": "name" }, "all": { "push": "count" } } } }"""));
+        // A sort with ties before a group: what is first, last and pushed is the same whatever page is asked.
+        const string Ordered = """{ "group": { "by": [{ "path": "optionalCount", "as": "k" }], "fields": { "first": { "first": "name" }, "last": { "last": "name" }, "all": { "push": "id" } } } }""";
+
+        data.Add("sort-before-group/ties", Stages(Sort(("optionalMoment", "desc")), Ordered));
+        data.Add("sort-before-group/one-value", Stages(Sort(("active", "asc")), """{ "match": { "count": { "gte": 0 } } }""", Ordered));
+        data.Add("sort-before-group/unwound", Stages("""{ "unwind": { "path": "items", "as": "item" } }""", Sort(("note", "asc")), """{ "group": { "by": [{ "path": "count", "as": "k" }], "fields": { "first": { "first": "item.id" }, "last": { "last": "item.id" }, "all": { "push": "item.id" } } } }"""));
+        data.Add("sort-before-group/projected", Stages(Sort(("optionalCount", "desc")), """{ "project": { "name": 1, "note": 1 } }""", """{ "group": { "by": [{ "path": "note", "as": "k" }], "fields": { "first": { "first": "name" }, "all": { "push": "name" } } } }"""));
 
         return data;
     }

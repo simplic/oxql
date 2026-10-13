@@ -462,6 +462,29 @@ internal static class MongoCompiler
         }
         var sortEmitted = false;
 
+        // A sort a group follows orders what the group's first, last and push see. Rows that tie in it
+        // have no order of their own, and the database is free to hand them over in another one for
+        // another page: so such a sort is completed by the entity's key and the position of every
+        // element unwound before it, and the same rows are first and last whatever page is asked.
+        // (A contract 1 request is compiled as written.)
+        var groupOrders = new HashSet<int>();
+        var orderIndexes = new List<string>();
+
+        if (!options.AsWritten)
+            for (int at = 0, pending = -1; at < bound.Stages.Count; at++)
+            {
+                if (bound.Stages[at] is BoundStage.Sort)
+                    pending = at;
+                else if (bound.Stages[at] is BoundStage.Group)
+                {
+                    if (pending >= 0)
+                        groupOrders.Add(pending);
+
+                    // After a group the rows have neither the key nor a position.
+                    break;
+                }
+            }
+
         // A join only the rows' display reads runs after the page is taken: the sort stays
         // next to the limit, which lets the server keep the top rows instead of ordering
         // every candidate, and the join is paid per page row rather than per candidate row.
@@ -583,6 +606,8 @@ internal static class MongoCompiler
                         reservedIndexes.Add(indexField = ReservedIndex + reservedIndexes.Count);
                     else if (unwoundPaging)
                         reservedIndexes.Add(indexField!);
+                    else if (groupOrders.Any(order => order > index))
+                        orderIndexes.Add(indexField ??= ReservedIndex + "G" + orderIndexes.Count);
 
                     var placed = unwinding is not null && unwinding.Position == index ? unwinding : null;
 
@@ -685,7 +710,7 @@ internal static class MongoCompiler
 
                 case BoundStage.Project project:
                     if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
-                        [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
+                        [.. reservedIndexes, .. orderIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
                         sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection, wholeCollections: options.AsWritten) is { } projection)
                     {
                         if (!options.AsWritten && ProjectsAfterPage(bound, index))
@@ -712,7 +737,9 @@ internal static class MongoCompiler
                         emitted.Add(new BsonDocument("$match", joinedKeyset.Count == 1 ? joinedKeyset[0] : new BsonDocument("$and", new BsonArray(joinedKeyset))));
 
                     // A group's keys are its order's tie-break already: the rows of a group have no key.
-                    emitted.Add(new BsonDocument("$sort", Renamed(Sort(sort.Fields, keysetPaging && !grouped)["$sort"].AsBsonDocument, renamed)));
+                    emitted.Add(new BsonDocument("$sort", Renamed((groupOrders.Contains(index)
+                        ? Sort(sort.Fields, tieBreak: true, orderIndexes.Count > 0 ? orderIndexes : null)
+                        : Sort(sort.Fields, keysetPaging && !grouped))["$sort"].AsBsonDocument, renamed)));
                     sortEmitted = true;
                     break;
 

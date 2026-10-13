@@ -563,6 +563,9 @@ What a contract 2 caller reads differently:
   under the collation).
 - **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
   `Etc` area (`Etc/GMT-2`), on every host platform; they were `INVALID_TIMEZONE`.
+- **`first`, `last` and `push` after a sort with ties.** A sort a `group` follows is completed by
+  the entity's key and the positions of the elements unwound before it, so the rows that tie in
+  it reach the group in one order: the values are the same on every page and for every page size.
 - **`params` on every refusal of a stage and of an option.** `UNKNOWN_STAGE` carries `reason`
   and `keys`; `UNKNOWN_STAGE_MEMBER` always `stage` and `reason` (and `member`, `members` where
   they are known); `OPTION_NOT_APPLICABLE` always `option` and `reason`. A code that carried

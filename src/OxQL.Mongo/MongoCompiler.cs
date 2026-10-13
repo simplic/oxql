@@ -2421,7 +2421,7 @@ internal static class MongoCompiler
         // A reference that holds nothing names no record, also where a record holds nothing in the
         // member it is named by. A record always holds its key, so only a reference that names
         // its target by another member is asked.
-        var held = resolve.TargetFieldStorage != KeyStorage ? HoldsKey() : null;
+        var held = resolve.TargetFieldStorage != KeyStorage ? HoldsKey(resolve.TargetFieldStorage!) : null;
 
         if (held is not null)
             pipeline.Add(held);
@@ -2514,9 +2514,19 @@ internal static class MongoCompiler
         static BsonDocument Branch(BsonDocument when, string outcome) => new() { ["case"] = when, ["then"] = outcome };
     }
 
-    /// <summary>The match of a join's sub-pipeline that lets nothing through for a row whose local key (<see cref="KeyVariable"/>) is null or not stored.</summary>
-    private static BsonDocument HoldsKey() =>
-        new("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { "$$" + KeyVariable, BsonNull.Value })));
+    /// <summary>
+    /// The match of a join's sub-pipeline that joins only what holds a key on both sides: nothing for
+    /// a row whose local key (<see cref="KeyVariable"/>) is null or not stored, and no record that
+    /// holds nothing in the member it is named by (<paramref name="foreignField"/>). The second holds
+    /// whatever the row's member is stored as: an array there is joined by its elements, and an
+    /// element that is null, or an array without elements, names no record.
+    /// </summary>
+    private static BsonDocument HoldsKey(string foreignField) =>
+        new("$match", new BsonDocument
+        {
+            ["$expr"] = new BsonDocument("$gt", new BsonArray { "$$" + KeyVariable, BsonNull.Value }),
+            [foreignField] = new BsonDocument("$ne", BsonNull.Value),
+        });
 
     /// <summary>
     /// The <c>$lookup</c> document of a join. With <paramref name="bindKey"/> the local key is

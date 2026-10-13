@@ -70,10 +70,12 @@ public class LateJoinExecutionTests
 
                 rows = element.Name switch
                 {
-                    // Whether the row a join runs for holds a key at all: { $expr: { $gt: [ "$$name", null ] } }.
-                    "$match" when element.Value is BsonDocument { ElementCount: 1 } asked && asked.GetValue("$expr", null) is BsonDocument { ElementCount: 1 } expression
+                    // Whether the row a join runs for holds a key at all, { $expr: { $gt: [ "$$name", null ] } }, and beside it what the record is asked.
+                    "$match" when element.Value is BsonDocument asked && asked.GetValue("$expr", null) is BsonDocument { ElementCount: 1 } expression
                         && expression.GetValue("$gt", null) is BsonArray { Count: 2 } operands && operands[0] is BsonString { Value: var name } && name.StartsWith("$$", StringComparison.Ordinal) && operands[1].IsBsonNull
-                        => variables is not null && variables.GetValue(name[2..], BsonNull.Value) is { IsBsonNull: false } ? rows : [],
+                        => variables is not null && variables.GetValue(name[2..], BsonNull.Value) is { IsBsonNull: false }
+                            ? rows.Where(row => Matches(row, new BsonDocument(asked.Where(part => part.Name != "$expr")))).ToList()
+                            : [],
                     "$match" => rows.Where(row => Matches(row, element.Value.AsBsonDocument)).ToList(),
                     "$sort" => SortRows(rows, element.Value.AsBsonDocument),
                     "$skip" => rows.Skip(element.Value.ToInt32()).ToList(),
@@ -100,6 +102,8 @@ public class LateJoinExecutionTests
                 && neither[0] is BsonDocument { ElementCount: 1 } noElement && noElement.GetElement(0) is { Name: var collection, Value: BsonDocument first } && first.GetValue("$not", null) is BsonDocument holds && holds.Contains("$elemMatch")
                 && neither[1] is BsonDocument { ElementCount: 1 } noValue && noValue.GetElement(0).Name == collection && noValue.GetElement(0).Value is BsonDocument second && second.GetValue("$not", null) is BsonDocument typed && typed.Contains("$type")
                 => Get(row, collection) switch { BsonArray array => array.Count > 0, null or BsonNull or BsonUndefined => false, _ => true },
+            // A member that holds something: { member: { $ne: null } }.
+            _ when element.Value is BsonDocument { ElementCount: 1 } held && held.GetValue("$ne", null) is { IsBsonNull: true } => Get(row, element.Name) is not (null or BsonNull or BsonUndefined),
             _ when element.Name.StartsWith('$') || element.Value is BsonDocument => throw new NotSupportedException($"The evaluator does not match {element.ToJson()}."),
             _ => Get(row, element.Name) == element.Value,
         });

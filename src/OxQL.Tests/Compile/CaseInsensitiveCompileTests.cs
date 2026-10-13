@@ -224,7 +224,7 @@ public class CaseInsensitiveCompileTests
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [
                 { $match: {{OrgJson}} },
-                { $match: { $expr: { $gt: [ "$$oxKey", null ] } } },
+                { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } },
                 { $match: { $expr: { $cond: {
                     if: { $and: [ { $eq: [ { $type: "$$oxKey" }, "string" ] }, { $eq: [ { $type: "$Code" }, "string" ] } ] },
                     then: { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$Code")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$Code")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] },
@@ -256,7 +256,7 @@ public class CaseInsensitiveCompileTests
 
         // The one thing asked beside the plain join: the folder is named by its code, and a reference that holds nothing names none.
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
-            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] } } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
+            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().BeNull();
     }

@@ -632,7 +632,9 @@ What a contract 2 caller reads differently:
 - **Joins over a member that is not the target's key.** A reference that is null or not stored
   resolves to no record (`reference_null`), and a record that holds nothing in the member it is
   referenced by has no children in a `lookup`, also where records and references both hold
-  nothing there.
+  nothing there. A record that holds nothing in that member is joined by no reference, whatever
+  a row stores under it (an array with a null element, an empty array), and an element of an
+  `elements` join whose reference is null names no record.
 - **The API description.** The schemas of the OxQL routes in a document generated from the API
   explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
   `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in

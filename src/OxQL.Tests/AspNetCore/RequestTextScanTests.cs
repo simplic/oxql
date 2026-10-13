@@ -93,6 +93,184 @@ public class RequestTextScanTests
         allocated.Should().BeLessThan(body.Length, "a path is built for the place that is found, not for every value");
     }
 
+    /// <summary>What <paramref name="act"/> allocates on a thread of its own, which has nothing kept from a call before.</summary>
+    private static long AllocatedOnItsOwnThread(Action act)
+    {
+        long allocated = 0;
+
+        var thread = new Thread(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+
+            act();
+
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        });
+
+        thread.Start();
+        thread.Join();
+
+        return allocated;
+    }
+
+    /// <summary>A body as long as a request may be by default: one member whose name fills it, and under it twenty texts that are no text, 200 arrays deep.</summary>
+    private static string UnderALongName(string open = "{", string close = "}")
+    {
+        const int Length = 262_144;
+        const int Arrays = 200;
+
+        var texts = string.Join(",", Enumerable.Repeat("\"" + Half + "\"", RequestBodyReader.MaxBrokenTexts));
+        var rest = open + "\"\":" + new string('[', Arrays) + texts + new string(']', Arrays) + close;
+
+        return open + "\"" + new string('n', Length - rest.Length) + "\":" + new string('[', Arrays) + texts + new string(']', Arrays) + close;
+    }
+
+    [Fact]
+    public void Naming_twenty_places_deep_under_a_name_as_long_as_a_body_costs_a_small_multiple_of_the_body()
+    {
+        var body = Encoding.UTF8.GetBytes(UnderALongName());
+        List<QueryValidationError> errors = [];
+
+        body.Length.Should().Be(262_144);
+
+        // Once on a small body ahead, so nothing of a first call is counted.
+        RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes($$"""{ "a": ["{{Half}}"] }"""), Limit).Should().HaveCount(1);
+
+        var allocated = AllocatedOnItsOwnThread(() => errors = [.. RequestBodyReader.BrokenTexts(body, Limit)!.Select(text => RequestBodyReader.Broken(text.Path, text.Name))]);
+
+        errors.Should().HaveCount(RequestBodyReader.MaxBrokenTexts);
+
+        // The name is read into one buffer of its length in characters, which is what a body of this length costs at most.
+        allocated.Should().BeLessThan(4L * body.Length);
+    }
+
+    [Theory]
+    [InlineData("/OxQL/query")]
+    [InlineData("/OxQL/explain")]
+    [InlineData("/OxQL/batch")]
+    public async Task On_a_host_the_answer_to_such_a_body_is_short_on_every_route(string route)
+    {
+        using var host = new SampleHost();
+
+        // On the batch route once as the batch itself and once as an entry of it.
+        var bodies = route.EndsWith("batch", StringComparison.Ordinal)
+            ? new[] { UnderALongName(), UnderALongName("{\"queries\":[{", "}]}") }
+            : [UnderALongName()];
+
+        foreach (var body in bodies)
+        {
+            var response = await host.Client(contract: 2).PostAsync(route, SampleHost.Json(body));
+            var answer = await response.Content.ReadAsByteArrayAsync();
+
+            // Twenty places, each with its path twice.
+            answer.Length.Should().BeLessThan(64 * 1024);
+            JsonNode.Parse(answer)!.ToJsonString().Should().Contain("\"reason\":\"encoding\"");
+        }
+
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
+    /// <summary>The one refusal of a body with one text that is no text.</summary>
+    private static QueryValidationError Refusal(string body)
+    {
+        var (path, name) = RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes(body), Limit).Should().ContainSingle().Subject;
+
+        return RequestBodyReader.Broken(path, name);
+    }
+
+    /// <summary>The most characters a refusal carries of a path.</summary>
+    private const int Carried = RequestBodyReader.MaxPathLength;
+
+    /// <summary>A surrogate pair, as the escapes a body may write it with.</summary>
+    private const string Pair = "\\ud83d\\ude00";
+
+    public static TheoryData<string, string, string> Paths
+    {
+        get
+        {
+            // A hundred levels: an array in a member of twenty characters, fifty times over.
+            var member = new string('k', 20);
+            var nested = string.Concat(Enumerable.Repeat($$"""{ "{{member}}": [""", 50)) + "\"" + Half + "\"" + string.Concat(Enumerable.Repeat("] }", 50));
+            var deep = "$" + string.Concat(Enumerable.Repeat($".{member}[0]", 50));
+
+            return new()
+            {
+                // "$." and a name: as long as a refusal carries a path, and one character longer.
+                { "at the length", $$"""{ "{{new string('a', Carried - 2)}}": "{{Half}}" }""", "$." + new string('a', Carried - 2) },
+                { "one longer", $$"""{ "{{new string('a', Carried - 1)}}": "{{Half}}" }""", "$." + new string('a', Carried - 3) + "…" },
+                { "a name in brackets", $$"""{ "it's {{new string('b', Carried + 50)}}": "{{Half}}" }""", "$['it\\'s " + new string('b', Carried - 10) + "…" },
+                { "a name in brackets at the length", $$"""{ "{{new string('-', Carried - 5)}}": "{{Half}}" }""", "$['" + new string('-', Carried - 5) + "']" },
+                { "a pair before the cut", $$"""{ "{{new string('-', Carried - 6)}}😀{{new string('-', 50)}}": "{{Half}}" }""", "$['" + new string('-', Carried - 6) + "😀…" },
+                { "a pair across the cut", $$"""{ "{{new string('-', Carried - 5)}}😀{{new string('-', 50)}}": "{{Half}}" }""", "$['" + new string('-', Carried - 5) + "…" },
+                { "a pair written as escapes across the cut", $$"""{ "{{new string('-', Carried - 5)}}{{Pair}}{{new string('-', 50)}}": "{{Half}}" }""", "$['" + new string('-', Carried - 5) + "…" },
+                { "many levels", nested, deep[..(Carried - 1)] + "…" },
+                { "under a long name", $$"""{ "{{new string('a', 5000)}}": { "b": [1, "{{Half}}"] } }""", "$." + new string('a', Carried - 3) + "…" },
+            };
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Paths))]
+    public void A_refusal_carries_a_path_whole_up_to_1024_characters_and_a_longer_one_cut_to_them_with_an_ellipsis(string what, string body, string path)
+    {
+        var error = Refusal(body);
+
+        Carried.Should().Be(1024);
+        path.Length.Should().BeLessThanOrEqualTo(Carried, what);
+        error.Params!["path"].Should().Be(path, what);
+        error.Message.Should().Be($"The text at '{path}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.", what);
+
+        // What is carried is text: it is written as UTF-8 and read back as it was.
+        Encoding.UTF8.GetString(new UTF8Encoding(false, throwOnInvalidBytes: true).GetBytes(path)).Should().Be(path, what);
+    }
+
+    [Fact]
+    public void A_path_no_longer_than_a_refusal_carries_is_the_one_a_member_is_joined_to()
+    {
+        var names = new[] { "a", "_a1", "$a", "1a", "", "a.b", "it's", "back\\slash", "ünï", "a b", "😀", new string('z', 200) };
+
+        foreach (var name in names)
+        {
+            var written = System.Text.Json.JsonSerializer.Serialize(name);
+            var body = $$"""{ "outer": [{ {{written}}: { "in": "{{Half}}", "{{Half}}": 1 } }] }""";
+            var place = RequestBodyReader.Join("$.outer[0]", name);
+
+            RequestBodyReader.BrokenTexts(Encoding.UTF8.GetBytes(body), Limit).Should().Equal([(place, true), (place + ".in", false)], name);
+        }
+    }
+
+    [Fact]
+    public async Task On_a_host_the_path_of_an_entry_of_a_batch_is_cut_as_the_path_of_a_query()
+    {
+        using var host = new SampleHost();
+
+        var good = """{ "entityType": "probe.order", "pipeline": [{ "page": { "limit": 1 } }] }""";
+        var batch = $$"""{ "queries": [{{good}}, { "{{new string('a', Carried - 2)}}": "{{Half}}" }, { "{{new string('a', Carried - 1)}}": "{{Half}}" }] }""";
+        var response = await host.Client(contract: 2).PostAsync("/OxQL/batch", SampleHost.Json(batch));
+        var text = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, text);
+
+        var results = JsonNode.Parse(text)!["results"]!.AsArray();
+        var cut = "$." + new string('a', Carried - 3) + "…";
+
+        results[0]!["items"].Should().NotBeNull(text);
+        results[1]!["errors"]![0]!["params"]!["path"]!.GetValue<string>().Should().Be("$." + new string('a', Carried - 2));
+        results[2]!["errors"]![0]!["params"]!["path"]!.GetValue<string>().Should().Be(cut);
+        results[2]!["errors"]![0]!["params"]!["entry"]!.GetValue<int>().Should().Be(2);
+        results[2]!["errors"]![0]!["message"]!.GetValue<string>().Should().StartWith($"The text at '{cut}' is no Unicode text");
+
+        foreach (var route in new[] { "/OxQL/query", "/OxQL/explain" })
+        {
+            var refused = await host.Client(contract: 2).PostAsync(route, SampleHost.Json($$"""{ "{{new string('a', Carried - 1)}}": "{{Half}}" }"""));
+            var error = JsonNode.Parse(await refused.Content.ReadAsStringAsync())!["errors"]!.AsArray().Should().ContainSingle().Subject!;
+
+            refused.StatusCode.Should().Be(HttpStatusCode.BadRequest, route);
+            error["params"]!["path"]!.GetValue<string>().Should().Be(cut, route);
+            error["message"]!.GetValue<string>().Should().StartWith($"The text at '{cut}' is no Unicode text", route);
+        }
+    }
+
     [Fact]
     public void Every_place_is_named_as_the_body_has_it_up_to_twenty()
     {

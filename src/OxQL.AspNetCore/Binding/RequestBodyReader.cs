@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -125,7 +127,8 @@ internal static class RequestBodyReader
     /// the text (of the object, for a name) and whether it is a name; empty when there is none, and
     /// null when the body is no JSON at all or nests deeper than <paramref name="maxDepth"/>, which
     /// is said in its own words. At most <see cref="MaxBrokenTexts"/> places are named, the first
-    /// the body has.
+    /// the body has. A path longer than a refusal carries (<see cref="MaxPathLength"/>) is its
+    /// start only, longer than that.
     /// </summary>
     public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8, int maxDepth) => BrokenTexts(utf8, maxDepth, out _);
 
@@ -137,9 +140,12 @@ internal static class RequestBodyReader
     /// The body is read once, token by token and to its end, to the depth the host reads a body
     /// to: a body that is answered for such a place is JSON throughout. The read takes time in
     /// proportion to the body's length, whatever the body nests, and keeps one entry per level it
-    /// stands in. On top of that come a path for each place it names (as long as the place lies
-    /// deep and its names are, for at most <see cref="MaxBrokenTexts"/> places) and a number for
-    /// each entry of a batch that holds a place it does not name.
+    /// stands in. On top of that come, for each of the at most <see cref="MaxBrokenTexts"/> places
+    /// it names, a path of a bounded length (a path is built as far as a refusal carries it,
+    /// <see cref="MaxPathLength"/>, and little further) and one more read of the names above the
+    /// place, into one buffer as long as the longest name of the body; and, for the places it does
+    /// not name, a number for each entry of a batch that holds one and one read of the name of each
+    /// member of the body one lies under.
     /// </para>
     /// </summary>
     public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8, int maxDepth, out UnnamedTexts unnamed)
@@ -232,7 +238,7 @@ internal static class RequestBodyReader
         {
             if (broken.Count < MaxBrokenTexts)
             {
-                broken.Add((PathOf(json, levels, count), name));
+                broken.Add((PathOf(json, levels, count, ref characters), name));
                 return;
             }
 
@@ -278,22 +284,103 @@ internal static class RequestBodyReader
     /// <summary>The most places one refusal names.</summary>
     public const int MaxBrokenTexts = 20;
 
-    /// <summary>The JSON path of the first <paramref name="count"/> levels.</summary>
-    private static string PathOf(ReadOnlySpan<byte> utf8, List<Level> levels, int count)
-    {
-        var path = Root;
+    /// <summary>
+    /// The most characters a refusal carries of the path of a text that is no Unicode text, in its
+    /// message and in <c>params.path</c>: a member name is the caller's, and as long as a body may be.
+    /// A place as deep as a host reads by default, in arrays or under short names, is named whole.
+    /// </summary>
+    public const int MaxPathLength = 1024;
 
-        for (var index = 0; index < count; index++)
+    /// <summary>What a path that is cut ends with, in place of what it leaves out.</summary>
+    public const string PathCut = "\u2026";
+
+    /// <summary>
+    /// How far a path is built: past what a refusal carries of it by more than the entry of a batch
+    /// takes ahead of it (<c>.queries[2147483647]</c>), so a path that is cut is cut the same
+    /// wherever it starts.
+    /// </summary>
+    private const int MaxPathBuilt = MaxPathLength + 32;
+
+    /// <summary>The characters of a member name that <see cref="Join"/> writes after a dot.</summary>
+    private static readonly System.Buffers.SearchValues<char> PlainName =
+        System.Buffers.SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$");
+
+    /// <summary>
+    /// A path as a refusal carries it: whole up to <see cref="MaxPathLength"/> characters, and a
+    /// longer one cut to that length with <see cref="PathCut"/> as its last character. A surrogate
+    /// pair is kept whole or left out whole.
+    /// </summary>
+    public static string Carried(string path)
+    {
+        if (path.Length <= MaxPathLength)
+            return path;
+
+        var kept = MaxPathLength - PathCut.Length;
+
+        if (char.IsHighSurrogate(path[kept - 1]))
+            kept--;
+
+        return string.Concat(path.AsSpan(0, kept), PathCut);
+    }
+
+    /// <summary>
+    /// The JSON path of the first <paramref name="count"/> levels, written once and as
+    /// <see cref="Join"/> writes a member: whole when it is no longer than
+    /// <see cref="MaxPathBuilt"/> characters, and otherwise its start, longer than that. A name is
+    /// read into <paramref name="characters"/>, which grows to the longest name it is given.
+    /// </summary>
+    private static string PathOf(ReadOnlySpan<byte> utf8, List<Level> levels, int count, ref char[] characters)
+    {
+        var path = new StringBuilder(Root);
+
+        for (var index = 0; index < count && path.Length <= MaxPathBuilt; index++)
         {
             var level = levels[index];
 
+            if (level.Array)
+            {
+                path.Append(CultureInfo.InvariantCulture, $"[{level.Index}]");
+                continue;
+            }
+
             // A name above a place that is found is text: the look passes over what a name that is none holds.
-            path = level.Array
-                ? $"{path}[{level.Index}]"
-                : Join(path, JsonSerializer.Deserialize<string>(utf8[level.NameStart..level.NameEnd])!);
+            var reader = new Utf8JsonReader(utf8[level.NameStart..level.NameEnd]);
+
+            reader.Read();
+
+            // A text is never longer in characters than in the bytes it is written with.
+            if (characters.Length < reader.ValueSpan.Length)
+            {
+                System.Buffers.ArrayPool<char>.Shared.Return(characters);
+                characters = System.Buffers.ArrayPool<char>.Shared.Rent(reader.ValueSpan.Length);
+            }
+
+            var name = characters.AsSpan(0, reader.CopyString(characters));
+
+            if (name.Length > 0 && !char.IsAsciiDigit(name[0]) && name.IndexOfAnyExcept(PlainName) < 0)
+            {
+                path.Append('.').Append(name[..Math.Min(name.Length, MaxPathBuilt)]);
+                continue;
+            }
+
+            path.Append("['");
+
+            foreach (var character in name)
+            {
+                // The start of a path ends after a whole character.
+                if (path.Length > MaxPathBuilt && !char.IsLowSurrogate(character))
+                    break;
+
+                if (character is '\\' or '\'')
+                    path.Append('\\');
+
+                path.Append(character);
+            }
+
+            path.Append("']");
         }
 
-        return path;
+        return path.ToString();
     }
 
     /// <summary>Whether the name or the text the reader stands on is Unicode text; nothing is kept of it.</summary>
@@ -329,15 +416,20 @@ internal static class RequestBodyReader
         Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding },
     };
 
-    /// <summary>A name or a text that is no Unicode text, at its place.</summary>
-    public static QueryValidationError Broken(string at, bool name) => new()
+    /// <summary>A name or a text that is no Unicode text, at its place: the path as a refusal carries one (<see cref="Carried"/>).</summary>
+    public static QueryValidationError Broken(string at, bool name)
     {
-        Code = Codes.InvalidRequestBody,
-        Message = name
-            ? $"A member name in '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8."
-            : $"The text at '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.",
-        Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding, ["path"] = at, ["in"] = name ? "name" : "value" },
-    };
+        at = Carried(at);
+
+        return new()
+        {
+            Code = Codes.InvalidRequestBody,
+            Message = name
+                ? $"A member name in '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8."
+                : $"The text at '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.",
+            Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding, ["path"] = at, ["in"] = name ? "name" : "value" },
+        };
+    }
 
     private static bool IsBlank(ReadOnlySpan<byte> utf8)
     {

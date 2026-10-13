@@ -558,6 +558,8 @@ What a contract 2 caller reads differently:
   `timeout`), `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
+  `Etc` area (`Etc/GMT-2`), on every host platform; they were `INVALID_TIMEZONE`.
 - **Duration operands** are days and smaller: `P1Y` and `P1M` (no fixed lengths) are 400
   `INVALID_OPERAND`.
 - **An error inside `any`** names the member as the row has it, under its collection

@@ -684,10 +684,16 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 
 **`dateTrunc`.**
 
-- `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`. The service also
-  accepts a Windows zone id and sends the IANA id it maps to; a zone neither resolves is
-  `INVALID_TIMEZONE`. An IANA id must also map to a Windows zone, so the answer is the same
-  on every host platform: `CET` and `Europe//Berlin` are refused on Windows and Linux alike.
+- `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`, and spaces around
+  it are not read. Accepted as well, on every host platform the same:
+  an offset from UTC up to fourteen hours (`+02:00`, `+0200`, `+02`, `-09:30`) and the fixed
+  zones `Etc/GMT`, `Etc/GMT+1` … `Etc/GMT-14` (their sign is the reverse of an offset's),
+  `Etc/UTC` and `GMT`, which the database reads off their spelling; and a Windows zone id
+  (`W. Europe Standard Time`), for which the IANA id it maps to is sent. A zone id is looked up
+  in the zone table of the host's runtime and has to map to a Windows zone there, so that it
+  binds or is refused the same on Windows and Linux: an alias without such a mapping (`CET`)
+  and a spelling only a file system resolves (`Europe//Berlin`) are `INVALID_TIMEZONE`, as is
+  everything else. Write a region id (`Europe/Berlin`) or an offset.
 - The boundary is computed in local time, so a bucket follows daylight saving: the Berlin day
   bucket of 29 March is `2026-03-28T23:00:00Z`, that of 25 October `2026-10-24T22:00:00Z`. The key
   is emitted as the UTC instant of the local boundary and is not a UTC midnight; compare it as an

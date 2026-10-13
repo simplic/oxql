@@ -15,7 +15,7 @@ namespace OxQL.Core.Binding;
 /// order with the shape folded through them, every path checked at its stage, every operand
 /// encoded for storage. Collects every error; never throws for a caller error.
 /// </summary>
-public sealed class Binder
+public sealed partial class Binder
 {
     /// <summary>
     /// The deepest nesting of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> a condition may have
@@ -193,7 +193,7 @@ public sealed class Binder
     }
 
     /// <summary>One binding run: the stage loop and everything it accumulates.</summary>
-    private sealed class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
+    private sealed partial class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
     {
         private readonly OxQLOptions options = context.Options;
         private const string DefaultSelectKey = "$default";
@@ -4130,7 +4130,9 @@ public sealed class Binder
 
             var timezone = string.IsNullOrWhiteSpace(trunc.Timezone) ? "UTC" : trunc.Timezone.Trim();
 
-            if (timezone != "UTC")
+            // A fixed offset (+02:00, +0200, +02) and the fixed zones of the Etc area are no entries of a
+            // zone table: the database takes them as written, on every platform the same.
+            if (timezone != "UTC" && !FixedZone().IsMatch(timezone))
             {
                 // Mongo's $dateTrunc takes an IANA id, spelled exactly. The runtime's lookup is
                 // looser: it ignores case on some platforms and also finds a zone by its Windows
@@ -4139,7 +4141,7 @@ public sealed class Binder
                 // and nothing when there is no such mapping.
                 if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone) || !TryIanaId(zone, out var iana))
                 {
-                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
+                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not a timezone: an IANA zone id (Europe/Berlin), or an offset from UTC (+02:00).", index, trunc.Path));
                     return null;
                 }
 
@@ -4161,6 +4163,10 @@ public sealed class Binder
 
             return new DateTrunc(path, trunc.Unit!, timezone, weekStart);
         }
+
+        /// <summary>A zone without rules, which the database reads off its spelling: an offset from UTC up to fourteen hours, or a fixed zone of the Etc area.</summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[+-](?:0[0-9]|1[0-4])(?::?[0-5][0-9])?|Etc/GMT(?:[+-](?:[0-9]|1[0-4]))?|Etc/UTC|GMT)$")]
+        private static partial System.Text.RegularExpressions.Regex FixedZone();
 
         private static bool TryIanaId(TimeZoneInfo zone, [NotNullWhen(true)] out string? iana)
         {

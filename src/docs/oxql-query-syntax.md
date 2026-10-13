@@ -620,7 +620,7 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 
 - Keys are scalar paths (not under a collection that is not unwound: `GROUP_ON_COLLECTION`) or
   a `dateTrunc` with `unit` in `year quarter month week day hour minute second`
-  (`INVALID_DATE_TRUNC_UNIT`), an optional IANA `timezone` (default UTC, `INVALID_TIMEZONE`)
+  (`INVALID_DATE_TRUNC_UNIT`), an optional `timezone` (an IANA zone id or an offset such as `+02:00`; default UTC, `INVALID_TIMEZONE`; the accepted spellings are in the semantics guide, *Grouping*)
   and, for `week`, `weekStart` (a day name, `monday` … `sunday`, default `monday`; another word
   is `INVALID_DATE_TRUNC_UNIT`). A truncated key is emitted as the UTC
   instant of the local boundary. A `date` has no time of day and truncates on its calendar day

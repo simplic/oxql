@@ -1558,6 +1558,7 @@ internal static class MongoCompiler
 
         while (stages.Count > 1 && stages[1].ElementCount == 1 && stages[1].TryGetValue("$match", out var following))
         {
+            // Every alternative holds this same document, never a clone: a semi-join slot in it is the one array the executor fills.
             foreach (var alternative in alternatives.AsBsonArray)
                 alternative["$and"].AsBsonArray.Add(following);
 

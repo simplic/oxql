@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using OxQL.AspNetCore.Health;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -30,6 +31,24 @@ public class HostHardeningHealthTests
 
         public List<CancellationToken> Tokens { get; } = [];
 
+        private readonly List<(int Count, TaskCompletionSource Reached)> waiting = [];
+
+        /// <summary>Ends once <paramref name="count"/> probes have been sent; fails after <see cref="ManualTime.Ceiling"/>.</summary>
+        public Task ProbedAsync(int count)
+        {
+            lock (Tokens)
+            {
+                if (Probes >= count)
+                    return Task.CompletedTask;
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                waiting.Add((count, reached));
+
+                return reached.Task.WaitAsync(ManualTime.Ceiling);
+            }
+        }
+
         public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
@@ -37,26 +56,24 @@ public class HostHardeningHealthTests
 
         public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref probes);
-
             lock (Tokens)
+            {
+                var now = Interlocked.Increment(ref probes);
+
                 Tokens.Add(cancellationToken);
+
+                foreach (var (count, reached) in waiting)
+                    if (now >= count)
+                        reached.TrySetResult();
+            }
 
             return IgnoresCancellation ? Answer.Task : Answer.Task.WaitAsync(cancellationToken);
         }
     }
 
-    /// <summary>A clock the test moves.</summary>
-    private sealed class ManualTime : TimeProvider
-    {
-        private long ticks;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp() => Interlocked.Read(ref ticks);
-
-        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
-    }
+    /// <summary>A host whose clock stands still: the probe's timeout ends only when the test moves it.</summary>
+    private static SampleHost StillHost(IRemoteQueryClient client) =>
+        new(configure: services => services.AddSingleton<IRemoteQueryClient>(client).AddSingleton<TimeProvider>(new ManualTime()));
 
     private static RemoteHealthProbe Probe(ManualTime? time = null, TimeSpan? timeout = null) =>
         new(BindHost.Options(options => options.Cache.HealthProbeTtlSeconds = 10), time: time) { ProbeTimeout = timeout ?? TimeSpan.FromSeconds(30) };
@@ -66,7 +83,7 @@ public class HostHardeningHealthTests
     {
         var client = new GatedClient();
 
-        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
+        using var host = StillHost(client);
 
         var response = await host.CreateClient().GetAsync("/OxQL/health");
         var body = await SampleHost.Body(response);
@@ -91,11 +108,11 @@ public class HostHardeningHealthTests
     {
         var client = new GatedClient();
 
-        using var host = new SampleHost(configure: services => services.AddSingleton<IRemoteQueryClient>(client));
+        using var host = StillHost(client);
 
         var callers = Enumerable.Range(0, 6).Select(_ => host.Client(contract: 2).GetAsync("/OxQL/health")).ToList();
 
-        SpinWait.SpinUntil(() => client.Probes >= 2, TimeSpan.FromSeconds(10)).Should().BeTrue();
+        await client.ProbedAsync(2);
         callers.Should().OnlyContain(caller => !caller.IsCompleted, "the measurement is not in yet");
 
         // A caller without the header is answered meanwhile, as before.
@@ -119,35 +136,45 @@ public class HostHardeningHealthTests
     [Fact]
     public async Task A_service_that_never_answers_is_measured_as_not_reachable_by_the_end_of_the_wait()
     {
+        var time = new ManualTime();
         var client = new GatedClient { IgnoresCancellation = true };
-        var probe = new RemoteHealthProbe(BindHost.Options(options => options.Cache.HealthProbeTtlSeconds = 10)) { ProbeTimeout = TimeSpan.FromMilliseconds(100) };
+        var probe = Probe(time, TimeSpan.FromMilliseconds(100));
+        var first = probe.FirstStateAsync(BindHost.Probe, client);
 
-        (await probe.FirstStateAsync(BindHost.Probe, client)).Should().OnlyContain(state => state.Reachable == false, "its time was up, which is a measurement");
+        await client.ProbedAsync(2);
+        first.IsCompleted.Should().BeFalse("neither service has answered and the time is not up");
+        time.Advance(TimeSpan.FromMilliseconds(100));
+
+        (await first.WaitAsync(ManualTime.Ceiling)).Should().OnlyContain(state => state.Reachable == false, "its time was up, which is a measurement");
     }
 
     [Fact]
     public async Task The_wait_for_the_first_measurement_ends_with_the_measurement()
     {
+        // The probe's clock stands still, so its timeout cannot end the wait: only the measurement can.
         var client = new GatedClient();
-        var probe = Probe();
-        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var probe = Probe(new ManualTime());
         var first = probe.FirstStateAsync(BindHost.Probe, client);
 
         first.IsCompleted.Should().BeFalse();
         client.Answer.SetResult(true);
 
-        (await first).Should().OnlyContain(state => state.Reachable == true);
-        timer.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(20), "the probe's timeout is thirty seconds here, and nothing waited for it");
+        (await first.WaitAsync(ManualTime.Ceiling)).Should().OnlyContain(state => state.Reachable == true);
     }
 
     [Fact]
     public async Task A_wait_that_ran_out_says_pending_and_no_later_call_waits()
     {
         // The client holds the thread of the measurement, so the measurement outlasts its own timeout.
+        var time = new ManualTime();
         var client = new BlockingClient();
-        var probe = new RemoteHealthProbe(BindHost.Options(options => options.Cache.HealthProbeTtlSeconds = 10)) { ProbeTimeout = TimeSpan.FromMilliseconds(50) };
+        var probe = Probe(time, TimeSpan.FromMilliseconds(50));
+        var first = probe.FirstStateAsync(BindHost.Probe, client);
 
-        (await probe.FirstStateAsync(BindHost.Probe, client)).Should().OnlyContain(state => state.Reason == RemoteServiceState.Pending);
+        // The wait is the probe's timeout and a moment after it.
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        (await first.WaitAsync(ManualTime.Ceiling)).Should().OnlyContain(state => state.Reason == RemoteServiceState.Pending);
 
         var again = probe.FirstStateAsync(BindHost.Probe, client);
 
@@ -253,8 +280,8 @@ public class HostHardeningHealthTests
         for (var call = 0; call < 5; call++)
             probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Reachable == true, "the last measurement answers while the next one is taken");
 
-        // The refresh runs on the thread pool, so its probes arrive after the callers return.
-        SpinWait.SpinUntil(() => client.Probes >= probesBefore * 2, TimeSpan.FromSeconds(10)).Should().BeTrue("the callers past the interval start a refresh");
+        // The refresh runs on the thread pool, so its probes arrive after the callers return: the callers past the interval start it.
+        await client.ProbedAsync(probesBefore * 2);
 
         client.Answer.SetResult(false);
         await probe.Refreshing;
@@ -266,11 +293,15 @@ public class HostHardeningHealthTests
     [Fact]
     public async Task The_measurement_runs_under_its_own_timeout_and_no_callers_token()
     {
+        var time = new ManualTime();
         var client = new GatedClient();
-        var probe = Probe(timeout: TimeSpan.FromMilliseconds(50));
+        var probe = Probe(time, TimeSpan.FromMilliseconds(50));
 
         probe.State(BindHost.Probe, client);
-        await probe.Refreshing;
+        await client.ProbedAsync(2);
+        probe.Refreshing.IsCompleted.Should().BeFalse("neither service has answered and the time is not up");
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        await probe.Refreshing.WaitAsync(ManualTime.Ceiling);
 
         client.Tokens.Should().OnlyContain(token => token.CanBeCanceled);
         probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Configured && state.Reachable == false, "a service that does not answer in time is not reachable");
@@ -280,15 +311,21 @@ public class HostHardeningHealthTests
     [Fact]
     public async Task A_client_that_ignores_cancellation_cannot_hold_the_measurement_open()
     {
+        var time = new ManualTime();
         var client = new GatedClient { IgnoresCancellation = true };
-        var probe = Probe(timeout: TimeSpan.FromMilliseconds(50));
+        var probe = Probe(time, TimeSpan.FromMilliseconds(50));
 
         probe.State(BindHost.Probe, client);
 
         var refreshing = probe.Refreshing;
-        var finished = await Task.WhenAny(refreshing, Task.Delay(TimeSpan.FromSeconds(20)));
 
-        finished.Should().BeSameAs(refreshing, "the refresh ends at the probe timeout");
+        await client.ProbedAsync(2);
+        refreshing.IsCompleted.Should().BeFalse("the probes do not answer and the time is not up");
+
+        // The refresh ends at the probe timeout.
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        await refreshing.WaitAsync(ManualTime.Ceiling);
+
         probe.State(BindHost.Probe, client).Should().OnlyContain(state => state.Reachable == false);
     }
 

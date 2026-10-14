@@ -82,10 +82,13 @@ public class CoreHardeningEngineTests
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.InvalidTimezone);
     }
 
-    /// <summary>Fails the page asynchronously and leaves the count running until its token is cancelled or the test releases it.</summary>
-    private sealed class FailingPageRunner(Exception pageFailure) : IAggregateRunner
+    /// <summary>
+    /// Fails the page asynchronously and leaves the count running until its token is cancelled or the test releases it.
+    /// With <paramref name="endsInline"/>, what waits for the count goes on in the call that releases it.
+    /// </summary>
+    private sealed class FailingPageRunner(Exception pageFailure, bool endsInline = false) : IAggregateRunner
     {
-        public TaskCompletionSource<IReadOnlyList<BsonDocument>> Count { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<IReadOnlyList<BsonDocument>> Count { get; } = new(endsInline ? TaskCreationOptions.None : TaskCreationOptions.RunContinuationsAsynchronously);
 
         public CancellationToken CountToken { get; private set; }
 
@@ -150,15 +153,14 @@ public class CoreHardeningEngineTests
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static async Task RunAndAbandonAsync(string marker)
     {
-        var runner = new FailingPageRunner(CommandFailure(292, "Sort exceeded memory limit"));
+        var runner = new FailingPageRunner(CommandFailure(292, "Sort exceeded memory limit"), endsInline: true);
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(BindHost.Probe), runner, BindHost.Cursors, BindHost.Options());
 
         await engine.ExecuteAsync(BindHost.Request(Order, Counted), BindHost.Context());
 
+        // The count ends in this call, and so does what the engine left waiting for it: once it returns, the failure
+        // has been read or never will be, and nothing is left on the pool for the collections that follow to miss.
         runner.Count.SetException(new InvalidOperationException(marker));
-
-        // The continuation that reads the failure runs on the pool.
-        await Task.Delay(50);
     }
 
     [Fact]

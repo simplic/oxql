@@ -7,6 +7,7 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -26,15 +27,6 @@ public class KeyedFetchOwnerTests
     private static readonly Guid Id2 = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private static readonly Guid Id3 = Guid.Parse("33333333-3333-3333-3333-333333333333");
     private static readonly Guid Vehicle1 = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
-
-    private sealed class ManualTime : TimeProvider
-    {
-        private DateTimeOffset now = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => now;
-
-        public void Advance(TimeSpan by) => now += by;
-    }
 
     private static (MongoQueryEngine Engine, FakeAggregateRunner Runner, FakeRemoteClient Client) Host(Action<OxQLOptions>? configure = null, TimeProvider? time = null)
     {

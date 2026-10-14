@@ -7,6 +7,7 @@ using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Fleet.Models.Conformance;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Perf;
 using Xunit;
 
 namespace OxQL.IntegrationTests.Suites.RemoteChaos;
@@ -137,9 +138,9 @@ public sealed class OwnerRowsUnderLoadTests : OwnerRowsFleet
     /// whatever the host remembers at the moment a request arrives, the request is answered within
     /// its budget, a row is joined with its own record or with none, a row left without its record
     /// says why, and once the owner is back and the time is over the owner is asked again and nothing
-    /// is remembered.
+    /// is remembered. It is a soak test and runs only when <c>OXQL_LOAD</c> is set.
     /// </summary>
-    [Fact]
+    [OptInFact(OptInFactAttribute.Load)]
     public async Task While_an_owner_goes_and_comes_back_under_load_every_answer_is_in_time_and_right_and_the_owner_is_asked_again_in_the_end()
     {
         const int ResolveTimeoutMs = 400;

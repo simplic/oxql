@@ -64,13 +64,14 @@ public sealed class LabFleet : IAsyncDisposable
     public bool Contract1AsShipped { get; set; }
 
     /// <summary>
-    /// How long every aggregate of this fleet's hosts takes at least, as a database a network away
-    /// would make it: with it, which aggregates run side by side and which one after another shows in
-    /// <see cref="Aggregates"/>. Zero by default. Set before the first host starts.
+    /// Holds the aggregates of this fleet's hosts in the waves a case expects, so which aggregates run
+    /// side by side and which one after another shows in <see cref="Aggregates"/> whatever the speed of
+    /// the database: a local server answers before a sibling has even been sent. Null by default: the
+    /// engine's own runner. Set before the first host starts.
     /// </summary>
-    public TimeSpan AggregateDelay { get; set; }
+    public AggregateWaves? Waves { get; set; }
 
-    /// <summary>The aggregates the fleet's hosts ran while <see cref="AggregateDelay"/> is set: the service, the entity, and when each started and ended.</summary>
+    /// <summary>The aggregates the fleet's hosts ran while <see cref="Waves"/> is set: the service, the entity, and when each started and ended.</summary>
     public ConcurrentQueue<(string Service, string Entity, long Started, long Ended)> Aggregates { get; } = new();
 
     /// <summary>A private fleet for a test that writes; its databases are dropped on disposal.</summary>

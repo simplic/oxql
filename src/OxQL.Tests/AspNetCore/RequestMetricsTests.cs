@@ -16,6 +16,11 @@ namespace OxQL.Tests.AspNetCore;
 /// records how long it took, and the line of a contract 1 request the legacy pipeline answered
 /// carries the route, the status, the rows and the time, the database's share of it included.
 /// </summary>
+/// <remarks>
+/// The meter is one for the whole process, so the class runs in a collection of its own that runs
+/// alone, after the tests that run side by side: no other test's host measures while it listens.
+/// </remarks>
+[Collection(MeterCollection.Name)]
 public class RequestMetricsTests
 {
     private const string Query = "/OxQL/query";
@@ -187,4 +192,11 @@ public class RequestMetricsTests
         lines[1].Should().Contain(" route=batch status=200 rows=2 ");
         lines[2].Should().Contain(" refused=UNKNOWN_TYPE ").And.Contain(" route=query status=400 rows=0 ").And.EndWith(" dbCommands=0");
     }
+}
+
+/// <summary>The tests that listen to the engine's meter: they run one after another and alone.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class MeterCollection
+{
+    public const string Name = "Meter";
 }

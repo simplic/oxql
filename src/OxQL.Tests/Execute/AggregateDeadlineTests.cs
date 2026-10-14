@@ -9,6 +9,7 @@ using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Mongo;
 using OxQL.Mongo.Legacy;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -24,93 +25,15 @@ public class AggregateDeadlineTests
 {
     private const string Order = "probe.order";
 
-    /// <summary>A clock that stands still until a test moves it, with timers that fire when it passes them.</summary>
-    private sealed class ManualTime : TimeProvider
-    {
-        private readonly List<ManualTimer> timers = [];
-        private readonly SemaphoreSlim created = new(0);
-        private long ticks;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp() => Interlocked.Read(ref ticks);
-
-        public override DateTimeOffset GetUtcNow() => new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
-        /// <summary>The due times of the timers that were started, as offsets from the clock's start, in milliseconds.</summary>
-        public List<long> Due
-        {
-            get
-            {
-                lock (timers)
-                    return timers.Select(timer => timer.Due / TimeSpan.TicksPerMillisecond).ToList();
-            }
-        }
-
-        /// <summary>Completes when one more timer has been started: the deadline is armed.</summary>
-        public Task Armed() => created.WaitAsync(TimeSpan.FromSeconds(30)).ContinueWith(waited => waited.Result.Should().BeTrue("a deadline is armed for the aggregate"));
-
-        public void Advance(TimeSpan by)
-        {
-            var now = Interlocked.Add(ref ticks, by.Ticks);
-            List<ManualTimer> due;
-
-            lock (timers)
-                due = timers.Where(timer => timer.Fires(now)).ToList();
-
-            foreach (var timer in due)
-                timer.Fire();
-        }
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = new ManualTimer(callback, state, dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : GetTimestamp() + dueTime.Ticks);
-
-            lock (timers)
-                timers.Add(timer);
-
-            created.Release();
-
-            return timer;
-        }
-
-        private sealed class ManualTimer(TimerCallback callback, object? state, long due) : ITimer
-        {
-            private int ended;
-
-            public long Due { get; private set; } = due;
-
-            public bool Fires(long now) => Volatile.Read(ref ended) == 0 && now >= Due;
-
-            public void Fire()
-            {
-                if (Interlocked.Exchange(ref ended, 1) == 0)
-                    callback(state);
-            }
-
-            public bool Change(TimeSpan dueTime, TimeSpan period)
-            {
-                if (dueTime == Timeout.InfiniteTimeSpan)
-                    Due = long.MaxValue;
-
-                return true;
-            }
-
-            public void Dispose() => Interlocked.Exchange(ref ended, 1);
-
-            public ValueTask DisposeAsync()
-            {
-                Dispose();
-
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
     /// <summary>A database that says nothing: an aggregate ends only when it is given up on.</summary>
     private sealed class SilentRunner : IAggregateRunner
     {
+        private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public List<AggregateRunOptions> Calls { get; } = [];
+
+        /// <summary>Ends once the first aggregate has been sent.</summary>
+        public Task Started => started.Task;
 
         /// <summary>The aggregates whose cancellation was asked for.</summary>
         public int GivenUp;
@@ -122,6 +45,8 @@ public class AggregateDeadlineTests
         {
             lock (Calls)
                 Calls.Add(options);
+
+            started.TrySetResult();
 
             var never = new TaskCompletionSource<IReadOnlyList<BsonDocument>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -270,7 +195,8 @@ public class AggregateDeadlineTests
 
         var running = engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5 } }]"""), BindHost.Context(), caller.Token);
 
-        SpinWait.SpinUntil(() => { lock (runner.Calls) return runner.Calls.Count == 1; }, TimeSpan.FromSeconds(30)).Should().BeTrue();
+        await runner.Started.WaitAsync(TimeSpan.FromSeconds(30));
+        runner.Calls.Should().ContainSingle();
 
         time.Advance(TimeSpan.FromHours(1));
         time.Due.Should().BeEmpty("no deadline was armed");

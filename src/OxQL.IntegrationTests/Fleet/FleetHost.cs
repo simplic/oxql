@@ -55,6 +55,31 @@ public sealed class FleetHost : IAsyncDisposable
     /// <summary>The harness's own key of a variant that buffers every request body ahead of MVC: <c>rewound</c>, <c>end</c> or <c>unread</c>.</summary>
     public const string BufferBodyKey = "Lab:BufferBody";
 
+    // The time bounds of the fleet's hosts. A host's defaults are bounds for a service under real
+    // traffic; here they are upper bounds the suites never reach, so that a count, an owner call or an
+    // explain answers the same on a loaded runner as on an idle one. The cases about a bound set a
+    // small one on a variant of their own; the published defaults are held by a host that sets nothing.
+
+    /// <summary><c>OxQL:Execution:MaxTimeMs</c> of the fleet's hosts: the ceiling the engine clamps it to.</summary>
+    public const int MaxTimeMs = OxQL.Core.Models.ExecutionOptions.MaxTimeCeilingMs;
+
+    /// <summary><c>OxQL:Execution:ResolveTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ResolveTimeoutMs = 30_000;
+
+    /// <summary><c>OxQL:Execution:ChainTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ChainTimeoutMs = 30_000;
+
+    /// <summary><c>OxQL:Count:BudgetMs</c> of the fleet's hosts.</summary>
+    public const int CountBudgetMs = 30_000;
+
+    /// <summary><c>OxQL:Count:MaxBudgetMs</c> of the fleet's hosts.</summary>
+    public const int CountMaxBudgetMs = 60_000;
+
+    /// <summary><c>OxQL:Explain:TimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ExplainTimeoutMs = 60_000;
+
+    /// <summary><c>OxQL:Explain:RemoteTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ExplainRemoteTimeoutMs = 60_000;
     /// <summary>
     /// Starts a host. <paramref name="configuration"/> is layered over the host's defaults, so a
     /// variant names only the keys it changes (<c>OxQL:Limits:MaxPageSize</c> and the like).
@@ -105,9 +130,9 @@ public sealed class FleetHost : IAsyncDisposable
         services.AddSingleton<IEntityModelProvider>(new LazyEntityModelProvider(() => service.Model));
         services.AddSingleton(client);
 
-        // A fleet that slows its aggregates down registers the runner itself; the engine's own is the default.
-        if (fleet.AggregateDelay > TimeSpan.Zero)
-            services.AddSingleton<IAggregateRunner>(new DelayedRunner(new MongoAggregateRunner(client, databaseName), fleet, service.Key));
+        // A fleet that holds its aggregates in waves registers the runner itself; the engine's own is the default.
+        if (fleet.Waves is { } waves)
+            services.AddSingleton<IAggregateRunner>(new WaveRunner(new MongoAggregateRunner(client, databaseName), fleet, waves, service.Key));
 
         services.AddOxQLMongo(options =>
         {
@@ -163,7 +188,17 @@ public sealed class FleetHost : IAsyncDisposable
         // makes of it. What a host remembers of an owner that failed has tests of its own, on a variant
         // that sets the time (RemoteChaosTests, the M cases).
         new("OxQL:Cache:OwnerUnavailableTtlSeconds", "0"),
+        // The time bounds, as upper bounds the suites never reach (see MaxTimeMs).
+        new("OxQL:Execution:MaxTimeMs", Text(MaxTimeMs)),
+        new("OxQL:Execution:ResolveTimeoutMs", Text(ResolveTimeoutMs)),
+        new("OxQL:Execution:ChainTimeoutMs", Text(ChainTimeoutMs)),
+        new("OxQL:Count:BudgetMs", Text(CountBudgetMs)),
+        new("OxQL:Count:MaxBudgetMs", Text(CountMaxBudgetMs)),
+        new("OxQL:Explain:TimeoutMs", Text(ExplainTimeoutMs)),
+        new("OxQL:Explain:RemoteTimeoutMs", Text(ExplainRemoteTimeoutMs)),
     ];
+
+    private static string Text(int value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>A client for one organisation (organisation A when null) under the given contract; an anonymous client sends no identity.</summary>
     public HttpClient Client(Guid? organisation = default, int contract = 2, bool anonymous = false)
@@ -198,12 +233,12 @@ public sealed class FleetHost : IAsyncDisposable
 }
 
 /// <summary>
-/// The engine's runner with every aggregate taking at least <see cref="LabFleet.AggregateDelay"/>, and
-/// recorded with its start and end (<see cref="LabFleet.Aggregates"/>). A local server answers in
+/// The engine's runner with every aggregate held until its wave is in flight (<see cref="AggregateWaves"/>),
+/// and recorded with its start and end (<see cref="LabFleet.Aggregates"/>). A local server answers in
 /// well under a millisecond, which hides what a hosted one makes plain: aggregates sent one after
 /// another add up, aggregates sent together do not.
 /// </summary>
-internal sealed class DelayedRunner(IAggregateRunner inner, LabFleet fleet, string service) : IAggregateRunner
+internal sealed class WaveRunner(IAggregateRunner inner, LabFleet fleet, AggregateWaves waves, string service) : IAggregateRunner
 {
     public async Task<IReadOnlyList<MongoDB.Bson.BsonDocument>> AggregateAsync(OxQL.Model.EntityDef entity, IReadOnlyList<MongoDB.Bson.BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
     {
@@ -211,13 +246,87 @@ internal sealed class DelayedRunner(IAggregateRunner inner, LabFleet fleet, stri
 
         try
         {
-            await Task.Delay(fleet.AggregateDelay, cancellationToken);
+            await waves.EnterAsync(service, cancellationToken);
 
             return await inner.AggregateAsync(entity, stages, options, cancellationToken);
         }
         finally
         {
             fleet.Aggregates.Enqueue((service, entity.Id, started, System.Diagnostics.Stopwatch.GetTimestamp()));
+        }
+    }
+}
+
+/// <summary>
+/// The waves a case expects the aggregates of each service in, by service: an aggregate is held until as
+/// many aggregates of its service as its wave holds have been sent, and then the wave goes on together.
+/// The aggregates of one wave are so in flight together, and an aggregate sent only once an earlier one
+/// has answered starts after that one ended. A service without waves, or whose waves are spent, is not held.
+/// <para>
+/// A wave that does not fill, because the engine sends its aggregates one after another, goes on after
+/// <see cref="Ceiling"/>, an upper bound a wave that fills never reaches, and is counted in
+/// <see cref="Overdue"/>: the case then fails on what it asserts instead of waiting for ever.
+/// </para>
+/// </summary>
+public sealed class AggregateWaves(IReadOnlyDictionary<string, int[]> waves)
+{
+    public static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
+
+    private readonly object gate = new();
+    private readonly Dictionary<string, Queue<int>> planned = waves.ToDictionary(pair => pair.Key, pair => new Queue<int>(pair.Value), StringComparer.Ordinal);
+    private readonly Dictionary<string, List<TaskCompletionSource>> open = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> sizes = new(StringComparer.Ordinal);
+    private int overdue;
+
+    /// <summary>The aggregates that went on after <see cref="Ceiling"/> because their wave did not fill.</summary>
+    public int Overdue => Volatile.Read(ref overdue);
+
+    /// <summary>How many waves of each service have not gone on yet: none once every wave of the case has.</summary>
+    public IReadOnlyDictionary<string, int> Unfilled
+    {
+        get
+        {
+            lock (gate)
+                return planned.ToDictionary(pair => pair.Key, pair => pair.Value.Count + (open.ContainsKey(pair.Key) ? 1 : 0), StringComparer.Ordinal)
+                    .Where(pair => pair.Value > 0).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>Holds an aggregate of <paramref name="service"/> until its wave is in flight.</summary>
+    public async Task EnterAsync(string service, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource held;
+
+        lock (gate)
+        {
+            if (!open.TryGetValue(service, out var wave))
+            {
+                if (!planned.TryGetValue(service, out var waiting) || waiting.Count == 0)
+                    return;
+
+                sizes[service] = waiting.Dequeue();
+                open[service] = wave = [];
+            }
+
+            held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            wave.Add(held);
+
+            if (wave.Count >= sizes[service])
+            {
+                open.Remove(service);
+
+                foreach (var member in wave)
+                    member.TrySetResult();
+            }
+        }
+
+        try
+        {
+            await held.Task.WaitAsync(Ceiling, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            Interlocked.Increment(ref overdue);
         }
     }
 }

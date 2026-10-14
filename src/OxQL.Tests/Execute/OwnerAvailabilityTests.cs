@@ -10,6 +10,7 @@ using OxQL.Model.Attributes;
 using OxQL.Model.Build;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -51,14 +52,8 @@ public class OwnerAvailabilityTests
     private static readonly Lazy<EntityModel> model = new(() => ClrModelBuilder.Build(
         new EntityDeclaration[] { new(Tour, Tour, typeof(OaTour), "tours", null, false) }, retiredIds: null, new ReferenceDeclarations()));
 
-    private sealed class ManualTime : TimeProvider
-    {
-        private DateTimeOffset now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => now;
-
-        public void Advance(TimeSpan by) => now += by;
-    }
+    /// <summary>The longest a test waits for a signal its passing path always gives.</summary>
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
 
     private static (MongoQueryEngine Engine, FakeAggregateRunner Runner, FakeRemoteClient Client, ManualTime Time) Host(Action<OxQLOptions>? configure = null)
     {
@@ -170,12 +165,13 @@ public class OwnerAvailabilityTests
 
         var first = RunAsync(one);
 
-        SpinWait.SpinUntil(() => client.Calls == 2, TimeSpan.FromSeconds(30)).Should().BeTrue("the first request asks the owner again");
+        // The first request asks the owner again.
+        await client.CalledAsync(2).WaitAsync(Ceiling);
 
         // The second arrives while the first one's call is still under way.
         var second = RunAsync(other);
 
-        SpinWait.SpinUntil(() => client.Calls == 3 || second.IsCompleted, TimeSpan.FromSeconds(30)).Should().BeTrue();
+        await Task.WhenAny(client.CalledAsync(3), second).WaitAsync(Ceiling);
         release.SetResult();
 
         foreach (var result in await Task.WhenAll(first, second))
@@ -339,7 +335,12 @@ public class OwnerAvailabilityTests
     [Fact]
     public async Task An_owner_that_did_not_answer_within_a_whole_call_budget_is_remembered_and_one_cut_short_by_the_request_is_not()
     {
-        var (engine, runner, client, _) = Host(options => options.Execution.ResolveTimeoutMs = 60);
+        // The tour's resource is a typed reference, whose owner call runs under the chain ceiling.
+        var (engine, runner, client, _) = Host(options =>
+        {
+            options.Execution.ResolveTimeoutMs = 60;
+            options.Execution.ChainTimeoutMs = 60;
+        });
 
         runner.PageRows = [Row("driver", Driver)];
         client.Silent.Add("staff");
@@ -373,13 +374,37 @@ public class OwnerAvailabilityTests
     /// <summary>An owner whose every batch ends as the test says, counted.</summary>
     private sealed class EndingClient(Func<CancellationToken, Task<BatchResponse>> end) : IRemoteQueryClient
     {
+        private readonly List<(int Count, TaskCompletionSource Reached)> waiting = [];
         private int calls;
 
         public int Calls => Volatile.Read(ref calls);
 
+        /// <summary>Ends once the owner has been called <paramref name="count"/> times.</summary>
+        public Task CalledAsync(int count)
+        {
+            lock (waiting)
+            {
+                if (Calls >= count)
+                    return Task.CompletedTask;
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                waiting.Add((count, reached));
+
+                return reached.Task;
+            }
+        }
+
         public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref calls);
+            lock (waiting)
+            {
+                var now = Interlocked.Increment(ref calls);
+
+                foreach (var (count, reached) in waiting)
+                    if (now >= count)
+                        reached.TrySetResult();
+            }
 
             return end(cancellationToken);
         }
@@ -389,9 +414,18 @@ public class OwnerAvailabilityTests
         public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
     }
 
-    private static (MongoQueryEngine Engine, EndingClient Client) Ending(Func<CancellationToken, Task<BatchResponse>> end, EntityModel? entities = null)
+    /// <summary>
+    /// An engine whose owner calls end as <paramref name="end"/> says and may take <paramref name="callMs"/>: short, so a
+    /// call that never ends is over at once; a test that ends the call itself gives it a ceiling it never reaches.
+    /// </summary>
+    private static (MongoQueryEngine Engine, EndingClient Client) Ending(Func<CancellationToken, Task<BatchResponse>> end, EntityModel? entities = null, int callMs = 60)
     {
-        var options = BindHost.Options(configure => configure.Execution.ResolveTimeoutMs = 60);
+        // The tour's resource is a typed reference, whose owner call runs under the chain ceiling.
+        var options = BindHost.Options(configure =>
+        {
+            configure.Execution.ResolveTimeoutMs = callMs;
+            configure.Execution.ChainTimeoutMs = callMs;
+        });
         var client = new EndingClient(end);
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(entities ?? model.Value), new FakeAggregateRunner { PageRows = [Row("driver", Driver)] }, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options))
         {
@@ -508,7 +542,7 @@ public class OwnerAvailabilityTests
             asked.TrySetResult();
 
             return Never(token);
-        });
+        }, callMs: 60_000);
         using var caller = new CancellationTokenSource();
 
         var running = engine.ExecuteAsync(BindHost.Request(Tour, Resolve), BindHost.Context(), caller.Token);

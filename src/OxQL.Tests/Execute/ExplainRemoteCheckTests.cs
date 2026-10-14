@@ -10,6 +10,7 @@ using OxQL.Model;
 using OxQL.Mongo;
 using OxQL.Mongo.Explain;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using OxQL.Tests.Bind.Fixtures.Resolve;
 using Xunit;
@@ -32,13 +33,6 @@ public class ExplainRemoteCheckTests
         [{ "resolve": { "path": "contactId", "as": "r" } },
          { "resolve": { "path": "r.companyId", "as": "co" } }]
         """;
-
-    private sealed class ManualTime : TimeProvider
-    {
-        public DateTimeOffset Now { get; set; } = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => Now;
-    }
 
     private static MongoQueryEngine Engine(FakeRemoteClient? client = null, Action<OxQLOptions>? configure = null, ExplainForwardCache? cache = null, OwnerFetchCache? owner = null) =>
         new(new StaticEntityModelProvider(ResolveModel.Model), new FakeAggregateRunner(), BindHost.Cursors, BindHost.Options(configure), client,

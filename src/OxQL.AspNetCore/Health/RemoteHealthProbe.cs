@@ -206,7 +206,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
         Task wait;
 
         lock (gate)
-            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle, CancellationToken.None)) : Task.CompletedTask;
+            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle, time, CancellationToken.None)) : Task.CompletedTask;
 
         await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -244,7 +244,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
         if (!client.IsConfigured(service))
             return RemoteServiceState.Unconfigured(service);
 
-        using var timeout = new CancellationTokenSource(ProbeTimeout);
+        using var timeout = new CancellationTokenSource(ProbeTimeout, time);
 
         try
         {

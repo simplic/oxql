@@ -9,6 +9,7 @@ using OxQL.Core.Engine;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Perf;
 using OxQL.IntegrationTests.Suites.Report;
 using OxQL.Mongo;
 using OxQL.Mongo.Explain;
@@ -253,6 +254,8 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
 
         var perCold = (remote.ExplainCalls.Count - calls) / 15.0;
 
+        perCold.Should().BePositive("a cold check asks its owners");
+
         // Cached tier with nothing kept: no owner is asked.
         var bare = new List<double>();
         var bareBytes = 0;
@@ -313,7 +316,6 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
         output.WriteLine($"  cached + If-None-Match (304):                    {Median(notModified):F2} ms, 0 B");
         output.WriteLine($"  answer: {first.Body.Length} B raw, {gzip.Body.Length} B gzip, {brotli.Body.Length} B br (fastest level)");
 
-        Median(bare).Should().BeLessThan(Median(cold), "the cached tier asks no owner, so it answers before a cold check does");
         brotli.Body.Length.Should().BeLessThan(first.Body.Length / 4);
         gzip.Body.Length.Should().BeLessThan(first.Body.Length / 4);
     }
@@ -343,9 +345,10 @@ public class ExplainRemoteFleetTests(ITestOutputHelper output)
     /// is done. The managed-memory assertion here is a tripwire against a leak per explain, far above
     /// what a run measures, not the plan's bound.
     /// </para>
-    /// The flood lasts <c>OXQL_LOAD_SECONDS</c> seconds (3 by default) with <c>OXQL_LOAD_CLIENTS</c> clients (50).
+    /// It is a load test and runs only when <c>OXQL_LOAD</c> is set. The flood lasts <c>OXQL_LOAD_SECONDS</c>
+    /// seconds (3 by default) with <c>OXQL_LOAD_CLIENTS</c> clients (50).
     /// </summary>
-    [Fact]
+    [OptInFact(OptInFactAttribute.Load)]
     public async Task T5_a_flood_of_explains_is_refused_at_the_limits_and_takes_nothing_else_down()
     {
         var seconds = int.TryParse(Environment.GetEnvironmentVariable("OXQL_LOAD_SECONDS"), out var configured) ? configured : 3;

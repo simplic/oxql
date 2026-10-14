@@ -58,7 +58,10 @@ public class JoinsRemoteOwnerTests : IClassFixture<OwnerFleet>
         sent.Stage("page")!["limit"]!.GetValue<int>().Should().Be(Keys().Count, "page.limit is the key count");
 
         // M32: min(remaining budget, ResolveTimeoutMs) rides on the batch body as the owner's budget.
-        sent.Body!["maxTimeMs"]!.GetValue<int>().Should().BeInRange(1_700, 1_800, "the budget less a tenth, so the owner answers before the caller stops waiting");
+        // The owner is sent the budget less a margin, a tenth and at most 250 ms.
+        const int Ceiling = FleetHost.ResolveTimeoutMs - 250;
+
+        sent.Body!["maxTimeMs"]!.GetValue<int>().Should().BeInRange(Ceiling - 100, Ceiling, "the budget less a margin, so the owner answers before the caller stops waiting");
 
         // M33: the caller's identity. The i-api-key scheme and the InternalHosts address belong
         // to the base server's remote client, not to the engine.

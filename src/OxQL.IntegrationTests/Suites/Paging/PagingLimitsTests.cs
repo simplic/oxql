@@ -4,6 +4,7 @@ using FluentAssertions;
 using OxQL.IntegrationTests.Fixtures;
 using OxQL.IntegrationTests.Fleet;
 using OxQL.IntegrationTests.Harness;
+using OxQL.IntegrationTests.Suites.Hosts;
 using Xunit;
 
 namespace OxQL.IntegrationTests.Suites.Paging;
@@ -23,7 +24,7 @@ namespace OxQL.IntegrationTests.Suites.Paging;
 [Trait("Category", "Integration")]
 public class PagingLimitsTests
 {
-    /// <summary>The defaults every host runs with, as <c>OxQLOptions</c> documents them; forty-one names (the explain limits last).</summary>
+    /// <summary>The defaults a host that sets nothing runs with, as <c>OxQLOptions</c> documents them; forty-one names (the explain limits last).</summary>
     private static readonly IReadOnlyDictionary<string, int> Defaults = new Dictionary<string, int>
     {
         ["maxPageSize"] = 500,
@@ -52,8 +53,7 @@ public class PagingLimitsTests
         ["maxReportedRows"] = 50,
         ["chainTimeoutMs"] = 6_000,
         ["negativeResolveTtlSeconds"] = 10,
-        // The fleet's hosts remember nothing of an owner that failed, for the suites (FleetHost); the default is 5.
-        ["ownerUnavailableTtlSeconds"] = 0,
+        ["ownerUnavailableTtlSeconds"] = 5,
         ["countStepRows"] = 1_000,
         ["countBudgetMs"] = 500,
         ["countMaxBudgetMs"] = 5_000,
@@ -69,20 +69,39 @@ public class PagingLimitsTests
         ["explainMaxOwnerServices"] = 4,
         ["explainMaxOwnerCalls"] = 8,
         ["explainMaxBatchChecks"] = 64,
-        // The fleet's hosts raise the rate and concurrency of explain for the suites (FleetHost); the defaults are 120, 30, 20, 5, 2 and 8.
-        ["explainRatePerMinute"] = 600_000,
-        ["explainRateBurst"] = 100_000,
-        ["explainOwnerRatePerMinute"] = 600_000,
-        ["explainOwnerRateBurst"] = 100_000,
-        ["explainMaxConcurrentPerUser"] = 1_000,
-        ["explainMaxConcurrentPerHost"] = 1_000,
+        ["explainRatePerMinute"] = 120,
+        ["explainRateBurst"] = 30,
+        ["explainOwnerRatePerMinute"] = 20,
+        ["explainOwnerRateBurst"] = 5,
+        ["explainMaxConcurrentPerUser"] = 2,
+        ["explainMaxConcurrentPerHost"] = 8,
         ["explainMaxConcurrentPerCaller"] = 4,
         ["maxValuesLimit"] = 500,
         ["valuesScanRows"] = 50_000,
         ["valuesDefaultLimit"] = 100,
     };
 
-    private static int Limit(string name) => Defaults[name];
+    /// <summary>
+    /// What the fleet's hosts set for the suites (FleetHost): they remember nothing of an owner that failed,
+    /// raise the rate and concurrency of explain, and run their time bounds as ceilings the suites never reach.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, int> FleetSettings = new Dictionary<string, int>
+    {
+        ["chainTimeoutMs"] = FleetHost.ChainTimeoutMs,
+        ["ownerUnavailableTtlSeconds"] = 0,
+        ["countBudgetMs"] = FleetHost.CountBudgetMs,
+        ["countMaxBudgetMs"] = FleetHost.CountMaxBudgetMs,
+        ["explainRemoteTimeoutMs"] = FleetHost.ExplainRemoteTimeoutMs,
+        ["explainTimeoutMs"] = FleetHost.ExplainTimeoutMs,
+        ["explainRatePerMinute"] = 600_000,
+        ["explainRateBurst"] = 100_000,
+        ["explainOwnerRatePerMinute"] = 600_000,
+        ["explainOwnerRateBurst"] = 100_000,
+        ["explainMaxConcurrentPerUser"] = 1_000,
+        ["explainMaxConcurrentPerHost"] = 1_000,
+    };
+
+    private static int Limit(string name) => FleetSettings.TryGetValue(name, out var set) ? set : Defaults[name];
 
     private static string Text(int value) => value.ToString(CultureInfo.InvariantCulture);
 
@@ -105,6 +124,16 @@ public class PagingLimitsTests
     public async Task U25_every_host_publishes_every_limit_on_health_at_its_default()
     {
         // The legacy half that compared them with the generated TypeScript modules is the client's.
+        await using (var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport)))
+        {
+            var limits = (await bare.GetAsync("OxQL/health?shallow=true", contract: 2)).Body!["limits"]!.AsObject();
+
+            limits.Select(pair => pair.Key).Should().BeEquivalentTo(Defaults.Keys, "a host that sets nothing");
+
+            foreach (var (name, value) in Defaults)
+                limits[name]!.GetValue<int>().Should().Be(value, $"a host that sets nothing: {name}");
+        }
+
         foreach (var service in LabService.All)
         {
             var health = await (await Lab.ClientAsync(service)).HealthAsync(shallow: true);
@@ -112,8 +141,8 @@ public class PagingLimitsTests
 
             limits.Select(pair => pair.Key).Should().BeEquivalentTo(Defaults.Keys, service.Key);
 
-            foreach (var (name, value) in Defaults)
-                limits[name]!.GetValue<int>().Should().Be(value, $"{service.Key}.{name}");
+            foreach (var name in Defaults.Keys)
+                limits[name]!.GetValue<int>().Should().Be(Limit(name), $"{service.Key}.{name}");
         }
     }
 
@@ -360,10 +389,11 @@ public class PagingLimitsTests
     public async Task U13_max_batch_queries_ten_queries_run_in_one_round_trip_and_eleven_are_refused()
     {
         // The legacy battery's eleven were refused by the client; the engine refuses them too.
+        // Each entry gives its count the longest budget, so ten counts at once finish on a loaded runner too.
         var client = await Transport();
         var dup = Corpus.Where(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP").Count;
         static object[] Entries(int count) => Enumerable.Range(0, count)
-            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": true } }] }""")
+            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": { "budgetMs": 5000 } } }] }""")
             .ToArray();
 
         var at = await client.BatchAsync(Entries(Limit("maxBatchQueries")));

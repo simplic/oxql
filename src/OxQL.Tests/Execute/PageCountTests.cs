@@ -8,6 +8,7 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
 using OxQL.Mongo;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -23,18 +24,6 @@ namespace OxQL.Tests.Execute;
 public class PageCountTests
 {
     private const string Order = "probe.order";
-
-    /// <summary>The clock a count measures its steps by: it stands still until a test moves it, so a step takes exactly what the test says.</summary>
-    private sealed class ManualTime : TimeProvider
-    {
-        private long ticks;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp() => Interlocked.Read(ref ticks);
-
-        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
-    }
 
     /// <summary>Answers the page with fixture rows and each count by a script over the bound it was asked with (<c>$limit - 1</c>).</summary>
     private sealed class ScriptedRunner : IAggregateRunner

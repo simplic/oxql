@@ -10,6 +10,7 @@ using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using OxQL.Tests.Bind.Fixtures.Resolve;
 using Xunit;
@@ -144,13 +145,6 @@ public class OwnerFetchRobustnessTests
         var without = Succeeded(await engine.ExecuteAsync(BindHost.Request(Invoice, Without), BindHost.Context()));
 
         (without.Diagnostics ?? []).Should().NotContain(diagnostic => diagnostic.Code == Notes.SelectPathNotOnTarget);
-    }
-
-    private sealed class ManualTime : TimeProvider
-    {
-        public DateTimeOffset Now { get; set; } = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     /// <summary>The owner of <see cref="TransportOwner"/>, which lacks <c>name</c> only while <paramref name="lacks"/> says so and answers it otherwise.</summary>

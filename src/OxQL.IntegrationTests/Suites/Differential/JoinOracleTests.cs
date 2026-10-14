@@ -236,8 +236,11 @@ public class JoinOracleTests
             {
                 var hurried = await client.PostAsync("OxQL/query", cut);
 
-                // By the clock it is answered or it ends at its ceiling; it is never a fault.
-                return (Index: -1, Items: hurried.IsPage || hurried.ErrorCodes.SequenceEqual(["QUERY_TIMEOUT"]) || hurried.ErrorCodes.Contains("RESOLVE_UNAVAILABLE") ? "" : hurried.ToString());
+                // By the clock it is answered or it ends at its ceiling, here or at the owner it sent the rest of its time
+                // to, which then refuses the owner query under the same code; it is never a fault.
+                var timedOut = hurried.ErrorCodes.SequenceEqual(["QUERY_TIMEOUT"]) || hurried.ErrorCodes.SequenceEqual(["RESOLVE_REFUSED", "QUERY_TIMEOUT"]);
+
+                return (Index: -1, Items: hurried.IsPage || timedOut || hurried.ErrorCodes.Contains("RESOLVE_UNAVAILABLE") ? "" : hurried.ToString());
             }
 
             var index = turn % steady.Length;

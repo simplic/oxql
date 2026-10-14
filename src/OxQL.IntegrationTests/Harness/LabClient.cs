@@ -137,7 +137,7 @@ public sealed class LabClient
 
         // A fault answers with a correlation id and no cause. The cause is in the host's log: a failure message that
         // quotes the answer says it too, so a fault of the database under the run is told from one of the engine.
-        if ((int)response.StatusCode == 500 && (await host()).Logs.Faults.LastOrDefault() is { Message: not null } fault)
+        if ((int)response.StatusCode == 500 && target.Logs.Faults.LastOrDefault() is { Message: not null } fault)
             sent += $"{Environment.NewLine}    last fault of the host: {fault.Message} ({fault.Exception})";
 
         var answer = new WireAnswer(response.StatusCode, Json.TryParse(text), text, headers, watch.Elapsed, sent);

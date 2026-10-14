@@ -360,10 +360,11 @@ public class PagingLimitsTests
     public async Task U13_max_batch_queries_ten_queries_run_in_one_round_trip_and_eleven_are_refused()
     {
         // The legacy battery's eleven were refused by the client; the engine refuses them too.
+        // Each entry gives its count the longest budget, so ten counts at once finish on a loaded runner too.
         var client = await Transport();
         var dup = Corpus.Where(Corpus.Template, row => Corpus.Text(row, "templateName") == "T-DUP").Count;
         static object[] Entries(int count) => Enumerable.Range(0, count)
-            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": true } }] }""")
+            .Select(_ => (object)"""{ "entityType": "transport.shipment_template", "pipeline": [{ "match": { "templateName": { "eq": "T-DUP" } } }, { "page": { "limit": 1, "count": { "budgetMs": 5000 } } }] }""")
             .ToArray();
 
         var at = await client.BatchAsync(Entries(Limit("maxBatchQueries")));

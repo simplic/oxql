@@ -38,20 +38,45 @@ public class BatchConcurrencyTests
     {
         var running = 0;
         var peak = 0;
+        var full = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = Enumerable.Range(0, 10).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
 
         var results = await BatchRun.RunAsync(Enumerable.Range(0, 10).ToList(), 3, async (item, token) =>
         {
-            peak = Math.Max(peak, Interlocked.Increment(ref running));
+            var now = Interlocked.Increment(ref running);
 
-            // The later an item, the sooner it ends: an order by completion would be the reverse.
-            await Task.Delay(TimeSpan.FromMilliseconds(5 * (10 - item)), token);
+            Raise(ref peak, now);
+
+            if (now == 3)
+                full.TrySetResult();
+
+            // None ends before three are in flight, and the first three end in reverse: an order by completion would differ.
+            await full.Task.WaitAsync(Ceiling, token);
+
+            if (item < 2)
+                await ended[item + 1].Task.WaitAsync(Ceiling, token);
+
             Interlocked.Decrement(ref running);
+            ended[item].TrySetResult();
 
             return item * 2;
         }, CancellationToken.None);
 
         results.Should().Equal(Enumerable.Range(0, 10).Select(item => item * 2));
         peak.Should().Be(3);
+    }
+
+    /// <summary>The longest a test waits for a signal its passing path always gives.</summary>
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
+
+    /// <summary>Raises <paramref name="peak"/> to <paramref name="value"/> when it is lower, whoever else raises it at the same time.</summary>
+    private static void Raise(ref int peak, int value)
+    {
+        int seen;
+
+        while ((seen = Volatile.Read(ref peak)) < value && Interlocked.CompareExchange(ref peak, value, seen) != seen)
+        {
+        }
     }
 
     [Fact]
@@ -137,18 +162,27 @@ public class BatchConcurrencyTests
 
         public int Peak { get; private set; }
 
-        public int Started
-        {
-            get
-            {
-                lock (Calls)
-                    return Calls.Count;
-            }
-        }
-
         public List<(string Entity, int MaxTimeMs)> Calls { get; } = [];
 
         public Func<EntityDef, IReadOnlyList<BsonDocument>> Rows { get; set; } = _ => [];
+
+        private readonly List<(int Count, TaskCompletionSource Reached)> waiting = [];
+
+        /// <summary>Ends once <paramref name="count"/> aggregates have started.</summary>
+        public Task StartedAsync(int count)
+        {
+            lock (Calls)
+            {
+                if (Calls.Count >= count)
+                    return Task.CompletedTask;
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                waiting.Add((count, reached));
+
+                return reached.Task;
+            }
+        }
 
         public async Task<IReadOnlyList<BsonDocument>> AggregateAsync(EntityDef entity, IReadOnlyList<BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
         {
@@ -156,6 +190,10 @@ public class BatchConcurrencyTests
             {
                 Calls.Add((entity.Id, options.MaxTimeMs));
                 Peak = Math.Max(Peak, ++running);
+
+                foreach (var (count, reached) in waiting)
+                    if (Calls.Count >= count)
+                        reached.TrySetResult();
 
                 if (running >= Together)
                     together.TrySetResult();
@@ -353,9 +391,7 @@ public class BatchConcurrencyTests
         var batch = service.BatchAsync(Batch(6), internalCall: true, caller.Token);
 
         // Binding takes its turn at the addon source, so the four start a moment apart.
-        for (var waited = 0; waited < 200 && runner.Started < 4; waited++)
-            await Task.Delay(10);
-
+        await runner.StartedAsync(4).WaitAsync(Ceiling);
         await caller.CancelAsync();
 
         await FluentActions.Awaiting(() => batch).Should().ThrowAsync<OperationCanceledException>();

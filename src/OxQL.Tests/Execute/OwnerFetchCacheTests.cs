@@ -7,6 +7,7 @@ using OxQL.Model.Attributes;
 using OxQL.Model.Build;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -137,13 +138,6 @@ public class OwnerFetchCacheTests
         answer!.Rows.Should().ContainSingle();
         cache.TryGetDrops(drops, out var select, out _).Should().BeTrue();
         select.Should().Equal("number");
-    }
-
-    private sealed class ManualTime : TimeProvider
-    {
-        public DateTimeOffset Now { get; set; } = new(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     [Fact]

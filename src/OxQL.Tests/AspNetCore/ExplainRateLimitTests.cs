@@ -8,6 +8,7 @@ using OxQL.Core.Binding;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Model;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using OxQL.Tests.Execute;
 using Xunit;
@@ -22,17 +23,6 @@ namespace OxQL.Tests.AspNetCore;
 /// </summary>
 public class ExplainRateLimitTests
 {
-    private sealed class ManualTime : TimeProvider
-    {
-        private long ticks;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp() => Interlocked.Read(ref ticks);
-
-        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
-    }
-
     private static ExplainOptions Limits(int perMinute = 20, int burst = 5, int perUser = 2, int perHost = 8, int perCaller = 4, int ownersPerMinute = 20, int ownerBurst = 5) => new()
     {
         RatePerMinute = perMinute,

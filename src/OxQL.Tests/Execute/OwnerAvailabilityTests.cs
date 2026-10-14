@@ -10,6 +10,7 @@ using OxQL.Model.Attributes;
 using OxQL.Model.Build;
 using OxQL.Mongo;
 using OxQL.Mongo.Resolve;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using Xunit;
 
@@ -53,15 +54,6 @@ public class OwnerAvailabilityTests
 
     /// <summary>The longest a test waits for a signal its passing path always gives.</summary>
     private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
-
-    private sealed class ManualTime : TimeProvider
-    {
-        private DateTimeOffset now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => now;
-
-        public void Advance(TimeSpan by) => now += by;
-    }
 
     private static (MongoQueryEngine Engine, FakeAggregateRunner Runner, FakeRemoteClient Client, ManualTime Time) Host(Action<OxQLOptions>? configure = null)
     {

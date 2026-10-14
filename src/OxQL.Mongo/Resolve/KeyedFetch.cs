@@ -890,7 +890,7 @@ internal sealed class KeyedFetch
             foreach (var call in round)
             {
                 calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
-                localCalls += call.Service == SelfService ? call.Outcome.Calls : 0;
+                localCalls += call.Service == SelfService ? call.Outcome.Queries : 0;
 
                 if (Failed(call, diagnostics))
                     continue;
@@ -954,7 +954,7 @@ internal sealed class KeyedFetch
         foreach (var call in probes.Count == 0 ? [] : await SendAsync(probes, context, deadline, cancellationToken).ConfigureAwait(false))
         {
             calls += call.Service == SelfService ? 0 : call.Outcome.Calls;
-            localCalls += call.Service == SelfService ? call.Outcome.Calls : 0;
+            localCalls += call.Service == SelfService ? call.Outcome.Queries : 0;
 
             if (Failed(call, diagnostics))
                 continue;
@@ -2860,6 +2860,9 @@ internal sealed class KeyedFetch
         /// <summary>How many batches went out for it, a split batch counted per part.</summary>
         public int Calls { get; init; } = 1;
 
+        /// <summary>How many owner queries those batches carried: what an owner ran, a query another one of the batch had sent not counted.</summary>
+        public int Queries { get; init; }
+
         /// <summary>
         /// The outcome of the call that left <paramref name="outage"/>, for a request that is not sent
         /// while it is remembered: a timeout stays a timeout, an owner's status stays its status.
@@ -2907,6 +2910,7 @@ internal sealed class KeyedFetch
         var size = BatchCapOf(owner, service);
         var results = new List<JsonNode?>(queries.Count);
         var calls = 0;
+        var carried = 0;
 
         for (var start = 0; start < queries.Count; start += size)
         {
@@ -2916,18 +2920,20 @@ internal sealed class KeyedFetch
             var budget = chain ? ChainBudget(left) : Budget(left);
             var request = new BatchRequest { Queries = queries.Skip(start).Take(size).ToList(), MaxTimeMs = OwnerCeilingMs(budget) };
 
+            carried += request.Queries.Count;
+
             // A call that had at least half of what one call may take and got no answer says something
             // of the owner; one the request's own time had already cut short says nothing of it.
             var whole = budget.TotalMilliseconds * 2 >= (chain ? options.Execution.EffectiveChainTimeoutMs : options.Execution.EffectiveResolveTimeoutMs);
             var outcome = await CallAsync(owner, service, request, budget, whole, context, cancellationToken).ConfigureAwait(false);
 
             if (outcome.Failure is not null)
-                return outcome with { Budget = budget, Calls = outcome.Remembered is null ? calls : calls - 1 };
+                return outcome with { Budget = budget, Calls = outcome.Remembered is null ? calls : calls - 1, Queries = outcome.Remembered is null ? carried : carried - request.Queries.Count };
 
             results.AddRange(outcome.Results);
         }
 
-        return new CallOutcome(results, null) { Calls = calls };
+        return new CallOutcome(results, null) { Calls = calls, Queries = carried };
     }
 
     /// <summary>One owner query of a batch's queries in flight (<see cref="BatchFlights"/>): what came of it, for the queries of the batch that would have sent the same.</summary>
@@ -3035,21 +3041,21 @@ internal sealed class KeyedFetch
             }
             catch (TimeoutException)
             {
-                return new CallOutcome([], Failure.Timeout) { Budget = budget, Calls = sent.Calls };
+                return new CallOutcome([], Failure.Timeout) { Budget = budget, Calls = sent.Calls, Queries = sent.Queries };
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 // The one that asked was stopped and this one was not: the owner did not answer it.
-                return new CallOutcome([], Failure.Unreachable) { Budget = budget, Calls = sent.Calls };
+                return new CallOutcome([], Failure.Unreachable) { Budget = budget, Calls = sent.Calls, Queries = sent.Queries };
             }
 
             if (failed is not null)
-                return failed with { Calls = sent.Calls };
+                return failed with { Calls = sent.Calls, Queries = sent.Queries };
 
             results[index] = entries[index].Flight.Copy();
         }
 
-        return new CallOutcome(results, null) { Calls = sent.Calls };
+        return new CallOutcome(results, null) { Calls = sent.Calls, Queries = sent.Queries };
     }
 
     /// <summary>

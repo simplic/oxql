@@ -181,6 +181,29 @@ public class KeyedFetchByKeysTests
     }
 
     [Fact]
+    public async Task Local_calls_count_each_owner_query_this_host_ran_however_many_batches_carried_them()
+    {
+        var (engine, runner, client) = Host();
+        var page = new List<BsonDocument> { InvoiceRow(row => row["CustomerIds"] = new BsonArray { Id(Customer1), Id(Customer2), Id(Missing) }) };
+        runner.Rows["rc.customer"] = [CustomerRow(Customer1, "Alice"), CustomerRow(Customer2, "Bob")];
+
+        var bound = ((BindOutcome.Bound)await new Binder(ResolveModel.Model, BindHost.Cursors).BindAsync(
+            BindHost.Request(Invoice, """[{ "resolve": { "path": "customerIds", "as": "customers", "elements": "all" } }]"""), BindHost.Context(), CancellationToken.None)).Pipeline;
+        var options = BindHost.Options(configure =>
+        {
+            configure.Limits.ResolveKeyChunk = 1;
+            configure.Limits.MaxBatchQueries = 2;
+        });
+        var fetch = new KeyedFetch(client, engine, new OwnerFetchCache(options), options);
+
+        var result = await fetch.ByKeysAsync(MongoCompiler.Compile(bound, new CompileOptions(5_000, null, 10_000)), page, BindHost.Context(), TimeSpan.FromSeconds(5), strict: false, CancellationToken.None);
+
+        runner.StagesOf("rc.customer").Should().HaveCount(3, "one owner query per key, in two batches");
+        result.LocalCalls.Should().Be(3, "each owner query this host ran is a command of its own, whatever batch carried it");
+        result.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Elements_first_folds_a_row_without_a_resolving_element_to_its_strongest_outcome()
     {
         var (engine, runner, client) = Host();

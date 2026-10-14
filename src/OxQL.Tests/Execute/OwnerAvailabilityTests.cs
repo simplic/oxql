@@ -339,7 +339,12 @@ public class OwnerAvailabilityTests
     [Fact]
     public async Task An_owner_that_did_not_answer_within_a_whole_call_budget_is_remembered_and_one_cut_short_by_the_request_is_not()
     {
-        var (engine, runner, client, _) = Host(options => options.Execution.ResolveTimeoutMs = 60);
+        // The tour's resource is a typed reference, whose owner call runs under the chain ceiling.
+        var (engine, runner, client, _) = Host(options =>
+        {
+            options.Execution.ResolveTimeoutMs = 60;
+            options.Execution.ChainTimeoutMs = 60;
+        });
 
         runner.PageRows = [Row("driver", Driver)];
         client.Silent.Add("staff");
@@ -389,9 +394,18 @@ public class OwnerAvailabilityTests
         public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
     }
 
-    private static (MongoQueryEngine Engine, EndingClient Client) Ending(Func<CancellationToken, Task<BatchResponse>> end, EntityModel? entities = null)
+    /// <summary>
+    /// An engine whose owner calls end as <paramref name="end"/> says and may take <paramref name="callMs"/>: short, so a
+    /// call that never ends is over at once; a test that ends the call itself gives it a ceiling it never reaches.
+    /// </summary>
+    private static (MongoQueryEngine Engine, EndingClient Client) Ending(Func<CancellationToken, Task<BatchResponse>> end, EntityModel? entities = null, int callMs = 60)
     {
-        var options = BindHost.Options(configure => configure.Execution.ResolveTimeoutMs = 60);
+        // The tour's resource is a typed reference, whose owner call runs under the chain ceiling.
+        var options = BindHost.Options(configure =>
+        {
+            configure.Execution.ResolveTimeoutMs = callMs;
+            configure.Execution.ChainTimeoutMs = callMs;
+        });
         var client = new EndingClient(end);
         var engine = new MongoQueryEngine(new StaticEntityModelProvider(entities ?? model.Value), new FakeAggregateRunner { PageRows = [Row("driver", Driver)] }, BindHost.Cursors, options, client, cache: new OwnerFetchCache(options))
         {
@@ -508,7 +522,7 @@ public class OwnerAvailabilityTests
             asked.TrySetResult();
 
             return Never(token);
-        });
+        }, callMs: 60_000);
         using var caller = new CancellationTokenSource();
 
         var running = engine.ExecuteAsync(BindHost.Request(Tour, Resolve), BindHost.Context(), caller.Token);

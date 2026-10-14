@@ -130,9 +130,9 @@ public sealed class FleetHost : IAsyncDisposable
         services.AddSingleton<IEntityModelProvider>(new LazyEntityModelProvider(() => service.Model));
         services.AddSingleton(client);
 
-        // A fleet that slows its aggregates down registers the runner itself; the engine's own is the default.
-        if (fleet.AggregateDelay > TimeSpan.Zero)
-            services.AddSingleton<IAggregateRunner>(new DelayedRunner(new MongoAggregateRunner(client, databaseName), fleet, service.Key));
+        // A fleet that holds its aggregates in waves registers the runner itself; the engine's own is the default.
+        if (fleet.Waves is { } waves)
+            services.AddSingleton<IAggregateRunner>(new WaveRunner(new MongoAggregateRunner(client, databaseName), fleet, waves, service.Key));
 
         services.AddOxQLMongo(options =>
         {
@@ -233,12 +233,12 @@ public sealed class FleetHost : IAsyncDisposable
 }
 
 /// <summary>
-/// The engine's runner with every aggregate taking at least <see cref="LabFleet.AggregateDelay"/>, and
-/// recorded with its start and end (<see cref="LabFleet.Aggregates"/>). A local server answers in
+/// The engine's runner with every aggregate held until its wave is in flight (<see cref="AggregateWaves"/>),
+/// and recorded with its start and end (<see cref="LabFleet.Aggregates"/>). A local server answers in
 /// well under a millisecond, which hides what a hosted one makes plain: aggregates sent one after
 /// another add up, aggregates sent together do not.
 /// </summary>
-internal sealed class DelayedRunner(IAggregateRunner inner, LabFleet fleet, string service) : IAggregateRunner
+internal sealed class WaveRunner(IAggregateRunner inner, LabFleet fleet, AggregateWaves waves, string service) : IAggregateRunner
 {
     public async Task<IReadOnlyList<MongoDB.Bson.BsonDocument>> AggregateAsync(OxQL.Model.EntityDef entity, IReadOnlyList<MongoDB.Bson.BsonDocument> stages, AggregateRunOptions options, CancellationToken cancellationToken)
     {
@@ -246,13 +246,87 @@ internal sealed class DelayedRunner(IAggregateRunner inner, LabFleet fleet, stri
 
         try
         {
-            await Task.Delay(fleet.AggregateDelay, cancellationToken);
+            await waves.EnterAsync(service, cancellationToken);
 
             return await inner.AggregateAsync(entity, stages, options, cancellationToken);
         }
         finally
         {
             fleet.Aggregates.Enqueue((service, entity.Id, started, System.Diagnostics.Stopwatch.GetTimestamp()));
+        }
+    }
+}
+
+/// <summary>
+/// The waves a case expects the aggregates of each service in, by service: an aggregate is held until as
+/// many aggregates of its service as its wave holds have been sent, and then the wave goes on together.
+/// The aggregates of one wave are so in flight together, and an aggregate sent only once an earlier one
+/// has answered starts after that one ended. A service without waves, or whose waves are spent, is not held.
+/// <para>
+/// A wave that does not fill, because the engine sends its aggregates one after another, goes on after
+/// <see cref="Ceiling"/>, an upper bound a wave that fills never reaches, and is counted in
+/// <see cref="Overdue"/>: the case then fails on what it asserts instead of waiting for ever.
+/// </para>
+/// </summary>
+public sealed class AggregateWaves(IReadOnlyDictionary<string, int[]> waves)
+{
+    public static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
+
+    private readonly object gate = new();
+    private readonly Dictionary<string, Queue<int>> planned = waves.ToDictionary(pair => pair.Key, pair => new Queue<int>(pair.Value), StringComparer.Ordinal);
+    private readonly Dictionary<string, List<TaskCompletionSource>> open = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> sizes = new(StringComparer.Ordinal);
+    private int overdue;
+
+    /// <summary>The aggregates that went on after <see cref="Ceiling"/> because their wave did not fill.</summary>
+    public int Overdue => Volatile.Read(ref overdue);
+
+    /// <summary>How many waves of each service have not gone on yet: none once every wave of the case has.</summary>
+    public IReadOnlyDictionary<string, int> Unfilled
+    {
+        get
+        {
+            lock (gate)
+                return planned.ToDictionary(pair => pair.Key, pair => pair.Value.Count + (open.ContainsKey(pair.Key) ? 1 : 0), StringComparer.Ordinal)
+                    .Where(pair => pair.Value > 0).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>Holds an aggregate of <paramref name="service"/> until its wave is in flight.</summary>
+    public async Task EnterAsync(string service, CancellationToken cancellationToken)
+    {
+        TaskCompletionSource held;
+
+        lock (gate)
+        {
+            if (!open.TryGetValue(service, out var wave))
+            {
+                if (!planned.TryGetValue(service, out var waiting) || waiting.Count == 0)
+                    return;
+
+                sizes[service] = waiting.Dequeue();
+                open[service] = wave = [];
+            }
+
+            held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            wave.Add(held);
+
+            if (wave.Count >= sizes[service])
+            {
+                open.Remove(service);
+
+                foreach (var member in wave)
+                    member.TrySetResult();
+            }
+        }
+
+        try
+        {
+            await held.Task.WaitAsync(Ceiling, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            Interlocked.Increment(ref overdue);
         }
     }
 }

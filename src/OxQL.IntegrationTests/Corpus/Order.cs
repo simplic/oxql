@@ -131,6 +131,31 @@ public static class Order
         }
     }
 
+    /// <summary>
+    /// Two numbers as a sort orders them: NaN before every number, then negative infinity, the
+    /// finite numbers by value whatever type each is stored as, then positive infinity.
+    /// </summary>
+    public static int CompareNumbers(BsonValue a, BsonValue b)
+    {
+        var (left, right) = (Class(a), Class(b));
+
+        if (left != right)
+            return left < right ? -1 : 1;
+
+        return left == 2 ? CompareDecimal(NumberText(a), NumberText(b)) : 0;
+
+        static int Class(BsonValue value) => value switch
+        {
+            BsonDouble d when double.IsNaN(d.Value) => 0,
+            BsonDouble d when double.IsNegativeInfinity(d.Value) => 1,
+            BsonDouble d when double.IsPositiveInfinity(d.Value) => 3,
+            BsonDecimal128 m when Decimal128.IsNaN(m.Value) => 0,
+            BsonDecimal128 m when Decimal128.IsNegativeInfinity(m.Value) => 1,
+            BsonDecimal128 m when Decimal128.IsPositiveInfinity(m.Value) => 3,
+            _ => 2,
+        };
+    }
+
     /// <summary>The canonical text of a numeric BSON value, exact for every numeric type.</summary>
     public static string NumberText(BsonValue value) => value switch
     {
@@ -184,7 +209,7 @@ public static class Order
         return (a, b) switch
         {
             (null or BsonNull or BsonUndefined, _) or (_, null or BsonNull or BsonUndefined) => 0,
-            _ when rankA == 3 => CompareDecimal(NumberText(a!), NumberText(b!)),
+            _ when rankA == 3 => CompareNumbers(a!, b!),
             (BsonString sa, BsonString sb) => CompareStrings(sa.Value, sb.Value, strings),
             (BsonBinaryData ba, BsonBinaryData bb) => CompareBinary(ba, bb),
             (BsonBoolean xa, BsonBoolean xb) => xa.Value.CompareTo(xb.Value),

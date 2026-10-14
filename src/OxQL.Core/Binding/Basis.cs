@@ -98,6 +98,7 @@ public static class Basis
         [Notes.RemoteUnchecked] = Owner, [Notes.ExplainLimit] = Owner, [Notes.ExplainTrimmed] = Owner,
 
         [Notes.TextFolds] = Advisory, [Notes.PatternFoldsCaseOnly] = Advisory, [Notes.PatternFolds] = Advisory, [Notes.ExactForcesExact] = Advisory,
+        [Notes.DurationOrdersAsText] = Advisory,
         [Notes.SomeElement] = Advisory, [Notes.NeqMatchesAbsent] = Advisory, [Notes.OnlyForVariants] = Advisory, [Notes.SnapshotCopy] = Advisory,
         [Notes.JoinBeforePage] = Advisory, [Notes.JoinAfterPage] = Advisory, [Notes.OwnerBinds] = Advisory, [Notes.SelectPathNotOnTarget] = Advisory,
         [Notes.CountCap] = Advisory, [Notes.LookupLimit] = Advisory, [Notes.OffsetPaging] = Advisory, [Notes.MissingPolicy] = Advisory,

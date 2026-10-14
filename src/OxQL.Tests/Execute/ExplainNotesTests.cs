@@ -43,7 +43,7 @@ public class ExplainNotesTests
             "JOIN_BEFORE_PAGE", "JOIN_AFTER_PAGE", "OWNER_BINDS", "REMOTE_UNCHECKED", "SELECT_PATH_NOT_ON_TARGET", "COUNT_CAP", "LOOKUP_LIMIT",
             "OFFSET_PAGING", "MISSING_POLICY", "REPORT_PAGE", "INDEX_ADVICE", "REMOTE_LOOKUP", "EXPLAIN_LIMIT", "EXPLAIN_TRIMMED", "FILTER_BINDS_EARLIER",
             "PATTERN_FOLDS", "PROJECT_AFTER_PAGE", "SORT_BEFORE_UNWIND", "UNWIND_PREFILTER", "SEMI_JOIN_NOT_BY_KEY", "GROUP_SCANS", "VALUES_SCANS",
-            "REFERENCE_TARGET_UNKNOWN");
+            "REFERENCE_TARGET_UNKNOWN", "DURATION_ORDERS_AS_TEXT");
         Notes.All.Except([Notes.ExplainLimit]).Should().NotIntersectWith(typeof(Codes).GetFields().Where(field => field.IsLiteral).Select(field => (string)field.GetRawConstantValue()!),
             "a note is neither a refusal nor a diagnostic of the catalogue; only an explain limit is both a refusal (past a bound, before binding) and a note (hit mid-way)");
     }
@@ -155,6 +155,33 @@ public class ExplainNotesTests
             .Should().BeOfType<ExplainOutcome.Success>().Subject.Result;
 
         legacy.Notes.Should().NotContain(note => note.Code == Notes.GroupScans);
+    }
+
+    public sealed class TimedModel
+    {
+        public Guid Id { get; set; }
+
+        public Guid OrganizationId { get; set; }
+
+        public TimeSpan? Took { get; set; }
+
+        [MongoDB.Bson.Serialization.Attributes.BsonTimeSpanOptions(MongoDB.Bson.BsonType.Int64)]
+        public TimeSpan Ticks { get; set; }
+    }
+
+    [Fact]
+    public async Task An_ordered_comparison_and_a_sort_on_a_duration_stored_as_text_say_that_the_order_is_by_character()
+    {
+        var model = OxQL.Model.Build.ClrModelBuilder.Build([new OxQL.Model.Build.EntityDeclaration("nt.timed", "nt.timed", typeof(TimedModel), "tmp_nt_timed", null, false)]);
+
+        var notes = await NotesAsync("""[{ "match": { "took": { "gt": "PT1H" }, "ticks": { "lte": "PT1H" } } }, { "sort": [{ "took": "desc" }, { "ticks": "asc" }] }]""", "nt.timed", model: model);
+        var said = notes.Where(note => note.Code == Notes.DurationOrdersAsText).ToList();
+
+        said.Select(note => (note.Stage, note.Path, Op: (string)note.Params!["op"]!)).Should().Equal((0, "took", "gt"), (1, "took", "sort"));
+
+        // Equality has one answer whatever the order is, and a member stored as a number orders by value.
+        (await NotesAsync("""[{ "match": { "took": { "eq": "PT1H" }, "ticks": { "gt": "PT1H" } } }, { "sort": [{ "ticks": "asc" }] }]""", "nt.timed", model: model))
+            .Should().NotContain(note => note.Code == Notes.DurationOrdersAsText);
     }
 
     [Fact]

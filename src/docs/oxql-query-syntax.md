@@ -218,7 +218,7 @@ Anything else is `UNKNOWN_OPERATOR`.
 | `eq`, `neq` | every scalar kind | one value, or `null` (`eq null` = absent or null; `neq null` = present and non-null) |
 | `gt`, `gte`, `lt`, `lte` | `int long double decimal date dateTime timeSpan string enum` | one value |
 | `in`, `nin` | every scalar kind | an array of values (`OPERAND_NOT_ARRAY` otherwise); `in []` matches nothing, `nin []` everything |
-| `contains`, `startsWith`, `endsWith` | `string` | a string; a folding `startsWith` is a range under the collation, the others are patterns the engine escapes (`endsWith` anchored at the end) |
+| `contains`, `startsWith`, `endsWith` | `string` | a string; a folding `startsWith` is a range under the collation (through a collection a pattern, so that one element starts with the text), the others are patterns the engine escapes (`endsWith` anchored at the end of the value: a line feed that ends a value is a character of it, and the start of a text is the start of the value, never of a line inside it) |
 | `regex` | `string` | a pattern up to `RegexMaxLength` (`REGEX_TOO_LONG`); nested quantifiers and backreferences are `INVALID_REGEX`; an unanchored pattern is diagnosed `REGEX_UNANCHORED` |
 | `exists` | every stored member, objects and collections included | a boolean |
 | `is` | an object, or a collection of objects, whose type has variants | a variant name, or a non-empty array of names |
@@ -260,7 +260,7 @@ storage. A wrong JSON kind is `INVALID_OPERAND` naming what was expected.
 | `guid` | a GUID string |
 | `date` | `YYYY-MM-DD` |
 | `dateTime` | ISO-8601 with `Z` or an offset; a bare local time is refused |
-| `timeSpan` | ISO-8601 duration (`PT1H30M`) |
+| `timeSpan` | ISO-8601 duration (`PT1H30M`, `P2DT4H`, `-PT5M`). A year in it counts as 365 days and a month as 30 (`P1Y`, `P1M`). A duration is kept to 100 nanoseconds, the precision a stored one has: finer digits of a second are dropped (`PT0.00000001S` is zero) |
 | `enum` | the member name or its number; an unknown name or number is `UNKNOWN_ENUM_MEMBER` |
 | `binary` | base64 |
 
@@ -329,7 +329,7 @@ Contract 2 has five more members:
 
 | member | default | meaning |
 |---|---|---|
-| `sort` | the child's key ascending | sort entries as in the `sort` stage, bound against the child; the child's key is appended as the tie-breaker |
+| `sort` | the child's key ascending | sort entries as in the `sort` stage, bound against the child; the child's key is appended as the tie-breaker unless the sort names it |
 | `first` | `false` | the alias holds the first child by `sort`, or `null`; a filterable, sortable entity row, not an array. Together with `limit`: `OPTION_NOT_APPLICABLE` |
 | `on` | the entity itself | the alias of the parent row, an entity row of this host: an inline `resolve` alias, a `first` lookup alias, or an unwound lookup alias; the child's reference must target its entity. An array, an unwound element, a scalar, a group output or the alias of an item target is `LOOKUP_ON_NOT_ENTITY`; a name that is no alias of the row is `UNKNOWN_PATH`. A keyed or remote `resolve` alias (or its `parentAs`) makes the lookup a continued stage that runs at that alias's owner (see *Continued stages*) |
 | `forTarget` | none | only on a continued lookup (see *Continued stages*); elsewhere `OPTION_NOT_APPLICABLE` |
@@ -620,7 +620,7 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
 
 - Keys are scalar paths (not under a collection that is not unwound: `GROUP_ON_COLLECTION`) or
   a `dateTrunc` with `unit` in `year quarter month week day hour minute second`
-  (`INVALID_DATE_TRUNC_UNIT`), an optional IANA `timezone` (default UTC, `INVALID_TIMEZONE`)
+  (`INVALID_DATE_TRUNC_UNIT`), an optional `timezone` (an IANA zone id or an offset such as `+02:00`; default UTC, `INVALID_TIMEZONE`; the accepted spellings are in the semantics guide, *Grouping*)
   and, for `week`, `weekStart` (a day name, `monday` … `sunday`, default `monday`; another word
   is `INVALID_DATE_TRUNC_UNIT`). A truncated key is emitted as the UTC
   instant of the local boundary. A `date` has no time of day and truncates on its calendar day
@@ -639,7 +639,22 @@ under `strict` that refuses. A `flatten` that names a member which is not such a
   object by its members.
 - An argument is a path (a string, or `{ "path": "…" }`), `{ "$var": "…" }`, `{ "literal": … }`
   (a bare number, boolean or `null` is a literal too), or an arithmetic expression
-  `add subtract multiply divide coalesce` over an array of arguments.
+  `add subtract multiply divide coalesce` over an array of arguments. Arithmetic is over numbers
+  (`int`, `long`, `double`, `decimal`, an enum by its number, a `timeSpan` its member stores as a
+  number: ticks as a 64-bit integer, or a `double` in the member's unit; a member of `unknown`
+  kind, a `null` and what a `coalesce` answers are taken as they come): an operand of another
+  kind, a `timeSpan` stored as text among them, is
+  `INVALID_AGGREGATE_ARGUMENT` (`params { operator, kinds }`), and so is a `subtract` or a
+  `divide` that does not take exactly two operands. A date takes part in two forms: one date in
+  an `add`, or a date a number is subtracted from, is that date moved by so many milliseconds
+  (a `dateTime`); one date less another is the milliseconds between them (a `long`). **A quotient
+  by zero is `null`**, as a quotient by `null` is, and `sum`, `avg`, `min` and `max` skip it like
+  any `null`; a quotient is a `double`, a `decimal` when an operand is one (under `avg` a
+  quotient of whole numbers counts as whole numbers, so the mean is a `decimal`). A row that
+  holds a value no arithmetic takes where the kinds allow one (text under an `unknown` member)
+  refuses the run: 422 `INVALID_AGGREGATE_ARGUMENT`. Under contract 1 arithmetic is bound
+  without the refusal by kind and is a `long` unless an operand is a `double` or a `decimal`;
+  the quotient by zero and the 422 hold there too.
 - **Written as read.** A `group` that is no object is `UNKNOWN_STAGE_MEMBER`, and so is a key
   that names both `path` and `dateTrunc` (`params.reason: "exclusive"`). An aggregate is an object
   of one function: two functions, an argument object that names no path, variable, literal or
@@ -697,7 +712,10 @@ entity's key and display members; it applies to the entity's own shape, not afte
 **The projection alone decides the row's shape.** Under a join alias it names the paths the alias
 shows (`"vehicle.registrationPlate": 1`): exactly those, without the key unless it names it, and the
 join loads them. What a stage only reads (a `match` on `vehicle.status`, the key of a later
-`resolve`, the member a `lookup` joins on) is loaded and never shown.
+`resolve`, the member a `lookup` joins on) is loaded and never shown. The same holds under the
+alias of an `unwind`: `"item.id": 1` shows the element's `id`, and a reference of the element a
+join reads (`item.billingLineId`) is read and not shown. An alias the projection names nothing
+under, written by a stage after it, shows the whole element.
 
 **A member no row can carry is refused.** A member the service returns over REST and does not
 store (`stored: false` in the schema document: computed, `[BsonIgnore]`, without a setter) is in
@@ -755,8 +773,11 @@ Each entry is one object of one path and a direction `asc` | `desc` (`INVALID_SO
 or the object form with `direction` and `caseSensitive` (any other member is
 `UNKNOWN_STAGE_MEMBER`, a missing `direction` `INVALID_SORT_DIRECTION`). An entry that names two
 paths or none is `UNKNOWN_STAGE_MEMBER`. Paths must be scalar and sortable in the current shape (not under a
-collection); after `group` only keys and aggregates. On a root shape the engine appends `id`
-as the tie-breaker; after `group` it appends every group key the sort does not name, ascending.
+collection); after `group` only keys and aggregates. On a root shape the entity key (`id`) breaks
+ties: ascending at the end of a sort that does not name it, and at the place and in the direction
+of a sort that does. After `group` the engine appends every group key the sort does not name,
+ascending. A path a sort names more than once orders once, at its first place and in the
+direction written last. The pages of a cursor walk are that one order, split.
 
 A string orders under the collation, case and accents folded, unless the entry says
 `caseSensitive: true`. An exact sort runs in a request where every string comparison and key is
@@ -1037,7 +1058,7 @@ breakdown as `timing`, the last member of the answer, unless the host keeps it t
   "db": { "ms": 47.6, "commands": 1, "roundTrips": 1, "rttMs": 0.8, "networkEstimateMs": 0.8,
           "list": [ { "kind": "page", "collection": "transport.shipment", "ms": 47.6, "firstBatchMs": 47.59, "drainMs": 0.01,
                       "docs": 101, "bytes": 45322, "getMores": 0, "parallelWith": null } ] },
-  "resolve": { "ms": 0, "calls": 0, "cacheHits": 0, "remoteMs": 0, "owners": [] },
+  "resolve": { "ms": 0, "calls": 0, "localCalls": 0, "cacheHits": 0, "remoteMs": 0, "owners": [] },
   "countWaitMs": 0, "convertMs": 0.64, "rows": 100, "build": "Release" }
 ```
 
@@ -1060,6 +1081,9 @@ breakdown as `timing`, the last member of the answer, unless the host keeps it t
 - `addonMs` is the time the host's addon source was asked. Where the source waited for its
   database and says so, that wait is listed under `db.list[]` (`kind: "addon"`) and is database
   time, not `oursMs`; a host that answers from its cache lists nothing. `bindMs` never holds it.
+- `resolve.calls` counts the calls to other services' owners; `resolve.localCalls` the owner
+  queries this host ran in process for join targets of its own, each a command of kind `resolve`
+  under `db.list[]` (the header says `… / n local` when there are any).
 - `resolve.owners[]`: one entry per join target: `service`, `entity`, `remote` (another service's
   owner), `ms` of the calls that carried its keys, `keys` asked, `cacheHits`. An owner of another
   service that was asked answers with its own `timing` per query (`timing: [ … ]`), so the

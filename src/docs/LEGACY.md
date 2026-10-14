@@ -122,6 +122,11 @@ Behaviour kept as it is, because an answer depends on it:
 - A request member, a stage key and a stage member the pipeline does not know are ignored:
   `offset`, `timing`, `filter`, `strict`, a `values` stage.
 - `limit` may be written as text (`"2"`).
+- A cursor continues by one range per sort field, in the field's direction: by comparison with
+  the last value of the page. A comparison is made among the rows that hold a value in the sort
+  member, so that is where the position of a cursor lies and where it continues. A walk that is
+  to continue across the rows that hold `null` there, or do not store the member, is a contract 2
+  walk (`X-OxQL-Contract: 2`): it orders them `null` first ascending and last descending.
 - An operand its operator cannot take (`in` with a text, `contains` with a number) and a `null`
   where a stage or a sort entry stands are a fault (500).
 - An aggregate's argument is handed to the database as written: a path as `$<path>`, a variable
@@ -206,6 +211,43 @@ or `Compat:Legacy:Enabled=false` a contract 1 caller reads the rewrite path's li
 `group.page`, `page.offset`, `any` ahead of the host's own, and every limit). Held by
 `HostTests.Health_lists_for_a_caller_the_legacy_pipeline_answers_what_that_pipeline_honours` and
 `LegacyPipelineTests.P09`.
+
+## A host that switches the legacy pipeline off
+
+With `OxQL:Compat:Legacy:Enabled=false` (or `Always=false`, for every request the rewrite does not
+refuse) a contract 1 request is answered by the compatibility rewrite: the contract 2 engine,
+compiling the request as contract 1 wrote it. Such a request keeps what contract 1 published, and
+that includes the predicate and the anchor a contract 1 cursor continues by. So not everything the
+engine guarantees a contract 2 caller holds for it. Of what this release adds:
+
+| Guarantee | A contract 2 request | A contract 1 request the rewrite answers |
+|---|---|---|
+| A walk by cursor follows the sort across a NaN and across stored types (a decimal as text, text under an `int`) | yes | the cursor continues by one range per sort field, as it was issued: within the stored type of the position, among the numbers a range compares |
+| The page after a cursor is planned alternative by alternative of its predicate, each with the scope, so it reads the keys of its rows whatever the position ties on | yes | the predicate stands beside the scope as one condition, as contract 1 wrote it |
+| A text comparison that runs as a pattern, and the text form of a decimal, ends at the end of the value | yes (`\z`) | the pattern ends with `$`, as contract 1 wrote it |
+| `first`, `last` and `push` after a sort with ties are the same on every page (the sort is completed by the key) | yes | the sort is sent as written, and rows that tie are in the database's order |
+| Comparisons under the host's collation: `startsWith` through a collection, a duration stored as text compared by byte beside a folding condition, a join over a text key | yes | not applicable: a contract 1 request runs under no collation, and its `ignoreCase` is a pattern that folds case |
+| A body that does not read is answered with the refusal envelope, and in a batch refuses its entry, whether the body declares its length or not | yes | the host's 400 ProblemDetails for the body as a whole, as before |
+| Under the alias of an unwind a row shows the members its projection names there | yes | the row as contract 1 answers it |
+| `params` on a refusal | yes | none |
+| Health waits once for the first measurement of the referenced services, and says `pending`, `usable`, `reason`, `references`, `model` | yes | answered at once with the three members of a `remote` entry |
+
+What holds for both, since it is decided before or after the request is compiled:
+
+- a `dateTrunc.timezone` written as an offset from UTC or a fixed zone of the `Etc` area binds, and
+  a zone the database's zone table does not have is `INVALID_TIMEZONE` (400);
+- arithmetic of an aggregate over a row that holds no number is 422 `INVALID_AGGREGATE_ARGUMENT`
+  (what the kinds of the operands say is refused under contract 2 only: a contract 1 request is
+  bound whatever they are, and its arithmetic is a `long` unless an operand is a `double` or a
+  `decimal`);
+- a quotient by zero or by `null` is `null`, which an aggregate skips;
+- a join over a member that is not the target's key joins no record to a reference that is null
+  or not stored, and no child to a record that holds nothing in the member it is named by;
+- a pattern with a NUL character is `INVALID_REGEX`;
+- a request the database has said nothing of by its deadline is 504 `QUERY_TIMEOUT`.
+
+A caller that needs a row of the left column sends `X-OxQL-Contract: 2`, and starts a walk it had
+begun under contract 1 again.
 
 ## How it is held
 

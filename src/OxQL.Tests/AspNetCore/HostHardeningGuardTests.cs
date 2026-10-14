@@ -97,6 +97,32 @@ public class HostHardeningGuardTests
         host.Runner.Calls.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A request that holds a text that is no Unicode text where nothing reads it, in a body the
+    /// host reads in another charset than UTF-8: it is bound as it is, and a fault of the host's own
+    /// while it is bound is the fault, not the caller's text.
+    /// </summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(1)]
+    public async Task A_fault_while_binding_a_request_that_holds_text_that_is_no_Unicode_text_is_still_a_coded_500_and_one_log_line(int contract)
+    {
+        using var host = HostWith(services =>
+            services.AddSingleton<IAddonDefinitionSource>(new FailingAddons(_ => new InvalidOperationException(Secret))));
+
+        var body = """{ "entityType": "probe.order", "variables": { "unused": "\ud800" }, "pipeline": [{ "match": { "addon.weight": { "gte": 1 } } }] }""";
+        var content = new ByteArrayContent(System.Text.Encoding.Unicode.GetBytes(body));
+
+        content.Headers.ContentType = new("application/json") { CharSet = "utf-16" };
+
+        var response = await host.Client(contract).PostAsync("/OxQL/query", content);
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError, await response.Content.ReadAsStringAsync());
+        AssertEnvelope(await SampleHost.Body(response));
+        AssertFaultLine(host);
+        host.Runner.Calls.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task A_fault_in_the_engine_before_it_binds_is_a_coded_500()
     {

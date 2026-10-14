@@ -41,6 +41,7 @@ what a client needs to render it, and neither it nor the message ever names a ty
 | `empty` | the body is empty | — |
 | `depth` | the body nests deeper than the host reads | `max` |
 | `kind` | a value is of another JSON kind than its place takes: a body or a stage that is no object, a `pipeline`, `sort`, `and`, `or`, `group.by` or `queries` that is no array, a condition, a `not`, an aggregate or a `variables` that is no object, an `entityType` that is no string, a `strict` that is no boolean, a fraction where a whole number is read | `path`, `expected` and `actual` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`); a place only known as a whole (a stage) carries `path` alone |
+| `encoding` | a member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape (`"\ud800"`, which is well-formed JSON), or bytes that are no UTF-8. An escaped half is said before anything else about a body that is JSON to its end (one that is not is `json`) and nests no deeper than the host reads (a deeper one is `depth`), one error per place for the first 20 places of the body. Bytes that are no UTF-8 are said the same way in such a body; in a body that is also no JSON to its end or nests deeper they are still what is said, in place of `json` and `depth`, as one error at the `path` `$` (`in`: `value`). A `path` longer than 1 024 characters is cut to at most 1 024, the last of them an ellipsis (`…`), and the message names the place as cut | `path` (the text; for a name, the object that holds it), `in`: `name` or `value` |
 | `missing` | a required member is not written: `entityType`, `pipeline`, a batch's `queries`, an explain envelope's `query`, the `path` or `unit` of a `dateTrunc` | `path` |
 
 `params.path` is the place in the body as a JSON path from its root (`$.pipeline[2].sort`,
@@ -49,7 +50,16 @@ a stage. In a batch an entry that does not read is refused in its place of `resu
 entries run: its `path` starts at the entry (`$.pipeline[0].sort`) and `params.entry` is its index
 in `queries`. An entry written as `null` is such an entry (`kind`, `actual: "null"`). The batch
 itself is refused whole only where it is no batch: no object, no `queries` array, a `maxTimeMs`
-that is no whole number.
+that is no whole number. Text that is no Unicode text (`encoding`) in an entry refuses that
+entry, in a member of the batch itself the batch, whether the body declares its length or not and
+whether a middleware of the host has buffered it ahead of MVC or not (a buffer is read from its
+start, up to the length a request may have, and left where it stood). The batch without the
+entries that are refused is the request's body for the whole MVC pipeline of that request, its
+filters and the action included; whatever runs after that pipeline reads the body as it was
+written. An entry whose places all lie past the 20 a refusal names is
+refused with the same code and `reason`, without `path` and `in`. A request handed to the engine
+without a host (`IQueryEngine`) that holds such a text is refused so too. A byte order mark ahead
+of a body is passed over wherever the body is read.
 
 The engine's controller carries the filter that answers so (`[OxQLRequestBody]`,
 `OxQL.AspNetCore.Binding`); a host that reads an OxQL body in a controller of its own puts the
@@ -62,10 +72,10 @@ request. They carry no refusal envelope; most are `application/problem+json`:
 
 | status | cause |
 |---|---|
-| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above |
+| 400 ProblemDetails | contract 1 only (no contract header, or `1`): the body cannot be read into the request model, in every case of the table above; a member name or a text that is no Unicode text is answered so by the engine's filter, as the one error of the model state (`errors["$"]`) and through what the host configured to answer an invalid model state (`ApiBehaviorOptions.InvalidModelStateResponseFactory`), so in the form of every such answer of the host |
 | 401, 403 | authentication or the authorization policy failed, when the host registered `RequireAuthorization` (`/oxql/health` is always anonymous) |
 | 404 | `POST /oxql/explain` while `Explain:Enabled` is false (it is on by default) |
-| 413 | a body of undeclared length over `Limits:MaxRequestBytes`, cut off by the server; a body with a declared length gets the `REQUEST_TOO_LARGE` envelope |
+| 413 | a body of undeclared length over the larger of `Limits:MaxRequestBytes` and `Explain:MaxRequestBytes`, cut off by the server; a body with a declared length, and one of undeclared length up to that size (the engine's filter reads it before it is bound), gets the `REQUEST_TOO_LARGE` envelope |
 | 415 | the request is not `application/json` |
 
 A client that maps statuses to messages treats a 400 ProblemDetails as a caller error, like a
@@ -103,22 +113,22 @@ the listed status.
 | `UNKNOWN_VARIANT` | 400 | an `is` names a type that is neither a variant of the member's type nor its concrete base; the message lists the variants, and so does `params` under contract 2 (`path`, `variant`, `variants`) |
 | `UNKNOWN_REQUEST_MEMBER` | 400 | a contract 2 request carries a top-level member other than `entityType`, `variables`, `filter`, `pipeline`, `strict`, `onMissing`, `timing`, `maxTimeMs`; `keyedBy` on a public route; an explain envelope's `budget` on the public route. On the internal route (a query, `keyedBy`, the batch) the message adds that the calling service's engine is another build, with `params` `reason: "engineBuild"`, `members`. `timing` or `maxTimeMs` of another kind than a boolean and a whole number is `INVALID_OPERAND` with `params` `member`, `reason`. Contract 2 `params` on the public routes: `members` (every such member), `member` (the first) and `reason`: `unknown` (no member of a request, a batch or an explain envelope), `internal` (a member only the internal route takes: `keyedBy`, an explain's `budget`), `contract` (the header) |
 | `EMPTY_LOGICAL_GROUP` | 400 | an empty `and`, `or` or `not`; a condition that names neither a path nor a group |
-| `OPTION_NOT_APPLICABLE` | 400 | an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
-| `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse; or, from execution, a pattern the server's PCRE2 rejects |
+| `OPTION_NOT_APPLICABLE` | 400 | (contract 2 `params` on every one: `option`, and `reason`, a word for why: `unknown`, `kind`, `removed`, `notApplicable`, `folds`, `outcome`, `operator`, `withFirst`, `notContinued`, `notAnItem`, `oneValue`, `notATarget`, and those of a union join, `withPath` … `singleBranch`) an unknown option; `caseSensitive` on an ordered operator, `regex`, a non-string member or under contract 1; `ignoreCase` under contract 2 (`params` `option`, `reason: "removed"`, `use: "caseSensitive"`); under contract 1 `caseSensitive` and `ignoreCase` disagreeing; an exact sort in a request that folds elsewhere; options on `is`. Stage options where they do not apply: `limit` with lookup `first`, `elements` on a single value, `parentSelect` without `parentAs`, `forTarget` on a stage that is not continued under a union alias, or naming a target the alias lacks |
+| `INVALID_REGEX` | 400 | a backreference, a quantifier over a quantified group, a pattern .NET cannot parse, a pattern that holds a NUL character (written `\x00` it matches one; a text operand of `eq`, `contains` and the like may hold the character itself); or, from execution, a pattern the server's PCRE2 rejects |
 | `REGEX_TOO_LONG` | 400 | a pattern longer than `RegexMaxLength` characters or 32 764 UTF-8 bytes |
 | `ANY_NOT_APPLICABLE` | 400 | `any` on a collection of scalars, an unwound collection or one under another collection |
-| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind` or `missing`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
-| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; contract 1: a `null` query in a batch |
-| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal) |
+| `INVALID_REQUEST_BODY` | 400 | contract 2: the body does not read into the request model (see *A body that does not read*): `params.reason` is `json`, `empty`, `depth`, `kind`, `missing` or `encoding`, `params.path` the place in the body; in a batch `params.entry` is the entry's index |
+| `UNKNOWN_STAGE` | 400 | a stage object with no key, several keys or an unknown key; a `null` stage; contract 1: a `null` query in a batch. Contract 2 `params`: `reason` (`empty`, `unknown`, `severalKeys`, `null`) and `keys`, the keys the object carries |
+| `UNKNOWN_STAGE_MEMBER` | 400 | an unknown member of a stage or of a sort entry's object form; a stage whose value is `null`; a sort entry with more than one key or none; a contract 2 stage member of the wrong JSON kind (`elements` not `first`/`all`, `onMissing` not `null`/`report`/`refuse`); a malformed catalog entry of an explain (answered on the entry, never a refusal). Contract 2 `params` on every refusal of a stage: `stage` (the stage's kind), `reason` (`unknown`: no member of the stage; `kind`: a member of another JSON kind; `removed`: a member contract 2 gave up, with `use`; `null`: the stage's value is `null`), and where the members are known `member` (the first) and `members` |
 | `FLATTEN_NOT_RECURSIVE` | 400 | an unwind's `flatten` names a member that is not a collection of the same items as the unwound collection, or the collection holds no objects |
 | `STAGE_AFTER_PAGE` | 400 | a stage after `page` |
 | `MULTIPLE_PAGE_STAGES` | 400 | two `page` stages |
 | `MIXED_PROJECTION` | 400 | paths kept and paths removed in one projection, `id` aside (`"id": 0` may stand in an inclusion; `"id": 1` beside removed paths is the inclusion of `id` alone); a value that is neither a number nor a boolean; an empty projection |
 | `GROUP_ON_COLLECTION` | 400 | a group key or aggregate argument under a collection that is not unwound |
 | `UNKNOWN_AGG_FUNCTION` | 400 | an aggregate outside `count countDistinct sum avg min max first last push` |
-| `INVALID_AGGREGATE_ARGUMENT` | 400 | `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date |
+| `INVALID_AGGREGATE_ARGUMENT` | 400, or 422 | 400: `sum`/`avg` over a non-numeric argument; a missing argument; an argument object naming no path, variable, literal or operator; `dateTrunc` over a non-date; under contract 2 arithmetic over an operand that is no number (`params` `operator`, `kinds`: the kind of each operand; a `timeSpan` stored as a number is one, stored as text none), two dates added, a `subtract` or `divide` without exactly two operands. 422 (`not_executable`): a row holds a value the arithmetic cannot take where the kinds allow one (text under an `unknown` member, or what a `coalesce` answers). Test the code, not the status |
 | `INVALID_DATE_TRUNC_UNIT` | 400 | a unit outside `year quarter month week day hour minute second`; a `weekStart` that is not a day |
-| `INVALID_TIMEZONE` | 400 | a `timezone` that is not an IANA (or Windows) zone id |
+| `INVALID_TIMEZONE` | 400 | a `timezone` that is not an IANA (or Windows) zone id or an offset from UTC, or one the database's zone table does not have |
 | `INVALID_SORT_DIRECTION` | 400 | a direction other than `asc`/`desc`; the object form without `direction`; the object form under contract 1 |
 | `LOOKUP_NOT_DECLARED` | 400 | the child's `path` declares no reference to the current entity (or to the entity of the `on` alias), or the referenced key is not stored |
 | `LOOKUP_ON_NOT_ENTITY` | 400 | a lookup's `on` names a lookup array, an unwound element, a scalar or a group output |
@@ -179,7 +189,7 @@ stage's effective `onMissing`:
 |---|---|---|
 | `ENTITY_ID_RETIRED` | `currentId` | the request named a retired entity id |
 | `TOTAL_COUNT_CAPPED` | `cap` | contract 1 and internal calls: more rows match than the count cap in force; `totalCount` is the cap. A contract 2 count says it under `pageInfo.count` (`state: "atLeast"`, `stoppedBy: "cap"`) and carries no diagnostic |
-| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"`; `remembered: true` and `retryAfterMs` when no call went out | an owner did not answer within its budget; the aliases are `null` on this page. While the host remembers that call (`Cache:OwnerUnavailableTtlSeconds`) the owner is not called and the diagnostic says so under the same code |
+| `RESOLVE_TIMEOUT` (loss) | `service` (`null`: this host), `aliases`, `reason: "timeout"`; `remembered: true` and `retryAfterMs` when no call went out | an owner did not answer within its budget; the aliases are `null` on this page. Where the host kept some of the page's records from an earlier answer, their rows carry them, the aliases are `null` for the keys the owner was asked for, and `params` also has `keys` (how many those are) and `cached` (how many were kept); the same holds for `RESOLVE_UNREACHABLE`. While the host remembers that call (`Cache:OwnerUnavailableTtlSeconds`) the owner is not called and the diagnostic says so under the same code |
 | `RESOLVE_UNREACHABLE` (loss) | `service`, `aliases`, `reason`, `status` (only when the owner answered); `remembered: true` and `retryAfterMs` when no call went out | an owner was not reached (`reason: "unreachable"`), or answered with an HTTP error: `reason: "route"` with `status: 404` when the owner did not answer on its query route (the message says no more than that; the causes are for the host's operator, see *An owner without the query route* under *Keyed fetch and remote continuation*), `reason: "status"` with the status for any other. An owner that just failed is not called again for `Cache:OwnerUnavailableTtlSeconds`: the diagnostic then says so, with the code, the `reason` and the `status` of the call that failed, `remembered: true` and the milliseconds until the owner is tried again |
 | `RESOLVE_PARTIAL` (loss) | `alias`, `keys`, `max`; or `alias`, `keys`, `unanswered`, `service` | the request needed more owner keys than `MaxResolveKeys` and the rest were not asked for; or an owner answered a chunk with `hasNextPage`, and its open keys are `owner_unanswered` and not cached |
 | `RESOLVE_MISSING` (loss by `onMissing`) | `alias`, `count`, `truncated`, `rows` `[{ row, element?, key, outcome }]` | under `onMissing` `report` or `refuse`: references that resolved to `not_found`, `invalid_key` or `owner_unanswered`; one per stage; `rows` capped at `MaxReportedRows` |
@@ -463,7 +473,8 @@ Fixed bounds, not configurable:
 
 ## `GET /oxql/health`
 
-Anonymous, always 200, and never waits for another service:
+Anonymous, always 200, and answered from what was last measured of the other services. It waits
+for a measurement in one case: the first one of a process, for a contract 2 caller (below).
 
 ```jsonc
 {
@@ -547,9 +558,26 @@ Anonymous, always 200, and never waits for another service:
   (`IRemoteOwnerInfo`): `contract` and `engineVersion` as the owner named them (absent when it named
   none), and `usable`: `true` only for an owner that answered and speaks this engine's contract,
   `false` with a `reason` otherwise, absent while nothing is measured or the client keeps no owner
-  facts. `reason` is `notConfigured` (no `InternalHosts` entry), `unreachable` (its health did not
-  answer; a wrong `InternalApiVersions` entry looks the same) or `engine` (it answered and names no
-  contract 2: a join into it is `null` with `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
+  facts. `reason` is one of:
+  `pending` (configured, and nothing was measured of it yet: the entry carries neither `reachable`
+  nor `usable`, and `status` says nothing of it). So that a `status` read after a start says what
+  was measured, a contract 2 request that would read `pending` waits for the first measurement of
+  the process: once, every such request of the moment for the same measurement, and for no longer
+  than a measurement may take (the probe's timeout per service, 2 s, all services at a time, and
+  a quarter of a second to record it) or than the caller waits. `pending` is therefore
+  read only where that wait ran out, and no later request waits. A caller without the contract
+  header and `?shallow=true` never wait;
+  `notConfigured` (no `InternalHosts` entry);
+  `unreachable` (its health did not answer);
+  `route` (the owner's host answers and has no internal query route under the API version this
+  host calls it with, a wrong `InternalApiVersions` entry: its health answered 404, or a join of
+  this host found the route missing, which the host remembers for
+  `Cache:OwnerUnavailableTtlSeconds`; a join says the same word, `RESOLVE_UNREACHABLE` with
+  `params.reason: "route"`, and so does explain's owner entry. A remote client that reports a 404
+  of the owner's health as "not reachable" without the status reads `unreachable` here until a
+  join has met the route);
+  `engine` (it answered and names no contract 2: a join into it is `null` with
+  `RESOLVE_UNREACHABLE`, `params.reason: "route"`).
   `usable: false` degrades the `status` a contract 2 caller reads, as `reachable: false` does. A
   caller without the contract header reads the three members `service`, `configured`, `reachable`,
   and a `status` that only a service that is not configured or not reachable degrades.
@@ -682,6 +710,12 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   malformed body or one past an explain bound, 403 without an organisation, 413 for a body over the
   limit, 429 over the rate, 500 for an engine fault. `contract` is the contract the request was read
   as; a contract 1 request is rewritten by the compatibility binder and answered the same way.
+- **`page.cursor`.** Explain does not read the cursor of a page: a request is explained the same
+  with a cursor, without one and with one that would not verify (a run answers that one
+  `CURSOR_INVALID`). What it shows is the request's first page: `plan.bound` has the page with
+  `cursor: null`, and the leading `$match` of `plan.stages` holds the scope and the conditions
+  without the alternatives of a position. The page a run sends after a cursor carries those
+  alternatives in that `$match` (the semantics document, under the cursor's position).
 - **`engine`.** `contract` is the contract the engine speaks. `2` is the marker of this package: an
   engine that reports it has the whole contract 2 language and this answer.
 - **Absent members.** A member that would be null is left out, except where null says something:
@@ -1024,6 +1058,10 @@ schema documents asks for the member rows with `include: ["shape", "notes", "typ
   an index that holds the organisation, the path and what the conditions before it read, built
   without a collation; `params` `scan`, `limit`, `counts`, `unwinds`, the number of collections),
   `TEXT_FOLDS` with `params.op: "values"` where the path holds text,
+  `DURATION_ORDERS_AS_TEXT` (a `gt`, `gte`, `lt` or `lte`, or a sort, on a `timeSpan` member that
+  is stored as text: the order is that of the text's characters, which is the order of the
+  durations only among values from zero to under one day; `params.op` is the comparison or
+  `sort`; a member stored as ticks or milliseconds orders by value and has no such note),
   `MISSING_POLICY` (the effective `onMissing`, `strict`, which outcomes lose data, and with
   `outcomeAs` the member that carries the outcome, `params.outcomeAs`; on a join that refuses its
   missing references the message says that no answered row shows that outcome),

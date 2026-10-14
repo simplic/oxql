@@ -133,7 +133,20 @@ public sealed class LabClient
         var headers = response.Headers.Concat(response.Content.Headers)
             .ToDictionary(header => header.Key, header => string.Join(", ", header.Value), StringComparer.OrdinalIgnoreCase);
 
-        return new WireAnswer(response.StatusCode, Json.TryParse(text), text, headers, watch.Elapsed, $"{method} {route} {body}");
+        var sent = $"{method} {route} {body}";
+
+        // A fault answers with a correlation id and no cause. The cause is in the host's log: a failure message that
+        // quotes the answer says it too, so a fault of the database under the run is told from one of the engine.
+        if ((int)response.StatusCode == 500 && target.Logs.Faults.LastOrDefault() is { Message: not null } fault)
+            sent += $"{Environment.NewLine}    last fault of the host: {fault.Message} ({fault.Exception})";
+
+        var answer = new WireAnswer(response.StatusCode, Json.TryParse(text), text, headers, watch.Elapsed, sent);
+
+        // Every refusal any suite provokes is held against what its code carries for a client.
+        if (Who.Contract == 2)
+            RefusalParams.Hold(answer);
+
+        return answer;
     }
 
     // ── what a case computes before it asserts ──────────────────────────────────────────────

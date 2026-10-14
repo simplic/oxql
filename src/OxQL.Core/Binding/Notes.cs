@@ -154,6 +154,14 @@ public static class Notes
     /// </summary>
     public const string ReferenceTargetUnknown = "REFERENCE_TARGET_UNKNOWN";
 
+    /// <summary>
+    /// An ordered comparison (<c>gt</c>, <c>gte</c>, <c>lt</c>, <c>lte</c>) or a sort on a duration
+    /// its member stores as text: the order is that of the text's characters, which is the order of
+    /// the durations only among values from zero to under one day (params <c>op</c>: the comparison,
+    /// or <c>sort</c>). A member stored as a number orders by value and has no such note.
+    /// </summary>
+    public const string DurationOrdersAsText = "DURATION_ORDERS_AS_TEXT";
+
     /// <summary>Every note code, in a fixed order; the studio's key list equals it.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -161,7 +169,7 @@ public static class Notes
         JoinBeforePage, JoinAfterPage, OwnerBinds, RemoteUnchecked, SelectPathNotOnTarget, CountCap, LookupLimit,
         OffsetPaging, MissingPolicy, ReportPage, IndexAdvice, RemoteLookup, ExplainLimit, ExplainTrimmed, FilterBindsEarlier,
         PatternFolds, ProjectAfterPage, SortBeforeUnwind, UnwindPrefilter, SemiJoinNotByKey, GroupScans, ValuesScans,
-        ReferenceTargetUnknown,
+        ReferenceTargetUnknown, DurationOrdersAsText,
     ];
 
     /// <summary>The outcomes that lose data, in the table's order.</summary>
@@ -739,11 +747,27 @@ public static class Notes
 
             if (leaf.Op is "neq" or "nin" && leaf.Operand is not BoundOperand.Null)
                 Add(NeqMatchesAbsent, stage, wire, $"'{leaf.Op}' on '{wire}' also matches rows where the member is absent or null.", new() { ["op"] = leaf.Op });
+
+            if (leaf.Op is "gt" or "gte" or "lt" or "lte" && StoresDurationAsText(leaf.Path))
+                DurationAsText(stage, wire, leaf.Op);
         }
+
+        /// <summary>Whether a path is a duration its member stores as text, in .NET's constant format.</summary>
+        private static bool StoresDurationAsText(ResolvedPath path) =>
+            path.LeafKind == Kind.TimeSpan && path.Addon is null
+            && (path.Leaf?.Representation ?? Representation.None).BsonType is not (MongoDB.Bson.BsonType.Int64 or MongoDB.Bson.BsonType.Double);
+
+        private void DurationAsText(int? stage, string wire, string op) =>
+            Add(DurationOrdersAsText, stage, wire,
+                $"'{op}' on '{wire}' orders a duration that is stored as text by its characters: that is the order of the durations only among values from zero to under one day. A member stored as a number (ticks or milliseconds) orders by value.",
+                new() { ["op"] = op });
 
         public void Sort(BoundSortField field, int? stage)
         {
             Path(field.Path, stage);
+
+            if (StoresDurationAsText(field.Path))
+                DurationAsText(stage, field.Path.Wire, "sort");
 
             if (contract != 2 || field.Path.LeafKind != Kind.String || OperandCoercer.IsCharRepresented(field.Path))
                 return;

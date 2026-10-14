@@ -213,8 +213,8 @@ internal sealed record CompileOptions(int MaxTimeMs, bool? AllowDiskUse, int Cou
     /// while the rows stay the same: a projection after the page is taken
     /// (<see cref="MongoCompiler.ProjectsAfterPage"/>), the rename of an unwound element after it too,
     /// the order and the cut of the parents before their unwind, the rows without a passing element
-    /// dropped before it (<see cref="UnwindPlacement"/>), and a cursor's position also as one range on
-    /// the leading sort field.
+    /// dropped before it (<see cref="UnwindPlacement"/>), and a cursor's position as the alternatives
+    /// of its predicate, each with the scope and the matches beside it.
     /// </summary>
     public bool AsWritten { get; init; }
 }
@@ -256,6 +256,9 @@ internal static class MongoCompiler
 
     /// <summary>The variable the <c>keyedBy</c> prologue's filter reads each element under.</summary>
     private const string ElementVariable = "oxItem";
+
+    /// <summary>The variable a quotient reads its divisor under.</summary>
+    private const string DivisorVariable = "oxDivisor";
 
     /// <summary>The variable a join binds its local key to when the sub-pipeline has to compare it byte for byte.</summary>
     private const string KeyVariable = "oxKey";
@@ -309,14 +312,32 @@ internal static class MongoCompiler
     [ThreadStatic]
     private static CollationOptions? folding;
 
+    /// <summary>
+    /// Whether the patterns compiled on this thread end as a contract 1 pattern always has, with
+    /// <c>$</c> (see <see cref="End"/>); set for an aggregate compiled as written.
+    /// </summary>
+    [ThreadStatic]
+    private static bool dollarEnd;
+
+    /// <summary>
+    /// The end of a pattern the engine builds from a text: the very end of the value, which is
+    /// <c>\z</c>. (<c>$</c> is that place and one more, before a line feed that ends the value: a
+    /// text is found where the value ends, and nowhere before it.) The start anchor needs no
+    /// such care: without the multi-line option, which the engine never sets, <c>^</c> is the start
+    /// of the value. A contract 1 pattern ends as it always has.
+    /// </summary>
+    private static string End => dollarEnd ? "$" : @"\z";
+
     public static CompiledQuery Compile(BoundPipeline bound, CompileOptions options)
     {
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentNullException.ThrowIfNull(options);
 
         var outer = folding;
+        var outerEnd = dollarEnd;
 
         folding = options.Collation ?? new CollationOptions();
+        dollarEnd = options.AsWritten;
 
         try
         {
@@ -325,6 +346,7 @@ internal static class MongoCompiler
         finally
         {
             folding = outer;
+            dollarEnd = outerEnd;
         }
     }
 
@@ -334,7 +356,7 @@ internal static class MongoCompiler
         var stages = new List<BsonDocument>();
         var keyed = new List<BoundStage.Resolve>();
         var semiJoins = new List<SemiJoinSlot>();
-        var sortFields = bound.Sort?.Fields ?? [];
+        var sortFields = Ordering(bound.Sort?.Fields ?? []);
         var collated = bound.Collated;
 
         var grouped = bound.FinalShape.Grouped;
@@ -384,7 +406,7 @@ internal static class MongoCompiler
         // The rows after the cursor's position. On unwound rows the position reads the unwinds'
         // indexes, which exist only after them: it is built with the paging sort, after the loop.
         var keyset = position is null || unwoundPaging ? null
-            : KeysetConjuncts(grouped ? Legs(position, sortFields, key: false, []) : KeysetFrom(position, sortFields), !options.AsWritten);
+            : KeysetConjuncts(Legs(position, sortFields, key: !grouped, [], repeatKey: options.AsWritten && !grouped), !options.AsWritten);
 
         // A sum or an average of floating-point values is computed anew for every page, and the order
         // its terms are added in is the server's: the last group's value may differ from the one its
@@ -422,7 +444,7 @@ internal static class MongoCompiler
         if (position is not null && unwinding is { ParentsFirst: true, IndexAscending: not null })
             keyset = LeadingFields(sortFields) is { Count: > 0 } leading ? KeysetConjuncts(Legs(position, leading, key: false, []), !options.AsWritten, inclusive: true) : null;
 
-        stages.Add(new BsonDocument("$match", keyset is null ? scope : new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset))));
+        stages.Add(new BsonDocument("$match", LeadingMatch(scope, keyset, alternatives: !options.AsWritten)));
 
         var countStages = page.IncludeTotalCount || page.Count is not null ? new List<BsonDocument> { new("$match", scope) } : null;
 
@@ -439,6 +461,31 @@ internal static class MongoCompiler
             countStages?.AddRange(prologue);
         }
         var sortEmitted = false;
+
+        // A sort a group follows orders what the group's first, last and push see. Rows that tie in it
+        // have no order of their own, and the database is free to hand them over in another one for
+        // another page: so such a sort is completed by the entity's key and the position of every
+        // element unwound before it, and the same rows are first and last whatever page is asked.
+        // A group without such an aggregate reads no order: its sort stays as written, so an index
+        // that serves it still does and the database may fold it into the group.
+        // (A contract 1 request is compiled as written.)
+        var groupOrders = new HashSet<int>();
+        var orderIndexes = new List<string>();
+
+        if (!options.AsWritten)
+            for (int at = 0, pending = -1; at < bound.Stages.Count; at++)
+            {
+                if (bound.Stages[at] is BoundStage.Sort)
+                    pending = at;
+                else if (bound.Stages[at] is BoundStage.Group group)
+                {
+                    if (pending >= 0 && group.Fields.Any(field => field.Function is "first" or "last" or "push"))
+                        groupOrders.Add(pending);
+
+                    // After a group the rows have neither the key nor a position.
+                    break;
+                }
+            }
 
         // A join only the rows' display reads runs after the page is taken: the sort stays
         // next to the limit, which lets the server keep the top rows instead of ordering
@@ -561,6 +608,8 @@ internal static class MongoCompiler
                         reservedIndexes.Add(indexField = ReservedIndex + reservedIndexes.Count);
                     else if (unwoundPaging)
                         reservedIndexes.Add(indexField!);
+                    else if (groupOrders.Any(order => order > index))
+                        orderIndexes.Add(indexField ??= ReservedIndex + "G" + orderIndexes.Count);
 
                     var placed = unwinding is not null && unwinding.Position == index ? unwinding : null;
 
@@ -663,7 +712,7 @@ internal static class MongoCompiler
 
                 case BoundStage.Project project:
                     if (Project(project, keyed, [.. lateJoinKeys, .. probeKeys.Where(key => !lateJoinKeys.Contains(key, StringComparer.Ordinal))], keepKey,
-                        [.. reservedIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
+                        [.. reservedIndexes, .. orderIndexes, .. probes.Select(probe => probe.Field), .. rowFlags, .. InlineFlags(inlineProbes), .. options.KeepDiscriminators && project.Inclusion ? DiscriminatorsOf(project.Paths) : []],
                         sortStorages, sortKeptAgainstProjection, ref keyKeptAgainstProjection, wholeCollections: options.AsWritten) is { } projection)
                     {
                         if (!options.AsWritten && ProjectsAfterPage(bound, index))
@@ -682,7 +731,7 @@ internal static class MongoCompiler
                 // emitted after the loop with the tie-breakers that make it total. Any earlier
                 // sort is the caller's own and stays where it was written.
                 case BoundStage.Sort sort when unwoundPaging && ReferenceEquals(sort, bound.Sort):
-                    pagingSort = sort.Fields;
+                    pagingSort = sortFields;
                     break;
 
                 case BoundStage.Sort sort:
@@ -690,7 +739,9 @@ internal static class MongoCompiler
                         emitted.Add(new BsonDocument("$match", joinedKeyset.Count == 1 ? joinedKeyset[0] : new BsonDocument("$and", new BsonArray(joinedKeyset))));
 
                     // A group's keys are its order's tie-break already: the rows of a group have no key.
-                    emitted.Add(new BsonDocument("$sort", Renamed(Sort(sort.Fields, keysetPaging && !grouped)["$sort"].AsBsonDocument, renamed)));
+                    emitted.Add(new BsonDocument("$sort", Renamed((groupOrders.Contains(index)
+                        ? Sort(sort.Fields, tieBreak: true, orderIndexes.Count > 0 ? orderIndexes : null)
+                        : Sort(sort.Fields, keysetPaging && !grouped))["$sort"].AsBsonDocument, renamed)));
                     sortEmitted = true;
                     break;
 
@@ -773,6 +824,9 @@ internal static class MongoCompiler
             countStages.Add(new BsonDocument("$count", "n"));
         }
 
+        if (!options.AsWritten)
+            WithFollowingMatches(stages);
+
         return new CompiledQuery
         {
             Bound = bound,
@@ -784,7 +838,7 @@ internal static class MongoCompiler
             Offset = offset,
             PagingMode = bound.PagingMode,
             IncludeTotalCount = page.IncludeTotalCount,
-            SortFields = sortFields,
+            SortFields = bound.Sort?.Fields ?? [],
             KeyedResolves = keyed,
             SemiJoins = semiJoins,
             MaxTimeMs = options.MaxTimeMs,
@@ -833,7 +887,7 @@ internal static class MongoCompiler
         var at = bound.Stages.ToList().FindIndex(stage => stage is BoundStage.Unwind);
         var unwind = (BoundStage.Unwind)bound.Stages[at];
         var grouped = bound.FinalShape.Grouped;
-        var sortFields = bound.Sort?.Fields ?? [];
+        var sortFields = Ordering(bound.Sort?.Fields ?? []);
 
         // A sort written before the unwind over the collection itself orders by what the collection
         // holds; as written it runs after the collection has left the row. Nothing about it moves.
@@ -1124,7 +1178,8 @@ internal static class MongoCompiler
                 {
                     var paths = Paths(condition).ToList();
 
-                    if (paths.Count == 0 || SemiJoins(condition))
+                    // So is a condition that may be asked as an expression, which no element test holds: it is asked after the unwind alone.
+                    if (paths.Count == 0 || SemiJoins(condition) || ComparesTextDuration(condition))
                         exact = false;
                     else if (unwind.As is { } alias && paths.All(path => Under(path, alias) && path.Storage is not null))
                         element.Add(condition);
@@ -1140,6 +1195,16 @@ internal static class MongoCompiler
 
         private static IEnumerable<BoundCondition> Conjuncts(BoundCondition condition) =>
             condition is BoundCondition.And and ? and.Conditions.SelectMany(Conjuncts) : [condition];
+
+        private static bool ComparesTextDuration(BoundCondition condition) => condition switch
+        {
+            BoundCondition.And and => and.Conditions.Any(ComparesTextDuration),
+            BoundCondition.Or or => or.Conditions.Any(ComparesTextDuration),
+            BoundCondition.Not not => ComparesTextDuration(not.Condition),
+            BoundCondition.Any any => ComparesTextDuration(any.Inner),
+            BoundCondition.Leaf leaf => leaf is { Path.LeafKind: Kind.TimeSpan, Op: "gt" or "gte" or "lt" or "lte", Operand: BoundOperand.Single { Value: BsonString } },
+            _ => false,
+        };
 
         private static bool SemiJoins(BoundCondition condition) => condition switch
         {
@@ -1375,11 +1440,45 @@ internal static class MongoCompiler
     };
 
     /// <summary>
+    /// The fields of a sort that order: a path the sort names more than once orders once, at its
+    /// first place and in the direction written last, as the <c>$sort</c> document of
+    /// <see cref="Sort"/> holds it. Everything that reads a direction off the sort reads it here, so
+    /// the order of a page and the rows after a cursor's position are one order.
+    /// </summary>
+    internal static IReadOnlyList<BoundSortField> Ordering(IReadOnlyList<BoundSortField> fields)
+    {
+        if (fields.Select(field => field.Path.Storage).Distinct(StringComparer.Ordinal).Count() == fields.Count)
+            return fields;
+
+        var ordering = new List<BoundSortField>();
+
+        foreach (var field in fields)
+        {
+            var at = ordering.FindIndex(earlier => earlier.Path.Storage == field.Path.Storage);
+
+            if (at < 0)
+                ordering.Add(field);
+            else
+                ordering[at] = ordering[at] with { Ascending = field.Ascending };
+        }
+
+        return ordering;
+    }
+
+    /// <summary>
     /// The legs of a page's total order with the values of the cursor's position: the sort fields,
     /// then the key unless a sort field is it or the rows have none (<paramref name="key"/>: groups),
-    /// then the position of each unwind not sorted on already. It mirrors the emitted <c>$sort</c>.
+    /// then the position of each unwind not sorted on already. It mirrors the emitted <c>$sort</c>:
+    /// the key is one leg, in the direction the sort gives it and ascending where the sort does not
+    /// name it. A cursor carries the key's value twice where the sort names it (under the sort's
+    /// path and, last, as the key); both are the same value of the same row, and one leg reads it.
     /// </summary>
-    private static List<KeysetField> Legs(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields, bool key, IReadOnlyList<string> indexes, (string Alias, string Storage)? renamed = null)
+    /// <remarks>
+    /// <paramref name="repeatKey"/>: a contract 1 page sends the predicate it always sent for a sort
+    /// that names the key ascending, the key once more as the last leg. That leg admits only rows
+    /// the legs before it admit, so the rows are the same.
+    /// </remarks>
+    private static List<KeysetField> Legs(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields, bool key, IReadOnlyList<string> indexes, (string Alias, string Storage)? renamed = null, bool repeatKey = false)
     {
         BsonValue At(string wire) => cursor.Fields.FirstOrDefault(value => value.Wire == wire)?.Value ?? BsonNull.Value;
 
@@ -1392,10 +1491,10 @@ internal static class MongoCompiler
 
         foreach (var field in sortFields)
             if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
-                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)));
+                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path), NeverNull = field.Path.Storage == KeyStorage });
 
-        if (key && !legs.Any(leg => leg.Storage == KeyStorage))
-            legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)));
+        if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
+            legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)) { NeverNull = true });
 
         foreach (var index in indexes)
             if (!legs.Any(leg => leg.Storage == index))
@@ -1405,20 +1504,66 @@ internal static class MongoCompiler
     }
 
     /// <summary>
-    /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it
-    /// on): the null-aware predicate over every leg and, with <paramref name="ranged"/>, the one range
-    /// on the leading leg it implies, first.
+    /// Whether the rows may hold values of more than one stored type under a sort path. Any member
+    /// of one value may: a decimal the rows written before a migration hold as text, a value of an
+    /// addon bag, which is stored as it was written, and a member some writer stored as another type
+    /// than the model declares. A sort orders such rows by type first, and a page continues across
+    /// the types; an index on the sort serves the predicate with the bounds of each type, at the
+    /// keys of the page. A path through a collection is none: the database compares its elements.
     /// </summary>
-    private static List<BsonDocument> KeysetConjuncts(IReadOnlyList<KeysetField> legs, bool ranged, bool inclusive = false)
+    private static bool HoldsSeveralTypes(ResolvedPath path) => path.CollectionAncestors == 0 && path.Kind != Kind.Array;
+
+    /// <summary>
+    /// The conditions that keep the rows after a position (with <paramref name="inclusive"/>: from it
+    /// on): the null-aware predicate over every leg. With <paramref name="everyType"/> (a contract 2
+    /// page) it follows the sort across the stored types; without it (a contract 1 page) it is the
+    /// predicate that page always sent.
+    /// </summary>
+    private static List<BsonDocument> KeysetConjuncts(IReadOnlyList<KeysetField> legs, bool everyType, bool inclusive = false) =>
+        [KeysetPredicate.After(legs, inclusive, everyType)];
+
+    /// <summary>
+    /// The leading match: the organisation's scope and, on a page after a position, the rows after it.
+    /// <para>
+    /// With <paramref name="alternatives"/> (a contract 2 page) the match is the predicate's
+    /// <c>$or</c> itself, each alternative with the scope in it: an alternative is then one range of
+    /// the index of the sort (the scope, the members before a leg at the position's values, the leg
+    /// beyond its value), the database plans each on its own and merges them in the order of the
+    /// sort, and a page reads the keys of its rows whatever the position ties on. A contract 1 page
+    /// (without <paramref name="alternatives"/>) sends the predicate beside the scope, as that page
+    /// is written.
+    /// </para>
+    /// </summary>
+    private static BsonDocument LeadingMatch(BsonDocument scope, List<BsonDocument>? keyset, bool alternatives)
     {
-        var conjuncts = new List<BsonDocument>();
+        if (keyset is null)
+            return scope;
 
-        if (ranged && KeysetPredicate.LeadingRange(legs) is { } range)
-            conjuncts.Add(range);
+        if (!alternatives || keyset[0].ElementCount != 1 || !keyset[0].TryGetValue("$or", out var legs))
+            return new BsonDocument("$and", new BsonArray { scope }.AddRange(keyset));
 
-        conjuncts.Add(KeysetPredicate.After(legs, inclusive));
+        return new BsonDocument("$or", new BsonArray(legs.AsBsonArray.Select(leg => new BsonDocument("$and", new BsonArray { scope, leg }.AddRange(keyset.Skip(1))))));
+    }
 
-        return conjuncts;
+    /// <summary>
+    /// Takes the matches that follow a leading match of alternatives (<see cref="LeadingMatch"/>) into
+    /// each alternative. Matches that stand next to each other are one condition, and the database
+    /// reads them as one: inside the alternatives they leave the match the alternatives themselves,
+    /// each planned on its own.
+    /// </summary>
+    private static void WithFollowingMatches(List<BsonDocument> stages)
+    {
+        if (stages.Count < 2 || stages[0]["$match"] is not BsonDocument { ElementCount: 1 } leading || !leading.TryGetValue("$or", out var alternatives))
+            return;
+
+        while (stages.Count > 1 && stages[1].ElementCount == 1 && stages[1].TryGetValue("$match", out var following))
+        {
+            // Every alternative holds this same document, never a clone: a semi-join slot in it is the one array the executor fills.
+            foreach (var alternative in alternatives.AsBsonArray)
+                alternative["$and"].AsBsonArray.Add(following);
+
+            stages.RemoveAt(1);
+        }
     }
 
     /// <summary>
@@ -1683,32 +1828,6 @@ internal static class MongoCompiler
         return new BsonDocument { ["locale"] = collation.Locale, ["strength"] = collation.Strength };
     }
 
-    private static List<KeysetField> KeysetFrom(CursorPayload cursor, IReadOnlyList<BoundSortField> sortFields)
-    {
-        var fields = new List<KeysetField>();
-        BsonValue key = BsonNull.Value;
-
-        foreach (var value in cursor.Fields)
-        {
-            if (value.Wire == KeyStorage)
-            {
-                key = value.Value;
-                continue;
-            }
-
-            var sortField = sortFields.FirstOrDefault(field => field.Path.Wire == value.Wire);
-
-            if (sortField is null)
-                continue;
-
-            fields.Add(new KeysetField(sortField.Path.Storage!, value.Ascending, value.Value));
-        }
-
-        fields.Add(new KeysetField(KeyStorage, true, key));
-
-        return fields;
-    }
-
     // ---- filters ----------------------------------------------------------------------------
 
     /// <summary>Compiles a condition tree to a filter document; <paramref name="collated"/> when the aggregate carries the collation.</summary>
@@ -1750,9 +1869,9 @@ internal static class MongoCompiler
 
         // A decimal under the addon bag is written wrapped by the bag serializer: match both places.
         if (leaf.Path.Addon is not null && leaf.Path.Kind == Kind.Decimal)
-            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated), LeafAt(storage + "._v", leaf, collated) });
+            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated, element), LeafAt(storage + "._v", leaf, collated, element) });
 
-        return LeafAt(storage, leaf, collated);
+        return LeafAt(storage, leaf, collated, element);
     }
 
     /// <summary>
@@ -1808,10 +1927,13 @@ internal static class MongoCompiler
         _ => Casing.Value,
     };
 
-    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf, bool collated)
+    private static BsonDocument LeafAt(string storage, BoundCondition.Leaf leaf, bool collated, bool element)
     {
         var op = leaf.Op;
         var casing = CasingOf(leaf, collated);
+
+        // A path through a collection holds one value per element, and a condition on it is one element's to meet.
+        var many = leaf.Path.CollectionAncestors > 0 || leaf.Path.Kind == Kind.Array;
 
         switch (leaf.Operand)
         {
@@ -1822,8 +1944,8 @@ internal static class MongoCompiler
 
             case BoundOperand.Set set:
                 var values = casing is Casing.Fold or Casing.Exact
-                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)Anchored(text.Value, casing) : value))
-                    : new BsonArray(set.Values);
+                    ? new BsonArray(set.Values.Select(value => value is BsonString text ? (BsonValue)Anchored(text.Value, casing) : ToEnd(value)))
+                    : new BsonArray(set.Values.Select(ToEnd));
 
                 return new BsonDocument(storage, new BsonDocument(op == "nin" ? "$nin" : "$in", values));
 
@@ -1834,23 +1956,59 @@ internal static class MongoCompiler
                 // agrees with $and of $ne on a missing member, which is the only case where
                 // the two could differ for a scalar.
                 if (op == "neq")
-                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", value, casing))));
+                    return new BsonDocument("$nor", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, "eq", ToEnd(value), casing, many))));
 
-                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, value, casing))));
+                return new BsonDocument("$or", new BsonArray(tolerant.Alternatives.Select(value => Compare(storage, op, ToEnd(value), casing, many))));
+
+            // A duration stored as text orders by character, and by the same characters whatever else the
+            // request asks: under a collation, which would order them by its own weights, the comparison is
+            // made on the bytes. (Of one element, inside 'any', and through a collection no expression can
+            // be asked: there the plain operator stands.)
+            case BoundOperand.Single { Value: BsonString duration } when collated && !many && !element && leaf.Path.LeafKind == Kind.TimeSpan && op is "gt" or "gte" or "lt" or "lte":
+                return ByBytes(storage, op, duration.Value);
 
             case BoundOperand.Single single:
-                return Compare(storage, op, single.Value, casing);
+                return Compare(storage, op, single.Value, casing, many);
 
             default:
                 return new BsonDocument(storage, BsonNull.Value);
         }
     }
 
+    /// <summary>
+    /// An ordered comparison of a stored text with a text by their bytes, inside an aggregate whose
+    /// collation a plain operator would compare under: the texts are compared by a function the
+    /// collation does not reach. Both are text without letters of two cases (a duration as the driver
+    /// writes it), so that the function sets case aside changes nothing. A value that is no text
+    /// meets no ordered comparison with one, as under the plain operator.
+    /// </summary>
+    private static BsonDocument ByBytes(string storage, string op, string text) =>
+        new("$expr", new BsonDocument("$and", new BsonArray
+        {
+            new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$" + storage), "string" }),
+            new BsonDocument("$" + op, new BsonArray { new BsonDocument("$strcasecmp", new BsonArray { TextOrEmpty("$" + storage), new BsonDocument("$literal", text) }), 0 }),
+        }));
+
+    /// <summary>
+    /// The pattern of a bound alternative (the text a decimal may be stored as) with its end at the
+    /// end of the value (<see cref="End"/>): it is bound once for both contracts, ending <c>$</c>.
+    /// </summary>
+    private static BsonValue ToEnd(BsonValue value) =>
+        value is BsonRegularExpression { Pattern: var pattern } bound && pattern.EndsWith('$') && !pattern.EndsWith(@"\$", StringComparison.Ordinal)
+            ? new BsonRegularExpression(pattern[..^1] + End, bound.Options)
+            : value;
+
     /// <summary>The whole-value pattern of a text: escaped and anchored at both ends, folding case only as a fold.</summary>
     private static BsonRegularExpression Anchored(string text, Casing casing) =>
-        new("^" + RegexGuard.Escape(text) + "$", casing == Casing.Fold ? "i" : "");
+        new("^" + RegexGuard.Escape(text) + End, casing == Casing.Fold ? "i" : "");
 
-    private static BsonDocument Compare(string storage, string op, BsonValue value, Casing casing)
+    /// <summary>
+    /// One comparison of one member. Each form asks the member one thing, so through a collection
+    /// (<paramref name="many"/>) it holds when one element meets it; the one form of two bounds, a
+    /// prefix under the collation, is a pattern there, since two bounds on a collection's path could
+    /// be met by two elements.
+    /// </summary>
+    private static BsonDocument Compare(string storage, string op, BsonValue value, Casing casing, bool many)
     {
         // A fold that stays a pattern (contains, endsWith) folds case with the flag, under a
         // collation or not; an exact comparison and a caller's own pattern carry none.
@@ -1874,15 +2032,18 @@ internal static class MongoCompiler
             // equivalents, so contains and endsWith find what eq and startsWith find. It is still a
             // pattern: no index bounds it, and it reads every candidate row.
             "contains" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
-            "endsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()) + "$", flags)),
+            "endsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonRegularExpression(AccentFold.Pattern(Text(value), folding ?? new CollationOptions()) + End, flags)),
             "contains" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)), flags)),
             // Under the collation a prefix is the range from the prefix up to the prefix
             // followed by the highest character: every string that starts with it under the
             // collation, accents and case folded, and nothing else, and an index on the member
             // bounds it, which no pattern does.
+            // Through a collection the two bounds would each be met by some element, not by one: there
+            // the prefix is the anchored pattern that folds as the collation does.
+            "startsWith" when casing == Casing.Collated && many => new BsonDocument(storage, new BsonRegularExpression("^" + AccentFold.Pattern(Text(value), folding ?? new CollationOptions()), flags)),
             "startsWith" when casing == Casing.Collated => new BsonDocument(storage, new BsonDocument { ["$gte"] = Text(value), ["$lt"] = Text(value) + AfterEveryCharacter }),
             "startsWith" => new BsonDocument(storage, new BsonRegularExpression("^" + RegexGuard.Escape(Text(value)), flags)),
-            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + "$", flags)),
+            "endsWith" => new BsonDocument(storage, new BsonRegularExpression(RegexGuard.Escape(Text(value)) + End, flags)),
             "regex" => new BsonDocument(storage, new BsonRegularExpression(Text(value), flags)),
             "exists" => new BsonDocument(storage, new BsonDocument("$exists", value)),
             _ => new BsonDocument(storage, value),
@@ -1993,7 +2154,12 @@ internal static class MongoCompiler
         var exactKey = collated && IsStringStored(lookup.ChildReference);
         var onAlias = lookup.On is not null;
 
-        if (onAlias)
+        // A parent that holds no key has no children, also where children hold nothing in their
+        // reference. The entity's own key is always there; a parent under an alias, or
+        // one a reference names by another member than its key, may hold none.
+        var keyMayBeAbsent = onAlias || lookup.ParentKeyStorage != KeyStorage;
+
+        if (keyMayBeAbsent)
             pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray { "$$" + ParentVariable, BsonNull.Value }))));
 
         if (exactKey)
@@ -2008,7 +2174,7 @@ internal static class MongoCompiler
 
         var join = Join(lookup.From.Collection, lookup.ParentKeyStorage, lookup.ChildKeyStorage, exactKey, pipeline, lookup.As);
 
-        if (onAlias)
+        if (keyMayBeAbsent)
         {
             var let = join.TryGetValue("let", out var existing) ? existing.AsBsonDocument : new BsonDocument();
 
@@ -2253,6 +2419,14 @@ internal static class MongoCompiler
         var pipeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
         var exactKey = collated && IsStringStored(resolve.Reference);
 
+        // A reference that holds nothing names no record, also where a record holds nothing in the
+        // member it is named by. A record always holds its key, so only a reference that names
+        // its target by another member is asked.
+        var held = resolve.TargetFieldStorage != KeyStorage ? HoldsKey(resolve.TargetFieldStorage!) : null;
+
+        if (held is not null)
+            pipeline.Add(held);
+
         if (exactKey)
             pipeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
 
@@ -2276,7 +2450,7 @@ internal static class MongoCompiler
         var temporary = resolve.As + Aliases.ReservedSuffix;
         var set = new BsonDocument(resolve.As, new BsonDocument("$arrayElemAt", new BsonArray { "$" + temporary, 0 }));
 
-        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, pipeline, temporary));
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey || held is not null, pipeline, temporary));
 
         if (probe?.AmbiguityFlag is { } ambiguity)
             set[ambiguity] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + temporary), 1 });
@@ -2296,13 +2470,16 @@ internal static class MongoCompiler
 
         var probeline = new BsonArray { new BsonDocument("$match", ScopeFilter(resolve.TargetScope!)) };
 
+        if (held is not null)
+            probeline.Add(held);
+
         if (exactKey)
             probeline.Add(ExactKeyMatch(resolve.TargetFieldStorage!));
 
         probeline.Add(new BsonDocument("$limit", 1));
         probeline.Add(new BsonDocument("$project", new BsonDocument(KeyStorage, 1)));
 
-        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey, probeline, existing));
+        yield return new BsonDocument("$lookup", Join(resolve.Target!.Collection, resolve.Reference.Storage!, resolve.TargetFieldStorage!, exactKey || held is not null, probeline, existing));
 
         if (probe?.ExistsFlag is { } exists)
             set[exists] = new BsonDocument("$gt", new BsonArray { new BsonDocument("$size", "$" + existing), 0 });
@@ -2339,11 +2516,25 @@ internal static class MongoCompiler
     }
 
     /// <summary>
-    /// The <c>$lookup</c> document of a join. With <paramref name="exactKey"/> the local key is
-    /// bound to a variable for the sub-pipeline's byte comparison; otherwise the document is
-    /// the indexed join alone.
+    /// The match of a join's sub-pipeline that joins only what holds a key on both sides: nothing for
+    /// a row whose local key (<see cref="KeyVariable"/>) is null or not stored, and no record that
+    /// holds nothing in the member it is named by (<paramref name="foreignField"/>). The second holds
+    /// whatever the row's member is stored as: an array there is joined by its elements, and an
+    /// element that is null, or an array without elements, names no record.
     /// </summary>
-    private static BsonDocument Join(string from, string localField, string foreignField, bool exactKey, BsonArray pipeline, string alias)
+    private static BsonDocument HoldsKey(string foreignField) =>
+        new("$match", new BsonDocument
+        {
+            ["$expr"] = new BsonDocument("$gt", new BsonArray { "$$" + KeyVariable, BsonNull.Value }),
+            [foreignField] = new BsonDocument("$ne", BsonNull.Value),
+        });
+
+    /// <summary>
+    /// The <c>$lookup</c> document of a join. With <paramref name="bindKey"/> the local key is
+    /// bound to a variable the sub-pipeline reads (its byte comparison, or whether the row holds
+    /// a key at all); otherwise the document is the indexed join alone.
+    /// </summary>
+    private static BsonDocument Join(string from, string localField, string foreignField, bool bindKey, BsonArray pipeline, string alias)
     {
         var join = new BsonDocument
         {
@@ -2352,7 +2543,7 @@ internal static class MongoCompiler
             ["foreignField"] = foreignField,
         };
 
-        if (exactKey)
+        if (bindKey)
             join["let"] = new BsonDocument(KeyVariable, "$" + localField);
 
         join["pipeline"] = pipeline;
@@ -2372,6 +2563,13 @@ internal static class MongoCompiler
     /// accents would join; ids are exact, so the joined rows are compared again byte for
     /// byte, with the byte functions that a collation does not reach. A key that is not a
     /// string joins as it always has.
+    /// <para>
+    /// The byte functions take text and nothing else, and the database evaluates them where their
+    /// operand is known before a row is read: the key of the row a join runs for is such an operand,
+    /// in the branch that is not taken too. So each reads its operand as text or as the empty text
+    /// (<see cref="TextOrEmpty"/>), and a row whose key is null, not stored or of another type is
+    /// compared by the plain join alone.
+    /// </para>
     /// </summary>
     private static BsonDocument ExactKeyMatch(string foreignField)
     {
@@ -2387,12 +2585,16 @@ internal static class MongoCompiler
             }),
             ["then"] = new BsonDocument("$and", new BsonArray
             {
-                new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { field, key }), 0 }),
-                new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", field), new BsonDocument("$strLenBytes", key) }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$indexOfBytes", new BsonArray { TextOrEmpty(field), TextOrEmpty(key) }), 0 }),
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$strLenBytes", TextOrEmpty(field)), new BsonDocument("$strLenBytes", TextOrEmpty(key)) }),
             }),
             ["else"] = true,
         })));
     }
+
+    /// <summary>A value where it is text, the empty text where it is anything else: an operand a byte function takes whatever the value is.</summary>
+    private static BsonDocument TextOrEmpty(string value) =>
+        new("$cond", new BsonArray { new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", value), "string" }), value, "" });
 
     /// <summary>
     /// The projection inside a join: what the join loads of its target (the select of a contract 1
@@ -2680,6 +2882,19 @@ internal static class MongoCompiler
         BoundExpression.Path { Unwrap: true } path => new BsonDocument("$ifNull", new BsonArray { "$" + path.Resolved.Storage + "._v", "$" + path.Resolved.Storage }),
         BoundExpression.Path path => "$" + path.Resolved.Storage,
         BoundExpression.Literal literal => new BsonDocument("$literal", literal.Value),
+
+        // A quotient by zero is no number: it is null, as a quotient by null is. The divisor is read
+        // once and taken as null where it is zero, so no row and no constant makes the database
+        // divide by zero, in a branch it takes or in one it only looks at.
+        BoundExpression.Arithmetic { Operator: "divide", Operands: [var dividend, var divisor] } => new BsonDocument("$let", new BsonDocument
+        {
+            ["vars"] = new BsonDocument(DivisorVariable, Expression(divisor)),
+            ["in"] = new BsonDocument("$divide", new BsonArray
+            {
+                Expression(dividend),
+                new BsonDocument("$cond", new BsonArray { new BsonDocument("$eq", new BsonArray { "$$" + DivisorVariable, 0 }), BsonNull.Value, "$$" + DivisorVariable }),
+            }),
+        }),
         BoundExpression.Arithmetic arithmetic => new BsonDocument(arithmetic.Operator switch
         {
             "add" => "$add",

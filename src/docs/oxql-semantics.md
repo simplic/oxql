@@ -62,7 +62,10 @@ owner did not answer holds `null`, with the owner's diagnostic). A `resolve` yie
 the stage's `filter`, when no case of a typed reference matches, and, for a remote target, when
 the owner did not answer (with a `RESOLVE_TIMEOUT` or `RESOLVE_UNREACHABLE` diagnostic). Which of
 these a `null` is, and which of them lose data, is the join's outcome
-([Outcomes and data loss](#outcomes-and-data-loss)).
+([Outcomes and data loss](#outcomes-and-data-loss)). A reference that holds nothing names no
+record, whatever the records hold: where a reference names its target by another member than the
+target's key (a `code`), a record that holds nothing in that member is resolved by no reference,
+and has no children in a `lookup`.
 
 **Rows.** A member stored as `null` is `null` in the row; a member absent from the document is
 absent from the row object. A stored double that is `NaN` or infinite is `null`, under a `double`
@@ -155,6 +158,13 @@ that representation. Where a fleet's data is not uniform, the options under
 - **`timeSpan`** stored as text orders by character. That agrees with duration order only while
   every value is non-negative and below one day; from a day on the text gains a day component
   (`1.02:00:00`), and a `gt` or a sort across that boundary, or across a negative value, does not.
+  An ordered comparison goes by the characters' bytes whatever else the request asks, so it has
+  one answer alone and beside a condition that folds case. A **sort** on such a member orders
+  under the request's collation when another comparison, sort or key of the request folds, and by
+  byte when none does: the two orders differ where the texts differ in punctuation (`10:00:00`
+  and `10.00:00:00`). A service that orders or compares durations stores them as a number
+  (ticks or milliseconds), which orders by value. Explain says so of a request that compares or
+  sorts such a member: the note `DURATION_ORDERS_AS_TEXT`.
 - **Addon keys** (`addon.<path>` of a defined key) always match tolerantly, whatever the options:
   a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
   `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes
@@ -199,7 +209,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 |---|---|
 | `eq neq in nin` on a string | folds case and accents; `options.caseSensitive: true` compares exactly |
 | `gt gte lt lte` on a string | orders under the collation; cannot opt out (`OPTION_NOT_APPLICABLE`) |
-| `startsWith` | a range under the collation, folds case and accents; `caseSensitive` compares exactly |
+| `startsWith` | a range under the collation, folds case and accents; `caseSensitive` compares exactly. On a path through a collection that is not unwound (`items.text`, a collection of text) it is the pattern `contains` and `endsWith` fold by, anchored at the start: one element starts with the text, and no index bounds it |
 | `contains`, `endsWith` | a pattern with the `i` flag in which each letter of the operand is the class of the letters of its primary weight, and a letter the collation weighs as two or three stands for them and they for it (`ß`/`ss`, `æ`/`ae`, `œ`/`oe`, `ĳ`/`ij`, the Latin ligatures): the classes are read from the collation data over the Latin blocks (Latin-1 Supplement to Latin Extended-B, Latin Extended Additional, the ligatures), and a test asks the server's `eq` the same pairs, so `contains` finds a spelling exactly when `eq` calls it equal; folds case and accents as the collation does at strength 1 (at strength 2 and above the collation tells accents apart, and so does the pattern); `caseSensitive` compares exactly. Never index-served: it reads every candidate row |
 | `regex` | the caller's pattern as written, never folded; `caseSensitive` does not apply |
 | sort on a string | orders under the collation; `{ "direction": …, "caseSensitive": true }` orders by byte value, only in a request where nothing else folds (`OPTION_NOT_APPLICABLE` otherwise) |
@@ -242,8 +252,8 @@ with no index but `_id`. What changes with the collation is which indexes the se
 
 | shape at the page | caller wrote no sort | caller's sort | paging |
 |---|---|---|---|
-| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker | cursor: the last row's sort values and key |
-| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id`, then every unwind's position | cursor: a position in that order |
+| the entity's rows (no `group`, no `unwind`) | ascending by the entity key (`id`) | the caller's fields, then `id` ascending as the tie-breaker; a sort that names `id` gives it its place and its direction, and nothing is appended | cursor: the last row's sort values and key |
+| after `unwind` | ascending by `id`, then by the position of every unwound element | the caller's fields, then `id` (ascending, or where and as the sort names it), then every unwind's position | cursor: a position in that order |
 | after `group` | the group keys, ascending, string keys folded | the caller's fields, then every group key it did not name, ascending | cursor: a position in that order |
 | `group` with no key | one row, no order | | |
 
@@ -263,7 +273,12 @@ with no index but `_id`. What changes with the collation is which indexes the se
   wants a stable business order sorts by a member.
 - The last `sort` of a pipeline decides the page order; an earlier one only orders what a
   following `group` sees (`first`, `last`, `push`). A sort before a `group` is dropped from
-  paging.
+  paging. Under contract 2, where the group has a `first`, a `last` or a `push`, that sort is
+  completed like the page's: by the entity's key, ascending unless the sort names it, and by the
+  position of every element unwound before it. Rows that tie on the sort's members therefore
+  reach the group in one order, and `first`, `last` and `push` answer the same values on every
+  page of a walk and for every page size. Before a group of other aggregates, which read no
+  order, the sort is sent as written.
 - `null` and absent values come first in ascending and last in descending order. An enum sorts
   by its stored value (its number, or its name when stored as text); a `timeSpan` stored as text
   by character; a mixed member by BSON type bracket.
@@ -336,9 +351,28 @@ included, as it always has; a cursor of one contract is never one of the other.
   is rewritten between two pages is. A `count`, a `min`/`max` and a sum of `int`, `long` or
   `decimal` values are exact however often they are computed.
 - A cursor's position is sent to the database as the null-aware predicate over every field of the
-  order and, where the leading sort field holds a value, as one range on that field beside it
-  (`k >= v` ascending; "not above `v`" descending, which keeps the nulls that follow): the rows
-  before the position fail one comparison, and an index on the sort is bounded by one range.
+  order: one alternative per field, the fields before it at the position's values and the field
+  beyond its value. Under contract 2 the leading match of the page is these alternatives
+  themselves, each with the organisation's scope and the conditions that stand next to it in it.
+  An alternative is then one range of an index on the scope and the sort; the database plans each
+  on its own and merges them in the order of the sort, so a page reads the keys of its rows,
+  whatever the position ties on. Held on a server in `KeysetPlanServerTests`: on 20 000 rows of
+  one organisation with the index of the sort, a page of 51 from the middle of a walk reads 52 to
+  55 keys on MongoDB 6, 7 and 8 (the test holds at most 58), for one, two and three sort members
+  in every mix of directions, with and without a condition. A contract 1 page sends the predicate as one condition beside the scope, as it
+  always did.
+- **A page continues in the order of its sort whatever the member holds.** A range comparison
+  stays inside the stored type of its operand and holds for nothing against a NaN, while a sort
+  orders every value. So the position of a contract 2 cursor also admits, on a numeric leg,
+  the rows on the far side of a NaN (NaN orders before every number), and on every sort member
+  of one value and every key of a group the rows whose value is of a type that orders after the
+  position's: numbers, then text, then objects, binary, object ids, booleans and dates. A walk
+  serves every row once whatever the rows hold: a decimal as text beside the migrated rows, an
+  addon value of any stored type, text under an `int` or a number under a `string` that some
+  writer stored. An index on the sort answers the question for the types with the bounds of each
+  type, and where no row is of another type the alternative reads one key. The one stored type the position
+  does not ask for is the array: a sort orders an array under a member of one value by one of
+  its elements. A walk by cursor is defined for a sort member of one value; an array there is outside it.
 - A contract 2 cursor carries the number of rows the pages up to it served. It is what a later
   page's count is known by without counting (below).
 - **Sorting on a local join alias.** A keyset cursor's condition is merged into the leading
@@ -672,10 +706,19 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 
 **`dateTrunc`.**
 
-- `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`. The service also
-  accepts a Windows zone id and sends the IANA id it maps to; a zone neither resolves is
-  `INVALID_TIMEZONE`. An IANA id must also map to a Windows zone, so the answer is the same
-  on every host platform: `CET` and `Europe//Berlin` are refused on Windows and Linux alike.
+- `timezone` is an IANA zone id (`Europe/Berlin`); absent or blank is `UTC`, and spaces around
+  it are not read. Accepted as well, on every host platform the same:
+  an offset from UTC up to fourteen hours (`+02:00`, `+0200`, `+02`, `-09:30`) and the fixed
+  zones `Etc/GMT` and `Etc/GMT-14` … `Etc/GMT+12` (their sign is the reverse of an offset's;
+  the area has no zone further west than `Etc/GMT+12`, and `Etc/GMT+13` is `INVALID_TIMEZONE`),
+  `Etc/UTC` and `GMT`, which the database reads off their spelling; and a Windows zone id
+  (`W. Europe Standard Time`), for which the IANA id it maps to is sent. A zone id is looked up
+  in the zone table of the host's runtime and has to map to a Windows zone there, so that it
+  binds or is refused the same on Windows and Linux: an alias without such a mapping (`CET`)
+  and a spelling only a file system resolves (`Europe//Berlin`) are `INVALID_TIMEZONE`, as is
+  everything else. Write a region id (`Europe/Berlin`) or an offset. The database computes with a
+  zone table of its own: a zone id the host's table has and the database's does not is
+  `INVALID_TIMEZONE` as well (400, without a `path`), answered when the query runs.
 - The boundary is computed in local time, so a bucket follows daylight saving: the Berlin day
   bucket of 29 March is `2026-03-28T23:00:00Z`, that of 25 October `2026-10-24T22:00:00Z`. The key
   is emitted as the UTC instant of the local boundary and is not a UTC midnight; compare it as an
@@ -734,8 +777,8 @@ reads (each is a literal path; a variable only ever stands for a value) and infe
 | key over a path | the member's kind | as the member (`long` and `decimal` as a number, `date` as `YYYY-MM-DD`, enum as its number) |
 | key over `dateTrunc` | `dateTime` | ISO-8601 UTC instant |
 | `count`, `countDistinct` | `int` | a JSON number (`12`); a `sum`, `min` or `max` over such an alias in a later `group` is an `int` and a number too |
-| `sum` | the argument's kind | a number: `int` and `double` as they are, `long` and `decimal` with every digit (a `decimal` sums in Decimal128 and reads back exactly; a `double` sums in binary floating point, so `0.1 + 0.2` is `0.30000000000000004`: the engine rounds nothing, the member's kind says which it is); arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal` |
-| `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal` | a number; a decimal mean with every digit the database holds (up to 34) |
+| `sum` | the argument's kind | a number: `int` and `double` as they are, `long` and `decimal` with every digit (a `decimal` sums in Decimal128 and reads back exactly; a `double` sums in binary floating point, so `0.1 + 0.2` is `0.30000000000000004`: the engine rounds nothing, the member's kind says which it is); arithmetic over integers and integer literals is a `long`, with a `double` operand a `double`, with a `decimal` operand a `decimal`; a quotient (`divide`) is a `double`, or a `decimal` with a `decimal` operand, and `null` where the divisor is zero or `null`; a `timeSpan` stored as a number counts as that number (ticks a `long`, a `double` in the member's unit a `double`) |
+| `avg` | `double` over `int`/`double`, `decimal` over `long`/`decimal`; a quotient of whole numbers counts as a `long` here, so its mean is a `decimal` | a number; a decimal mean with every digit the database holds (up to 34); each quotient enters the mean with the 15 significant digits a decimal takes of a `double` |
 | `min`, `max`, `first`, `last` | the argument's kind | as the member; an object by its members |
 | `push` | array of the argument's kind | each element in the member's encoding |
 | `coalesce` | unknown | the stored value verbatim |

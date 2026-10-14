@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using OxQL.Core.Binding;
 using OxQL.Core.Engine;
@@ -32,6 +34,9 @@ internal static class RequestBodyReader
     public const string ReasonKind = "kind";
     public const string ReasonMissing = "missing";
 
+    /// <summary>A member name or a text of the body is no Unicode text: half of a surrogate pair written as an escape, or bytes that are no UTF-8.</summary>
+    public const string ReasonEncoding = "encoding";
+
     private static readonly string[] ExplainMembers = ["query", "remote", "include", "catalog", "shape", "budget"];
 
     // ---- the body as a whole ------------------------------------------------------------------
@@ -39,6 +44,11 @@ internal static class RequestBodyReader
     /// <summary>
     /// The body as a document, or why it is none: empty, no well-formed JSON (with the line and the
     /// position in the line, both from 1), or nested deeper than the host reads.
+    /// <para>
+    /// How deep the body nests is found by one pass over its bytes that keeps a bit per level, and a
+    /// document is built only of a body within <paramref name="maxDepth"/>: what a refusal costs is
+    /// in proportion to the body's length, however deep the body nests.
+    /// </para>
     /// </summary>
     public static QueryValidationError? Parse(ReadOnlyMemory<byte> utf8, int maxDepth, out JsonDocument? document)
     {
@@ -52,10 +62,21 @@ internal static class RequestBodyReader
                 Params = new Dictionary<string, object?> { ["reason"] = ReasonEmpty },
             };
 
+        // A byte order mark ahead of the body is passed over, as the host passes over it.
+        utf8 = WithoutMark(utf8);
+
         try
         {
-            // The document itself is read without a depth of its own: how deep the host reads is said apart from what is no JSON.
-            document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = int.MaxValue });
+            // The body is read to its end without a depth of its own first: what is no JSON is said apart from how deep the host reads.
+            if (Deepest(utf8.Span) > maxDepth)
+                return new QueryValidationError
+                {
+                    Code = Codes.InvalidRequestBody,
+                    Message = $"The request body nests deeper than {maxDepth} levels.",
+                    Params = new Dictionary<string, object?> { ["reason"] = ReasonDepth, ["max"] = maxDepth },
+                };
+
+            document = JsonDocument.Parse(utf8, new JsonDocumentOptions { MaxDepth = maxDepth });
         }
         catch (JsonException exception)
         {
@@ -70,64 +91,356 @@ internal static class RequestBodyReader
             };
         }
 
-        if (Depth(document.RootElement, 1) > maxDepth)
-        {
-            document.Dispose();
-            document = null;
+        return null;
+    }
 
-            return new QueryValidationError
+    /// <summary>
+    /// How deep a body nests, counted as the reader counts it: an object or an array at the root is
+    /// at 1, and a value that is neither is at the depth of what holds it. The body is read token by
+    /// token to its end, and one that is no JSON fails as the reader fails.
+    /// </summary>
+    private static int Deepest(ReadOnlySpan<byte> utf8)
+    {
+        var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = int.MaxValue });
+        var deepest = 0;
+
+        while (reader.Read())
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                deepest = Math.Max(deepest, reader.CurrentDepth + 1);
+
+        return deepest;
+    }
+
+    // ---- text that is no text -----------------------------------------------------------------
+
+    /// <summary>
+    /// Whether a body may hold a name or a text that is no Unicode text: bytes that are no UTF-8, or
+    /// an escape of half a surrogate pair (every such escape starts <c>\ud</c>). A body without
+    /// either holds none, which is every body but a few: the full look (<see cref="BrokenTexts(ReadOnlyMemory{byte}, int)"/>)
+    /// is taken only then.
+    /// </summary>
+    public static bool MayHoldBrokenText(ReadOnlySpan<byte> utf8) =>
+        utf8.IndexOf("\\ud"u8) >= 0 || utf8.IndexOf("\\uD"u8) >= 0 || !System.Text.Unicode.Utf8.IsValid(utf8);
+
+    /// <summary>
+    /// The places of a body whose member name or text is no Unicode text, each as the JSON path of
+    /// the text (of the object, for a name) and whether it is a name; empty when there is none, and
+    /// null when the body is no JSON at all or nests deeper than <paramref name="maxDepth"/>, which
+    /// is said in its own words. At most <see cref="MaxBrokenTexts"/> places are named, the first
+    /// the body has. A path longer than a refusal carries (<see cref="MaxPathLength"/>) is its
+    /// start only, longer than that.
+    /// </summary>
+    public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8, int maxDepth) => BrokenTexts(utf8, maxDepth, out _);
+
+    /// <summary>
+    /// The places of a body whose member name or text is no Unicode text, as
+    /// <see cref="BrokenTexts(ReadOnlyMemory{byte}, int)"/> names them, and in
+    /// <paramref name="unnamed"/> where the places past the ones it names lie.
+    /// <para>
+    /// The body is read once, token by token and to its end, to the depth the host reads a body
+    /// to: a body that is answered for such a place is JSON throughout. The read takes time in
+    /// proportion to the body's length, whatever the body nests, and keeps one entry per level it
+    /// stands in. On top of that come, for each of the at most <see cref="MaxBrokenTexts"/> places
+    /// it names, a path of a bounded length (a path is built as far as a refusal carries it,
+    /// <see cref="MaxPathLength"/>, and little further) and one more read of the names above the
+    /// place, into one buffer as long as the longest name of the body; and, for the places it does
+    /// not name, a number for each entry of a batch that holds one and one read of the name of each
+    /// member of the body one lies under.
+    /// </para>
+    /// </summary>
+    public static List<(string Path, bool Name)>? BrokenTexts(ReadOnlyMemory<byte> utf8, int maxDepth, out UnnamedTexts unnamed)
+    {
+        var broken = new List<(string Path, bool Name)>();
+        var body = WithoutMark(utf8.Span);
+
+        // Where the look stands: per level the index of the element (an array) or the name of the member (an object), as its place in the body.
+        var levels = new List<Level>();
+        var characters = System.Buffers.ArrayPool<char>.Shared.Rent(256);
+
+        // The places past the ones that are named: the entries of a batch they lie in, and whether one lies elsewhere.
+        List<int>? entries = null;
+        var elsewhere = false;
+        var member = (At: -1, Queries: false);
+
+        unnamed = default;
+
+        try
+        {
+            var reader = new Utf8JsonReader(body, new JsonReaderOptions { MaxDepth = maxDepth });
+
+            while (reader.Read())
             {
-                Code = Codes.InvalidRequestBody,
-                Message = $"The request body nests deeper than {maxDepth} levels.",
-                Params = new Dictionary<string, object?> { ["reason"] = ReasonDepth, ["max"] = maxDepth },
-            };
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.PropertyName:
+                        if (IsText(ref reader, ref characters))
+                        {
+                            levels[^1] = new Level(false, 0, (int)reader.TokenStartIndex, (int)reader.TokenStartIndex + reader.ValueSpan.Length + 2);
+                        }
+                        else
+                        {
+                            // The member is named by nothing: the object is the place, and what the member holds is passed over.
+                            Found(body, levels.Count - 1, true);
+                            reader.Skip();
+                        }
+
+                        break;
+
+                    case JsonTokenType.StartObject:
+                    case JsonTokenType.StartArray:
+                        Element(levels);
+                        levels.Add(new Level(reader.TokenType == JsonTokenType.StartArray, -1, 0, 0));
+                        break;
+
+                    case JsonTokenType.EndObject:
+                    case JsonTokenType.EndArray:
+                        levels.RemoveAt(levels.Count - 1);
+                        break;
+
+                    case JsonTokenType.String:
+                        Element(levels);
+
+                        if (!IsText(ref reader, ref characters))
+                            Found(body, levels.Count, false);
+
+                        break;
+
+                    default:
+                        Element(levels);
+                        break;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Bytes that are no UTF-8 may stop the reader before it has read a text: they are still what is wrong.
+            return System.Text.Unicode.Utf8.IsValid(body) ? null : [(Root, false)];
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(characters);
         }
 
-        return null;
+        broken.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
+        unnamed = new UnnamedTexts(elsewhere, entries ?? []);
+
+        return broken;
+
+        // A value in an array is its next element.
+        static void Element(List<Level> levels)
+        {
+            if (levels.Count > 0 && levels[^1] is { Array: true } array)
+                levels[^1] = array with { Index = array.Index + 1 };
+        }
+
+        // A place under the first <count> levels: named while a refusal names more, and after that kept as where it lies.
+        void Found(ReadOnlySpan<byte> json, int count, bool name)
+        {
+            if (broken.Count < MaxBrokenTexts)
+            {
+                broken.Add((PathOf(json, levels, count, ref characters), name));
+                return;
+            }
+
+            if (count < 2 || levels[0].Array || !levels[1].Array)
+            {
+                elsewhere = true;
+                return;
+            }
+
+            // The name of the member the place lies under is read once, however many places lie under it.
+            if (member.At != levels[0].NameStart)
+                member = (levels[0].NameStart, JsonSerializer.Deserialize<string>(json[levels[0].NameStart..levels[0].NameEnd]) == BatchQueries);
+
+            if (!member.Queries)
+                elsewhere = true;
+            else if (entries is not [.., var last] || last != levels[1].Index)
+                (entries ??= []).Add(levels[1].Index);
+        }
+    }
+
+    /// <summary>
+    /// Where the places lie that a refusal does not name (those past <see cref="MaxBrokenTexts"/>):
+    /// the indexes of the entries of a batch's <c>queries</c> that hold one, each once and in the
+    /// order of the body, and whether one lies anywhere else.
+    /// </summary>
+    public readonly record struct UnnamedTexts(bool Elsewhere, IReadOnlyList<int> Entries);
+
+    /// <summary>The member of a batch that carries its entries.</summary>
+    public const string BatchQueries = "queries";
+
+    /// <summary>A body without the byte order mark a client may write ahead of it.</summary>
+    public static ReadOnlySpan<byte> WithoutMark(ReadOnlySpan<byte> utf8) => utf8.StartsWith(Mark) ? utf8[Mark.Length..] : utf8;
+
+    /// <inheritdoc cref="WithoutMark(ReadOnlySpan{byte})"/>
+    public static ReadOnlyMemory<byte> WithoutMark(ReadOnlyMemory<byte> utf8) => utf8.Span.StartsWith(Mark) ? utf8[Mark.Length..] : utf8;
+
+    /// <summary>The UTF-8 byte order mark.</summary>
+    private static ReadOnlySpan<byte> Mark => [0xEF, 0xBB, 0xBF];
+
+    /// <summary>One level the look stands in: an array with the index of its element, or an object with where the name of its member is written (from its opening quote to past its closing one).</summary>
+    private readonly record struct Level(bool Array, int Index, int NameStart, int NameEnd);
+
+    /// <summary>The most places one refusal names.</summary>
+    public const int MaxBrokenTexts = 20;
+
+    /// <summary>
+    /// The most characters a refusal carries of the path of a text that is no Unicode text, in its
+    /// message and in <c>params.path</c>: a member name is the caller's, and as long as a body may be.
+    /// A place as deep as a host reads by default, in arrays or under short names, is named whole.
+    /// </summary>
+    public const int MaxPathLength = 1024;
+
+    /// <summary>What a path that is cut ends with, in place of what it leaves out.</summary>
+    public const string PathCut = "\u2026";
+
+    /// <summary>
+    /// How far a path is built: past what a refusal carries of it by more than the entry of a batch
+    /// takes ahead of it (<c>.queries[2147483647]</c>), so a path that is cut is cut the same
+    /// wherever it starts.
+    /// </summary>
+    private const int MaxPathBuilt = MaxPathLength + 32;
+
+    /// <summary>The characters of a member name that <see cref="Join"/> writes after a dot.</summary>
+    private static readonly System.Buffers.SearchValues<char> PlainName =
+        System.Buffers.SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$");
+
+    /// <summary>
+    /// A path as a refusal carries it: whole up to <see cref="MaxPathLength"/> characters, and a
+    /// longer one cut to that length with <see cref="PathCut"/> as its last character. A surrogate
+    /// pair is kept whole or left out whole.
+    /// </summary>
+    public static string Carried(string path)
+    {
+        if (path.Length <= MaxPathLength)
+            return path;
+
+        var kept = MaxPathLength - PathCut.Length;
+
+        if (char.IsHighSurrogate(path[kept - 1]))
+            kept--;
+
+        return string.Concat(path.AsSpan(0, kept), PathCut);
+    }
+
+    /// <summary>
+    /// The JSON path of the first <paramref name="count"/> levels, written once and as
+    /// <see cref="Join"/> writes a member: whole when it is no longer than
+    /// <see cref="MaxPathBuilt"/> characters, and otherwise its start, longer than that. A name is
+    /// read into <paramref name="characters"/>, which grows to the longest name it is given.
+    /// </summary>
+    private static string PathOf(ReadOnlySpan<byte> utf8, List<Level> levels, int count, ref char[] characters)
+    {
+        var path = new StringBuilder(Root);
+
+        for (var index = 0; index < count && path.Length <= MaxPathBuilt; index++)
+        {
+            var level = levels[index];
+
+            if (level.Array)
+            {
+                path.Append(CultureInfo.InvariantCulture, $"[{level.Index}]");
+                continue;
+            }
+
+            // A name above a place that is found is text: the look passes over what a name that is none holds.
+            var reader = new Utf8JsonReader(utf8[level.NameStart..level.NameEnd]);
+
+            reader.Read();
+
+            // A text is never longer in characters than in the bytes it is written with.
+            if (characters.Length < reader.ValueSpan.Length)
+            {
+                System.Buffers.ArrayPool<char>.Shared.Return(characters);
+                characters = System.Buffers.ArrayPool<char>.Shared.Rent(reader.ValueSpan.Length);
+            }
+
+            var name = characters.AsSpan(0, reader.CopyString(characters));
+
+            if (name.Length > 0 && !char.IsAsciiDigit(name[0]) && name.IndexOfAnyExcept(PlainName) < 0)
+            {
+                path.Append('.').Append(name[..Math.Min(name.Length, MaxPathBuilt)]);
+                continue;
+            }
+
+            path.Append("['");
+
+            foreach (var character in name)
+            {
+                // The start of a path ends after a whole character.
+                if (path.Length > MaxPathBuilt && !char.IsLowSurrogate(character))
+                    break;
+
+                if (character is '\\' or '\'')
+                    path.Append('\\');
+
+                path.Append(character);
+            }
+
+            path.Append("']");
+        }
+
+        return path.ToString();
+    }
+
+    /// <summary>Whether the name or the text the reader stands on is Unicode text; nothing is kept of it.</summary>
+    private static bool IsText(ref Utf8JsonReader reader, ref char[] characters)
+    {
+        if (!reader.ValueIsEscaped)
+            return System.Text.Unicode.Utf8.IsValid(reader.ValueSpan);
+
+        // An escape is never longer in characters than in the bytes it is written with.
+        if (characters.Length < reader.ValueSpan.Length)
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(characters);
+            characters = System.Buffers.ArrayPool<char>.Shared.Rent(reader.ValueSpan.Length);
+        }
+
+        try
+        {
+            reader.CopyString(characters);
+
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A name or a text that is no Unicode text, said without its place: one past the places a refusal names.</summary>
+    public static QueryValidationError Broken() => new()
+    {
+        Code = Codes.InvalidRequestBody,
+        Message = "A member name or a text of the request is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.",
+        Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding },
+    };
+
+    /// <summary>A name or a text that is no Unicode text, at its place: the path as a refusal carries one (<see cref="Carried"/>).</summary>
+    public static QueryValidationError Broken(string at, bool name)
+    {
+        at = Carried(at);
+
+        return new()
+        {
+            Code = Codes.InvalidRequestBody,
+            Message = name
+                ? $"A member name in '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8."
+                : $"The text at '{at}' is no Unicode text: it holds half of a surrogate pair, or bytes that are no UTF-8.",
+            Params = new Dictionary<string, object?> { ["reason"] = ReasonEncoding, ["path"] = at, ["in"] = name ? "name" : "value" },
+        };
     }
 
     private static bool IsBlank(ReadOnlySpan<byte> utf8)
     {
         // A byte order mark ahead of nothing is nothing.
-        if (utf8.StartsWith("﻿"u8))
-            utf8 = utf8[3..];
+        utf8 = WithoutMark(utf8);
 
         foreach (var value in utf8)
             if (value is not ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n'))
                 return false;
 
         return true;
-    }
-
-    /// <summary>How deep a value nests, counted as the reader counts it: a scalar is at the depth of what holds it.</summary>
-    private static int Depth(JsonElement element, int at)
-    {
-        var deepest = 0;
-        var pending = new Stack<(JsonElement Element, int Depth)>();
-
-        pending.Push((element, at));
-
-        while (pending.Count > 0)
-        {
-            var (current, depth) = pending.Pop();
-
-            if (current.ValueKind == JsonValueKind.Object)
-            {
-                deepest = Math.Max(deepest, depth);
-
-                foreach (var member in current.EnumerateObject())
-                    pending.Push((member.Value, depth + 1));
-            }
-            else if (current.ValueKind == JsonValueKind.Array)
-            {
-                deepest = Math.Max(deepest, depth);
-
-                foreach (var item in current.EnumerateArray())
-                    pending.Push((item, depth + 1));
-            }
-        }
-
-        return deepest;
     }
 
     // ---- the three bodies ---------------------------------------------------------------------

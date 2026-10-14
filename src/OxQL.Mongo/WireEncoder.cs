@@ -66,7 +66,7 @@ internal static class WireEncoder
 
                 case ShapeNode.Element element:
                     if (row.TryGetValue(name, out var elementValue))
-                        result[name] = EncodeValue(elementValue, ElementShape(element.Source), name, shape, name, unfit);
+                        result[name] = Projected(EncodeValue(elementValue, ElementShape(element.Source), name, shape, name, unfit), name, shape, bound);
                     break;
 
                 case ShapeNode.Array array:
@@ -111,6 +111,48 @@ internal static class WireEncoder
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The element of an unwind as the projection leaves it. The element is a part of the row like
+    /// the row's own members: a projection that names paths under its alias decides what it shows,
+    /// and a reference a join kept in storage beside them (a join reads its key off the stored row
+    /// after the projection) is not in the row. An alias no projection names shows what it holds,
+    /// and so does the element of an owner's answer per key, whose matched member travels with it.
+    /// A contract 1 row is what it has been.
+    /// </summary>
+    private static JsonNode? Projected(JsonNode? element, string alias, Shape shape, BoundPipeline bound)
+    {
+        if (!shape.Derives || bound.KeyedBy is not null || shape.Included is null || !shape.IsVisible(alias))
+            return element;
+
+        Prune(element, alias, shape);
+
+        return element;
+    }
+
+    private static void Prune(JsonNode? node, string wire, Shape shape)
+    {
+        switch (node)
+        {
+            case JsonObject members:
+                foreach (var name in members.Select(member => member.Key).ToList())
+                {
+                    if (!shape.IsVisible(wire + "." + name))
+                        members.Remove(name);
+                    else
+                        Prune(members[name], wire + "." + name, shape);
+                }
+
+                break;
+
+            // The elements of a collection are read under the collection's own path.
+            case JsonArray elements:
+                foreach (var each in elements)
+                    Prune(each, wire, shape);
+
+                break;
+        }
     }
 
     /// <summary>

@@ -52,6 +52,9 @@ public sealed class FleetHost : IAsyncDisposable
 
     public IServiceProvider Services => app.Services;
 
+    /// <summary>The harness's own key of a variant that buffers every request body ahead of MVC: <c>rewound</c>, <c>end</c> or <c>unread</c>.</summary>
+    public const string BufferBodyKey = "Lab:BufferBody";
+
     /// <summary>
     /// Starts a host. <paramref name="configuration"/> is layered over the host's defaults, so a
     /// variant names only the keys it changes (<c>OxQL:Limits:MaxPageSize</c> and the like).
@@ -118,6 +121,23 @@ public sealed class FleetHost : IAsyncDisposable
         services.AddSingleton<IRemoteQueryClient, InMemoryRemoteClient>();
 
         var app = builder.Build();
+
+        // A variant whose own middleware buffers every body ahead of MVC, as a host's base package may:
+        // read to the end and set back ("rewound"), read to the end and left there ("end"), or not read ("unread").
+        if (settings.GetValueOrDefault(BufferBodyKey) is { Length: > 0 } buffered)
+            app.Use(async (context, next) =>
+            {
+                Microsoft.AspNetCore.Http.HttpRequestRewindExtensions.EnableBuffering(context.Request);
+
+                if (buffered != "unread")
+                    await context.Request.Body.CopyToAsync(Stream.Null);
+
+                if (buffered == "rewound")
+                    context.Request.Body.Position = 0;
+
+                await next(context);
+            });
+
         app.MapControllers();
         await app.StartAsync();
 
@@ -216,19 +236,40 @@ public sealed class LogCapture : ILoggerProvider
 {
     public ConcurrentQueue<(string Category, LogLevel Level, string Message)> Entries { get; } = new();
 
-    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries);
+    /// <summary>The exceptions the host logged as errors, each with its line: what stands behind an answer that only names a correlation id.</summary>
+    public ConcurrentQueue<(string Message, string Exception)> Faults { get; } = new();
+
+    public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Entries, Faults);
 
     public void Dispose()
     {
     }
 
-    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, string)> entries) : ILogger
+    private sealed class Logger(string category, ConcurrentQueue<(string, LogLevel, string)> entries, ConcurrentQueue<(string, string)> faults) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-            entries.Enqueue((category, logLevel, formatter(state, exception)));
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+
+            entries.Enqueue((category, logLevel, message));
+
+            if (exception is not null && logLevel >= LogLevel.Error)
+                faults.Enqueue((message, Chain(exception)));
+        }
+
+        /// <summary>An exception and what caused it, each as its type and message, outermost first.</summary>
+        private static string Chain(Exception exception)
+        {
+            var parts = new List<string>();
+
+            for (var current = exception; current is not null && parts.Count < 6; current = current.InnerException)
+                parts.Add($"{current.GetType().Name}: {current.Message}");
+
+            return string.Join(" <- ", parts);
+        }
     }
 }

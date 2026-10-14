@@ -390,6 +390,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
             resolveCalls += resolution.Calls;
             cacheHits += resolution.CacheHits;
             timing.ResolveCalls = resolveCalls;
+            timing.ResolveLocalCalls += resolution.LocalCalls;
             timing.ResolveCacheHits = cacheHits;
 
             if (resolution.Refusal is not null)
@@ -953,6 +954,17 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         MongoCommandException command when IsPatternRejection(command) =>
             Refusal.Validation([new QueryValidationError { Code = Codes.InvalidRegex, Message = "The database could not compile a regular expression of this query; it accepts PCRE2 syntax." }]),
 
+        // The binder takes numbers into the arithmetic of an aggregate by the kind of each member; a
+        // row that holds something else there (text under a member the model does not describe) is
+        // the data's doing, said with the code of the argument.
+        MongoCommandException command when IsArithmeticRejection(command) =>
+            Refusal.NotExecutable(Codes.InvalidAggregateArgument, "A row holds a value the arithmetic of an aggregate cannot take: it adds, subtracts, multiplies and divides numbers, and moves a date by a number."),
+
+        // The binder takes a zone by the host's zone table and the database computes with its own:
+        // a zone the first has and the second does not is said with the code of the zone.
+        MongoCommandException { Code: UnknownZoneCode } =>
+            Refusal.Validation([new QueryValidationError { Code = Codes.InvalidTimezone, Message = "The database does not know a timezone of this query; an offset from UTC (+02:00) names the same zone without a zone table." }]),
+
         // The binder bounds how deep a condition nests; a pipeline the driver still cannot
         // serialize this deep is the query's cost, not a fault of the host.
         BsonSerializationException =>
@@ -960,6 +972,25 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
 
         _ => null,
     };
+
+    /// <summary>The server's code for a zone id its zone table does not have.</summary>
+    internal const int UnknownZoneCode = 40485;
+
+    /// <summary>
+    /// Whether the server refused an arithmetic expression for what a row holds. A server that has a
+    /// code of its own for it says it by that code (an operand <c>$add</c>, <c>$multiply</c>,
+    /// <c>$subtract</c> or <c>$divide</c> does not take, a quotient by zero, two dates added); one that
+    /// answers with a general code (<c>TypeMismatch</c>, <c>BadValue</c>) is taken by the operator its
+    /// message names, as a word of its own: <c>$addFields</c> and <c>$addToSet</c> are other things,
+    /// and what fails there is a fault.
+    /// </summary>
+    internal static bool IsArithmeticRejection(MongoCommandException command) =>
+        // The codes of the server's expression engines: 16554 to 16612 and 14 or 2 with the operator named, and 4848401 and 7157719 to 7157723 where a group computes it.
+        command.Code is 16554 or 16555 or 16556 or 16608 or 16609 or 16610 or 16611 or 16612 or 4848401 or (>= 7157719 and <= 7157723)
+        || (command.Code is 2 or 14 && command.ErrorMessage is { } message && ArithmeticOperator().IsMatch(message));
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![\w$])\$(?:add|subtract|multiply|divide)(?!\w)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex ArithmeticOperator();
 
     /// <summary>
     /// Whether the server refused to compile a pattern: its dedicated code, or the generic

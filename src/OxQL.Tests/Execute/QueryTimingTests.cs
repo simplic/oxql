@@ -116,7 +116,7 @@ public class QueryTimingTests
 
         timing.Select(member => member.Key).Should().Equal("totalMs", "oursMs", "parseMs", "bindMs", "addonMs", "compileMs", "db", "resolve", "countWaitMs", "convertMs", "rows", "build");
         timing["db"]!.AsObject().Select(member => member.Key).Should().Equal("ms", "commands", "roundTrips", "list");
-        timing["resolve"]!.ToJsonString().Should().Be("""{"ms":0,"calls":0,"cacheHits":0,"remoteMs":0,"owners":[]}""");
+        timing["resolve"]!.ToJsonString().Should().Be("""{"ms":0,"calls":0,"localCalls":0,"cacheHits":0,"remoteMs":0,"owners":[]}""");
         timing["rows"]!.GetValue<int>().Should().Be(3);
         timing["build"]!.GetValue<string>().Should().BeOneOf("Debug", "Release");
 

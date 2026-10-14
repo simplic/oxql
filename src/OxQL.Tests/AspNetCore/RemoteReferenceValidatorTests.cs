@@ -192,7 +192,7 @@ public class RemoteReferenceValidatorTests
 
         client.Hanging.Add("crm");
 
-        var validator = new RemoteReferenceValidator { ReadTimeout = TimeSpan.FromMilliseconds(50) };
+        var validator = new RemoteReferenceValidator { ReadTimeout = TimeSpan.FromSeconds(2) };
         var first = validator.State(Model, client);
 
         first.Should().OnlyContain(state => !state.Validated && state.Reason == RemoteReferenceValidation.Pending, "nothing is checked yet and the caller did not wait for it");

@@ -105,6 +105,9 @@ public sealed class QueryTiming
     /// <inheritdoc cref="ResolveCalls"/>
     public int ResolveCacheHits { get; set; }
 
+    /// <summary>The owner queries the host ran in process for join targets of its own: none of <see cref="ResolveCalls"/>, each a command of kind <c>resolve</c> at its own database.</summary>
+    public int ResolveLocalCalls { get; set; }
+
     /// <summary>Now, as a phase's start.</summary>
     public static long Now => Stopwatch.GetTimestamp();
 
@@ -334,7 +337,7 @@ public sealed class QueryTiming
             Metric("addon", snapshots.Sum(snapshot => snapshot.Addons(from, to)), "db");
 
         if (roots.Sum(root => Interlocked.Read(ref root.resolve)) is var resolved and > 0)
-            Metric("resolve", resolved, string.Create(CultureInfo.InvariantCulture, $"{roots.Sum(root => root.ResolveCalls)} calls / {roots.Sum(root => root.ResolveCacheHits)} cached"));
+            Metric("resolve", resolved, string.Create(CultureInfo.InvariantCulture, $"{roots.Sum(root => root.ResolveCalls)} calls / {roots.Sum(root => root.ResolveCacheHits)} cached{(roots.Sum(root => root.ResolveLocalCalls) is > 0 and var local ? $" / {local} local" : "")}"));
 
         if (waited > 0)
             Metric("remote", waited);
@@ -450,6 +453,7 @@ public sealed class QueryTiming
             {
                 ["ms"] = Ms(Interlocked.Read(ref root.resolve)),
                 ["calls"] = root.ResolveCalls,
+                ["localCalls"] = root.ResolveLocalCalls,
                 ["cacheHits"] = root.ResolveCacheHits,
                 ["remoteMs"] = Ms(snapshot.Remote),
                 ["owners"] = calls,

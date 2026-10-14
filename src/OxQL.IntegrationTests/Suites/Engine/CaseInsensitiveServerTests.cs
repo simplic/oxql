@@ -150,4 +150,49 @@ public class CaseInsensitiveServerTests
         looked[0]["docs"].AsBsonArray.Select(document => document["FolderCode"].AsString).Should().Equal("abc");
         looked[1]["docs"].AsBsonArray.Select(document => document["FolderCode"].AsString).Should().Equal("ABC");
     }
+
+    /// <summary>
+    /// The byte comparison of a join's key reads text only: beside a row whose key is null, not
+    /// stored or of another type, the rows that hold a text key join exactly, and the request is answered.
+    /// </summary>
+    [Fact]
+    public async Task A_join_on_a_string_key_inside_a_collated_aggregate_is_answered_beside_rows_without_a_text_key()
+    {
+        await using var owned = await MongoFixture.CreateDatabaseAsync("ci_join_null");
+        var folders = owned.Database.GetCollection<BsonDocument>(CaseInsensitiveJoinModel.FolderCollection);
+        var documents = owned.Database.GetCollection<BsonDocument>(CaseInsensitiveJoinModel.DocumentCollection);
+
+        static BsonDocument Folder(int id, BsonValue code) => new() { ["_id"] = new BsonBinaryData(Guid.Parse($"10000000-0000-0000-0000-{id:D12}"), GuidRepresentation.Standard), ["OrganizationId"] = EngineDirect.OrganisationValue, ["Code"] = code, ["Name"] = "x" };
+
+        static BsonDocument Document(int id, BsonValue? code)
+        {
+            var document = new BsonDocument { ["_id"] = new BsonBinaryData(Guid.Parse($"20000000-0000-0000-0000-{id:D12}"), GuidRepresentation.Standard), ["OrganizationId"] = EngineDirect.OrganisationValue, ["Title"] = "t" };
+
+            if (code is not null)
+                document["FolderCode"] = code;
+
+            return document;
+        }
+
+        await folders.InsertManyAsync([Folder(1, "abc"), Folder(2, "ABC"), Folder(5, 7)]);
+        await documents.InsertManyAsync([Document(1, "abc"), Document(2, BsonNull.Value), Document(3, null), Document(4, 7), Document(5, "ABC"), Document(6, "äbc")]);
+
+        var resolved = await Joins.CompileAsync(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }, { "match": { "title": { "eq": "T" } } }, { "project": { "title": 1, "folder.code": 1 } }, { "sort": [{ "id": "asc" }] }]""");
+
+        resolved.Collation.Should().NotBeNull();
+
+        var rows = await EngineDirect.RunAsync(owned.Database, CaseInsensitiveJoinModel.DocumentCollection, resolved);
+
+        rows.Should().HaveCount(6);
+        rows[0]["folder"]["Code"].AsString.Should().Be("abc");
+        rows[1].Contains("folder").Should().BeFalse("a null names no folder");
+        rows[2].Contains("folder").Should().BeFalse("a reference that is not stored names no folder");
+        rows[3]["folder"]["Code"].ToInt32().Should().Be(7, "a key that is no text joins as it does without a collation");
+        rows[4]["folder"]["Code"].AsString.Should().Be("ABC");
+        rows[5].Contains("folder").Should().BeFalse("no folder is spelled äbc");
+
+        var looked = await EngineDirect.RunAsync(owned.Database, CaseInsensitiveJoinModel.FolderCollection, await Joins.CompileAsync(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs" } }, { "match": { "name": { "eq": "X" } } }, { "project": { "name": 1, "docs.title": 1 } }, { "sort": [{ "id": "asc" }] }]"""));
+
+        looked.Select(folder => folder["docs"].AsBsonArray.Count).Should().Equal(1, 1, 1);
+    }
 }

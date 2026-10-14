@@ -193,7 +193,7 @@ public class ApiDescriptionTests
 
         var members = XDocument.Load(file).Descendants("member").ToDictionary(member => member.Attribute("name")!.Value, member => member);
 
-        foreach (var action in new[] { "Query", "Batch", "Explain", "Health" })
+        foreach (var action in new[] { "Query", "Batch", "Explain", "HealthAsync" })
         {
             var documented = members.Single(member => member.Key.StartsWith($"M:{typeof(OxQLController).FullName}.{action}(", StringComparison.Ordinal)).Value;
             var method = typeof(OxQLController).GetMethod(action)!;

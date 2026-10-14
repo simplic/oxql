@@ -517,6 +517,11 @@ unchanged, and a caller reads the new members by name. Where an answer is anothe
 2.1.126.1012 gave to the same request, it is one of the following; the entries further down say
 the rest.
 
+A host that has switched the legacy pipeline off answers contract 1 through the compatibility
+rewrite, which keeps the cursor predicate and the pattern anchor contract 1 published:
+[LEGACY.md](src/docs/LEGACY.md), *A host that switches the legacy pipeline off*, lists which of
+the guarantees below hold for contract 2 only.
+
 What a contract 2 caller reads differently:
 
 - **A body the host cannot bind**, on `query`, `batch` and `explain`: the refusal envelope (400
@@ -525,10 +530,9 @@ What a contract 2 caller reads differently:
   others.
 - **No request at all**: the literal `null` as a body, a batch without `queries`, an explain
   without `query`, and a `null` entry of a batch are `INVALID_REQUEST_BODY` (`params.reason` is
-  `"missing"` for a member that is not there and `"kind"` for a `null`); the code was
-  `UNKNOWN_STAGE`.
+  `"missing"` for a member that is not there and `"kind"` for a `null`).
 - **`OPTION_NOT_APPLICABLE`** is one error per option of a condition that is no option, each with
-  `params.option`; several unknown options were one error.
+  `params.option`.
 - **Message texts.** `OPTION_NOT_APPLICABLE` says which of three mistakes was made (a name that
   is no option, an option that is no boolean, an `options` that is no object); a `dateTrunc` key
   says whether its path is no date (`INVALID_AGGREGATE_ARGUMENT`) or lies under a collection
@@ -549,15 +553,89 @@ What a contract 2 caller reads differently:
 - **Health.** `status` is also `degraded` for an owner that answers and does not speak contract 2,
   for a declared target its owner does not publish, and for a model its provider calls degraded
   or cannot hand out.
+  The first health request of a process that carries the contract header waits for the first
+  measurement of the referenced services (once, for no longer than one measurement may take:
+  the probe's timeout per service and a quarter of a second to record it, and no longer than
+  the caller waits), so its `status` says what was
+  measured; `?shallow=true` and a request without the header are answered at once.
 - **Explain.** `executable` is `unknown`, with a `REMOTE_UNCHECKED` note and `cache.complete:
   false`, for a join whose owner no check asked and that the host cannot take to answer: its
   remote client keeps owner facts (`IRemoteOwnerInfo`) and has none of that owner, or the facts
   name another contract, or the host remembers the owner as not answering. A join into a target
   the host's check found its owner not to publish is noted `REFERENCE_TARGET_UNKNOWN` and is not
-  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for; it was
-  `timeout`), `unknown`, `engine` and `route` beside the ones it had.
+  `yes` either. An owner's `reason` has the values `budget` (a part nothing was sent for),
+  `unknown`, `engine` and `route` beside the ones it had.
 - **504 by the host's own deadline.** A request whose aggregate the database has said nothing of
   by its `maxTimeMS` and `Execution:ClientDeadlineMarginMs` is answered 504 `QUERY_TIMEOUT`.
+- **A duration stored as text.** `gt`, `gte`, `lt` and `lte` on it have one answer, by the
+  characters' bytes, alone and in a request that folds case elsewhere and so runs
+  under the collation. Explain notes such a comparison and a sort on such a member with
+  `DURATION_ORDERS_AS_TEXT`, a new note code a client that lists the codes adds.
+- **A body sent without a declared length** (`Transfer-Encoding: chunked`), and a body a
+  middleware of the host has buffered ahead of MVC (`EnableBuffering`), is answered like one
+  with a `Content-Length` that MVC reads from the wire: text that is no Unicode text names its
+  place, and in a batch refuses its entry while the others run. A buffer is read from its start
+  and left where it stood, holding the body as it was written. A byte order mark ahead of a body
+  is passed over. A request handed to the engine itself (`IQueryEngine`) is refused with the same
+  code and `reason`, without a place.
+- **`dateTrunc.timezone`** also takes an offset from UTC (`+02:00`) and the fixed zones of the
+  `Etc` area (`Etc/GMT-2` to `Etc/GMT+12`), on every host platform. A zone id the
+  host's zone table has and the database's does not is `INVALID_TIMEZONE` (400) too.
+- **`first`, `last` and `push` after a sort with ties.** A sort followed by a `group` that has
+  one of them is completed by the entity's key and the positions of the elements unwound before
+  it, so the rows that tie in it reach the group in one order: the values are the same on every
+  page and for every page size. A sort before a `group` of other aggregates is sent as written.
+- **`params` on every refusal of a stage and of an option.** `UNKNOWN_STAGE` carries `reason`
+  and `keys`; `UNKNOWN_STAGE_MEMBER` always `stage` and `reason` (and `member`, `members` where
+  they are known); `OPTION_NOT_APPLICABLE` always `option` and `reason`. A code that carried
+  `params` keeps what it carried.
+- **Duration operands.** A year in a duration counts as 365 days and a month as 30 (`P1Y`,
+  `P1M`), and a duration is kept to 100 nanoseconds, the precision a stored one has.
+- **An error inside `any`** names the member as the row has it, under its collection
+  (`tours.id`), in `path`, `params.path` and the message.
+- **Text that is no Unicode text.** Half of a surrogate pair written as an escape (`"\ud800"`)
+  or bytes that are no UTF-8, in a member name or a text anywhere in a body, is 400
+  `INVALID_REQUEST_BODY` with `params { reason: "encoding", path, in: "name" | "value" }` (a new
+  `reason`), on `query`, `batch` and `explain`; an entry of a batch is answered in its place.
+- **Arithmetic in an aggregate's argument.** A quotient by zero or by `null` is `null`, which an
+  aggregate skips, whatever rows the request meets. A quotient of whole numbers is a `double`
+  under `sum`, `min` and `max`, so they carry its fraction; under `avg` it counts as the whole
+  numbers it is taken from, and the mean is a `decimal`, as a mean over whole numbers is. A
+  duration its member stores as a number (ticks, or a `double` in the member's unit) is an
+  operand, as that number (`sum(divide(duration, 600000000))`). An operand that is no number
+  (text, a boolean, a duration stored as text, a guid, two dates in an `add`) and a `subtract`
+  or `divide` without exactly two operands are 400 `INVALID_AGGREGATE_ARGUMENT` with
+  `params { operator, kinds }`, in a run and in explain; a row that holds text where the kinds
+  allow a number is 422 with the same code.
+- **A NUL character in an operand.** A text operand that holds one (`"\u0000"`) is matched as
+  the character it is by every operator; a `regex` that holds one is 400 `INVALID_REGEX` (the
+  pattern writes it `\x00`).
+- **Text that ends in a line feed.** `endsWith`, and an exact `eq`, `neq`, `in` or `nin` in a
+  request that folds case elsewhere, read the end of the text as the end of the value: `"1"` is
+  not found at the end of `"1\n"`, and the exact comparison answers what it answers alone.
+- **`startsWith` through a collection.** A folding `startsWith` on a path through a collection
+  that is not unwound (`items.text`, a collection of text) answers the rows in which one element
+  starts with the text, in a `match`, the request's `filter`, a join's `filter` and under `not`;
+  it reads every candidate row there, as `contains` does.
+- **Under the alias of an unwind** a row shows the members its projection names there. A
+  reference a join read from the element (`item.billingLineId` beside a projected `item.id`) is
+  not in the row: what a join reads is read, and the projection decides what is shown.
+- **A walk by cursor.** The pages are the order of the sort, split, also where rows hold a NaN
+  or a value of another stored type than the member declares (a decimal as text beside the
+  migrated rows, an addon value of any type, text under an `int`, a number under a `string`):
+  each row is served once. A cursor issued before is continued as it was issued.
+  The page after a cursor is sent as the alternatives of its position, each within the
+  organisation's scope and the conditions beside it, so with an index on the scope and the sort
+  it reads the keys of its rows, also where many rows share the position's leading value.
+- **Joins on a text key.** In a request that folds case, a join over a reference stored as text
+  joins a row whose reference is null, not stored or no text as it joins it in a request that
+  folds nothing; the rows beside it join byte for byte.
+- **Joins over a member that is not the target's key.** A reference that is null or not stored
+  resolves to no record (`reference_null`), and a record that holds nothing in the member it is
+  referenced by has no children in a `lookup`, also where records and references both hold
+  nothing there. A record that holds nothing in that member is joined by no reference, whatever
+  a row stores under it (an array with a null element, an empty array), and an element of an
+  `elements` join whose reference is null names no record.
 - **The API description.** The schemas of the OxQL routes in a document generated from the API
   explorer are the documentation models (`OxQLQueryBody`, `OxQLQueryAnswer`, `OxQLBatchBody`,
   `OxQLBatchAnswer`, `OxQLExplainBody`, `OxQLExplainAnswer`, `OxQLHealthAnswer`, `OxQLError`) in
@@ -566,6 +644,8 @@ What a contract 2 caller reads differently:
 
 What a caller without the contract header reads differently:
 
+- On either path: a body with a member name or a text that is no Unicode text (half of a
+  surrogate pair, bytes that are no UTF-8) is the host's 400 in its problem form.
 - Where the legacy pipeline answers it (the default): 504 `QUERY_TIMEOUT`, in the words that
   pipeline has for its limit's expiry, when the database has said nothing by
   `Compat:Legacy:MaxTimeMs` and `Execution:ClientDeadlineMarginMs`. Nothing else: every status,
@@ -642,6 +722,21 @@ What a caller without the contract header reads differently:
   The deadline runs on the host's clock from when the aggregate is handed to the driver, so the
   selection of a server, the wait for a pooled connection and the transfer of the rows are in it;
   a margin below 0 switches it off, and the database's own limit holds either way.
+- **Health and explain name a missing query route.** A remote entry of health has the `reason`
+  values `route` (the owner answers and has no internal query route under the API version it is
+  called with; `RemoteServiceState.Route`) and `pending` (nothing measured yet;
+  `RemoteServiceState.Pending`, on the entries that carried no `reason`); an explain's owner
+  entry says `route` for an owner whose explain route answered 404.
+- **`RESOLVE_TIMEOUT` and `RESOLVE_UNREACHABLE` beside kept records.** Where some records of the
+  page were kept from an earlier answer, the message says for how many keys the alias is null, and
+  `params` carries `keys` and `cached`.
+- **Timing.** `timing.resolve.localCalls` counts the owner queries a host ran in process for join
+  targets of its own (`calls` counts those to other services), and `Server-Timing` says
+  `… / n local` beside them.
+- **The strict start.** The exception that stops a host whose declared remote references have no
+  configured service says how many there are, that the log lines before it name them, and the
+  switch; the services and the keys to set are in those lines (`OxQL.Startup`), once.
+  `RemoteReferenceCheck.Refusal` is its text.
 - **Options.** `Cache:OwnerUnavailableTtlSeconds` (5), `Startup:StrictRemoteReferences` (unset),
   `OxQLEndpointOptions.StrictRemoteReferences`, `Execution:ClientDeadlineMarginMs` (5 000).
 - **Model build.** The finding `reference-target-unprefixed`: a target id without a service prefix
@@ -660,7 +755,10 @@ What a caller without the contract header reads differently:
   `CursorCodec.Decode(cursor, fingerprint, out reason)` with `CursorCodec.Malformed`, `Signature`
   and `OtherQuery`; `Refusal.Timeout(message, maxTimeMs)` and `Refusal.RequestTooLarge(bytes, max, limit)`;
   `RemoteReferenceCheck.DescribeByService` and `IsStrict(endpoint, configured, environment, ci)`;
-  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`.
+  `StartupOptions`; `Notes.ReferenceTargetUnknown`; `BuildCodes.ReferenceTargetUnprefixed`;
+  `KeysetField.SeveralTypes` and `KeysetField.NeverNull`,
+  `KeysetPredicate.After(legs, inclusive, everyType)` and
+  `KeysetPredicate.LeadingRange(legs, everyType)`.
   `AddOxQLCore` registers `OwnerAvailability` and `RemoteReferenceValidator` as singletons.
 
 ### Turning the legacy pipeline off

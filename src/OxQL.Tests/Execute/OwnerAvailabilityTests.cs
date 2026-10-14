@@ -680,6 +680,33 @@ public class OwnerAvailabilityTests
     }
 
     [Fact]
+    public async Task Health_names_the_route_for_an_owner_whose_health_is_not_found_and_for_one_a_join_found_without_its_query_route()
+    {
+        // The owner's host answers 404 to the health of the API version it is called with.
+        var (_, notFound) = await ProbedAsync((_, _) => Task.FromException<bool>(new HttpRequestException("Not found.", null, System.Net.HttpStatusCode.NotFound)));
+
+        notFound.Should().OnlyContain(state => state.Reachable == false && state.Usable == false && state.Reason == RemoteServiceState.Route);
+
+        // Its health answers, and a join found the query route missing: the same word, while the host remembers it.
+        var (_, remembered) = await ProbedAsync((_, _) => Task.FromResult(true), before: record => record.Failed("staff", OwnerAvailability.Route, 404));
+
+        remembered.Single(state => state.Service == "staff").Should().Match<RemoteServiceState>(state => state.Reachable == true && state.Usable == false && state.Reason == RemoteServiceState.Route && state.Degrades);
+        remembered.Where(state => state.Service != "staff").Should().OnlyContain(state => state.Reason == null);
+    }
+
+    [Fact]
+    public void Health_says_of_a_service_nothing_was_measured_of_that_it_is_pending()
+    {
+        var options = BindHost.Options();
+        var gate = new TaskCompletionSource<bool>();
+        var probe = new RemoteHealthProbe(options);
+        var states = probe.State(model.Value, new ProbedClient((_, _) => gate.Task));
+
+        states.Should().NotBeEmpty().And.OnlyContain(state => state.Configured && state.Reachable == null && state.Usable == null && state.Reason == RemoteServiceState.Pending && !state.Degrades);
+        gate.SetResult(true);
+    }
+
+    [Fact]
     public async Task A_health_probe_that_answers_ends_what_is_remembered_of_the_owner()
     {
         var (availability, _) = await ProbedAsync((_, _) => Task.FromResult(true), before: record => record.Failed("staff", OwnerAvailability.Unreachable));

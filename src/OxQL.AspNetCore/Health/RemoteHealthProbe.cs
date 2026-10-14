@@ -28,6 +28,17 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
     /// <summary><see cref="Reason"/> of a service that answered and does not speak this engine's contract.</summary>
     public const string Engine = "engine";
 
+    /// <summary>
+    /// The <see cref="Reason"/> of an owner that does not answer on the internal query route under the
+    /// API version this host calls it with: its health answered 404, or a join of this host found the
+    /// route missing while its health answers. A join into it says the same word
+    /// (<c>RESOLVE_UNREACHABLE</c>, <c>params.reason: "route"</c>).
+    /// </summary>
+    public const string Route = "route";
+
+    /// <summary>The <see cref="Reason"/> of a configured service nothing was measured of yet: its entry says neither that it answers nor that it does not.</summary>
+    public const string Pending = "pending";
+
     /// <summary>The contract the owner's engine speaks, as its health named it; null when it named none or nothing is known.</summary>
     public int? Contract { get; init; }
 
@@ -63,6 +74,13 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
 
     /// <summary>The state of a service this host has no <c>InternalHosts</c> entry for.</summary>
     public static RemoteServiceState Unconfigured(string service) => new(service, false, null) { Usable = false, Reason = NotConfigured };
+
+    /// <summary>A configured service before its first measurement.</summary>
+    public static RemoteServiceState Unmeasured(string service) => new(service, true, null) { Reason = Pending };
+
+    /// <summary>A service whose internal query route does not answer; <paramref name="reachable"/> is what its health said.</summary>
+    public static RemoteServiceState WithoutRoute(string service, bool reachable, RemoteOwnerInfo? owner) =>
+        new(service, true, reachable) { Contract = owner?.Contract, EngineVersion = owner?.EngineVersion, Usable = false, Reason = Route };
 
     /// <summary>
     /// The state of a configured service after one measurement: whether its health answered, and
@@ -101,6 +119,12 @@ public sealed record RemoteServiceState(string Service, bool Configured, bool? R
 /// next caller start it again. Before the first measurement has finished a configured service
 /// is reported with an unknown reachability, which does not degrade the status.
 /// </para>
+/// <para>
+/// The first measurement of a process is the one exception to not waiting, and only for a caller
+/// that asks so (<see cref="FirstStateAsync"/>): it is awaited once, by every caller that arrives
+/// while it runs together, for no longer than a measurement may take. A status read after a start
+/// therefore says what was measured, and not that nothing was yet.
+/// </para>
 /// </summary>
 public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthProbe>? logger = null, TimeProvider? time = null)
 {
@@ -110,6 +134,7 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
     private IReadOnlyList<RemoteServiceState>? measured;
     private long? takenAt;
     private Task? refresh;
+    private Task? first;
 
     /// <summary>How long one service may take to answer before it counts as not reachable.</summary>
     public TimeSpan ProbeTimeout { get; init; } = TimeSpan.FromSeconds(2);
@@ -157,8 +182,36 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             if (due && refresh is null)
                 refresh = Task.Run(() => RefreshAsync(services, client));
 
-            return measured ?? services.Select(service => client.IsConfigured(service) ? new RemoteServiceState(service, true, null) : RemoteServiceState.Unconfigured(service)).ToList();
+            return measured ?? services.Select(service => client.IsConfigured(service) ? RemoteServiceState.Unmeasured(service) : RemoteServiceState.Unconfigured(service)).ToList();
         }
+    }
+
+    /// <summary>What a caller waits beyond <see cref="ProbeTimeout"/> for the first measurement to be put down once every service answered or ran out of its time.</summary>
+    private static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// <see cref="State"/>, after the first measurement of this process where a configured service
+    /// has none yet: that one measurement is awaited, by all callers of the moment together, for at
+    /// most <see cref="ProbeTimeout"/> and a moment to put it down. Once that wait is over, measured
+    /// or not, no call waits again. A caller that gives up (<paramref name="cancellationToken"/>) is
+    /// let go at once; the measurement goes on for the others.
+    /// </summary>
+    public async Task<IReadOnlyList<RemoteServiceState>> FirstStateAsync(EntityModel? model, IRemoteQueryClient client, CancellationToken cancellationToken = default)
+    {
+        var state = State(model, client);
+
+        if (!state.Any(service => service.Reason == RemoteServiceState.Pending))
+            return state;
+
+        Task wait;
+
+        lock (gate)
+            wait = first ??= refresh is { } running ? Task.WhenAny(running, Task.Delay(ProbeTimeout + Settle, CancellationToken.None)) : Task.CompletedTask;
+
+        await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        lock (gate)
+            return measured ?? state;
     }
 
     private async Task RefreshAsync(IReadOnlyList<string> services, IRemoteQueryClient client)
@@ -203,8 +256,22 @@ public sealed class RemoteHealthProbe(OxQLOptions options, ILogger<RemoteHealthP
             if (reachable)
                 Availability?.Succeeded(service, keepRoute: true);
 
+            var owner = reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null;
+
+            // A join that found the owner's query route missing said so; health says the same of the owner
+            // until a call finds the route, whether or not its health answers.
+            if (Availability?.OutageOf(service) is { Reason: OwnerAvailability.Route })
+                return RemoteServiceState.WithoutRoute(service, reachable, owner);
+
             // The client keeps what the owner's health said of it where it measures reachability.
-            return RemoteServiceState.Measured(service, reachable, reachable ? (client as IRemoteOwnerInfo)?.OwnerOf(service) : null);
+            return RemoteServiceState.Measured(service, reachable, owner);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The owner's host answered and has no such route: the API version it is called with, not its reach.
+            logger.LogDebug(exception, "OxQL health probe of {Service} found no route", service);
+
+            return RemoteServiceState.WithoutRoute(service, reachable: false, null);
         }
         catch (Exception exception)
         {

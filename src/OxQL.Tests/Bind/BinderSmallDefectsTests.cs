@@ -39,4 +39,24 @@ public class BinderSmallDefectsTests
 
         error.Message.Should().EndWith(Binder.Contract1Hint);
     }
+
+    /// <summary>A shape keeps what it answered for a bounded number of paths and answers the others the same.</summary>
+    [Fact]
+    public async Task What_a_shape_shows_is_answered_the_same_past_the_paths_it_keeps()
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, "probe.order", """[{ "project": { "number": 1 } }]""");
+        var shape = bound.FinalShape;
+
+        for (var round = 0; round < 2; round++)
+        {
+            for (var name = 0; name < Shape.MaxKeptVisibility * 2; name++)
+                shape.IsVisible("number.m" + name).Should().BeTrue();
+
+            for (var name = 0; name < Shape.MaxKeptVisibility * 2; name++)
+                shape.IsVisible("count.m" + name).Should().BeFalse();
+
+            shape.IsVisible("number").Should().BeTrue();
+            shape.IsVisible("count").Should().BeFalse();
+        }
+    }
 }

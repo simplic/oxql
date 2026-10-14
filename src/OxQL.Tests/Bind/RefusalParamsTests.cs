@@ -79,6 +79,39 @@ public class RefusalParamsTests
         }
     }
 
+    /// <summary>A year in a duration counts as 365 days and a month as 30, under either contract.</summary>
+    [Theory]
+    [InlineData("P1Y", "365.00:00:00")]
+    [InlineData("P1M", "30.00:00:00")]
+    [InlineData("-P2Y3M4DT1H", "-824.01:00:00")]
+    [InlineData("P1MT1M", "30.00:01:00")]
+    [InlineData("P1Y1D", "366.00:00:00")]
+    public async Task A_year_of_a_duration_is_365_days_and_a_month_30(string duration, string stored)
+    {
+        foreach (var contract in new[] { 2, 1 })
+        {
+            var bound = await BindHost.BoundAsync(BindHost.Probe, Order, Match($$"""{ "span": { "eq": "{{duration}}" } }"""), BindHost.Context(contract: contract));
+            var leaf = bound.Stages.OfType<BoundStage.Match>().Single().Condition.Should().BeOfType<BoundCondition.Leaf>().Subject;
+
+            leaf.Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.AsString.Should().Be(stored, $"contract {contract}");
+        }
+    }
+
+    /// <summary>A duration is kept to 100 nanoseconds.</summary>
+    [Theory]
+    [InlineData("P1D", "1.00:00:00")]
+    [InlineData("PT1M", "00:01:00")]
+    [InlineData("P1DT1M", "1.00:01:00")]
+    [InlineData("PT0.0000001S", "00:00:00.0000001")]
+    [InlineData("PT0.00000001S", "00:00:00")]
+    public async Task A_duration_of_days_and_smaller_is_kept_to_100_nanoseconds(string duration, string stored)
+    {
+        var bound = await BindHost.BoundAsync(BindHost.Probe, Order, Match($$"""{ "span": { "eq": "{{duration}}" } }"""));
+        var leaf = bound.Stages.OfType<BoundStage.Match>().Single().Condition.Should().BeOfType<BoundCondition.Leaf>().Subject;
+
+        leaf.Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.AsString.Should().Be(stored);
+    }
+
     [Theory]
     [InlineData("""{ "when": { "gte": "2026-02-30T00:00:00Z" } }""", "names no day of the calendar")]
     [InlineData("""{ "when": { "gte": "2026-06-01T25:00:00Z" } }""", "names no day of the calendar or no time of day")]
@@ -218,6 +251,85 @@ public class RefusalParamsTests
 
         // The group a caller did write is still named as written.
         (await Refused(Match("""{ "items": { "any": { "and": [] } } }"""), Codes.EmptyLogicalGroup)).Message.Should().Be("'and' has no conditions.");
+    }
+
+    /// <summary>An error of a condition inside <c>any</c> names the member as the row has it: under its collection.</summary>
+    [Fact]
+    public async Task An_error_inside_any_names_the_member_under_its_collection()
+    {
+        var unknown = await Refused(Match("""{ "not": { "items": { "any": { "nope": { "exists": true } } } } }"""), Codes.UnknownPath);
+
+        unknown.Path.Should().Be("items.nope");
+        unknown.Message.Should().Contain("'items.nope'").And.NotContain("'nope'");
+
+        var operand = await Refused(Match("""{ "items": { "any": { "and": [{ "quantity": { "eq": "many" } }] } } }"""), Codes.InvalidOperand);
+
+        operand.Path.Should().Be("items.quantity");
+        operand.Params!["path"].Should().Be("items.quantity");
+        operand.Message.Should().Contain("'items.quantity'");
+
+        var op = await Refused(Match("""{ "items": { "any": { "quantity": { "like": 1 } } } }"""), Codes.UnknownOperator);
+
+        op.Path.Should().Be("items.quantity");
+    }
+
+    /// <summary>An <c>any</c> inside another names a member under both collections, and what follows it in the outer one under the outer one.</summary>
+    [Fact]
+    public async Task An_error_beside_and_inside_an_any_in_an_any_names_the_member_under_the_collections_it_lies_in()
+    {
+        var after = await Refused(Match("""{ "items": { "any": { "and": [{ "stops": { "any": { "city": { "exists": true } } } }, { "nosuch": { "eq": 1 } }] } } }"""), Codes.UnknownPath);
+
+        after.Path.Should().Be("items.nosuch");
+        after.Message.Should().Contain("'items.nosuch'").And.NotContain("'nosuch'");
+
+        var operand = await Refused(Match("""{ "items": { "any": { "and": [{ "stops": { "any": { "city": { "exists": true } } } }, { "quantity": { "eq": "many" } }] } } }"""), Codes.InvalidOperand);
+
+        operand.Message.Should().StartWith("'items.quantity' expects");
+
+        var inside = await Refused(Match("""{ "items": { "any": { "stops": { "any": { "nosuch": { "exists": true } } } } } }"""), Codes.UnknownPath);
+
+        inside.Path.Should().Be("items.stops.nosuch");
+        inside.Message.Should().Contain("'items.stops.nosuch'").And.NotContain("'stops.nosuch'").And.NotContain("'nosuch'");
+    }
+
+    /// <summary>What an error inside <c>any</c> says beside the member is said as it was written: an operator, a variable or an operand spelled like the member is none.</summary>
+    [Fact]
+    public async Task An_error_inside_any_leaves_what_is_no_path_as_it_was_written()
+    {
+        var op = await Refused(Match("""{ "items": { "any": { "quantity": { "quantity": 1 } } } }"""), Codes.UnknownOperator);
+
+        op.Path.Should().Be("items.quantity");
+        op.Message.Should().Be("'quantity' is not an operator.");
+
+        var variable = await Refused(Match("""{ "items": { "any": { "quantity": { "eq": { "$var": "quantity" } } } } }"""), Codes.UnboundVariable);
+
+        variable.Path.Should().Be("items.quantity");
+        variable.Message.Should().Be("The variable 'quantity' is not bound.");
+
+        var applies = await Refused(Match("""{ "items": { "any": { "quantity": { "contains": "quantity" } } } }"""), Codes.InvalidOperand);
+
+        applies.Path.Should().Be("items.quantity");
+        applies.Message.Should().Be("'contains' does not apply to an int.");
+
+        var kind = await Refused(Match("""{ "items": { "any": { "quantity": { "eq": "quantity" } } } }"""), Codes.InvalidOperand);
+
+        kind.Message.Should().StartWith("'items.quantity' expects").And.NotContain("'quantity'");
+
+        var set = await Refused(Match("""{ "items": { "any": { "quantity": { "in": [1, "quantity"] } } } }"""), Codes.InvalidOperand);
+
+        set.Message.Should().StartWith("'items.quantity[1]' expects");
+    }
+
+    /// <summary>A path under an alias a stage wrote after an inclusion projection: the refusal says the rule, and which alias.</summary>
+    [Fact]
+    public async Task A_path_under_an_alias_written_after_an_inclusion_projection_says_the_rule()
+    {
+        var error = await Refused("""[{ "project": { "items": 1 } }, { "unwind": { "path": "items", "as": "item" } }, { "match": { "item.quantity": { "gt": 1 } } }]""", Codes.UnknownPath);
+
+        error.Path.Should().Be("item.quantity");
+        error.Message.Should().Contain("An inclusion projection also hides").And.Contain("project after the stage that writes 'item'");
+        error.Params!["reason"].Should().Be("projected");
+        error.Params["alias"].Should().Be("item");
     }
 
     [Fact]

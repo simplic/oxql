@@ -90,7 +90,8 @@ internal sealed class ExplainOwnerPool : IExplainShare
     /// <summary>
     /// What came of one <see cref="Group"/>: the answers in the order of its checks, or why there are none
     /// (<see cref="RemoteExplain.Unsupported"/>, <see cref="RemoteExplain.Unreachable"/>,
-    /// <see cref="RemoteExplain.Timeout"/>, or <see cref="NoCalls"/> / <see cref="TooManyChecks"/> when a
+    /// <see cref="RemoteExplain.Timeout"/>, <see cref="OxQL.Core.Engine.OwnerAvailability.Route"/> when the owner's host has no
+    /// such route, or <see cref="NoCalls"/> / <see cref="TooManyChecks"/> when a
     /// limit kept it from being sent), the time the call took, and whether this explain is the one the call is counted for.
     /// </summary>
     internal sealed record Sent(IReadOnlyList<JsonObject?>? Answers, string? Failure, long Ms, bool Paid);
@@ -286,6 +287,11 @@ internal sealed class ExplainOwnerPool : IExplainShare
         catch (OperationCanceledException)
         {
             return (null, RemoteExplain.Timeout, watch.ElapsedMilliseconds);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The owner's host answered and has no such route: the word a join into it says.
+            return (null, OxQL.Core.Engine.OwnerAvailability.Route, watch.ElapsedMilliseconds);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

@@ -15,7 +15,7 @@ namespace OxQL.Core.Binding;
 /// order with the shape folded through them, every path checked at its stage, every operand
 /// encoded for storage. Collects every error; never throws for a caller error.
 /// </summary>
-public sealed class Binder
+public sealed partial class Binder
 {
     /// <summary>
     /// The deepest nesting of <c>and</c>, <c>or</c>, <c>not</c> and <c>any</c> a condition may have
@@ -77,6 +77,22 @@ public sealed class Binder
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
+
+        try
+        {
+            return await BindRequestAsync(request, context, explain, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException exception) when (RequestText.IsFailedRead(exception) && RequestText.HoldsBroken(request))
+        {
+            // A name or a text of the request is no Unicode text, and a read of it as one failed: the
+            // caller's mistake, whether or not a host answered it from the body first. Anything else
+            // that fails while such a request is bound is a fault and is passed on as one.
+            return new BindOutcome.Failed(Refusal.Validation([RequestText.Refused()]));
+        }
+    }
+
+    private async ValueTask<BindOutcome> BindRequestAsync(QueryRequest request, RequestContext context, bool explain, CancellationToken cancellationToken)
+    {
 
         if (context.Organisation is null || context.Organisation == Guid.Empty)
             return new BindOutcome.Failed(Refusal.AccessDenied("The request carries no organisation."));
@@ -193,7 +209,7 @@ public sealed class Binder
     }
 
     /// <summary>One binding run: the stage loop and everything it accumulates.</summary>
-    private sealed class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
+    private sealed partial class Session(Binder binder, QueryRequest request, RequestContext context, EntityDef entity, List<QueryValidationError> errors, List<Diagnostic> diagnostics, CancellationToken cancellationToken)
     {
         private readonly OxQLOptions options = context.Options;
         private const string DefaultSelectKey = "$default";
@@ -352,7 +368,7 @@ public sealed class Binder
 
                 if (stage is null)
                 {
-                    errors.Add(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null));
+                    errors.Add(NoStage(Error(Codes.UnknownStage, "A stage is an object carrying exactly one stage member; this one is null.", index, null), "null", []));
                     traced.Add((index, null, before, shape));
                     continue;
                 }
@@ -361,7 +377,7 @@ public sealed class Binder
                 // is not, and no stage binds from nothing.
                 if (stage.Kind is { } kind && !HasMember(stage, kind) && (contract2 || kind != "values"))
                 {
-                    errors.Add(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null));
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, $"'{kind}' is null; a {kind} stage carries {(kind == "sort" ? "an array of sort entries" : "an object")}.", index, null), kind, [kind], "null"));
                     traced.Add((index, kind, before, shape));
                     continue;
                 }
@@ -397,9 +413,10 @@ public sealed class Binder
                     // Contract 1 knows no such stage: it is the unknown stage it always was there.
                     case "values" when contract2: BindValues(stage.Values!, index); break;
                     default:
-                        errors.Add(Error(Codes.UnknownStage, stage.Keys.Count == 0
+                        errors.Add(NoStage(Error(Codes.UnknownStage, stage.Keys.Count == 0
                             ? "A stage object must carry exactly one stage member."
-                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page{(contract2 ? ", values" : "")}.", index, null));
+                            : $"'{string.Join(", ", stage.Keys)}' is not a stage; a stage object carries exactly one of match, lookup, resolve, unwind, group, project, sort, page{(contract2 ? ", values" : "")}.", index, null),
+                            stage.Keys.Count switch { 0 => "empty", 1 => "unknown", _ => "severalKeys" }, stage.Keys));
                         break;
                 }
 
@@ -439,12 +456,27 @@ public sealed class Binder
             if (collated)
             {
                 foreach (var (stage, path) in exactSorts)
-                    errors.Add(Error(Codes.OptionNotApplicable, $"The sort on '{path}' asks for the exact order, but another comparison, sort or group key of the request folds case; a request orders exactly only when every string comparison in it is caseSensitive.", stage, path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"The sort on '{path}' asks for the exact order, but another comparison, sort or group key of the request folds case; a request orders exactly only when every string comparison in it is caseSensitive.", stage, path), "caseSensitive", "folds"));
 
                 // Inside a collated aggregate an exact comparison is a pattern, with the pattern's limit.
                 foreach (var (stage, path, op) in exactTexts)
                     errors.Add(Operand(TooLongToMatch(op, path), stage, path, op, "length"));
             }
+
+            // Every member a stage does not have says its stage and why, whichever place of the binder
+            // refused it: one that says no more is a member the stage does not know.
+            if (contract2)
+                for (var position = 0; position < errors.Count; position++)
+                    if (errors[position] is { Code: Codes.UnknownStageMember, Stage: { } at } incomplete && at < pipeline.Count
+                        && (incomplete.Params is null || !incomplete.Params.ContainsKey("stage") || !incomplete.Params.ContainsKey("reason")))
+                        errors[position] = incomplete with
+                        {
+                            Params = new Dictionary<string, object?>(incomplete.Params ?? new Dictionary<string, object?>())
+                            {
+                                ["stage"] = incomplete.Params?.GetValueOrDefault("stage") ?? pipeline[at]?.Kind,
+                                ["reason"] = incomplete.Params?.GetValueOrDefault("reason") ?? "unknown",
+                            },
+                        };
 
             LabelFilterFindings();
 
@@ -908,7 +940,15 @@ public sealed class Binder
         /// (<see cref="PathReasons"/>). A contract 1 answer is frozen: it carries the code and the message as before.
         /// </summary>
         private QueryValidationError Unresolved(PathResolution resolution, int? stage, string? path) =>
-            new() { Code = resolution.Code!, Message = resolution.Message!, Stage = stage, Path = path, Params = contract2 ? resolution.Params : null };
+            new() { Code = resolution.Code!, Message = NamedIn(resolution.Message!, path), Stage = stage, Path = path, Params = contract2 ? resolution.Params : null };
+
+        /// <summary>
+        /// What a shape says of a path that does not resolve, with the path named under its collection
+        /// inside <c>any</c>: the shape of an element knows the member by its own name, and its words
+        /// name nothing the caller wrote but paths.
+        /// </summary>
+        private string NamedIn(string message, string? path) =>
+            under is null || path is null ? message : message.Replace($"'{path}'", $"'{Named(path)}'", StringComparison.Ordinal);
 
         /// <summary>The contract 1 hint when <paramref name="contract2Construct"/> is what a contract 1 request was refused for; empty otherwise.</summary>
         private string Hint(bool contract2Construct) => !contract2 && contract2Construct ? Contract1Hint : "";
@@ -1653,7 +1693,7 @@ public sealed class Binder
             if (path.IsRemote && !path.Filterable)
             {
                 errors.Add(Error(Codes.ResolveNotFilterable,
-                    $"'{condition.Path}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
+                    $"'{Named(condition.Path)}' is the alias of a remote resolve; filter on one of its members (a semi-join on the owner), not on the alias itself.", index, condition.Path));
                 return null;
             }
 
@@ -1669,8 +1709,8 @@ public sealed class Binder
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
                 errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
-                    ? $"'{condition.Path}' is unknown to the model; it can be projected, not filtered."
-                    : $"'{condition.Path}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
+                    ? $"'{Named(condition.Path)}' is unknown to the model; it can be projected, not filtered."
+                    : $"'{Named(condition.Path)}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
                 return null;
             }
 
@@ -1684,7 +1724,7 @@ public sealed class Binder
             // operators pass the kind gate above and have nothing to match against.
             if (!path.IsRemote && OperandCoercer.NeedsText(op) && OperandCoercer.IsCharRepresented(path))
             {
-                errors.Add(Operand($"'{condition.Path}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path, op, "operator", path.LeafKind));
+                errors.Add(Operand($"'{Named(condition.Path)}' holds a single character stored as its code point; '{op}' needs text. Compare it with eq, neq, in or nin.", index, condition.Path, op, "operator", path.LeafKind));
                 return null;
             }
 
@@ -1736,11 +1776,13 @@ public sealed class Binder
 
             // A folding contains or endsWith is a pattern that folds accents too: each letter
             // is a class of its equivalents, and it is that pattern the server has to compile.
-            var foldsAccents = contract2 && ignoreCase && op is "contains" or "endsWith" && AccentFold.Applies(options.Representation.Collation);
+            // So is a folding startsWith through a collection, where the prefix cannot be a range.
+            var throughCollection = path.CollectionAncestors > 0 || path.Kind == Kind.Array;
+            var foldsAccents = contract2 && ignoreCase && (op is "contains" or "endsWith" || (op == "startsWith" && throughCollection)) && AccentFold.Applies(options.Representation.Collation);
 
             if (isPattern && (foldsAccents ? !TextsOf(operand).All(text => RegexGuard.PatternFits(AccentFold.Pattern(text, options.Representation.Collation))) : !TextFits(operand)))
             {
-                errors.Add(Operand(TooLongToMatch(op, condition.Path), index, condition.Path, op, "length"));
+                errors.Add(Operand(TooLongToMatch(op, Named(condition.Path)!), index, condition.Path, op, "length"));
                 return null;
             }
 
@@ -1748,7 +1790,7 @@ public sealed class Binder
                 exactTexts.Add((index, condition.Path, op));
 
             if (op == "regex" && operand is BoundOperand.Single { Value: BsonString pattern } && !RegexGuard.IsAnchored(pattern.Value))
-                diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{condition.Path}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
+                diagnostics.Add(new Diagnostic { Code = Codes.RegexUnanchored, Message = $"The pattern on '{Named(condition.Path)}' is not anchored; it scans every value of the member.", Stage = index, Path = condition.Path });
 
             return new BoundCondition.Leaf(path, op, operand, ignoreCase, IsSemiJoin: false);
         }
@@ -1763,13 +1805,13 @@ public sealed class Binder
         {
             if (op is not ("eq" or "neq" or "in" or "nin"))
             {
-                errors.Add(Operand($"'{op}' does not apply to an outcome; compare '{condition.Path}' with eq, neq, in or nin.", index, condition.Path, op, "operator"));
+                errors.Add(Operand($"'{op}' does not apply to an outcome; compare '{Named(condition.Path)}' with eq, neq, in or nin.", index, condition.Path, op, "operator"));
                 return null;
             }
 
             if (condition.Options is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable, $"'{condition.Path}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{Named(condition.Path)}' is an outcome, which compares exactly; no option applies to it.", index, condition.Path), "options", "outcome"));
                 return null;
             }
 
@@ -1787,7 +1829,7 @@ public sealed class Binder
 
             if (named is null)
             {
-                errors.Add(Error(Codes.InvalidOperand, $"'{condition.Path}' is an outcome; compare it with one of {string.Join(", ", Notes.Outcomes)}.", index, condition.Path));
+                errors.Add(Error(Codes.InvalidOperand, $"'{Named(condition.Path)}' is an outcome; compare it with one of {string.Join(", ", Notes.Outcomes)}.", index, condition.Path));
                 return null;
             }
 
@@ -1823,7 +1865,7 @@ public sealed class Binder
                 errors.Add(new QueryValidationError
                 {
                     Code = Codes.InvalidOperand,
-                    Message = $"'{op}' does not apply to '{condition.Path}', whose value follows from the variant its object is stored as; compare it with eq, neq, in or nin.",
+                    Message = $"'{op}' does not apply to '{Named(condition.Path)}', whose value follows from the variant its object is stored as; compare it with eq, neq, in or nin.",
                     Stage = index,
                     Path = condition.Path,
                     Params = new Dictionary<string, object?> { ["reason"] = PathReasons.Derived, ["can"] = new List<string> { "eq", "neq", "in", "nin" } },
@@ -1847,7 +1889,7 @@ public sealed class Binder
             if (texts is null)
             {
                 errors.Add(Error(Codes.InvalidOperand,
-                    $"'{condition.Path}' holds one of {string.Join(", ", derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => $"'{value}'"))} wherever its object is; compare it with one of them. Whether the object is there is a test of the object ('exists').",
+                    $"'{Named(condition.Path)}' holds one of {string.Join(", ", derived.Values.Values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(value => $"'{value}'"))} wherever its object is; compare it with one of them. Whether the object is there is a test of the object ('exists').",
                     index, condition.Path));
                 return null;
             }
@@ -1910,7 +1952,7 @@ public sealed class Binder
             if (throughCollection && (inherited.Count > 0 || (includeBase && holding.CollectionAncestors > 0)))
             {
                 errors.Add(Error(Codes.InvalidOperand,
-                    $"'{condition.Path}' lies under a collection that is not unwound, and which value an element holds cannot be told from its stored variant without looking at one element at a time; test the elements with 'any' on the collection, or unwind it first.",
+                    $"'{Named(condition.Path)}' lies under a collection that is not unwound, and which value an element holds cannot be told from its stored variant without looking at one element at a time; test the elements with 'any' on the collection, or unwind it first.",
                     index, condition.Path));
                 return null;
             }
@@ -1937,19 +1979,19 @@ public sealed class Binder
             {
                 var what = type is null ? Kinds.WithArticle(path.LeafKind) : "an object of one type only";
 
-                errors.Add(Operand($"'is' applies to a member that holds one of several variants; '{condition.Path}' is {what}.", index, condition.Path, "is", "operator", path.LeafKind));
+                errors.Add(Operand($"'is' applies to a member that holds one of several variants; '{Named(condition.Path)}' is {what}.", index, condition.Path, "is", "operator", path.LeafKind));
                 return null;
             }
 
             if (path.CollectionAncestors > 0)
             {
-                errors.Add(Operand($"'{condition.Path}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path, "is", "collection"));
+                errors.Add(Operand($"'{Named(condition.Path)}' lies under a collection that is not unwound; test its elements with 'any' on the collection, or unwind it first.", index, condition.Path, "is", "collection"));
                 return null;
             }
 
             if (condition.Options is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable, "'is' takes no options.", index, condition.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable, "'is' takes no options.", index, condition.Path), "options", "operator"));
                 return null;
             }
 
@@ -1957,6 +1999,36 @@ public sealed class Binder
 
             return operand is null ? null : new BoundCondition.Leaf(path, "is", operand, IgnoreCase: false, IsSemiJoin: false);
         }
+
+        /// <summary>A stage object that is no stage, with what a client renders it from (contract 2): why, and the keys it carries.</summary>
+        private QueryValidationError NoStage(QueryValidationError error, string reason, IReadOnlyList<string> keys) => !contract2 ? error : error with
+        {
+            Params = new Dictionary<string, object?> { ["reason"] = reason, ["keys"] = keys.ToList() },
+        };
+
+        /// <summary>
+        /// A member a stage does not have, or has in another form, with what a client renders it from
+        /// (contract 2): the stage, the members (<c>member</c> is the first) and why.
+        /// </summary>
+        private QueryValidationError NoMember(QueryValidationError error, string stage, IReadOnlyList<string> members, string reason) => !contract2 || error.Code != Codes.UnknownStageMember ? error : error with
+        {
+            Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>())
+            {
+                ["stage"] = stage,
+                ["member"] = members.Count > 0 ? members[0] : null,
+                ["members"] = members.ToList(),
+                ["reason"] = reason,
+            },
+        };
+
+        /// <summary>
+        /// A refusal of an option with what a client renders it from (contract 2): the option, and why
+        /// it does not apply.
+        /// </summary>
+        private QueryValidationError Option(QueryValidationError error, string option, string reason) => !contract2 ? error : error with
+        {
+            Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>()) { ["option"] = option, ["reason"] = reason },
+        };
 
         /// <summary>
         /// The case option of a condition, as the caller's choice: true to compare exactly,
@@ -1993,8 +2065,8 @@ public sealed class Binder
 
             var applies = path.IsRemote || OperandCoercer.IgnoreCaseApplies(op, path.LeafKind);
             var why = path.LeafKind == Kind.String && !path.IsRemote && OperandCoercer.FoldsByDefault(op, path)
-                ? $"'{op}' on '{condition.Path}' orders under the collation of the whole request and cannot opt out of it"
-                : $"'{condition.Path}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'";
+                ? $"'{op}' on '{Named(condition.Path)}' orders under the collation of the whole request and cannot opt out of it"
+                : $"'{Named(condition.Path)}' is a {Kinds.NameOf(path.LeafKind)} under '{op}'";
             bool? caseSensitive = null;
 
             if (conditionOptions.CaseSensitive is { } sensitive)
@@ -2002,7 +2074,7 @@ public sealed class Binder
                 if (!contract2)
                     errors.Add(Error(Codes.OptionNotApplicable, "'caseSensitive' is not an option under contract 1; it is a contract 2 option." + Contract1Hint, index, condition.Path));
                 else if (!applies)
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to eq, neq, in, nin, contains, startsWith and endsWith on string members; {why}.", index, condition.Path), "caseSensitive", "notApplicable"));
                 else
                     caseSensitive = sensitive;
             }
@@ -2127,10 +2199,10 @@ public sealed class Binder
             if (path.IsRemote || path.Path is null || path.Kind != Kind.Array || path.Shape?.Of?.Kind != Kind.Object || path.CollectionAncestors > 0)
             {
                 errors.Add(Error(Codes.AnyNotApplicable, path.Kind != Kind.Array
-                    ? $"'{condition.Path}' is not a collection here; 'any' applies to a collection of objects that is not unwound."
+                    ? $"'{Named(condition.Path)}' is not a collection here; 'any' applies to a collection of objects that is not unwound."
                     : path.CollectionAncestors > 0
-                        ? $"'{condition.Path}' lies under another collection; unwind the outer one first."
-                        : $"'{condition.Path}' is a collection of scalars; the plain form already matches some element.", index, condition.Path));
+                        ? $"'{Named(condition.Path)}' lies under another collection; unwind the outer one first."
+                        : $"'{Named(condition.Path)}' is a collection of scalars; the plain form already matches some element.", index, condition.Path));
                 return null;
             }
 
@@ -2142,10 +2214,57 @@ public sealed class Binder
             }
 
             // The inner paths are relative to one element; the ledger has them under the collection.
-            var inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
+            var errorsBefore = errors.Count;
+            // What the conditions of an element say of a member, they say of it as the row has it: under its
+            // collection, which inside another 'any' lies under that one's.
+            var outer = under;
+            var collection = Named(condition.Path);
+
+            (under, coercer.Under) = (collection, collection);
+
+            BoundCondition? inner;
+
+            try
+            {
+                inner = BindCondition(condition.Any!, at.ForElement(path), index, reading is { } row ? new Reading(row.Prefix + condition.Path + ".") : null);
+            }
+            finally
+            {
+                (under, coercer.Under) = (outer, outer);
+            }
+
+            // So has an error: it names the path as the row has it (the collection, then the element's member), in its path and its params.
+            for (var position = errorsBefore; position < errors.Count; position++)
+                errors[position] = UnderCollection(errors[position], condition.Path!);
 
             return inner is null ? null : new BoundCondition.Any(path, inner);
         }
+
+        /// <summary>
+        /// An error of a condition inside <c>any</c>, with the element's member named under its
+        /// collection in its path and its params. Its words are written with that name where they are
+        /// written (<see cref="Named"/>), so nothing else in them is touched: an operator, a variable or
+        /// an operand spelled like the member stays what the caller wrote.
+        /// </summary>
+        private static QueryValidationError UnderCollection(QueryValidationError error, string collection)
+        {
+            if (error.Path is not { Length: > 0 } relative || error.Code == Shape.PoisonedCode)
+                return error;
+
+            var full = collection + "." + relative;
+            var parameters = error.Params;
+
+            if (parameters is not null && parameters.TryGetValue("path", out var named) && named is string text && text == relative)
+                parameters = new Dictionary<string, object?>(parameters) { ["path"] = full };
+
+            return error with { Path = full, Params = parameters };
+        }
+
+        /// <summary>The collection whose elements the conditions being bound are of (inside <c>any</c>), as the row has it; null elsewhere.</summary>
+        private string? under;
+
+        /// <summary>A member as a message names it: under the collection whose element it is a member of, inside <c>any</c>.</summary>
+        private string? Named(string? path) => under is null || path is null ? path : under + "." + path;
 
         // ---- lookup --------------------------------------------------------------------------
 
@@ -2164,9 +2283,9 @@ public sealed class Binder
 
             if (unknown.Count > 0)
             {
-                errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
                     $"'{string.Join(", ", unknown)}' is not a member of lookup; a lookup carries {(contract2 ? LookupMembers : "from, path, as, select, filter, limit")}."
-                    + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null));
+                    + Hint(contract2Members.Any(member => member.Written) || lookup.Malformed.Count > 0), index, null), "lookup", unknown, "unknown"));
                 return;
             }
 
@@ -2179,12 +2298,12 @@ public sealed class Binder
             if (lookup.Malformed.Count > 0)
             {
                 foreach (var name in lookup.Malformed)
-                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, name switch
                     {
                         "first" => "A lookup's 'first' is true or false.",
                         "sort" => "A lookup's 'sort' is an array of sort entries: [{\"path\": \"asc\"}, …].",
                         _ => $"A lookup's '{name}' is a string.",
-                    }, index, null));
+                    }, index, null), "lookup", [name], "kind"));
                 return;
             }
 
@@ -2229,8 +2348,8 @@ public sealed class Binder
             // runs continues nothing.
             if (lookup.ForTarget is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'forTarget' applies to a stage continued under a remote alias with several targets; {(lookup.On is null ? "this lookup joins on the entity itself" : $"'{lookup.On}' is a row of this host")}.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'forTarget' applies to a stage continued under a remote alias with several targets; {(lookup.On is null ? "this lookup joins on the entity itself" : $"'{lookup.On}' is a row of this host")}.", index, null), "forTarget", "notContinued"));
                 return;
             }
 
@@ -2258,8 +2377,8 @@ public sealed class Binder
             // The owning row of an element: only a lookup of another service's item collection has one.
             if (lookup.ParentAs is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'parentAs' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'parentAs' applies to a lookup of another service's item collection ('entity#item'); '{child.Id}' is an entity of this host.", index, null), "parentAs", "notAnItem"));
                 return;
             }
 
@@ -2333,7 +2452,7 @@ public sealed class Binder
             {
                 // One child is what first takes; a limit would say something else.
                 if (lookup.Limit is not null)
-                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null), "limit", "withFirst"));
 
                 limit = 1;
             }
@@ -2470,8 +2589,8 @@ public sealed class Binder
             {
                 if (item is null)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable,
-                        $"'parentAs' names the row that owns an element; '{from}' is an entity, which is its own row. Look up '{entityId}#<collection>' to join elements.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable,
+                        $"'parentAs' names the row that owns an element; '{from}' is an entity, which is its own row. Look up '{entityId}#<collection>' to join elements.", index, null), "parentAs", "notAnItem"));
                     return;
                 }
 
@@ -2523,7 +2642,7 @@ public sealed class Binder
             if (first)
             {
                 if (lookup.Limit is not null)
-                    errors.Add(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, "'limit' does not apply to a lookup with 'first', which takes the first child or null.", index, null), "limit", "withFirst"));
 
                 limit = 1;
             }
@@ -2633,9 +2752,9 @@ public sealed class Binder
 
             if (unknown.Count > 0)
             {
-                errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
                     $"'{string.Join(", ", unknown)}' is not a member of resolve; a resolve carries {(contract2 ? ResolveMembers : "path, as, select, filter")}."
-                    + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null));
+                    + Hint(contract2Members.Any(member => member.Written) || resolve.Malformed.Count > 0), index, null), "resolve", unknown, "unknown"));
                 return;
             }
 
@@ -2645,13 +2764,13 @@ public sealed class Binder
             if (resolve.Malformed.Count > 0)
             {
                 foreach (var name in resolve.Malformed)
-                    errors.Add(Error(Codes.UnknownStageMember, name switch
+                    errors.Add(NoMember(Error(Codes.UnknownStageMember, name switch
                     {
                         "elements" => "A resolve's 'elements' is \"first\" or \"all\".",
                         "onMissing" => "A resolve's 'onMissing' is \"null\", \"report\" or \"refuse\".",
                         "byTarget" => "A resolve's 'byTarget' is an object with one member per target: its path, or { \"path\": …, \"elements\": \"first\" | \"all\" }.",
                         _ => $"A resolve's '{name}' is a string.",
-                    }, index, null));
+                    }, index, null), "resolve", [name], "kind"));
                 return;
             }
 
@@ -2689,8 +2808,8 @@ public sealed class Binder
             // runs continues nothing.
             if (resolve.ForTarget is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    "'forTarget' applies to a stage continued under a remote alias with several targets; this resolve runs on this host.", index, null));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    "'forTarget' applies to a stage continued under a remote alias with several targets; this resolve runs on this host.", index, null), "forTarget", "notContinued"));
                 return;
             }
 
@@ -2759,8 +2878,8 @@ public sealed class Binder
             }
             else if (elements is not null)
             {
-                errors.Add(Error(Codes.OptionNotApplicable,
-                    $"'elements' applies to a path through a collection that is not unwound; '{resolve.Path}' holds one value per row.", index, resolve.Path));
+                errors.Add(Option(Error(Codes.OptionNotApplicable,
+                    $"'elements' applies to a path through a collection that is not unwound; '{resolve.Path}' holds one value per row.", index, resolve.Path), "elements", "oneValue"));
                 return;
             }
 
@@ -2969,8 +3088,8 @@ public sealed class Binder
             {
                 if (!targets.Contains(forTarget, StringComparer.Ordinal))
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable,
-                        $"'forTarget' names '{forTarget}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, root));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable,
+                        $"'forTarget' names '{forTarget}', which is not a target of '{anchor.Stage.As}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, root), "forTarget", "notATarget"));
                     return;
                 }
 
@@ -3317,7 +3436,7 @@ public sealed class Binder
 
                 if (node.Options?.Unknown is { Count: > 0 } unknown)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; the option is caseSensitive, written true or false.", index, node.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'{string.Join(", ", unknown)}' is not an option; the option is caseSensitive, written true or false.", index, node.Path), unknown[0], "unknown"));
                     refused = true;
                 }
 
@@ -4108,7 +4227,9 @@ public sealed class Binder
 
             var timezone = string.IsNullOrWhiteSpace(trunc.Timezone) ? "UTC" : trunc.Timezone.Trim();
 
-            if (timezone != "UTC")
+            // A fixed offset (+02:00, +0200, +02) and the fixed zones of the Etc area are no entries of a
+            // zone table: the database takes them as written, on every platform the same.
+            if (timezone != "UTC" && !FixedZone().IsMatch(timezone))
             {
                 // Mongo's $dateTrunc takes an IANA id, spelled exactly. The runtime's lookup is
                 // looser: it ignores case on some platforms and also finds a zone by its Windows
@@ -4117,7 +4238,7 @@ public sealed class Binder
                 // and nothing when there is no such mapping.
                 if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone) || !TryIanaId(zone, out var iana))
                 {
-                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not an IANA timezone.", index, trunc.Path));
+                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not a timezone: an IANA zone id (Europe/Berlin), or an offset from UTC (+02:00).", index, trunc.Path));
                     return null;
                 }
 
@@ -4139,6 +4260,14 @@ public sealed class Binder
 
             return new DateTrunc(path, trunc.Unit!, timezone, weekStart);
         }
+
+        /// <summary>
+        /// A zone without rules, which the database reads off its spelling: an offset from UTC up to
+        /// fourteen hours, or a fixed zone of the Etc area. That area has the zones from fourteen hours
+        /// east of UTC (<c>Etc/GMT-14</c>) to twelve west (<c>Etc/GMT+12</c>), and no other.
+        /// </summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^(?:[+-](?:0[0-9]|1[0-4])(?::?[0-5][0-9])?|Etc/GMT(?:-(?:[0-9]|1[0-4])|\+(?:[0-9]|1[0-2]))?|Etc/UTC|GMT)$")]
+        private static partial System.Text.RegularExpressions.Regex FixedZone();
 
         private static bool TryIanaId(TimeZoneInfo zone, [NotNullWhen(true)] out string? iana)
         {
@@ -4230,6 +4359,8 @@ public sealed class Binder
                 }
 
                 var operands = new List<BoundExpression>();
+                var kinds = new List<Kind>();
+                var taken = new List<Kind>();
                 var numeric = Kind.Long;
 
                 foreach (var operand in expression.Operands ?? [])
@@ -4239,10 +4370,15 @@ public sealed class Binder
                     if (bound is null)
                         return null;
 
-                    if (operandKind is Kind.Double or Kind.Decimal)
-                        numeric = operandKind == Kind.Decimal || numeric == Kind.Decimal ? Kind.Decimal : Kind.Double;
+                    // A duration its member stores as a number takes part as that number (contract 2; a contract 1 request is bound by the declared kinds alone).
+                    var counted = contract2 ? StoredNumber(bound, operandKind) : operandKind;
+
+                    if (counted is Kind.Double or Kind.Decimal)
+                        numeric = counted == Kind.Decimal || numeric == Kind.Decimal ? Kind.Decimal : Kind.Double;
 
                     operands.Add(bound);
+                    kinds.Add(operandKind);
+                    taken.Add(counted);
                 }
 
                 if (operands.Count == 0)
@@ -4251,7 +4387,33 @@ public sealed class Binder
                     return null;
                 }
 
-                kind = expression.Operator == "coalesce" ? Kind.Unknown : numeric;
+                if (expression.Operator == "coalesce")
+                    return new BoundExpression.Arithmetic(expression.Operator!, operands);
+
+                // Contract 1 is frozen: its arithmetic binds over any operands, a long unless one is a double or a
+                // decimal. What its rows hold is said when it runs.
+                if (!contract2)
+                {
+                    kind = numeric;
+                    return new BoundExpression.Arithmetic(expression.Operator!, operands);
+                }
+
+                if (!ArithmeticApplies(expression.Operator!, taken, out var result, out var why))
+                {
+                    errors.Add(new QueryValidationError
+                    {
+                        Code = Codes.InvalidAggregateArgument,
+                        Message = $"'{expression.Operator}' {why}.",
+                        Stage = index,
+                        Params = contract2 ? new Dictionary<string, object?> { ["operator"] = expression.Operator, ["kinds"] = kinds.Select(Kinds.NameOf).ToList() } : null,
+                    });
+                    return null;
+                }
+
+                // A quotient of whole numbers is no whole number: it is a double, a decimal with a decimal operand.
+                // Under a mean it counts as the whole numbers it is taken from: the mean is taken in decimal, as
+                // a mean over whole numbers is.
+                kind = result ?? (expression.Operator == "divide" && numeric == Kind.Long && function != "avg" ? Kind.Double : numeric);
                 return new BoundExpression.Arithmetic(expression.Operator!, operands);
             }
 
@@ -4259,6 +4421,65 @@ public sealed class Binder
 
             kind = KindOf(constant);
             return new BoundExpression.Literal(constant);
+        }
+
+        /// <summary>
+        /// The kind an operand takes part in arithmetic as: a duration whose member stores it as a number
+        /// (ticks as a 64-bit integer, or a double in the member's unit) is that number; every other
+        /// operand is of its own kind, so a duration stored as text is no number.
+        /// </summary>
+        private static Kind StoredNumber(BoundExpression operand, Kind kind) =>
+            kind == Kind.TimeSpan && operand is BoundExpression.Path { Resolved: { Addon: null, Leaf.Representation.BsonType: var stored } }
+                ? stored switch { BsonType.Int64 => Kind.Long, BsonType.Double => Kind.Double, _ => kind }
+                : kind;
+
+        /// <summary>
+        /// Whether an arithmetic operator takes operands of these kinds, and the kind of what it
+        /// answers where that is no number. Arithmetic is over numbers; a member of a kind the model
+        /// does not know, a null and what a <c>coalesce</c> answers are taken as they come (a row that
+        /// holds something else there is refused when the request runs). Dates take part in two forms:
+        /// one date in an <c>add</c> or as what a <c>subtract</c> takes from (a date moved by
+        /// milliseconds), and one date less another (the milliseconds between them).
+        /// </summary>
+        private static bool ArithmeticApplies(string op, IReadOnlyList<Kind> kinds, out Kind? result, [NotNullWhen(false)] out string? why)
+        {
+            static bool Number(Kind kind) => kind is Kind.Int or Kind.Long or Kind.Double or Kind.Decimal or Kind.Enum or Kind.Unknown;
+            static bool Date(Kind kind) => kind is Kind.Date or Kind.DateTime;
+
+            result = null;
+            why = null;
+
+            if (op is "subtract" or "divide" && kinds.Count != 2)
+            {
+                why = $"takes two operands, not {kinds.Count}";
+                return false;
+            }
+
+            if (op == "subtract" && Date(kinds[0]) && (Date(kinds[1]) || Number(kinds[1])))
+            {
+                result = Date(kinds[1]) ? Kind.Long : Kind.DateTime;
+                return true;
+            }
+
+            if (op == "add" && kinds.Count(Date) == 1 && kinds.All(kind => Date(kind) || Number(kind)))
+            {
+                result = Kind.DateTime;
+                return true;
+            }
+
+            if (kinds.FirstOrDefault(kind => !Number(kind), Kind.Unknown) is var other && other != Kind.Unknown)
+            {
+                why = op switch
+                {
+                    "add" when Date(other) => "takes numbers and at most one date; two dates do not add up",
+                    "subtract" when Date(other) => "takes a date from a date, or a number from a date or a number, not a date from a number",
+                    _ when other == Kind.TimeSpan => "takes numbers, not a duration its member stores as text",
+                    _ => $"takes numbers, not {Kinds.WithArticle(other)}",
+                };
+                return false;
+            }
+
+            return true;
         }
 
         private static Kind KindOf(BsonValue value) => value.BsonType switch
@@ -4498,7 +4719,7 @@ public sealed class Binder
 
                 if (field.CaseSensitive is not null && !text)
                 {
-                    errors.Add(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to a sort on a string member; '{field.Path}' is {Kinds.WithArticle(path.LeafKind)}.", index, field.Path));
+                    errors.Add(Option(Error(Codes.OptionNotApplicable, $"'caseSensitive' applies to a sort on a string member; '{field.Path}' is {Kinds.WithArticle(path.LeafKind)}.", index, field.Path), "caseSensitive", "notApplicable"));
                     continue;
                 }
 
@@ -4542,8 +4763,8 @@ public sealed class Binder
             if (unknown.Count == 0)
                 return true;
 
-            errors.Add(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
-                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.{hint}", index, null));
+            errors.Add(NoMember(Error(context.Contract == 1 ? Codes.LegacyStageUnsupported : Codes.UnknownStageMember,
+                $"'{string.Join(", ", unknown)}' is not a member of {stage}; {stage} carries {members}.{hint}", index, null), stage == "a group key" ? "group" : stage, unknown, "unknown"));
 
             return false;
         }
@@ -4916,7 +5137,7 @@ public sealed class Binder
                     Message = $"'search' keeps the values that start with a text; '{stage.Path}' is {Kinds.WithArticle(path.LeafKind)}, not text.",
                     Stage = index,
                     Path = stage.Path,
-                    Params = new Dictionary<string, object?> { ["option"] = "search", ["kind"] = Kinds.NameOf(path.LeafKind) },
+                    Params = new Dictionary<string, object?> { ["option"] = "search", ["reason"] = "notApplicable", ["kind"] = Kinds.NameOf(path.LeafKind) },
                 });
                 return;
             }

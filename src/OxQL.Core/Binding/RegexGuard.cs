@@ -23,8 +23,8 @@ public static class RegexGuard
     /// </summary>
     internal const int MaxPatternBytes = 32_764;
 
-    /// <summary>The two anchors the compiler may put around an escaped literal.</summary>
-    private const int AnchorBytes = 2;
+    /// <summary>The two anchors the compiler may put around an escaped literal: <c>^</c> and <c>\z</c>.</summary>
+    private const int AnchorBytes = 3;
 
     /// <summary>Checks a pattern; null when it passes, else the code and message.</summary>
     public static (string Code, string Message)? Check(string pattern, int maxLength)
@@ -34,6 +34,10 @@ public static class RegexGuard
 
         if (Encoding.UTF8.GetByteCount(pattern) > MaxPatternBytes)
             return (Codes.RegexTooLong, $"The pattern is longer than the {MaxPatternBytes} bytes the database compiles.");
+
+        // A pattern travels to the database as text that ends at its first NUL.
+        if (pattern.Contains('\0'))
+            return (Codes.InvalidRegex, "A pattern holds no NUL character; write the character as \\x00.");
 
         if (Backreference.IsMatch(pattern))
             return (Codes.InvalidRegex, "Backreferences are not allowed.");
@@ -69,6 +73,9 @@ public static class RegexGuard
     public static bool PatternFits(string pattern) =>
         Encoding.UTF8.GetByteCount(pattern) + AnchorBytes <= MaxPatternBytes;
 
-    /// <summary>Escapes a literal for use inside a pattern.</summary>
-    public static string Escape(string literal) => Regex.Escape(literal);
+    /// <summary>
+    /// Escapes a literal for use inside a pattern. A NUL is written as its escape: a pattern travels
+    /// to the database as text that ends at its first NUL, and the escape matches the character.
+    /// </summary>
+    public static string Escape(string literal) => Regex.Escape(literal).Replace("\0", @"\x00", StringComparison.Ordinal);
 }

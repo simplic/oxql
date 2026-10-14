@@ -64,7 +64,7 @@ public class CaseInsensitiveCompileTests
                 { Number: { $gt: 'a' } },
                 { Number: { $gte: 'a.b', $lt: 'a.b￿' } },
                 { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]/i },
-                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]$/i } ] } }
+                { Number: /[aÀ-Åà-åĀ-ąǍǎǞ-ǡǺǻȀ-ȃȦȧḀḁẠ-ặ]\z/i } ] } }
             """));
         compiled.CountStages![1].ShouldBeBson(compiled.PageStages[1], "the count reads the same filter");
         compiled.Collation.Should().NotBeNull();
@@ -88,13 +88,13 @@ public class CaseInsensitiveCompileTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
             { $match: { $and: [ { $or: [
-                { Number: /^a\.b$/ },
-                { Number: { $not: /^a$/ } },
-                { Number: { $in: [ /^a$/, /^b$/ ] } },
-                { Number: { $nin: [ /^a$/, null ] } },
+                { Number: /^a\.b\z/ },
+                { Number: { $not: /^a\z/ } },
+                { Number: { $in: [ /^a\z/, /^b\z/ ] } },
+                { Number: { $nin: [ /^a\z/, null ] } },
                 { Number: /^a/ },
                 { Number: /a/ },
-                { Number: /a$/ } ] },
+                { Number: /a\z/ } ] },
                 { Note: 'x' } ] } }
             """));
         compiled.Collation.Should().NotBeNull("the note folds");
@@ -134,8 +134,9 @@ public class CaseInsensitiveCompileTests
     [Fact]
     public async Task A_contract_1_fold_is_the_pattern_it_always_was_without_a_collation()
     {
-        var compiled = await Compile("""[{ "match": { "number": { "eq": "a", "options": { "ignoreCase": true } }, "note": { "startsWith": "b", "options": { "ignoreCase": true } } } }, { "sort": [{ "number": "asc" }] }]""", context: BindHost.Context(contract: 1));
+        var compiled = await Compile("""[{ "match": { "number": { "eq": "a", "options": { "ignoreCase": true } }, "note": { "startsWith": "b", "options": { "ignoreCase": true } } } }, { "sort": [{ "number": "asc" }] }]""", context: BindHost.Context(contract: 1), options: Options with { AsWritten = true });
 
+        // A contract 1 request is compiled as written, and its pattern ends as it always has.
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("{ $match: { $and: [ { Number: /^a$/i }, { Note: /^b/i } ] } }"));
         compiled.Collation.Should().BeNull();
     }
@@ -173,7 +174,7 @@ public class CaseInsensitiveCompileTests
         // The equality leg compares under the collation, so a neighbour that differs only in
         // case falls through to the key leg rather than being skipped or repeated.
         next.PageStages[0].ShouldBeBson(BsonDocument.Parse($$"""
-            { $match: { $and: [ {{OrgJson}}, { Number: { $gte: 'abc' } }, { $or: [ { Number: 'abc', _id: { $gt: {{id.ToJson()}} } }, { Number: { $gt: 'abc' } } ] } ] } }
+            { $match: { $or: [ { $and: [ {{OrgJson}}, { Number: 'abc', _id: { $gt: {{id.ToJson()}} } } ] }, { $and: [ {{OrgJson}}, { Number: { $gt: 'abc' } } ] }, { $and: [ {{OrgJson}}, { Number: { $type: [3, 5, 7, 8, 9, 17, 11, 12, 13, 15, 127] } } ] } ] } }
             """));
         next.Collation!.ShouldBeBson(DefaultCollation);
 
@@ -201,6 +202,20 @@ public class CaseInsensitiveCompileTests
         lookupStage["$lookup"]["pipeline"].AsBsonArray[1].ShouldBeBson(BsonDocument.Parse("{ $match: { Number: 'x' } }"));
     }
 
+    /// <summary>Two bounds on a collection's path could be met by two elements: there a folding prefix is one pattern, which one element meets.</summary>
+    [Fact]
+    public async Task A_folding_prefix_through_a_collection_is_one_pattern_and_a_range_on_one_value()
+    {
+        var compiled = await Compile("""[{ "match": { "items.price.currency": { "startsWith": "ab" }, "tags": { "startsWith": "ab" }, "number": { "startsWith": "ab" }, "items": { "any": { "price.currency": { "startsWith": "ab" } } } } }]""");
+        var match = compiled.PageStages.Select(stage => stage.GetValue("$match", null)).OfType<BsonDocument>().Last();
+        var asked = match.GetValue("$and", null) is BsonArray conditions ? conditions.OfType<BsonDocument>().Aggregate(new BsonDocument(), (all, each) => all.Merge(each)) : match;
+
+        asked["Items.Price.Currency"].Should().BeOfType<BsonRegularExpression>().Which.Pattern.Should().StartWith("^");
+        asked["Tags"].Should().BeOfType<BsonRegularExpression>().Which.Options.Should().Be("i");
+        asked["Number"].AsBsonDocument.Names.Should().Equal("$gte", "$lt");
+        asked["Items"]["$elemMatch"]["Price.Currency"].AsBsonDocument.Names.Should().Equal(["$gte", "$lt"], "inside 'any' the path is one element's own value");
+    }
+
     [Fact]
     public async Task A_join_on_a_string_key_compares_the_key_byte_for_byte_inside_a_collated_aggregate()
     {
@@ -209,9 +224,10 @@ public class CaseInsensitiveCompileTests
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [
                 { $match: {{OrgJson}} },
+                { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } },
                 { $match: { $expr: { $cond: {
                     if: { $and: [ { $eq: [ { $type: "$$oxKey" }, "string" ] }, { $eq: [ { $type: "$Code" }, "string" ] } ] },
-                    then: { $and: [ { $eq: [ { $indexOfBytes: [ "$Code", "$$oxKey" ] }, 0 ] }, { $eq: [ { $strLenBytes: "$Code" }, { $strLenBytes: "$$oxKey" } ] } ] },
+                    then: { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$Code")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$Code")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] },
                     else: true } } } },
                 { $limit: 1 },
                 { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
@@ -221,20 +237,26 @@ public class CaseInsensitiveCompileTests
         var lookup = await CompileJoin(CaseInsensitiveJoinModel.Folder, """[{ "lookup": { "from": "ci.document", "path": "folderCode", "as": "docs" } }, { "match": { "name": { "eq": "x" } } }]""");
         var join = lookup.PageStages.Single(stage => stage.Contains("$lookup"))["$lookup"].AsBsonDocument;
 
+        // The folder is named by its code, which a folder may not hold: such a parent has no children.
         join.Names.Should().Equal("from", "localField", "foreignField", "let", "pipeline", "as");
-        join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code' }"));
-        join["pipeline"].AsBsonArray[1]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("""
-            { $and: [ { $eq: [ { $indexOfBytes: [ "$FolderCode", "$$oxKey" ] }, 0 ] }, { $eq: [ { $strLenBytes: "$FolderCode" }, { $strLenBytes: "$$oxKey" } ] } ] }
+        join["let"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("{ oxKey: '$Code', oxParent: '$Code' }"));
+        join["pipeline"].AsBsonArray[1].AsBsonDocument.ShouldBeBson(BsonDocument.Parse("""{ $match: { $expr: { $gt: [ "$$oxParent", null ] } } }"""));
+        join["pipeline"].AsBsonArray[2]["$match"]["$expr"]["$cond"]["then"].AsBsonDocument.ShouldBeBson(BsonDocument.Parse($$"""
+            { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$FolderCode")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$FolderCode")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] }
             """));
     }
 
+    /// <summary>An operand of a byte function: the value where it is text, the empty text where it is anything else, so the function is given text whatever the row holds.</summary>
+    private static string Text(string value) => $$"""{ $cond: [ { $eq: [ { $type: "{{value}}" }, "string" ] }, "{{value}}", "" ] }""";
+
     [Fact]
-    public async Task A_join_on_a_string_key_is_unchanged_when_nothing_folds()
+    public async Task A_join_on_a_string_key_compares_no_bytes_when_nothing_folds()
     {
         var resolve = await CompileJoin(CaseInsensitiveJoinModel.Document, """[{ "resolve": { "path": "folderCode", "as": "folder" } }]""");
 
+        // The one thing asked beside the plain join: the folder is named by its code, and a reference that holds nothing names none.
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
-            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
+            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().BeNull();
     }

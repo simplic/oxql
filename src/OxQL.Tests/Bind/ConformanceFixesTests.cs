@@ -259,7 +259,7 @@ public class ConformanceFixesTests
     [InlineData("Europe//Berlin")]
     public async Task G6_an_unknown_timezone_is_still_refused(string timezone) =>
         (await Error($$"""[{ "group": { "by": [{ "dateTrunc": { "path": "when", "unit": "day", "timezone": "{{timezone}}" }, "as": "d" }], "fields": {} } }]""", Codes.InvalidTimezone))
-            .Message.Should().Contain("is not an IANA timezone");
+            .Message.Should().Contain("is not a timezone");
 
     // ---- G3 · an unrecognised aggregate argument ---------------------------------------------
 

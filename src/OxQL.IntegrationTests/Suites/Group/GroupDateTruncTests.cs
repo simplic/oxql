@@ -216,7 +216,7 @@ public class GroupDateTruncTests
 
     [Theory]
     [InlineData("N40", "Mars/Olympus")]
-    [InlineData("N40", "+02:00")]
+    [InlineData("N40", "+2:00")]
     [InlineData("N40", "Europe/Kolen")]
     [InlineData("N40", "Berlin")]
     [InlineData("N40", "Europe//Berlin")]

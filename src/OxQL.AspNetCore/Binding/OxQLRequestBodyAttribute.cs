@@ -57,27 +57,369 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     public int Order => FilterOrder;
 
     /// <inheritdoc/>
-    public Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
+    public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(next);
 
         var http = context.HttpContext;
 
-        // What the model binder reads is kept beside it, so a body that does not bind can be read
-        // again and said in the terms of the wire. A body something ahead has buffered is read from there.
-        if (http.RequestServices.GetService<OxQLOptions>() is { } options
-            && BodyOf(context.ActionDescriptor) is not null
-            && OxQLQueryService.ContractOf(options, http) != 1
-            && !http.Request.Body.CanSeek)
+        if (http.RequestServices.GetService<OxQLOptions>() is not { } options || BodyOf(context.ActionDescriptor) is not { } parameter)
         {
-            var recorder = new RecordingStream(http.Request.Body, Math.Max(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes));
+            await next().ConfigureAwait(false);
+            return;
+        }
+
+        var contract1 = OxQLQueryService.ContractOf(options, http) == 1;
+        var limit = Math.Max(options.Limits.MaxRequestBytes, options.Explain.MaxRequestBytes);
+
+        // A body within what a request may be long is read here, once, whether it declares its length or
+        // not and whether the host has buffered it ahead or not: a name or a text in it that is no Unicode
+        // text is answered before anything reads it as one. A body from the wire is handed to the model
+        // binder from memory; a buffered one is read from its start and left where it stood. A longer body
+        // is handed on as it came, what was read of it ahead of the rest: keeping a copy never stands
+        // between a body and its binder.
+        byte[]? bytes = null;
+        var whole = true;
+
+        // A batch read without some of its entries, and the body it stands in for while the action runs.
+        Stream? rewritten = null;
+        Stream? written = null;
+
+        if (IsUtf8(http.Request) && (http.Request.ContentLength ?? 0) <= limit)
+        {
+            if (http.Request.Body.CanSeek)
+            {
+                // What the binder reads of a buffer its host left elsewhere than at the start is not the body as it was written.
+                whole = http.Request.Body.Position == 0;
+                bytes = await RewoundAsync(http, limit).ConfigureAwait(false);
+            }
+            else if (await BufferedAsync(http, limit).ConfigureAwait(false) is { } read)
+            {
+                bytes = read;
+                http.Request.Body = new MemoryStream(read, writable: false);
+            }
+        }
+
+        if (bytes is not null)
+        {
+            var depth = DepthOf(http);
+
+            if (RequestBodyReader.MayHoldBrokenText(bytes) && RequestBodyReader.BrokenTexts(bytes, depth, out var unnamed) is { Count: > 0 } broken
+                && (contract1 || OxQLQueryService.ContractRefusal(options, http) is null))
+            {
+                if (contract1)
+                {
+                    context.Result = await HostRefusalAsync(context, options, parameter).ConfigureAwait(false);
+                    return;
+                }
+
+                // A batch whose own members read answers the entries that do not in their places and runs the others.
+                if (whole && parameter.ParameterType == typeof(BatchRequest) && WithoutEntries(bytes, depth, broken, unnamed) is { } rest)
+                {
+                    // The model binder reads the batch without those entries; whatever reads the body after the action reads it as it was written.
+                    written = http.Request.Body;
+                    http.Request.Body = rewritten = new MemoryStream(rest.Body, writable: false);
+                    http.Items[EntriesItem] = rest.Entries;
+                }
+                else
+                {
+                    context.Result = Refused(http, options, parameter, Refusal.Validation(broken.Select(text => RequestBodyReader.Broken(text.Path, text.Name)).ToList()));
+                    return;
+                }
+            }
+        }
+        else if (!http.Request.Body.CanSeek)
+        {
+            // What the model binder reads is kept beside it, so a body that does not bind can be read
+            // again and said in the terms of the wire. A body something ahead has buffered is read from there.
+            var recorder = new RecordingStream(http.Request.Body, limit);
 
             http.Request.Body = recorder;
             http.Items[RecorderItem] = recorder;
         }
 
-        return next();
+        // A body the binder met first (no declared length): a name that is no Unicode text stops the
+        // read itself, with an error of the JSON reader that is no malformed JSON. It is the caller's
+        // mistake and is answered as one, from the bytes the binder read.
+        ResourceExecutedContext? executed = null;
+        var stopped = false;
+
+        try
+        {
+            executed = await next().ConfigureAwait(false);
+            stopped = executed is { Exception: InvalidOperationException, ExceptionHandled: false };
+        }
+        catch (InvalidOperationException) when (!http.Response.HasStarted && BrokenIn(http) is not null)
+        {
+            stopped = true;
+        }
+        finally
+        {
+            if (written is not null && ReferenceEquals(http.Request.Body, rewritten))
+                http.Request.Body = written;
+        }
+
+        if (!stopped || http.Response.HasStarted || BrokenIn(http) is not { } texts)
+            return;
+
+        var result = contract1
+            ? await HostRefusalAsync(executed ?? (ActionContext)context, options, parameter).ConfigureAwait(false)
+            : Refused(http, options, parameter, Refusal.Validation(texts.Select(text => RequestBodyReader.Broken(text.Path, text.Name)).ToList()));
+
+        if (executed is not null)
+            executed.ExceptionHandled = true;
+
+        await result.ExecuteResultAsync(executed ?? (ActionContext)context).ConfigureAwait(false);
+    }
+
+    /// <summary>The names and texts that are no Unicode text in the body the binder read itself; null when it kept none or holds none.</summary>
+    private static List<(string Path, bool Name)>? BrokenIn(HttpContext http) =>
+        http.Items[RecorderItem] is RecordingStream { Whole: true } recorded && IsUtf8(http.Request)
+        && recorded.Recorded is var kept && RequestBodyReader.MayHoldBrokenText(kept) && RequestBodyReader.BrokenTexts(kept, DepthOf(http)) is { Count: > 0 } broken
+            ? broken
+            : null;
+
+    /// <summary>How deep the host reads a body.</summary>
+    private static int DepthOf(HttpContext http) =>
+        http.RequestServices.GetService<IOptions<JsonOptions>>()?.Value.JsonSerializerOptions.MaxDepth is > 0 and var depth ? depth
+        : http.RequestServices.GetService<IOptions<JsonOptions>>() is null ? OxQLJson.MaxDepth
+        : 64;
+
+    private static bool IsUtf8(HttpRequest request) =>
+        !MediaTypeHeaderValue.TryParse(request.ContentType, out var media) || media.Encoding is null || media.Encoding.CodePage == Encoding.UTF8.CodePage;
+
+    /// <summary>
+    /// The whole body, read up to <paramref name="limit"/> bytes; null when it is longer, and the
+    /// request's body is then what was read followed by the rest. The server's own cap on a body of
+    /// undeclared length is set before the first byte is read, where the server has one.
+    /// </summary>
+    private static async Task<byte[]?> BufferedAsync(HttpContext http, int limit)
+    {
+        if (http.Request.ContentLength is null && http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } cap)
+            cap.MaxRequestBodySize = limit;
+
+        var body = http.Request.Body;
+        var buffer = new byte[(int)Math.Min(limit + 1L, Math.Max(http.Request.ContentLength ?? 0, 16 * 1024))];
+        var read = 0;
+
+        while (true)
+        {
+            if (read == buffer.Length)
+            {
+                if (read > limit)
+                    break;
+
+                Array.Resize(ref buffer, (int)Math.Min(limit + 1L, buffer.Length * 2L));
+            }
+
+            var got = await body.ReadAsync(buffer.AsMemory(read), http.RequestAborted).ConfigureAwait(false);
+
+            if (got == 0)
+                return read == buffer.Length ? buffer : buffer[..read];
+
+            read += got;
+        }
+
+        http.Request.Body = new ReplayStream(buffer, body);
+
+        return null;
+    }
+
+    /// <summary>
+    /// A body the host has buffered, read from its start up to <paramref name="limit"/> bytes and set
+    /// back to where it stood; null when it is longer.
+    /// </summary>
+    private static async Task<byte[]?> RewoundAsync(HttpContext http, int limit)
+    {
+        var body = http.Request.Body;
+        var stood = body.Position;
+
+        try
+        {
+            body.Position = 0;
+
+            var buffer = new byte[(int)Math.Min(limit + 1L, Math.Max(http.Request.ContentLength ?? 0, 16 * 1024))];
+            var read = 0;
+
+            while (true)
+            {
+                if (read == buffer.Length)
+                {
+                    if (read > limit)
+                        return null;
+
+                    Array.Resize(ref buffer, (int)Math.Min(limit + 1L, buffer.Length * 2L));
+                }
+
+                var got = await body.ReadAsync(buffer.AsMemory(read), http.RequestAborted).ConfigureAwait(false);
+
+                if (got == 0)
+                    return read == buffer.Length ? buffer : buffer[..read];
+
+                read += got;
+            }
+        }
+        finally
+        {
+            body.Position = stood;
+        }
+    }
+
+    /// <summary>What was read of a body ahead of the rest of it, as one stream that reads forward only.</summary>
+    private sealed class ReplayStream(byte[] ahead, Stream rest) : Stream
+    {
+        private int position;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (position >= ahead.Length)
+                return rest.Read(buffer);
+
+            var taken = Math.Min(buffer.Length, ahead.Length - position);
+
+            ahead.AsSpan(position, taken).CopyTo(buffer);
+            position += taken;
+
+            return taken;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            position >= ahead.Length ? rest.ReadAsync(buffer, cancellationToken) : ValueTask.FromResult(Read(buffer.Span));
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// The answer to a request without the contract header whose body holds a name or a text that is
+    /// no Unicode text: the host's own 400 for a body it cannot bind. The finding is the one error of
+    /// the model state, at the root of the body, and the host's answer to an invalid model state is
+    /// built of it by what the host configured for that
+    /// (<see cref="ApiBehaviorOptions.InvalidModelStateResponseFactory"/>), so it has the form of
+    /// every such answer of that host.
+    /// </summary>
+    // LEGACY(compat.v1): the contract 1 half of the answer; remove with src/OxQL.AspNetCore/Legacy.
+    private static async Task<IActionResult> HostRefusalAsync(ActionContext action, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter)
+    {
+        const string Said = "The request body holds a member name or a text that is no Unicode text: half of a surrogate pair, or bytes that are no UTF-8.";
+
+        var http = action.HttpContext;
+
+        // LEGACY(compat.v1): the request is counted where every contract 1 request is.
+        await Legacy.LegacyRoute.UnboundAsync(http, options, RouteOf(parameter.ParameterType)).ConfigureAwait(false);
+        OxQLMetrics.Record(1, RouteOf(parameter.ParameterType), OxQLMetrics.NoEntity, OxQLMetrics.Unbound, TimeSpan.Zero);
+
+        // Whatever a read that stopped at the text left in the model state is not the finding.
+        action.ModelState.Clear();
+        action.ModelState.AddModelError(RequestBodyReader.Root, Said);
+
+        // A factory that answers nothing leaves the answer of a host that configured none.
+        if (http.RequestServices.GetService<IOptions<ApiBehaviorOptions>>()?.Value.InvalidModelStateResponseFactory is { } factory && factory(action) is { } answer)
+            return answer;
+
+        return new BadRequestObjectResult(new ValidationProblemDetails(action.ModelState) { Status = StatusCodes.Status400BadRequest }) { ContentTypes = { "application/problem+json" } };
+    }
+
+    /// <summary>
+    /// A batch body with the entries that hold text that is no Unicode text written as <c>null</c>,
+    /// and the refusal of each; null when such text lies outside the entries of <c>queries</c>, which
+    /// refuses the batch whole. An entry is refused with the places the look named in it, or
+    /// without a place when it holds only places past those (<paramref name="unnamed"/>).
+    /// <para>
+    /// The look has read <paramref name="body"/> to its end and to <paramref name="maxDepth"/>, so
+    /// it is JSON throughout and nests no deeper, and no name of the batch itself is among the
+    /// places: the body reads as a document here.
+    /// </para>
+    /// </summary>
+    private static (byte[] Body, Dictionary<int, Refusal> Entries)? WithoutEntries(ReadOnlyMemory<byte> body, int maxDepth, IReadOnlyList<(string Path, bool Name)> broken, RequestBodyReader.UnnamedTexts unnamed)
+    {
+        const string Queries = "$." + RequestBodyReader.BatchQueries + "[";
+        var entries = new Dictionary<int, List<QueryValidationError>>();
+
+        if (unnamed.Elsewhere)
+            return null;
+
+        foreach (var (path, name) in broken)
+        {
+            if (!path.StartsWith(Queries, StringComparison.Ordinal) || path.IndexOf(']', Queries.Length) is not (> 0 and var close)
+                || !int.TryParse(path.AsSpan(Queries.Length, close - Queries.Length), out var index))
+                return null;
+
+            if (!entries.TryGetValue(index, out var errors))
+                entries[index] = errors = [];
+
+            errors.Add(RequestBodyReader.Broken(RequestBodyReader.Root + path[(close + 1)..], name));
+        }
+
+        foreach (var index in unnamed.Entries)
+            entries.TryAdd(index, [RequestBodyReader.Broken()]);
+
+        using var document = JsonDocument.Parse(RequestBodyReader.WithoutMark(body), new JsonDocumentOptions { MaxDepth = maxDepth });
+
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // The members are copied as they were written; only the entries in question are replaced.
+        var text = new StringBuilder("{");
+
+        foreach (var member in document.RootElement.EnumerateObject())
+        {
+            if (text.Length > 1)
+                text.Append(',');
+
+            text.Append(JsonSerializer.Serialize(member.Name)).Append(':');
+
+            if (member.Name != RequestBodyReader.BatchQueries || member.Value.ValueKind != JsonValueKind.Array)
+            {
+                text.Append(member.Value.GetRawText());
+                continue;
+            }
+
+            text.Append('[');
+
+            var index = 0;
+
+            foreach (var query in member.Value.EnumerateArray())
+            {
+                if (index > 0)
+                    text.Append(',');
+
+                text.Append(entries.ContainsKey(index++) ? "null" : query.GetRawText());
+            }
+
+            text.Append(']');
+        }
+
+        text.Append('}');
+
+        return (Encoding.UTF8.GetBytes(text.ToString()), entries.ToDictionary(entry => entry.Key, entry => Refusal.Validation(entry.Value.Select(error => Entry(error, entry.Key)).ToList())));
     }
 
     /// <inheritdoc/>
@@ -87,6 +429,18 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
         ArgumentNullException.ThrowIfNull(next);
 
         var http = context.HttpContext;
+
+        // A body the binder read itself (no declared length): a name or a text in it that is no Unicode
+        // text is answered before anything reads it as one, whether the body bound or not.
+        if (http.RequestServices.GetService<OxQLOptions>() is { } bodyOptions && BodyOf(context.ActionDescriptor) is { } bodyParameter
+            && (OxQLQueryService.ContractOf(bodyOptions, http) == 1 || OxQLQueryService.ContractRefusal(bodyOptions, http) is null)
+            && BrokenIn(http) is { } broken)
+        {
+            context.Result = OxQLQueryService.ContractOf(bodyOptions, http) == 1
+                ? await HostRefusalAsync(context, bodyOptions, bodyParameter).ConfigureAwait(false)
+                : Refused(http, bodyOptions, bodyParameter, Refusal.Validation(broken.Select(text => RequestBodyReader.Broken(text.Path, text.Name)).ToList()));
+            return;
+        }
 
         if (context.ModelState.IsValid
             || http.RequestServices.GetService<OxQLOptions>() is not { } options
@@ -123,7 +477,7 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
             return;
         }
 
-        if (RequestBodyReader.Parse(body.Value, json.MaxDepth == 0 ? 64 : json.MaxDepth, out var document) is { } unparsed)
+        if (RequestBodyReader.Parse(body.Value, DepthOf(http), out var document) is { } unparsed)
         {
             context.Result = Refused(http, options, parameter, Refusal.Validation([unparsed]));
             return;
@@ -152,9 +506,15 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
                     if (batch.Count == 0 && entries.Count > 0)
                     {
                         // The batch reads: the entries that do not are answered in their places, the others run.
-                        http.Items[EntriesItem] = entries.ToDictionary(
+                        var answered = entries.ToDictionary(
                             entry => entry.Key,
-                            entry => Refusal.Validation(entry.Value.Select(error => Entry(error, entry.Key)).ToList()));
+                            entry => Refusal.Validation(entry.Value.Select(error => WithLimit(Entry(error, entry.Key), options)).ToList()));
+
+                        // The entries answered before the body was bound keep their answers.
+                        foreach (var (index, refusal) in http.Items[EntriesItem] as Dictionary<int, Refusal> ?? [])
+                            answered[index] = refusal;
+
+                        http.Items[EntriesItem] = answered;
                         context.ActionArguments[parameter.Name] = rebuilt with { Queries = [.. rebuilt.Queries.Select((query, index) => entries.ContainsKey(index) ? null! : query)] };
                         context.ModelState.Clear();
 
@@ -188,8 +548,17 @@ public sealed class OxQLRequestBodyAttribute : Attribute, IAsyncResourceFilter, 
     /// The refusal as the action's result, logged as the controller logs a refusal and counted as a
     /// request on the engine's meter: it never reaches the query service, where requests are counted.
     /// </summary>
+    /// <summary>A refusal under a limit's code says the limit's value on this host, as every refusal of that limit does.</summary>
+    private static QueryValidationError WithLimit(QueryValidationError error, OxQLOptions options) =>
+        error is { Code: Codes.LookupLimitExceeded, Params: { } carried } && !carried.ContainsKey("max")
+            ? error with { Params = new Dictionary<string, object?>(carried, StringComparer.Ordinal) { ["max"] = options.Limits.MaxLookupLimit } }
+            : error;
+
     private static IActionResult Refused(HttpContext http, OxQLOptions options, Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter, Refusal refusal)
     {
+        if (refusal.Errors is { } said)
+            refusal = refusal with { Errors = [.. said.Select(error => WithLimit(error, options))] };
+
         OxQLMetrics.Record(
             OxQLQueryService.ContractOf(options, http),
             RouteOf(parameter.ParameterType),

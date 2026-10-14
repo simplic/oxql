@@ -7,7 +7,7 @@
     <RootNamespace>OxQL.AspNetCore</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>2.1.226.1013</Version>
+    <Version>2.1.326.1014</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -43,7 +43,7 @@ public class ExplainGoldenTests
     public async Task The_explain_answer_equals_its_golden_answer(string id)
     {
         var request = ExplainGolden.Cases[id]();
-        var client = await ExplainGolden.ClientAsync(request);
+        var client = await ReportScenarios.ClientAsync(request);
         var answer = await client.ExplainHereAsync(request);
         var recorded = ExplainGolden.Record(request, answer);
         var path = ExplainGolden.PathOf(id);
@@ -106,7 +106,7 @@ public class ExplainGoldenTests
     {
         var query = ExplainGolden.Cases[id]();
         var request = new JsonObject { ["query"] = query.DeepClone(), ["include"] = new JsonArray("shape", "notes", "types") };
-        var client = await ExplainGolden.ClientAsync(query);
+        var client = await ReportScenarios.ClientAsync(query);
         var answer = await client.ExplainHereAsync(request);
 
         answer.Body?["flagSets"].Should().NotBeNull(answer.Text);
@@ -153,32 +153,6 @@ internal static class ExplainGolden
     /// the forward cache already held its answer; the engine's version goes with them.
     /// </summary>
     private static readonly HashSet<string> Volatile = new(StringComparer.Ordinal) { "etag", "ms", "revision", "calls", "cached" };
-
-    /// <summary>
-    /// The explain's own time and its owners' time on the host a golden is explained from: an upper
-    /// bound an explain of the reference set never reaches, so what the answer says of its owners
-    /// (<c>executable</c>, <c>cache.complete</c>) does not depend on how loaded the machine is.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<string, string?> Unhurried = new Dictionary<string, string?>
-    {
-        ["OxQL:Explain:TimeoutMs"] = "60000",
-        ["OxQL:Explain:RemoteTimeoutMs"] = "60000",
-    };
-
-    /// <summary>
-    /// A client of the root service of <paramref name="request"/> as organisation R, on a variant with
-    /// <see cref="Unhurried"/>. The owners it asks are the fleet's standard hosts, started here first:
-    /// a host starts on its first call, and a start inside an owner's call would spend the owners' time
-    /// of the host that asks it, which is the standard one when an owner asks an owner of its own.
-    /// </summary>
-    public static async Task<LabClient> ClientAsync(JsonObject request)
-    {
-        var shared = await CorpusFleet.SharedAsync();
-
-        await Task.WhenAll(LabService.All.Select(service => shared.Fleet.HostAsync(service)));
-
-        return shared.Variant(ReportScenarios.Service(request), "golden", Unhurried, Org.R);
-    }
 
     /// <summary>The reference set, by id; each builds its request (contract 2, organisation R).</summary>
     public static readonly IReadOnlyDictionary<string, Func<JsonObject>> Cases = new SortedDictionary<string, Func<JsonObject>>(StringComparer.Ordinal)

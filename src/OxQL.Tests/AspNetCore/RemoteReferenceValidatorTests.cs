@@ -39,12 +39,36 @@ public class RemoteReferenceValidatorTests
 
         public int ReadCount => Volatile.Read(ref reads);
 
+        private readonly List<(int Count, TaskCompletionSource Reached)> waiting = [];
+
+        /// <summary>Ends once <paramref name="count"/> schema documents have been asked for.</summary>
+        public Task ReadAsync(int count)
+        {
+            lock (Reads)
+            {
+                if (ReadCount >= count)
+                    return Task.CompletedTask;
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                waiting.Add((count, reached));
+
+                return reached.Task;
+            }
+        }
+
         public Task<RemoteSchemaEntities?> SchemaEntitiesAsync(string serviceKey, string? knownRevision, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref reads);
-
             lock (Reads)
+            {
+                var now = Interlocked.Increment(ref reads);
+
                 Reads.Add((serviceKey, knownRevision));
+
+                foreach (var (count, reached) in waiting)
+                    if (now >= count)
+                        reached.TrySetResult();
+            }
 
             if (Hanging.Contains(serviceKey))
                 return new TaskCompletionSource<RemoteSchemaEntities?>().Task;
@@ -371,7 +395,8 @@ public class RemoteReferenceValidatorTests
 
         // The host answers although an owner's schema read never ends.
         (await host.Client().GetAsync("/OxQL/health?shallow=true")).StatusCode.Should().Be(HttpStatusCode.OK);
-        SpinWait.SpinUntil(() => client.ReadCount >= 2, TimeSpan.FromSeconds(20)).Should().BeTrue("the check starts once the host has started, without a request asking for it");
+        // The check starts once the host has started, without a request asking for it.
+        await client.ReadAsync(2).WaitAsync(TimeSpan.FromSeconds(20));
     }
 
     // ---- explain ------------------------------------------------------------------------------------

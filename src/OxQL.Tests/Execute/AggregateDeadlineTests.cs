@@ -110,7 +110,12 @@ public class AggregateDeadlineTests
     /// <summary>A database that says nothing: an aggregate ends only when it is given up on.</summary>
     private sealed class SilentRunner : IAggregateRunner
     {
+        private readonly TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public List<AggregateRunOptions> Calls { get; } = [];
+
+        /// <summary>Ends once the first aggregate has been sent.</summary>
+        public Task Started => started.Task;
 
         /// <summary>The aggregates whose cancellation was asked for.</summary>
         public int GivenUp;
@@ -122,6 +127,8 @@ public class AggregateDeadlineTests
         {
             lock (Calls)
                 Calls.Add(options);
+
+            started.TrySetResult();
 
             var never = new TaskCompletionSource<IReadOnlyList<BsonDocument>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -270,7 +277,8 @@ public class AggregateDeadlineTests
 
         var running = engine.ExecuteAsync(BindHost.Request(Order, """[{ "page": { "limit": 5 } }]"""), BindHost.Context(), caller.Token);
 
-        SpinWait.SpinUntil(() => { lock (runner.Calls) return runner.Calls.Count == 1; }, TimeSpan.FromSeconds(30)).Should().BeTrue();
+        await runner.Started.WaitAsync(TimeSpan.FromSeconds(30));
+        runner.Calls.Should().ContainSingle();
 
         time.Advance(TimeSpan.FromHours(1));
         time.Due.Should().BeEmpty("no deadline was armed");

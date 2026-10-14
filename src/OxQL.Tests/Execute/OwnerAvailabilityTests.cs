@@ -51,6 +51,9 @@ public class OwnerAvailabilityTests
     private static readonly Lazy<EntityModel> model = new(() => ClrModelBuilder.Build(
         new EntityDeclaration[] { new(Tour, Tour, typeof(OaTour), "tours", null, false) }, retiredIds: null, new ReferenceDeclarations()));
 
+    /// <summary>The longest a test waits for a signal its passing path always gives.</summary>
+    private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(30);
+
     private sealed class ManualTime : TimeProvider
     {
         private DateTimeOffset now = new(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
@@ -170,12 +173,13 @@ public class OwnerAvailabilityTests
 
         var first = RunAsync(one);
 
-        SpinWait.SpinUntil(() => client.Calls == 2, TimeSpan.FromSeconds(30)).Should().BeTrue("the first request asks the owner again");
+        // The first request asks the owner again.
+        await client.CalledAsync(2).WaitAsync(Ceiling);
 
         // The second arrives while the first one's call is still under way.
         var second = RunAsync(other);
 
-        SpinWait.SpinUntil(() => client.Calls == 3 || second.IsCompleted, TimeSpan.FromSeconds(30)).Should().BeTrue();
+        await Task.WhenAny(client.CalledAsync(3), second).WaitAsync(Ceiling);
         release.SetResult();
 
         foreach (var result in await Task.WhenAll(first, second))
@@ -378,13 +382,37 @@ public class OwnerAvailabilityTests
     /// <summary>An owner whose every batch ends as the test says, counted.</summary>
     private sealed class EndingClient(Func<CancellationToken, Task<BatchResponse>> end) : IRemoteQueryClient
     {
+        private readonly List<(int Count, TaskCompletionSource Reached)> waiting = [];
         private int calls;
 
         public int Calls => Volatile.Read(ref calls);
 
+        /// <summary>Ends once the owner has been called <paramref name="count"/> times.</summary>
+        public Task CalledAsync(int count)
+        {
+            lock (waiting)
+            {
+                if (Calls >= count)
+                    return Task.CompletedTask;
+
+                var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                waiting.Add((count, reached));
+
+                return reached.Task;
+            }
+        }
+
         public Task<BatchResponse> BatchAsync(string serviceKey, BatchRequest request, TimeSpan budget, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref calls);
+            lock (waiting)
+            {
+                var now = Interlocked.Increment(ref calls);
+
+                foreach (var (count, reached) in waiting)
+                    if (now >= count)
+                        reached.TrySetResult();
+            }
 
             return end(cancellationToken);
         }

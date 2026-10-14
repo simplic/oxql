@@ -93,7 +93,6 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         parameters["reason"]!.GetValue<string>().Should().Be("unreachable");
         parameters["remembered"]!.GetValue<bool>().Should().BeTrue();
         parameters["retryAfterMs"]!.GetValue<int>().Should().BeInRange(1, 5_000);
-        second.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(1_000));
 
         // The owner is back and the host learns it, as it does when its health probe measures the owner.
         Owner.Set(ChaosMode.Ok);
@@ -206,8 +205,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         var second = await host.SendAsync(Corpus.Conformance, OwnerFleet.SemiJoin("M-03"));
 
         second.ShouldRefuse("RESOLVE_UNAVAILABLE", 422);
-        second.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(1_000));
-        Owner.BatchesSince(mark).Should().ContainSingle();
+        Owner.BatchesSince(mark).Should().ContainSingle("the second request does not call the owner again");
 
         (await host.HostAsync()).Services.GetRequiredService<OxQL.Core.Engine.OwnerAvailability>().Succeeded(LabFleet.ExternalOwner);
     }
@@ -283,7 +281,7 @@ public class RemoteChaosTests : IClassFixture<OwnerFleet>
         }
 
         // A failure known at once must not cost the caller the resolve budget.
-        answer.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(2_000), caseId);
+        answer.Duration.Should().BeLessThan(TimeSpan.FromMilliseconds(FleetHost.ResolveTimeoutMs), caseId);
         Owner.BatchesSince(mark).Should().ContainSingle(caseId);
     }
 

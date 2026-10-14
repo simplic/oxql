@@ -249,7 +249,9 @@ public class AgreementTests
     {
         var client = await EdgeCorpus.ClientAsync();
         var text = EdgeOracle.Members[path] == EdgeKind.Text;
-        string Key(BsonValue value) => value.IsBsonNull ? "(null)" : value.IsNumeric ? Order.NumberText(value).TrimEnd('0').TrimEnd('.') is { Length: > 0 } number ? number : "0" : text ? EdgeOracle.Fold(value.AsString) : value.ToString()!.ToLowerInvariant();
+        // A number's trailing zeros are dropped only from its fractional part: 10 stays 10, 2.50 is 2.5.
+        static string Number(string number) => number.Contains('.') && !number.Contains('E') ? number.TrimEnd('0').TrimEnd('.') is { Length: > 0 } trimmed ? trimmed : "0" : number;
+        string Key(BsonValue value) => value.IsBsonNull ? "(null)" : value.IsNumeric ? Number(Order.NumberText(value)) : text ? EdgeOracle.Fold(value.AsString) : value.ToString()!.ToLowerInvariant();
         var expected = EdgeCorpus.Stored().SelectMany(row => EdgeOracle.Reach(row, EdgeOracle.Storage(path)).Values).GroupBy(Key).ToDictionary(group => group.Key, group => group.Count());
 
         var listed = await client.SendAsync(Entity, $$"""[{ "values": { "path": "{{path}}", "counts": true, "limit": 500 } }]""");

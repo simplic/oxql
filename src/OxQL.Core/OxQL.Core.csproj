@@ -7,7 +7,7 @@
     <RootNamespace>OxQL.Core</RootNamespace>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Version>2.1.326.1014</Version>
+    <Version>2.1.426.1014</Version>
   </PropertyGroup>
 
   <ItemGroup>

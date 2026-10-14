@@ -7,6 +7,7 @@ using OxQL.Core.Binding;
 using OxQL.Core.Engine;
 using OxQL.Core.Models;
 using OxQL.Mongo;
+using OxQL.TestCases;
 using OxQL.Tests.Bind;
 using OxQL.Tests.Bind.Fixtures.Resolve;
 using OxQL.Tests.Execute;
@@ -88,18 +89,6 @@ public class RemoteReferenceValidatorTests
         public Task<bool> IsReachableAsync(string serviceKey, CancellationToken cancellationToken) => Task.FromResult(true);
 
         public RemoteOwnerInfo? OwnerOf(string serviceKey) => new("2.1.0", EngineCapabilities.Contract, 10);
-    }
-
-    /// <summary>A clock the test moves.</summary>
-    private sealed class ManualTime : TimeProvider
-    {
-        private long ticks;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp() => Interlocked.Read(ref ticks);
-
-        public void Advance(TimeSpan by) => Interlocked.Add(ref ticks, by.Ticks);
     }
 
     /// <summary>The resolve graph declares references into <c>crm</c> (two: <c>crm.contact</c> from two entities) and <c>transport</c>.</summary>
@@ -216,7 +205,8 @@ public class RemoteReferenceValidatorTests
 
         client.Hanging.Add("crm");
 
-        var validator = new RemoteReferenceValidator { ReadTimeout = TimeSpan.FromSeconds(2) };
+        var time = new ManualTime();
+        var validator = new RemoteReferenceValidator(time) { ReadTimeout = TimeSpan.FromSeconds(2) };
         var first = validator.State(Model, client);
 
         first.Should().OnlyContain(state => !state.Validated && state.Reason == RemoteReferenceValidation.Pending, "nothing is checked yet and the caller did not wait for it");
@@ -224,7 +214,12 @@ public class RemoteReferenceValidatorTests
 
         var refreshing = validator.Refreshing;
 
-        (await Task.WhenAny(refreshing, Task.Delay(TimeSpan.FromSeconds(20)))).Should().BeSameAs(refreshing, "a read that never ends is given up at the timeout");
+        // Both owners are asked; the one that never answers is given up once its time is over.
+        await client.ReadAsync(2).WaitAsync(ManualTime.Ceiling);
+        refreshing.IsCompleted.Should().BeFalse("the read that never ends holds the check until its timeout");
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        await refreshing.WaitAsync(ManualTime.Ceiling);
         validator.Of("crm")!.Reason.Should().Be(RemoteReferenceValidation.Unavailable);
         validator.Of("transport")!.Validated.Should().BeTrue();
     }

@@ -55,6 +55,31 @@ public sealed class FleetHost : IAsyncDisposable
     /// <summary>The harness's own key of a variant that buffers every request body ahead of MVC: <c>rewound</c>, <c>end</c> or <c>unread</c>.</summary>
     public const string BufferBodyKey = "Lab:BufferBody";
 
+    // The time bounds of the fleet's hosts. A host's defaults are bounds for a service under real
+    // traffic; here they are upper bounds the suites never reach, so that a count, an owner call or an
+    // explain answers the same on a loaded runner as on an idle one. The cases about a bound set a
+    // small one on a variant of their own; the published defaults are held by a host that sets nothing.
+
+    /// <summary><c>OxQL:Execution:MaxTimeMs</c> of the fleet's hosts: the ceiling the engine clamps it to.</summary>
+    public const int MaxTimeMs = OxQL.Core.Models.ExecutionOptions.MaxTimeCeilingMs;
+
+    /// <summary><c>OxQL:Execution:ResolveTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ResolveTimeoutMs = 30_000;
+
+    /// <summary><c>OxQL:Execution:ChainTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ChainTimeoutMs = 30_000;
+
+    /// <summary><c>OxQL:Count:BudgetMs</c> of the fleet's hosts.</summary>
+    public const int CountBudgetMs = 30_000;
+
+    /// <summary><c>OxQL:Count:MaxBudgetMs</c> of the fleet's hosts.</summary>
+    public const int CountMaxBudgetMs = 60_000;
+
+    /// <summary><c>OxQL:Explain:TimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ExplainTimeoutMs = 60_000;
+
+    /// <summary><c>OxQL:Explain:RemoteTimeoutMs</c> of the fleet's hosts.</summary>
+    public const int ExplainRemoteTimeoutMs = 60_000;
     /// <summary>
     /// Starts a host. <paramref name="configuration"/> is layered over the host's defaults, so a
     /// variant names only the keys it changes (<c>OxQL:Limits:MaxPageSize</c> and the like).
@@ -163,7 +188,17 @@ public sealed class FleetHost : IAsyncDisposable
         // makes of it. What a host remembers of an owner that failed has tests of its own, on a variant
         // that sets the time (RemoteChaosTests, the M cases).
         new("OxQL:Cache:OwnerUnavailableTtlSeconds", "0"),
+        // The time bounds, as upper bounds the suites never reach (see MaxTimeMs).
+        new("OxQL:Execution:MaxTimeMs", Text(MaxTimeMs)),
+        new("OxQL:Execution:ResolveTimeoutMs", Text(ResolveTimeoutMs)),
+        new("OxQL:Execution:ChainTimeoutMs", Text(ChainTimeoutMs)),
+        new("OxQL:Count:BudgetMs", Text(CountBudgetMs)),
+        new("OxQL:Count:MaxBudgetMs", Text(CountMaxBudgetMs)),
+        new("OxQL:Explain:TimeoutMs", Text(ExplainTimeoutMs)),
+        new("OxQL:Explain:RemoteTimeoutMs", Text(ExplainRemoteTimeoutMs)),
     ];
+
+    private static string Text(int value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>A client for one organisation (organisation A when null) under the given contract; an anonymous client sends no identity.</summary>
     public HttpClient Client(Guid? organisation = default, int contract = 2, bool anonymous = false)

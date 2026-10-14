@@ -154,9 +154,9 @@ public class NonQueryTests
             // the report limits
             ["maxFlattenDepth"] = defaults.MaxFlattenDepth, ["maxContinuedStages"] = defaults.MaxContinuedStages, ["maxReportPageSize"] = defaults.MaxReportPageSize,
             ["maxReportedRows"] = defaults.MaxReportedRows, ["chainTimeoutMs"] = options.Execution.EffectiveChainTimeoutMs,
-            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds, 
-            // what a host remembers of an owner that failed, which the fleet's hosts switch off for the suites
-            ["ownerUnavailableTtlSeconds"] = 0,
+            ["negativeResolveTtlSeconds"] = options.Cache.NegativeResolveTtlSeconds,
+            // what a host remembers of an owner that failed
+            ["ownerUnavailableTtlSeconds"] = options.Cache.OwnerUnavailableTtlSeconds,
             // where the count beside a page ends, and the time a count has and may ask for
             ["countStepRows"] = options.Count.EffectiveStepRows, ["countBudgetMs"] = options.Count.EffectiveBudgetMs, ["countMaxBudgetMs"] = options.Count.EffectiveMaxBudgetMs,
             ["explainRemoteTimeoutMs"] = options.Explain.RemoteTimeoutMs, ["explainTimeoutMs"] = options.Explain.TimeoutMs,
@@ -167,14 +167,37 @@ public class NonQueryTests
             ["explainDefaultShapeDepth"] = options.Explain.DefaultShapeDepth, ["explainMaxTypeMembers"] = options.Explain.MaxTypeMembers,
             ["explainMaxAnswerBytes"] = options.Explain.MaxAnswerBytes, ["explainMaxOwnerServices"] = options.Explain.MaxOwnerServices,
             ["explainMaxOwnerCalls"] = options.Explain.MaxOwnerCalls, ["explainMaxBatchChecks"] = options.Explain.MaxBatchChecks,
-            // the rate and concurrency of explain, which the fleet's hosts raise for the suites
-            ["explainRatePerMinute"] = 600_000, ["explainRateBurst"] = 100_000, ["explainOwnerRatePerMinute"] = 600_000, ["explainOwnerRateBurst"] = 100_000, ["explainMaxConcurrentPerUser"] = 1_000,
-            ["explainMaxConcurrentPerHost"] = 1_000, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
+            // the rate and concurrency of explain
+            ["explainRatePerMinute"] = options.Explain.RatePerMinute, ["explainRateBurst"] = options.Explain.RateBurst, ["explainOwnerRatePerMinute"] = options.Explain.OwnerRatePerMinute,
+            ["explainOwnerRateBurst"] = options.Explain.OwnerRateBurst, ["explainMaxConcurrentPerUser"] = options.Explain.MaxConcurrentPerUser,
+            ["explainMaxConcurrentPerHost"] = options.Explain.MaxConcurrentPerHost, ["explainMaxConcurrentPerCaller"] = options.Explain.MaxConcurrentPerCaller,
             // the bounds of a values stage
             ["maxValuesLimit"] = defaults.MaxValuesLimit, ["valuesScanRows"] = options.Values.ScanRows, ["valuesDefaultLimit"] = options.Values.DefaultLimit,
         };
         expected.Should().HaveCount(52);
         expected["maxSemiJoinIds"].Should().Be(5000, "U20: the published cap is 5 000");
+
+        // A host that sets nothing publishes the defaults.
+        await using (var bare = await CustomHost.StartAsync(LabService.Transport, await CustomHost.SharedDatabaseAsync(LabService.Transport)))
+        {
+            var published = (await bare.GetAsync("OxQL/health", contract: 2)).Body!["limits"]!.AsObject();
+
+            published.ToDictionary(member => member.Key, member => member.Value!.GetValue<int>()).Should().BeEquivalentTo(expected);
+        }
+
+        // A fleet's host publishes what it runs under: the defaults, and what the fleet sets for the suites (FleetHost).
+        expected["ownerUnavailableTtlSeconds"] = 0;
+        expected["chainTimeoutMs"] = FleetHost.ChainTimeoutMs;
+        expected["countBudgetMs"] = FleetHost.CountBudgetMs;
+        expected["countMaxBudgetMs"] = FleetHost.CountMaxBudgetMs;
+        expected["explainRemoteTimeoutMs"] = FleetHost.ExplainRemoteTimeoutMs;
+        expected["explainTimeoutMs"] = FleetHost.ExplainTimeoutMs;
+        expected["explainRatePerMinute"] = 600_000;
+        expected["explainRateBurst"] = 100_000;
+        expected["explainOwnerRatePerMinute"] = 600_000;
+        expected["explainOwnerRateBurst"] = 100_000;
+        expected["explainMaxConcurrentPerUser"] = 1_000;
+        expected["explainMaxConcurrentPerHost"] = 1_000;
 
         var limits = (await (await Lab.ClientAsync(LabService.Transport)).HealthAsync()).Body!["limits"]!.AsObject();
         limits.ToDictionary(member => member.Key, member => member.Value!.GetValue<int>()).Should().BeEquivalentTo(expected);

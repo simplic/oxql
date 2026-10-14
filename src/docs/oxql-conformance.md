@@ -67,7 +67,11 @@ service served by a mounted handler (the chaos owner, a scripted owner) is poste
 exactly as between real services, and a chain across services continues at each owner in process.
 Hosts are started on first use and shared by the whole run; a *variant* is the same service and
 database under changed configuration (`OxQL:Limits:MaxPageSize`, `OxQL:Explain:Enabled`, …).
-Explain is on by default, as on a real host. A fleet's hosts remember nothing of an owner that
+Explain is on by default, as on a real host. A fleet's hosts run their time bounds as ceilings the
+suites never reach (`FleetHost`: a request's time limit, an owner call, the count beside a page and an
+explain), so a count, an owner call or an explain answers the same on a loaded runner as on an idle
+one; the cases about a bound set a small one on a variant, and `PagingLimitsTests.U25` and
+`NonQueryTests.Y8` hold the published defaults on a host that sets nothing. A fleet's hosts remember nothing of an owner that
 failed (`OxQL:Cache:OwnerUnavailableTtlSeconds=0`), since the suites drive one owner through a
 failure and back within a case; `Suites/RemoteChaos` holds the memory itself on variants that set
 the default (the `M` cases), and `OxQL.Tests` `Execute/OwnerAvailabilityTests` holds the record, the

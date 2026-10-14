@@ -158,10 +158,14 @@ public sealed class CustomHost : IAsyncDisposable
     public Task<WireAnswer> SendAsync(string entityType, string pipeline, Org org = Org.A) =>
         PostAsync("OxQL/query", Json.Request(entityType, pipeline).ToJsonString(), org.Id());
 
-    /// <summary>A raw GET.</summary>
-    public async Task<WireAnswer> GetAsync(string route)
+    /// <summary>A raw GET, under <paramref name="contract"/> when one is named.</summary>
+    public async Task<WireAnswer> GetAsync(string route, int? contract = null)
     {
         using var client = Server.CreateClient();
+
+        if (contract is { } number)
+            client.DefaultRequestHeaders.Add(LabIdentity.ContractHeader, number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
         using var response = await client.GetAsync(route);
         var text = await response.Content.ReadAsStringAsync();
 

@@ -230,7 +230,7 @@ public sealed class RemoteReferenceValidator(TimeProvider? time = null)
         if (!client.IsConfigured(service))
             return new RemoteReferenceValidation(service, references, false, null, [], RemoteReferenceValidation.NotConfigured);
 
-        using var timeout = new CancellationTokenSource(ReadTimeout);
+        using var timeout = new CancellationTokenSource(ReadTimeout, time);
 
         try
         {

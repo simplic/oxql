@@ -29,11 +29,14 @@ public class CountCancellationServerTests
 {
     private static readonly EngineDirect Direct = new(LateJoinCases.Model);
 
-    /// <summary>What each row costs the count.</summary>
-    private const int SleepMs = 3_000;
+    /// <summary>What each row costs the count: short, since the server ends a cancelled count only once the row it reads is done.</summary>
+    private const int SleepMs = 300;
 
-    /// <summary>The children the count reads: twenty-three, so reading them all takes 69 seconds, longer than the count may run.</summary>
-    private const int Children = 23;
+    /// <summary>The children the count reads: two hundred and thirty, so reading them all takes 69 seconds, longer than the count may run.</summary>
+    private const int Children = 230;
+
+    /// <summary>The page's limit: more than the children, so the page ends the list and is its own count.</summary>
+    private const int PageLimit = 250;
 
     /// <summary>The count's time limit: the longest the engine allows a request, so the test's bounds are far below it.</summary>
     private const int BudgetMs = 60_000;
@@ -146,7 +149,7 @@ public class CountCancellationServerTests
         (Children * SleepMs).Should().BeGreaterThan(BudgetMs, "left alone the count reads rows until its time limit ends it");
 
         // Fewer children than the page takes: the page ends the list, so it is its own count.
-        var outcome = await engine.ExecuteAsync(EngineDirect.Request(LateJoinCases.Child, $$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": 50, "count": { "budgetMs": {{BudgetMs}} } } } ]"""), context);
+        var outcome = await engine.ExecuteAsync(EngineDirect.Request(LateJoinCases.Child, $$"""[ { "sort": [ { "id": "asc" } ] }, { "page": { "limit": {{PageLimit}}, "count": { "budgetMs": {{BudgetMs}} } } } ]"""), context);
         var result = outcome.Should().BeOfType<QueryOutcome.Success>(outcome is QueryOutcome.Refused refused ? EngineDirect.Describe(refused.Refusal) : "").Subject.Result;
 
         result.Items.Should().HaveCount(Children);

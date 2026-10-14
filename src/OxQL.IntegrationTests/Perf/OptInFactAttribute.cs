@@ -8,6 +8,9 @@ namespace OxQL.IntegrationTests.Perf;
 /// </summary>
 internal sealed class OptInFactAttribute : FactAttribute
 {
+    /// <summary>The variable that turns on the load and soak tests: they run for seconds and measure under contention.</summary>
+    public const string Load = "OXQL_LOAD";
+
     public OptInFactAttribute(params string[] variables)
     {
         if (variables.Any(variable => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable))))

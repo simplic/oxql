@@ -1559,7 +1559,7 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
                 _ => $"'{service}', the owner of '{target}', did not answer the last call this host made to it ({reason}): it was not asked, and the join '{alias}' is null when the query runs while that holds.",
             },
             Stage = stage,
-            Params = new Dictionary<string, object?> { ["service"] = service, ["target"] = target, ["reason"] = reason },
+            Params = new Dictionary<string, object?> { ["service"] = service, ["target"] = target, ["reason"] = reason, ["alias"] = alias },
         });
 
         return reason;
@@ -1587,6 +1587,6 @@ internal sealed class RemoteExplain : IExplainOwners, IExplainShare
             ? $"The stages continued under '{check.Target}' at this host were not checked ({reason}); this host binds them when the query runs."
             : $"What '{check.Service}' binds for '{check.Target}' (the paths under its alias, the stages continued there) could not be checked at its owner ({reason}); the owner binds it when the query runs.",
         Stage = check.FirstContinued,
-        Params = new Dictionary<string, object?> { ["service"] = check.Service.Length == 0 ? null : check.Service, ["target"] = check.Target, ["reason"] = reason },
+        Params = new Dictionary<string, object?> { ["service"] = check.Service.Length == 0 ? null : check.Service, ["target"] = check.Target, ["reason"] = reason, ["alias"] = check.Resolve?.As },
     };
 }

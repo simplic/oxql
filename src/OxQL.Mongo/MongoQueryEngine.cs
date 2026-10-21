@@ -942,12 +942,12 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // 5414201: a keyed window ($setWindowFields) over its memory limit, which a remote
         // lookup ranking many children per key without an index can reach.
         MongoCommandException { Code: 292 or 16819 or 16820 or 16945 or 5414201 } =>
-            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match."),
+            TooExpensive("memory", "The query needs more memory than the server allows without spilling to disk; add an index for the sort or narrow the match."),
 
         // An accumulator over its memory cap, which spilling to disk does not lift, and a
         // row that outgrew the document size limit: both are the query's cost, not a fault.
         MongoCommandException { Code: 146 or 10334 } =>
-            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query builds a value larger than the server allows, typically a push or countDistinct over too many rows; narrow the match or group by more keys."),
+            TooExpensive("valueSize", "The query builds a value larger than the server allows, typically a push or countDistinct over too many rows; narrow the match or group by more keys."),
 
         // The binder validates a pattern with the .NET parser and the server compiles it
         // with PCRE2; a construct only the first accepts is rejected here.
@@ -968,10 +968,19 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         // The binder bounds how deep a condition nests; a pipeline the driver still cannot
         // serialize this deep is the query's cost, not a fault of the host.
         BsonSerializationException =>
-            Refusal.NotExecutable(Codes.QueryTooExpensive, "The query nests deeper than the database accepts; flatten its conditions or joins."),
+            TooExpensive("nesting", "The query nests deeper than the database accepts; flatten its conditions or joins."),
 
         _ => null,
     };
+
+    /// <summary>
+    /// <c>QUERY_TOO_EXPENSIVE</c> with <c>params.reason</c>, what the database ran out of: <c>memory</c>,
+    /// <c>valueSize</c> (a value or row over its size limit) or <c>nesting</c> (a pipeline nested deeper
+    /// than it accepts).
+    /// </summary>
+    private static Refusal TooExpensive(string reason, string message) =>
+        Refusal.NotExecutable(Codes.QueryTooExpensive, message, inner:
+            [new QueryValidationError { Code = Codes.QueryTooExpensive, Message = message, Params = new Dictionary<string, object?> { ["reason"] = reason } }]);
 
     /// <summary>The server's code for a zone id its zone table does not have.</summary>
     internal const int UnknownZoneCode = 40485;

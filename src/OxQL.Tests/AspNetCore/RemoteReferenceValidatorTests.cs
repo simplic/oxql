@@ -423,7 +423,7 @@ public class RemoteReferenceValidatorTests
         note.Stage.Should().Be(0);
         note.Basis.Should().Be(Basis.Model);
         note.Message.Should().Contain("'crm' does not publish the entity 'crm.contact'");
-        note.Params.Should().Contain("service", "crm").And.Contain("target", "crm.contact").And.Contain("revision", "sha256:crm-1");
+        note.Params.Should().Contain("service", "crm").And.Contain("target", "crm.contact").And.Contain("revision", "sha256:crm-1").And.Contain("alias", "c");
         result.Valid.Should().BeTrue("the check may be behind the owner's document: it is a note, not an error");
         result.Executable.Should().Be(Basis.Unknown);
         result.Cache.Complete.Should().BeFalse();

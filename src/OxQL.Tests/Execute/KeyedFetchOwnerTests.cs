@@ -150,6 +150,9 @@ public class KeyedFetchOwnerTests
         partial["params"]!["keys"]!.GetValue<int>().Should().Be(2);
         partial["params"]!["unanswered"]!.GetValue<int>().Should().Be(1);
         partial["params"]!["service"]!.GetValue<string>().Should().Be("crm");
+        partial["params"]!["reason"]!.GetValue<string>().Should().Be("unanswered");
+        partial["stage"]!.GetValue<int>().Should().Be(0);
+        partial["path"]!.GetValue<string>().Should().Be("contact");
 
         var missing = Diagnostic(result, Codes.ResolveMissing);
         missing["params"]!["rows"]!.AsArray().Should().ContainSingle().Which!["outcome"]!.GetValue<string>().Should().Be("owner_unanswered", "a cut answer never says not_found");

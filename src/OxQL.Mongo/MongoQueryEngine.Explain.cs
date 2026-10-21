@@ -952,7 +952,7 @@ public sealed partial class MongoQueryEngine
                     Code = Notes.ReferenceTargetUnknown,
                     Message = $"'{query.Service}' does not publish the entity '{entity}' that '{resolve.As}' joins: the reference declares a target its owner does not have under that id, and a run is refused for it. Correct the declared target id, or have the owner publish the entity.",
                     Stage = stage,
-                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision },
+                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision, ["alias"] = resolve.As },
                 });
             }
         }

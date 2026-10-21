@@ -36,4 +36,23 @@ public static class Aliases
 
         return null;
     }
+
+    /// <summary>
+    /// The reason <see cref="Problem"/> gives, as a word a client renders it from: <c>notIdentifier</c>,
+    /// <c>keyName</c> (the storage name of the row's key) or <c>reserved</c> (a name the engine owns);
+    /// null when the alias can be used.
+    /// </summary>
+    public static string? Reason(string? alias)
+    {
+        if (string.IsNullOrEmpty(alias) || !Identifier.IsMatch(alias))
+            return "notIdentifier";
+
+        if (alias == KeyStorage)
+            return "keyName";
+
+        if (alias.StartsWith(ReservedPrefix, StringComparison.Ordinal) || alias.EndsWith(ReservedSuffix, StringComparison.Ordinal))
+            return "reserved";
+
+        return null;
+    }
 }

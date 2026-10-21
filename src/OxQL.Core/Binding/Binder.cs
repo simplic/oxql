@@ -35,6 +35,9 @@ public sealed partial class Binder
     private static readonly IReadOnlySet<string> Units = new HashSet<string>(StringComparer.Ordinal) { "year", "quarter", "month", "week", "day", "hour", "minute", "second" };
     private static readonly IReadOnlySet<string> WeekDays = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
     private static readonly IReadOnlySet<string> Aggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg", "min", "max", "first", "last", "push", "count", "countDistinct" };
+    /// <summary>The directions a sort entry takes, as a refusal lists them.</summary>
+    private static readonly IReadOnlyList<string> SortDirections = ["asc", "desc"];
+
     private static readonly IReadOnlySet<string> NumericAggregates = new HashSet<string>(StringComparer.Ordinal) { "sum", "avg" };
 
     /// <summary>
@@ -1674,7 +1677,8 @@ public sealed partial class Binder
 
             if (!OperandCoercer.Operators.Contains(op))
             {
-                errors.Add(Error(Codes.UnknownOperator, $"'{op}' is not an operator.", index, condition.Path));
+                errors.Add(Said(Error(Codes.UnknownOperator, $"'{op}' is not an operator.", index, condition.Path),
+                    new() { ["value"] = op, ["allowed"] = OperandCoercer.Operators.ToList() }));
                 return null;
             }
 
@@ -1710,9 +1714,10 @@ public sealed partial class Binder
 
             if (!path.IsRemote && !path.Filterable && !(op == "exists" && path.Storage is not null))
             {
-                errors.Add(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
+                errors.Add(Usable(Error(Codes.NotFilterable, path.Kind == Kind.Unknown
                     ? $"'{Named(condition.Path)}' is unknown to the model; it can be projected, not filtered."
-                    : $"'{Named(condition.Path)}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path));
+                    : $"'{Named(condition.Path)}' is {Kinds.WithArticle(path.Kind)}; a filter needs a scalar.", index, condition.Path),
+                    path.Kind == Kind.Unknown ? "unknownKind" : "notScalar", path.Kind));
                 return null;
             }
 
@@ -2394,7 +2399,7 @@ public sealed partial class Binder
                     Params = new Dictionary<string, object?> { ["currentId"] = child.Id },
                 });
 
-            if (!CheckAlias(lookup.As, index, out var alias))
+            if (!CheckAlias(lookup.As, index, out var alias, "as"))
                 return;
 
             await LoadAddonsAsync(child);
@@ -2582,7 +2587,7 @@ public sealed partial class Binder
                 return;
             }
 
-            if (!CheckAlias(lookup.As, index, out var alias))
+            if (!CheckAlias(lookup.As, index, out var alias, "as"))
                 return;
 
             string? parentAs = null;
@@ -2596,12 +2601,12 @@ public sealed partial class Binder
                     return;
                 }
 
-                if (!CheckAlias(lookup.ParentAs, index, out var checkedParent))
+                if (!CheckAlias(lookup.ParentAs, index, out var checkedParent, "parentAs"))
                     return;
 
                 if (checkedParent == alias)
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent));
+                    errors.Add(Collision($"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent, "parentAs", TakenHere(index, "as")));
                     return;
                 }
 
@@ -2813,19 +2818,19 @@ public sealed partial class Binder
                 return;
             }
 
-            if (!CheckAlias(resolve.As, index, out var alias))
+            if (!CheckAlias(resolve.As, index, out var alias, "as"))
                 return;
 
             string? parentAs = null;
 
             if (resolve.ParentAs is not null)
             {
-                if (!CheckAlias(resolve.ParentAs, index, out var checkedParent))
+                if (!CheckAlias(resolve.ParentAs, index, out var checkedParent, "parentAs"))
                     return;
 
                 if (checkedParent == alias)
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent));
+                    errors.Add(Collision($"'parentAs' and 'as' are both '{alias}'; the owning row needs a name of its own.", index, checkedParent, "parentAs", TakenHere(index, "as")));
                     return;
                 }
 
@@ -2860,8 +2865,9 @@ public sealed partial class Binder
 
             if (crossed.Count > 1)
             {
-                errors.Add(Error(Codes.UnwindOrder,
-                    $"'{resolve.Path}' crosses {crossed.Count} collections that are not unwound here ({string.Join(", ", crossed.Select(collection => $"'{collection.Wire}'"))}); unwind the outer ones first, so at most one is left for 'elements'.", index, resolve.Path));
+                errors.Add(Said(Error(Codes.UnwindOrder,
+                    $"'{resolve.Path}' crosses {crossed.Count} collections that are not unwound here ({string.Join(", ", crossed.Select(collection => $"'{collection.Wire}'"))}); unwind the outer ones first, so at most one is left for 'elements'.", index, resolve.Path),
+                    new() { ["reason"] = "crossesCollections", ["collections"] = crossed.Select(collection => collection.Wire).ToList() }));
                 return;
             }
 
@@ -2869,8 +2875,9 @@ public sealed partial class Binder
             {
                 if (elements is null)
                 {
-                    errors.Add(Error(Codes.ResolveOnCollection,
-                        $"'{resolve.Path}' lies under the collection '{crossed[0].Wire}', which is not unwound here; unwind it first, or set 'elements' to 'first' or 'all'." + Hint(true), index, resolve.Path));
+                    errors.Add(Said(Error(Codes.ResolveOnCollection,
+                        $"'{resolve.Path}' lies under the collection '{crossed[0].Wire}', which is not unwound here; unwind it first, or set 'elements' to 'first' or 'all'." + Hint(true), index, resolve.Path),
+                        new() { ["collection"] = crossed[0].Wire }));
                     return;
                 }
 
@@ -2893,8 +2900,9 @@ public sealed partial class Binder
 
                 if (!targets.Contains(wanted, StringComparer.Ordinal))
                 {
-                    errors.Add(Error(Codes.ResolveTargetNotDeclared,
-                        $"'{wanted}' is not a target of '{resolve.Path}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, resolve.Path));
+                    errors.Add(Said(Error(Codes.ResolveTargetNotDeclared,
+                        $"'{wanted}' is not a target of '{resolve.Path}'; its targets are {string.Join(", ", targets.Select(target => $"'{target}'"))}.", index, resolve.Path),
+                        new() { ["target"] = wanted, ["targets"] = targets }));
                     return;
                 }
 
@@ -2926,8 +2934,9 @@ public sealed partial class Binder
             // 'parentAs' is the owning row of an item target; an entity target is its own row.
             if (parentAs is not null && selected.SelectMany(declared => declared.Targets).FirstOrDefault(target => target.Item is null) is { } entityTarget)
             {
-                errors.Add(Error(Codes.ResolveParentNotItem,
-                    $"'parentAs' names the row that owns an item target; '{resolve.Path}' resolves to the entity '{entityTarget.Entity}' itself.", index, resolve.Path));
+                errors.Add(Said(Error(Codes.ResolveParentNotItem,
+                    $"'parentAs' names the row that owns an item target; '{resolve.Path}' resolves to the entity '{entityTarget.Entity}' itself.", index, resolve.Path),
+                    new() { ["entity"] = entityTarget.Entity }));
                 return;
             }
 
@@ -3065,15 +3074,15 @@ public sealed partial class Binder
 
             if (anchor.Many && anchor.Stage.RemoteLookup is not null)
             {
-                errors.Add(Error(Codes.NotContinuable,
-                    $"'{kind}' cannot run on '{head}', which holds every child the lookup found for a row; a continued stage would lose which child it belongs to. Look up with 'first' to continue from one child.", index, root));
+                errors.Add(Continuable(Error(Codes.NotContinuable,
+                    $"'{kind}' cannot run on '{head}', which holds every child the lookup found for a row; a continued stage would lose which child it belongs to. Look up with 'first' to continue from one child.", index, root), "lookupAll", kind, head));
                 return;
             }
 
             if (anchor.Many)
             {
-                errors.Add(Error(Codes.NotContinuable,
-                    $"'{kind}' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, root));
+                errors.Add(Continuable(Error(Codes.NotContinuable,
+                    $"'{kind}' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, root), "elementsAll", kind, head));
                 return;
             }
 
@@ -3107,17 +3116,20 @@ public sealed partial class Binder
 
             var added = new List<string>();
 
-            foreach (var alias in aliases)
+            // The aliases are the stage's 'as' and then its 'parentAs'.
+            foreach (var (alias, position) in aliases.Select((alias, position) => (alias, position)))
             {
                 if (alias is null && added.Count > 0)
                     continue;
 
-                if (!CheckAlias(alias, index, out var checkedAlias))
+                var member = position == 0 ? "as" : "parentAs";
+
+                if (!CheckAlias(alias, index, out var checkedAlias, member))
                     return;
 
                 if (added.Contains(checkedAlias, StringComparer.Ordinal))
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'parentAs' and 'as' are both '{checkedAlias}'; the owning row needs a name of its own.", index, checkedAlias));
+                    errors.Add(Collision($"'parentAs' and 'as' are both '{checkedAlias}'; the owning row needs a name of its own.", index, checkedAlias, member, TakenHere(index, "as")));
                     return;
                 }
 
@@ -3181,18 +3193,22 @@ public sealed partial class Binder
             if (written is null)
                 return true;
 
-            if (!CheckAlias(written, index, out var checkedAlias))
+            if (!CheckAlias(written, index, out var checkedAlias, "outcomeAs"))
                 return false;
 
             if (own.Contains(checkedAlias, StringComparer.Ordinal))
             {
-                errors.Add(Error(Codes.AliasCollision, $"'outcomeAs' is '{checkedAlias}', which this stage already names; the outcome needs a name of its own.", index, checkedAlias));
+                errors.Add(Collision($"'outcomeAs' is '{checkedAlias}', which this stage already names; the outcome needs a name of its own.", index, checkedAlias, "outcomeAs", TakenHere(index, OwnMember(own, checkedAlias))));
                 return false;
             }
 
             outcomeAs = checkedAlias;
             return true;
         }
+
+        /// <summary>The member of a stage's own aliases (its <c>as</c>, then its <c>parentAs</c>) that wrote <paramref name="alias"/>.</summary>
+        private static string OwnMember(IEnumerable<string?> own, string alias) =>
+            own.TakeWhile(name => !string.Equals(name, alias, StringComparison.Ordinal)).Any() ? "parentAs" : "as";
 
         /// <summary>
         /// A union join: <c>resolve { as, byTarget: { target: path | { path, elements } } }</c>,
@@ -3293,9 +3309,10 @@ public sealed partial class Binder
 
                 if (under.Many)
                 {
-                    errors.Add(Error(Codes.NotContinuable, under.Stage.RemoteLookup is not null
+                    errors.Add(Continuable(Error(Codes.NotContinuable, under.Stage.RemoteLookup is not null
                         ? $"'resolve' cannot run on '{head}', which holds every child the lookup found for a row; a continued stage would lose which child it belongs to. Look up with 'first' to continue from one child."
-                        : $"'resolve' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, path));
+                        : $"'resolve' cannot run on '{head}', which holds every resolved target of a row ('elements: \"all\"'); a continued stage would lose which element it belongs to. Resolve with 'elements: \"first\"' or unwind the collection first.", index, path),
+                        under.Stage.RemoteLookup is not null ? "lookupAll" : "elementsAll", "resolve", head));
                     return;
                 }
 
@@ -3370,7 +3387,7 @@ public sealed partial class Binder
                 return;
             }
 
-            if (!CheckAlias(resolve.As, index, out var alias))
+            if (!CheckAlias(resolve.As, index, out var alias, "as"))
                 return;
 
             if (!CheckOutcomeAlias(resolve.OutcomeAs, [alias], index, out var outcomeAs))
@@ -3477,10 +3494,27 @@ public sealed partial class Binder
             if (head is null || !anchors.ContainsKey(head))
                 return false;
 
-            errors.Add(Error(Codes.NotContinuable,
-                $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. {(kind == "values" ? "The values of such a member are its owner's to list." : "Aggregate chain data in the report.")}", index, path));
+            errors.Add(Continuable(Error(Codes.NotContinuable,
+                $"'{kind}' cannot run on '{head}', which comes from its owner after the page: only resolve and lookup continue a chain there. {(kind == "values" ? "The values of such a member are its owner's to list." : "Aggregate chain data in the report.")}", index, path), "joinsOnly", kind, head));
             return true;
         }
+
+        /// <summary>
+        /// A <c>NOT_FILTERABLE</c> or <c>NOT_SORTABLE</c>. Under contract 2 it carries <c>reason</c>, in the
+        /// words explain gives a column's <c>why</c> (<c>notScalar</c>, <c>underCollection</c>,
+        /// <c>unknownKind</c>, <c>notStored</c>), and <c>kind</c>, the member's kind, when the model knows it.
+        /// </summary>
+        private QueryValidationError Usable(QueryValidationError error, string reason, Kind kind) =>
+            Said(error, kind == Kind.Unknown ? new() { ["reason"] = reason } : new() { ["reason"] = reason, ["kind"] = Kinds.NameOf(kind) });
+
+        /// <summary>
+        /// A <c>NOT_CONTINUABLE</c>. Under contract 2 it carries <c>reason</c>, why the stage cannot run
+        /// there (<c>lookupAll</c>: the alias holds every child of a lookup; <c>elementsAll</c>: it
+        /// holds every resolved target of a row; <c>joinsOnly</c>: only a resolve or a lookup continues
+        /// there), <c>kind</c>, the stage's kind, and <c>alias</c>, the alias it would run on.
+        /// </summary>
+        private QueryValidationError Continuable(QueryValidationError error, string reason, string kind, string alias) =>
+            Said(error, new() { ["reason"] = reason, ["kind"] = kind, ["alias"] = alias });
 
         /// <summary>
         /// The collections a path crosses that are not unwound here, outermost first: a lookup
@@ -3871,22 +3905,23 @@ public sealed partial class Binder
 
             if (path.CollectionAncestors > 0)
             {
-                errors.Add(Error(Codes.UnwindOrder, $"'{unwind.Path}' lies under another collection; unwind the outer one first.", index, unwind.Path));
+                errors.Add(Said(Error(Codes.UnwindOrder, $"'{unwind.Path}' lies under another collection; unwind the outer one first.", index, unwind.Path),
+                    new() { ["reason"] = "outerCollection", ["collection"] = CollectionsCrossed(unwind.Path).FirstOrDefault()?.Wire }));
                 return;
             }
 
             string? alias = null;
             string? indexAlias = null;
 
-            if (unwind.As is not null && !CheckAlias(unwind.As, index, out alias))
+            if (unwind.As is not null && !CheckAlias(unwind.As, index, out alias, "as"))
                 return;
 
-            if (unwind.IncludeIndex is not null && !CheckAlias(unwind.IncludeIndex, index, out indexAlias))
+            if (unwind.IncludeIndex is not null && !CheckAlias(unwind.IncludeIndex, index, out indexAlias, "includeIndex"))
                 return;
 
             if (alias is not null && indexAlias is not null && alias == indexAlias)
             {
-                errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used for both the element and the index.", index, alias));
+                errors.Add(Collision($"'{alias}' is used for both the element and the index.", index, alias, "includeIndex", TakenHere(index, "as")));
                 return;
             }
 
@@ -3955,7 +3990,8 @@ public sealed partial class Binder
 
             if (element is null)
             {
-                errors.Add(Error(Codes.FlattenNotRecursive, $"'{unwind.Path}' is not a collection of objects; flatten follows a member that nests the same kind of element.", index, unwind.Path));
+                errors.Add(Said(Error(Codes.FlattenNotRecursive, $"'{unwind.Path}' is not a collection of objects; flatten follows a member that nests the same kind of element.", index, unwind.Path),
+                    new() { ["member"] = name, ["reason"] = "notObjects" }));
                 return null;
             }
 
@@ -3973,7 +4009,8 @@ public sealed partial class Binder
 
             if (!recursive || !member.Stored || member.StorageName is null)
             {
-                errors.Add(Error(Codes.FlattenNotRecursive, $"'{name}' is not a collection of the same items as '{unwind.Path}'; flatten follows a member that nests the same kind of element.", index, unwind.Path + "." + name));
+                errors.Add(Said(Error(Codes.FlattenNotRecursive, $"'{name}' is not a collection of the same items as '{unwind.Path}'; flatten follows a member that nests the same kind of element.", index, unwind.Path + "." + name),
+                    new() { ["member"] = name, ["reason"] = "notRecursive" }));
                 return null;
             }
 
@@ -4053,13 +4090,13 @@ public sealed partial class Binder
             {
                 if (Aliases.Problem(by.As) is { } keyProblem)
                 {
-                    errors.Add(Error(Codes.InvalidAlias, keyProblem, index, by.As));
+                    errors.Add(Said(Error(Codes.InvalidAlias, keyProblem, index, by.As), new() { ["member"] = "groupAs", ["reason"] = Aliases.Reason(by.As) }));
                     continue;
                 }
 
                 if (!aliases.Add(by.As))
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'{by.As}' is used twice in the group.", index, by.As));
+                    errors.Add(Collision($"'{by.As}' is used twice in the group.", index, by.As, "groupAs", TakenHere(index, "groupAs")));
                     continue;
                 }
 
@@ -4094,13 +4131,14 @@ public sealed partial class Binder
 
                 if (path.CollectionAncestors > 0 || path.Kind == Kind.Array)
                 {
-                    errors.Add(Error(Codes.GroupOnCollection, $"'{by.Path}' is a collection or lies under one; unwind it first.", index, by.Path));
+                    errors.Add(Said(Error(Codes.GroupOnCollection, $"'{by.Path}' is a collection or lies under one; unwind it first.", index, by.Path),
+                        new() { ["collection"] = CollectionsCrossed(by.Path).FirstOrDefault()?.Wire }));
                     continue;
                 }
 
                 if (!Kinds.IsScalar(path.Kind))
                 {
-                    errors.Add(Error(Codes.NotFilterable, $"'{by.Path}' is {Kinds.WithArticle(path.Kind)}; a group key needs a scalar.", index, by.Path));
+                    errors.Add(Usable(Error(Codes.NotFilterable, $"'{by.Path}' is {Kinds.WithArticle(path.Kind)}; a group key needs a scalar.", index, by.Path), "notScalar", path.Kind));
                     continue;
                 }
 
@@ -4115,13 +4153,13 @@ public sealed partial class Binder
             {
                 if (Aliases.Problem(alias) is { } fieldProblem)
                 {
-                    errors.Add(Error(Codes.InvalidAlias, fieldProblem, index, alias));
+                    errors.Add(Said(Error(Codes.InvalidAlias, fieldProblem, index, alias), new() { ["member"] = "groupAs", ["reason"] = Aliases.Reason(alias) }));
                     continue;
                 }
 
                 if (!aliases.Add(alias))
                 {
-                    errors.Add(Error(Codes.AliasCollision, $"'{alias}' is used twice in the group.", index, alias));
+                    errors.Add(Collision($"'{alias}' is used twice in the group.", index, alias, "groupAs", TakenHere(index, "groupAs")));
                     continue;
                 }
 
@@ -4129,7 +4167,8 @@ public sealed partial class Binder
 
                 if (!Aggregates.Contains(function))
                 {
-                    errors.Add(Error(Codes.UnknownAggFunction, $"'{function}' is not an aggregate function.", index, null));
+                    errors.Add(Said(Error(Codes.UnknownAggFunction, $"'{function}' is not an aggregate function.", index, null),
+                        new() { ["value"] = function, ["allowed"] = Aggregates.ToList(), ["field"] = alias }));
                     continue;
                 }
 
@@ -4214,14 +4253,16 @@ public sealed partial class Binder
             if (path.CollectionAncestors > 0 || path.Kind is not (Kind.DateTime or Kind.Date))
             {
                 errors.Add(path.CollectionAncestors > 0
-                    ? Error(Codes.GroupOnCollection, $"'{trunc.Path}' lies under a collection that is not unwound; a dateTrunc key is one date per row. Unwind the collection first.", index, trunc.Path)
+                    ? Said(Error(Codes.GroupOnCollection, $"'{trunc.Path}' lies under a collection that is not unwound; a dateTrunc key is one date per row. Unwind the collection first.", index, trunc.Path),
+                        new() { ["collection"] = CollectionsCrossed(trunc.Path).FirstOrDefault()?.Wire })
                     : Error(Codes.InvalidAggregateArgument, $"'{trunc.Path}' is {Kinds.WithArticle(path.Kind)}; dateTrunc takes a date or a dateTime.", index, trunc.Path));
                 return null;
             }
 
             if (!Units.Contains(trunc.Unit ?? ""))
             {
-                errors.Add(Error(Codes.InvalidDateTruncUnit, $"'{trunc.Unit}' is not a unit; one of year, quarter, month, week, day, hour, minute, second.", index, trunc.Path));
+                errors.Add(Said(Error(Codes.InvalidDateTruncUnit, $"'{trunc.Unit}' is not a unit; one of year, quarter, month, week, day, hour, minute, second.", index, trunc.Path),
+                    new() { ["member"] = "unit", ["value"] = trunc.Unit, ["allowed"] = Units.ToList() }));
                 return null;
             }
 
@@ -4238,7 +4279,8 @@ public sealed partial class Binder
                 // and nothing when there is no such mapping.
                 if (!TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone) || !TryIanaId(zone, out var iana))
                 {
-                    errors.Add(Error(Codes.InvalidTimezone, $"'{timezone}' is not a timezone: an IANA zone id (Europe/Berlin), or an offset from UTC (+02:00).", index, trunc.Path));
+                    errors.Add(Said(Error(Codes.InvalidTimezone, $"'{timezone}' is not a timezone: an IANA zone id (Europe/Berlin), or an offset from UTC (+02:00).", index, trunc.Path),
+                        new() { ["member"] = "timezone", ["value"] = timezone }));
                     return null;
                 }
 
@@ -4253,7 +4295,8 @@ public sealed partial class Binder
 
                 if (!WeekDays.Contains(weekStart))
                 {
-                    errors.Add(Error(Codes.InvalidDateTruncUnit, $"'{trunc.WeekStart}' is not a day of the week.", index, trunc.Path));
+                    errors.Add(Said(Error(Codes.InvalidDateTruncUnit, $"'{trunc.WeekStart}' is not a day of the week.", index, trunc.Path),
+                        new() { ["member"] = "weekStart", ["value"] = trunc.WeekStart, ["allowed"] = WeekDays.Where(day => day.Length > 3).ToList() }));
                     return null;
                 }
             }
@@ -4327,7 +4370,8 @@ public sealed partial class Binder
 
                 if (path.CollectionAncestors > 0 && function != "push")
                 {
-                    errors.Add(Error(Codes.GroupOnCollection, $"'{expression.Path}' lies under a collection; unwind it first.", index, expression.Path));
+                    errors.Add(Said(Error(Codes.GroupOnCollection, $"'{expression.Path}' lies under a collection; unwind it first.", index, expression.Path),
+                        new() { ["collection"] = CollectionsCrossed(expression.Path ?? "").FirstOrDefault()?.Wire }));
                     return null;
                 }
 
@@ -4340,7 +4384,7 @@ public sealed partial class Binder
             {
                 if (!coercer.TryResolveVariable(expression.Var!, out var value))
                 {
-                    errors.Add(Error(Codes.UnboundVariable, $"The variable '{expression.Var}' is not bound.", index, null));
+                    errors.Add(Said(Error(Codes.UnboundVariable, $"The variable '{expression.Var}' is not bound.", index, null), new() { ["name"] = expression.Var }));
                     return null;
                 }
 
@@ -4680,7 +4724,8 @@ public sealed partial class Binder
 
                 if (field.ObjectForm && field.Direction.Length == 0)
                 {
-                    errors.Add(Error(Codes.InvalidSortDirection, "The object form of a sort entry needs a direction, asc or desc.", index, field.Path));
+                    errors.Add(Said(Error(Codes.InvalidSortDirection, "The object form of a sort entry needs a direction, asc or desc.", index, field.Path),
+                        new() { ["value"] = null, ["allowed"] = SortDirections }));
                     continue;
                 }
 
@@ -4693,7 +4738,8 @@ public sealed partial class Binder
 
                 if (ascending is null)
                 {
-                    errors.Add(Error(Codes.InvalidSortDirection, $"'{field.Direction}' is not a direction; asc or desc.", index, field.Path));
+                    errors.Add(Said(Error(Codes.InvalidSortDirection, $"'{field.Direction}' is not a direction; asc or desc.", index, field.Path),
+                        new() { ["value"] = field.Direction, ["allowed"] = SortDirections }));
                     continue;
                 }
 
@@ -4709,11 +4755,12 @@ public sealed partial class Binder
 
                 if (!path.Sortable)
                 {
-                    errors.Add(Error(Codes.NotSortable, path.CollectionAncestors > 0 || path.Kind == Kind.Array
+                    errors.Add(Usable(Error(Codes.NotSortable, path.CollectionAncestors > 0 || path.Kind == Kind.Array
                         ? $"'{field.Path}' lies in a collection; a sort needs one value per row."
                         : path.Kind == Kind.Unknown
                             ? $"'{field.Path}' is unknown to the model; it cannot order rows."
-                            : $"'{field.Path}' is {Kinds.WithArticle(path.Kind)}; a sort needs a scalar.", index, field.Path));
+                            : $"'{field.Path}' is {Kinds.WithArticle(path.Kind)}; a sort needs a scalar.", index, field.Path),
+                        path.CollectionAncestors > 0 || path.Kind == Kind.Array ? "underCollection" : path.Kind == Kind.Unknown ? "unknownKind" : "notScalar", path.Kind));
                     continue;
                 }
 
@@ -5113,13 +5160,15 @@ public sealed partial class Binder
 
             if (path.Kind == Kind.Array)
             {
-                errors.Add(Error(Codes.GroupOnCollection, $"'{stage.Path}' is a collection; values takes a scalar member, also one of the elements of a collection.", index, stage.Path));
+                errors.Add(Said(Error(Codes.GroupOnCollection, $"'{stage.Path}' is a collection; values takes a scalar member, also one of the elements of a collection.", index, stage.Path),
+                    new() { ["collection"] = stage.Path }));
                 return;
             }
 
             if (!Kinds.IsScalar(path.Kind) || path.Storage is null)
             {
-                errors.Add(Error(Codes.NotFilterable, $"'{stage.Path}' is {Kinds.WithArticle(path.Kind)}; values needs a scalar.", index, stage.Path));
+                errors.Add(Usable(Error(Codes.NotFilterable, $"'{stage.Path}' is {Kinds.WithArticle(path.Kind)}; values needs a scalar.", index, stage.Path),
+                    Kinds.IsScalar(path.Kind) ? "notStored" : "notScalar", path.Kind));
                 return;
             }
 
@@ -5130,7 +5179,8 @@ public sealed partial class Binder
 
             if (collections.Count != path.CollectionAncestors || collections.Any(collection => collection.Storage is null))
             {
-                errors.Add(Error(Codes.GroupOnCollection, $"'{stage.Path}' lies under a collection the values cannot be read through; unwind it first.", index, stage.Path));
+                errors.Add(Said(Error(Codes.GroupOnCollection, $"'{stage.Path}' lies under a collection the values cannot be read through; unwind it first.", index, stage.Path),
+                    new() { ["collection"] = collections.FirstOrDefault()?.Wire ?? CollectionsCrossed(stage.Path).FirstOrDefault()?.Wire }));
                 return;
             }
 
@@ -5237,23 +5287,77 @@ public sealed partial class Binder
         /// <summary>Whether a path holds text the collation folds: a string member that is not a single character stored as its code point.</summary>
         private static bool FoldsAsText(ResolvedPath path) => path.LeafKind == Kind.String && !OperandCoercer.IsCharRepresented(path) && path.Root is not ShapeNode.Outcome;
 
-        private bool CheckAlias(string? alias, int index, out string checkedAlias)
+        /// <summary>
+        /// Whether <paramref name="alias"/>, written under the stage member <paramref name="member"/>
+        /// (<c>as</c>, <c>parentAs</c>, <c>outcomeAs</c>, <c>includeIndex</c>), is a name the row can take.
+        /// A refusal carries that member under contract 2, an <c>INVALID_ALIAS</c> its <c>reason</c>
+        /// (<see cref="Aliases.Reason"/>), an <c>ALIAS_COLLISION</c> what holds the name (<see cref="TakenBy"/>).
+        /// </summary>
+        private bool CheckAlias(string? alias, int index, out string checkedAlias, string member)
         {
             checkedAlias = alias ?? "";
 
             if (Aliases.Problem(alias) is { } problem)
             {
-                errors.Add(Error(Codes.InvalidAlias, problem, index, alias));
+                errors.Add(Said(Error(Codes.InvalidAlias, problem, index, alias), new() { ["member"] = member, ["reason"] = Aliases.Reason(alias) }));
                 return false;
             }
 
             if (shape.IsTaken(checkedAlias))
             {
-                errors.Add(Error(Codes.AliasCollision, $"'{alias}' collides with a member or an earlier alias.", index, alias));
+                errors.Add(Collision($"'{alias}' collides with a member or an earlier alias.", index, checkedAlias, member, TakenBy(checkedAlias)));
                 return false;
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// What holds a name the row already has, for <c>params.takenBy</c>: <c>stage</c>, the caller's
+        /// index of the stage that added it as a root, or <c>root: true</c> when it is a member of the
+        /// entity the pipeline entered (under its wire or its storage name). Empty when neither is found.
+        /// </summary>
+        private Dictionary<string, object?> TakenBy(string alias)
+        {
+            if (!shape.Roots.ContainsKey(alias))
+                return new() { ["root"] = true };
+
+            foreach (var (index, _, before, after) in traced)
+            {
+                if (!before.Roots.ContainsKey(alias) && after.Roots.ContainsKey(alias))
+                    return new() { ["stage"] = index };
+            }
+
+            return new();
+        }
+
+        /// <summary>What holds a name another member of the same stage <paramref name="index"/> already gave, for <c>params.takenBy</c>.</summary>
+        private static Dictionary<string, object?> TakenHere(int index, string member) => new() { ["stage"] = index, ["member"] = member };
+
+        /// <summary>
+        /// An <c>ALIAS_COLLISION</c>. Under contract 2 it carries <c>alias</c>, the name, <c>member</c>, the
+        /// stage member that wrote it (<c>as</c>, <c>parentAs</c>, <c>outcomeAs</c>, <c>includeIndex</c>,
+        /// <c>groupAs</c> for a group's key or aggregate), and <c>takenBy</c>, what holds the name already.
+        /// </summary>
+        private QueryValidationError Collision(string message, int index, string alias, string member, Dictionary<string, object?> takenBy) =>
+            Said(Error(Codes.AliasCollision, message, index, alias), new() { ["alias"] = alias, ["member"] = member, ["takenBy"] = takenBy });
+
+        /// <summary>
+        /// <paramref name="error"/> with <paramref name="parameters"/> added to what it carries, under
+        /// contract 2; a contract 1 request reads the error it always read. A member the error carries
+        /// already keeps its value.
+        /// </summary>
+        private QueryValidationError Said(QueryValidationError error, Dictionary<string, object?> parameters)
+        {
+            if (!contract2)
+                return error;
+
+            var merged = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>(), StringComparer.Ordinal);
+
+            foreach (var (key, value) in parameters)
+                merged.TryAdd(key, value);
+
+            return error with { Params = merged };
         }
     }
 

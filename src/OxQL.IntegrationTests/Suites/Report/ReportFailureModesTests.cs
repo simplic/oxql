@@ -83,7 +83,7 @@ public class ReportFailureModesTests
         var answer = await client.QueryAsync(Request(ReportSeed.Transaction, pipeline.Replace("SELECT", "address.city")));
 
         answer.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_PARTIAL"], answer.ToString());
-        answer.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"clerk","keys":1,"unanswered":0,"service":"staff"}""");
+        answer.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"clerk","keys":1,"unanswered":0,"service":"staff","reason":"unanswered"}""");
         ReportSeed.DuplicateUserEmployeeIds.Select(Id).Should().Contain(answer.Strings("clerk.id").Single(), "one of the two employees is taken");
 
         var refused = await client.QueryAsync(Request(ReportSeed.Transaction, pipeline.Replace("SELECT", "address.street"), strict: true));

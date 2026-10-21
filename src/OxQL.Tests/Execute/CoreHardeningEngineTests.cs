@@ -41,6 +41,7 @@ public class CoreHardeningEngineTests
 
         refusal.Status.Should().Be(422);
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
+        refusal.Errors![0].Params.Should().Contain("reason", "valueSize");
     }
 
     [Fact]
@@ -50,6 +51,7 @@ public class CoreHardeningEngineTests
 
         refusal.Status.Should().Be(422);
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
+        refusal.Errors![0].Params.Should().Contain("reason", "memory");
     }
 
     [Fact]
@@ -60,6 +62,7 @@ public class CoreHardeningEngineTests
         refusal.Status.Should().Be(422);
         refusal.Errors.Should().ContainSingle().Which.Code.Should().Be(Codes.QueryTooExpensive);
         refusal.Errors![0].Message.Should().NotContain("circular");
+        refusal.Errors[0].Params.Should().Contain("reason", "nesting");
     }
 
     [Theory]

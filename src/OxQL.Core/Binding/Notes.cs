@@ -56,7 +56,7 @@ public static class Notes
     /// <summary>A continued part could not be checked at its owner.</summary>
     public const string RemoteUnchecked = "REMOTE_UNCHECKED";
 
-    /// <summary>A path asked under a union's alias (its select hint, or what the projection names under it) that one target lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>, <c>target</c>, <c>parent</c>: a path of the owning row, <c>parentAs</c>).</summary>
+    /// <summary>A path asked under a union's alias (its select hint, or what the projection names under it) that one target lacks is dropped for that target (params <c>alias</c>: the resolve's <c>as</c>; <c>target</c>, the target that lacks it, or <c>branch</c>, the target of the <c>byTarget</c> branch that lacks it; <c>parent</c>: true when the path is one of the owning row a <c>parentAs</c> names).</summary>
     public const string SelectPathNotOnTarget = "SELECT_PATH_NOT_ON_TARGET";
 
     /// <summary>The total count stops at a cap (params <c>cap</c>).</summary>

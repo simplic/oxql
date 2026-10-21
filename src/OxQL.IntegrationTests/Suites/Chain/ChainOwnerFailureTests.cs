@@ -91,7 +91,7 @@ public class ChainOwnerFailureTests : IClassFixture<ScriptedOwnerFleet>
 
         plain.ShouldBeOk().Strings("w.name").Should().Equal("Widget One", "Widget Two", null);
         plain.DiagnosticCodes.Should().Equal("RESOLVE_PARTIAL");
-        plain.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"w","keys":3,"unanswered":1,"service":"owner"}""");
+        plain.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"w","keys":3,"unanswered":1,"service":"owner","reason":"unanswered"}""");
 
         reported.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_PARTIAL", "RESOLVE_MISSING"], reported.ToString());
         RowsOf(reported.ShouldHaveDiagnostic("RESOLVE_MISSING")).Should().Equal((2, "W-3", "owner_unanswered"));
@@ -119,7 +119,7 @@ public class ChainOwnerFailureTests : IClassFixture<ScriptedOwnerFleet>
 
         plain.ShouldBeOk().Values("w").Count(alias => alias is not null).Should().Be(2);
         plain.DiagnosticCodes.Should().Equal("RESOLVE_PARTIAL");
-        plain.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"w","keys":3,"max":2}""");
+        plain.Diagnostics[0]["params"]!.ToJsonString().Should().Be("""{"alias":"w","keys":3,"max":2,"reason":"max"}""");
 
         reported.ShouldBeOk().DiagnosticCodes.Should().Equal(["RESOLVE_PARTIAL", "RESOLVE_MISSING"], reported.ToString());
         RowsOf(reported.ShouldHaveDiagnostic("RESOLVE_MISSING")).Should().Equal((2, "W-3", "owner_unanswered"));

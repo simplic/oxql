@@ -47,7 +47,7 @@ public class LookupMembersCompileTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId",
-                pipeline: [ { $match: {{OrgJson}} }, { $sort: { When: -1, _id: 1 } }, { $limit: 3 }, { $project: { _id: 1, Number: 1 } } ],
+                pipeline: [ { $match: {{OrgJson}} }, { $sort: { When: -1, _id: 1 } }, { $limit: 3 }, { $project: { {{BindHost.WholeOrderProject}} } } ],
                 as: "orders" } }
             """));
         compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 2 ] }, orders: { $slice: [ "$orders", 2 ] } } }"""));
@@ -74,7 +74,7 @@ public class LookupMembersCompileTests
         LookupOf(compiled, "latest")["pipeline"].AsBsonArray.Skip(1).Select(stage => stage.ToJson()).Should().Equal(
             BsonDocument.Parse("{ $sort: { When: -1, _id: 1 } }").ToJson(),
             BsonDocument.Parse("{ $limit: 1 }").ToJson(),
-            BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }").ToJson());
+            BsonDocument.Parse($"{{ $project: {{ {BindHost.WholeOrderProject} }} }}").ToJson());
         compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $set: { latest: { $arrayElemAt: [ "$latest", 0 ] } } }"""));
         compiled.PageStages[3].ShouldBeBson(BsonDocument.Parse("""{ $match: { "latest.Number": "x" } }"""), "the child is one row under the alias");
         compiled.LookupFlags.Should().BeEmpty();
@@ -91,7 +91,7 @@ public class LookupMembersCompileTests
 
         LookupOf(compiled, "siblings").ShouldBeBson(BsonDocument.Parse($$"""
             { from: "orders", localField: "cust._id", foreignField: "CustomerId", let: { oxParent: "$cust._id" },
-              pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxParent", null ] } } }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { _id: 1, Number: 1 } } ],
+              pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxParent", null ] } } }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { {{BindHost.WholeOrderProject}} } } ],
               as: "siblings" }
             """));
         Kinds(compiled.PageStages).Should().Equal("$match", "$lookup", "$set", "$unset", "$lookup", "$set", "$match", "$sort", "$limit");

@@ -423,21 +423,27 @@ public class ConformanceFixesTests
     // ---- the remote resolve default select ---------------------------------------------------
 
     /// <summary>
-    /// A remote resolve with no <c>select</c> answers the target's key and display, as the local
-    /// half of the same stage does. The caller cannot name the owner's display member, so the
-    /// reserved <c>$default</c> key asks the owner to apply the pair itself.
+    /// A remote join alias kept whole answers the target's whole row, as the local half of the same
+    /// stage does. The caller has no model of the owner's entity and cannot name its members, so the
+    /// reserved <c>$default</c> key asks the owner to expand it: every stored member of its entity.
+    /// It is one path written, whatever it expands to, so the projection limit counts it once.
     /// </summary>
     [Fact]
-    public async Task F_ENT_003_the_default_select_key_expands_to_the_entitys_key_and_display()
+    public async Task F_ENT_003_the_default_select_key_expands_to_the_entitys_whole_row()
     {
         var bound = await Bound("""[{ "project": { "$default": 1 } }]""");
         var project = (BoundStage.Project)bound.Stages[0];
+        var stored = BindHost.Probe.Entities[Order].Root.Members.Where(member => member.Stored).Select(member => member.WireName).ToList();
 
         project.Inclusion.Should().BeTrue();
-        project.Paths.Select(path => path.Wire).Should().BeEquivalentTo("id", "number");
+        project.Paths.Select(path => path.Wire).Should().Contain(["id", "number", "customerId", "items"]).And.BeEquivalentTo(stored, "every stored member of the entity");
+
+        var limited = await Bound("""[{ "project": { "$default": 1 } }]""", BindHost.Context(BindHost.Options(options => options.Limits.MaxProjectionFields = 1)));
+
+        ((BoundStage.Project)limited.Stages[0]).Paths.Should().HaveCount(stored.Count, "the limit counts the paths written, not what $default expands to");
     }
 
-    /// <summary>It is the entity's own pair, so it means nothing after a group.</summary>
+    /// <summary>It is the entity's own row, so it means nothing after a group.</summary>
     [Fact]
     public async Task F_ENT_003_the_default_select_key_is_refused_where_the_shape_is_not_the_entitys() =>
         (await Error("""[{ "group": { "by": [{ "path": "state", "as": "s" }], "fields": {} } }, { "project": { "$default": 1 } }]""", Codes.UnknownPath))

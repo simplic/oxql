@@ -184,7 +184,7 @@ public class ResolveBindTests
     }
 
     [Fact]
-    public async Task ParentAs_places_the_owning_row_of_an_item_target_with_its_key_and_display_by_default()
+    public async Task ParentAs_places_the_owning_row_of_an_item_target_whole_by_default()
     {
         var bound = await BoundAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "ship" } }, { "project": { "bl.code": 1, "ship.number": 1 } }]""");
         var resolve = bound.Stages.OfType<BoundStage.Resolve>().Single();
@@ -199,11 +199,11 @@ public class ResolveBindTests
         bound.FinalShape.Roots["bl"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item!.Wire.Should().Be("billingLines");
         bound.FinalShape.Roots["ship"].Should().BeOfType<ShapeNode.Keyed>().Which.Targets.Single().Item.Should().BeNull();
 
-        // The element shows what the projection names under it, with the matched member; the owning row kept whole, its key and display.
+        // The element shows what the projection names under it, with the matched member; the owning row kept whole, its whole row.
         var selected = await ResolveAsync("""[{ "resolve": { "path": "billingLineId", "as": "bl", "parentAs": "ship" } }, { "project": { "bl.code": 1, "bl.amount": 1, "ship": 1 } }]""");
 
         selected.Cases![0].Targets[0].Select!.Select(path => path.Storage).Should().Equal(["_id", "Amount", "Code"], "the matched member, then the projected paths in ordinal order");
-        selected.Cases[0].Targets[0].ParentSelect!.Select(path => path.Storage).Should().Equal("_id", "Number");
+        selected.Cases[0].Targets[0].ParentSelect!.Select(path => path.Storage).Should().Equal(["_id", "OrganizationId", "Number", "BillingLines", "DriverId"], "every stored member of the owning row");
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class ResolveBindTests
         resolve.Cases[0].When!.IsVariant.Should().BeFalse();
         resolve.Cases[0].Targets.Select(target => target.Declared.ToString()).Should().Equal("rc.shipment#billingLines", "rc.tour#billingLines");
         resolve.Cases[1].When!.Values.Should().Equal(new BsonString("customer"));
-        resolve.Cases[1].Targets.Single().Select!.Select(path => path.Storage).Should().Equal("_id", "Name");
+        resolve.Cases[1].Targets.Single().Select!.Select(path => path.Storage).Should().Equal(["_id", "OrganizationId", "Name", "Code"], "kept whole, the target's whole row");
         resolve.Executor.Should().Be(ResolveExecutor.Keyed);
         resolve.IsRemote.Should().BeFalse();
     }
@@ -433,7 +433,7 @@ public class ResolveBindTests
         narrowed["cases"]![0]!["when"]!["path"]!.GetValue<string>().Should().Be("LocalSource.Type");
         target["item"]!.GetValue<string>().Should().Be("BillingLines");
         target["field"]!.GetValue<string>().Should().Be("_id");
-        target["parentSelect"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("_id", "Number");
+        target["parentSelect"]!.AsArray().Select(path => path!.GetValue<string>()).Should().Equal("_id", "OrganizationId", "Number", "BillingLines", "DriverId");
 
         var remote = RenderedResolve(await BoundAsync("""[{ "resolve": { "path": "source.id", "as": "src" } }, { "project": { "src.code": 1 } }]"""));
 

@@ -102,9 +102,8 @@ internal static class OwnerQueryBuilder
         // projection names under it, or, kept whole, its select hint (a local target's as bound, the
         // paths it has). An empty set is an alias the row does not show, kept alive for the stages
         // continued under it: the keyed member alone. Without a set, the reserved $default key, which the owner expands to its own
-        // entity's key and display members — the pair the local half of this stage keeps — or, for an
-        // item, the matched member. Without a projection the owner answers with whole documents,
-        // organizationId and every other member included, to a caller that wanted a label.
+        // entity's whole row as its model has it — the set the local half of this stage keeps — or, for an
+        // item, the matched member.
         // A probe projects the keyed member alone.
         IReadOnlyList<string>? select = target.IsRemote ? target.RemoteSelect : target.Select?.Select(path => path.Wire).ToList();
         var projection = new Dictionary<string, int>(StringComparer.Ordinal);

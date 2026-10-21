@@ -238,7 +238,7 @@ public class GoldenPipelineTests
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
             { $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId",
-                pipeline: [ { $match: {{OrgJson}} }, { $match: { Flag: true } }, { $sort: { _id: 1 } }, { $limit: 6 }, { $project: { _id: 1, Number: 1 } } ],
+                pipeline: [ { $match: {{OrgJson}} }, { $match: { Flag: true } }, { $sort: { _id: 1 } }, { $limit: 6 }, { $project: { {{BindHost.WholeOrderProject}} } } ],
                 as: "orders" } }
             """));
         compiled.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 5 ] }, orders: { $slice: [ "$orders", 5 ] } } }"""), "one child over the limit is fetched to flag the cut");
@@ -248,7 +248,7 @@ public class GoldenPipelineTests
         var unread = await Compile("""[{ "lookup": { "from": "probe.order", "path": "customerId", "as": "orders" } }, { "page": { "count": true } }]""", "probe.customer");
 
         unread.CountStages!.Should().HaveCount(3, "a lookup nothing reads is not in the count");
-        unread.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse("{ $project: { _id: 1, Number: 1 } }"), "the default select is the child's key and display member");
+        unread.PageStages[^2]["$lookup"]["pipeline"].AsBsonArray[3].ShouldBeBson(BsonDocument.Parse($"{{ $project: {{ {BindHost.WholeOrderProject} }} }}"), "kept whole the child shows its whole row: every stored member");
     }
 
     [Fact]
@@ -258,7 +258,7 @@ public class GoldenPipelineTests
 
         ShouldBe(compiled.PageStages,
             $"{{ $match: {OrgJson} }}",
-            $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }""",
+            $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { {{BindHost.WholeCustomerProject}} } } ], as: "cust__arr" } }""",
             """{ $set: { cust: { $arrayElemAt: [ "$cust__arr", 0 ] } } }""",
             """{ $unset: "cust__arr" }""",
             """{ $sort: { "cust.Name": 1, _id: 1 } }""",

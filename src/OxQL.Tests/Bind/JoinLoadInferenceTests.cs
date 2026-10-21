@@ -10,7 +10,7 @@ namespace OxQL.Tests.Bind;
 /// <summary>
 /// Load inference at bind time: a join loads its key, what later stages
 /// read under its alias and its output set; the output set is what the projection names under the
-/// alias, or, kept whole, its key and display member. A contract 2 join has no <c>select</c>: the
+/// alias, or, kept whole, the target's whole row (every stored member). A contract 2 join has no <c>select</c>: the
 /// member is refused by name, and nothing but the projection chooses what an alias shows. The reads
 /// are the binder's ledger, written at its read sites with an explicit use.
 /// </summary>
@@ -73,22 +73,45 @@ public class JoinLoadInferenceTests
     {
         var bound = await BoundAsync("""
             [{ "resolve": { "path": "customerId", "as": "c" } },
-             { "match": { "c.code": { "eq": "x" } } }]
+             { "match": { "c.code": { "eq": "x" } } },
+             { "project": { "number": 1, "c.name": 1 } }]
             """);
 
         bound.Loads["c"].Loads.Should().Equal("code", "id", "name");
-        bound.Loads["c"].Shows.Should().Equal(["id", "name"], "kept whole, the alias shows its key and display member");
-        bound.FinalShape.Roots["c"].Should().BeOfType<ShapeNode.Entity>().Which.Select.Should().Equal("id", "name");
+        bound.Loads["c"].Shows.Should().Equal(["name"], "the alias shows what the projection names under it");
     }
 
     [Fact]
-    public async Task Kept_whole_an_alias_shows_and_loads_key_and_display()
+    public async Task Kept_whole_an_alias_shows_and_loads_the_targets_whole_row()
     {
-        var display = Model.Entities[Customer].Display!.Wire;
         var bound = await BoundAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }]""");
 
-        bound.Loads["c"].Loads.Should().BeEquivalentTo(["id", display]);
-        bound.Loads["c"].Shows.Should().Equal("id", display);
+        bound.Loads["c"].Loads.Should().Equal(["code", "id", "name", "organizationId"], "every stored member of the target, in ordinal order");
+        bound.Loads["c"].Shows.Should().Equal(["id", "organizationId", "name", "code"], "every stored member of the target, in the model's order");
+        bound.FinalShape.Roots["c"].Should().BeOfType<ShapeNode.Entity>().Which.Select.Should().Equal("id", "organizationId", "name", "code");
+    }
+
+    [Fact]
+    public async Task An_alias_named_itself_beside_a_path_under_it_shows_and_loads_the_targets_whole_row()
+    {
+        // Named itself the alias is kept whole; a path under it names a member the whole row already holds.
+        var bound = await BoundAsync("""
+            [{ "resolve": { "path": "customerId", "as": "c" } },
+             { "project": { "number": 1, "c": 1, "c.code": 1 } }]
+            """);
+
+        bound.Loads["c"].Loads.Should().Equal(["code", "id", "name", "organizationId"], "the whole row, not the key alone");
+        bound.Loads["c"].Shows.Should().Equal(["id", "organizationId", "name", "code"]);
+    }
+
+    [Fact]
+    public async Task Under_contract_1_an_alias_kept_whole_shows_its_key_and_display()
+    {
+        var display = Model.Entities[Customer].Display!.Wire;
+        var bound = await BoundAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }]""", Invoice, BindHost.Context(contract: 1));
+
+        Wires(bound.Stages.OfType<BoundStage.Resolve>().Single().Select!).Should().Equal(["id", display], "the contract 1 default select is frozen: key and display");
+        bound.FinalShape.Roots["c"].Should().BeOfType<ShapeNode.Entity>().Which.Select.Should().Equal("id", display);
     }
 
     [Fact]
@@ -100,7 +123,7 @@ public class JoinLoadInferenceTests
             """);
 
         bound.Loads["c"].Shows.Should().Equal("code");
-        bound.Loads["c"].Loads.Should().Equal(["code", "id"], "the key and the projected path; the display member is what a whole alias would show");
+        bound.Loads["c"].Loads.Should().Equal(["code", "id"], "the key and the projected path; the display member and the rest of the row are what a whole alias would show");
     }
 
     [Fact]
@@ -117,14 +140,14 @@ public class JoinLoadInferenceTests
     }
 
     [Fact]
-    public async Task A_stage_that_reads_the_alias_itself_loads_its_output_set_not_the_targets_whole_row()
+    public async Task A_stage_that_reads_the_alias_itself_loads_its_output_set()
     {
         var bound = await BoundAsync("""
             [{ "resolve": { "path": "customerId", "as": "c" } },
              { "group": { "by": [{ "path": "number", "as": "n" }], "fields": { "customer": { "first": "c" } } } }]
             """);
 
-        bound.Loads["c"].Loads.Should().Equal(["id", "name"], "the group replaced the row, but the first customer of each group is the alias as a whole row shows it: key and display, never the whole row of the target");
+        bound.Loads["c"].Loads.Should().Equal(["code", "id", "name", "organizationId"], "the group replaced the row, but the first customer of each group is the alias as the row kept it whole: the target's whole row");
         bound.Loads["c"].Shows.Should().BeEmpty();
     }
 
@@ -147,11 +170,12 @@ public class JoinLoadInferenceTests
     {
         var bound = await BoundAsync("""
             [{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "latest", "first": true } },
-             { "sort": [{ "latest.customerCode": "asc" }] }]
+             { "sort": [{ "latest.customerCode": "asc" }] },
+             { "project": { "name": 1, "latest.number": 1 } }]
             """, Customer);
 
         Wires(bound.Stages.OfType<BoundStage.Lookup>().Single().Select).Should().Equal("customerCode", "id", "number");
-        bound.Loads["latest"].Shows.Should().Equal("id", "number");
+        bound.Loads["latest"].Shows.Should().Equal("number");
     }
 
     [Fact]
@@ -160,13 +184,14 @@ public class JoinLoadInferenceTests
         // rc.invoice#customerCode references rc.customer by its code, which is not the key.
         var bound = await BoundAsync("""
             [{ "resolve": { "path": "customerId", "as": "c" } },
-             { "lookup": { "from": "rc.invoice", "path": "customerCode", "on": "c", "as": "sameCode" } }]
+             { "lookup": { "from": "rc.invoice", "path": "customerCode", "on": "c", "as": "sameCode" } },
+             { "project": { "number": 1, "c.name": 1, "sameCode": 1 } }]
             """);
 
         bound.Stages.OfType<BoundStage.Lookup>().Single().ParentKeyStorage.Should().Be("c.Code");
         Reads(bound, 1).Should().Equal(("c.code", "lookupOn", "c"));
         bound.Loads["c"].Loads.Should().Equal("code", "id", "name");
-        bound.Loads["c"].Shows.Should().Equal(["id", "name"], "the member the lookup joins on is read, not shown");
+        bound.Loads["c"].Shows.Should().Equal(["name"], "the member the lookup joins on is read, not shown");
     }
 
     [Fact]
@@ -177,15 +202,16 @@ public class JoinLoadInferenceTests
              { "unwind": { "path": "invoices", "as": "inv" } },
              { "match": { "inv.customerCode": { "eq": "x" } } },
              { "unwind": { "path": "inv.lines", "as": "line" } },
-             { "match": { "line.customerId": { "exists": true } } }]
+             { "match": { "line.customerId": { "exists": true } } },
+             { "project": { "name": 1, "inv.number": 1, "line.customerId": 1 } }]
             """, Customer);
 
-        bound.Reads.Where(read => read.Stage >= 2).Select(read => (read.Path, read.Alias, read.Relative)).Should().Equal(
+        bound.Reads.Where(read => read.Stage is >= 2 and < 5).Select(read => (read.Path, read.Alias, read.Relative)).Should().Equal(
             ("inv.customerCode", "invoices", "customerCode"),
             ("inv.lines", "invoices", "lines"),
             ("line.customerId", "invoices", "lines.customerId"));
-        bound.Loads["invoices"].Loads.Should().Equal(["customerCode", "id", "lines", "number"], "an element's member is a member of the collection the lookup loads");
-        bound.FinalShape.Roots["inv"].Should().BeOfType<ShapeNode.Entity>().Which.Select.Should().Equal(["id", "number"], "the unwound copy shows what the lookup's alias shows");
+        bound.Loads["invoices"].Loads.Should().Equal(["customerCode", "id", "lines", "number"], "an element's member is a member of the collection the lookup loads; the unwind itself reads the array, not the whole row of its elements");
+        bound.FinalShape.Roots["inv"].Should().BeOfType<ShapeNode.Entity>().Which.Select.Should().Equal(["number"], "the unwound copy shows what the projection names under it");
     }
 
     [Fact]
@@ -210,7 +236,7 @@ public class JoinLoadInferenceTests
         var whole = await BoundAsync("""[{ "resolve": { "path": "contactId", "as": "r" } }]""");
         var projected = await BoundAsync("""[{ "resolve": { "path": "contactId", "as": "r" } }, { "project": { "number": 1, "r.phone": 1, "r.email": 1 } }]""");
 
-        whole.Stages.OfType<BoundStage.Resolve>().Single().RemoteSelect.Should().BeNull("the owner's own key and display");
+        whole.Stages.OfType<BoundStage.Resolve>().Single().RemoteSelect.Should().BeNull("the owner's own whole row");
         whole.Loads["r"].Should().BeEquivalentTo(new JoinLoad(null, null));
         projected.Stages.OfType<BoundStage.Resolve>().Single().RemoteSelect.Should().Equal(["email", "phone"], "the projection's paths, in ordinal order, and nothing beside them");
         projected.Loads["r"].Should().BeEquivalentTo(new JoinLoad(["email", "phone"], ["email", "phone"]));
@@ -257,7 +283,8 @@ public class JoinLoadInferenceTests
     {
         var bound = await BoundAsync("""
             [{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoice", "first": true } },
-             { "resolve": { "path": "invoice.slot.holderId", "as": "holder" } }]
+             { "resolve": { "path": "invoice.slot.holderId", "as": "holder" } },
+             { "project": { "name": 1, "invoice.id": 1, "holder": 1 } }]
             """, Customer);
 
         bound.Reads.Where(read => read.Stage == 1).Select(read => (read.Path, read.UseName, read.TypeOnly)).Should().Equal(
@@ -317,13 +344,14 @@ public class JoinLoadInferenceTests
     {
         var bound = await BoundAsync("""
             [{ "lookup": { "from": "rc.invoice", "path": "customerId", "as": "invoices", "filter": { "customerCode": { "eq": "x" } }, "sort": [{ "number": "desc" }] } },
-             { "resolve": { "path": "invoices.customerId", "as": "again", "elements": "first", "filter": { "code": { "neq": "y" } } } }]
+             { "resolve": { "path": "invoices.customerId", "as": "again", "elements": "first", "filter": { "code": { "neq": "y" } } } },
+             { "project": { "name": 1, "invoices.id": 1, "again": 1 } }]
             """, Customer);
 
-        bound.Reads.Select(read => (read.Stage, read.Path, read.UseName)).Should().Equal(
+        bound.Reads.Where(read => read.Stage < 2).Select(read => (read.Stage, read.Path, read.UseName)).Should().Equal(
             [(0, "id", "lookupOn"), (1, "invoices.customerId", "resolveKey")],
             "the lookup's path, filter and sort and the resolve's filter are bound against the child and the target");
-        bound.Loads["invoices"].Loads.Should().Equal(["customerId", "id", "number"], "the filter and the sort run inside the join and need no load");
+        bound.Loads["invoices"].Loads.Should().Equal(["customerId", "id"], "the filter and the sort run inside the join and need no load");
     }
 
     [Fact]
@@ -332,7 +360,7 @@ public class JoinLoadInferenceTests
         var bound = await BoundAsync("""[{ "resolve": { "path": "customerId", "as": "c" } }, { "project": { "c.name": 0, "number": 0 } }]""");
 
         Reads(bound, 1).Should().BeEmpty("a path an exclusion names is removed, not read");
-        bound.Loads["c"].Shows.Should().Equal(["id", "name"], "the alias stays whole; the row leaves the excluded member out");
+        bound.Loads["c"].Shows.Should().Equal(["id", "organizationId", "name", "code"], "the alias stays whole, the target's whole row; the row leaves the excluded member out");
     }
 
     [Fact]

@@ -58,7 +58,7 @@ public class JoinsLookupTests
     // ── rows ────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task L01_L02_L09_the_lookup_returns_exactly_the_children_key_ordered_with_the_default_select_and_an_empty_array_where_there_are_none()
+    public async Task L01_L02_L09_the_lookup_returns_exactly_the_children_key_ordered_each_kept_whole_and_an_empty_array_where_there_are_none()
     {
         string[] parents = ["VEH-001", "VEH-002", "VEH-003"];
         var expected = Vehicles().Where(vehicle => parents.Contains(Corpus.Text(vehicle, "matchCode"))).Order(Comparer<CorpusRow>.Create(Corpus.CompareIds))
@@ -84,8 +84,9 @@ public class JoinsLookupTests
             IdsIn(children).Should().Equal(expected[index].Children, "L2: the array is ordered by the child's key");
         }
 
-        // L9: no select means the child's key plus its display member, and nothing else.
-        answer.Items[0]!["equipment"]![0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "name"]);
+        // L9: kept whole, each child is its whole row: every member it stores, not its key and display member alone.
+        answer.Items[0]!["equipment"]![0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(
+            ["id", "organizationId", "isDeleted", "name", "number", "equipmentType", "vehicle", "assignedShipmentId", "createDateTime", "updateDateTime", "createUserId", "updateUserId", "createUserName", "updateUserName"]);
     }
 
     [Fact]
@@ -516,9 +517,9 @@ public class JoinsLookupTests
         for (var index = 0; index < expected.Count; index++)
             IdsIn(answer.Items[index]!["kids"]).Should().Equal(expected[index], parents[index].Key);
 
-        // The child's display member is name, so the default select is {id, name}; and B's
-        // child, whose parent id names an A row, is hidden by the child's own scope.
-        answer.Items[0]!["kids"]![0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "name"]);
+        // Kept whole, each child is its whole row; and B's child, whose parent id names an A row, is
+        // hidden by the child's own scope.
+        answer.Items[0]!["kids"]![0]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "organizationId", "isDeleted", "parentId", "name", "sequence"]);
     }
 
     private static IReadOnlyList<Guid> IdsOf(IEnumerable<CorpusRow> rows) => rows.Select(row => row.Id).ToList();

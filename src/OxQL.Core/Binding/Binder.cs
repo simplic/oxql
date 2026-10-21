@@ -500,11 +500,11 @@ public sealed partial class Binder
         /// <summary>
         /// What each join loads, once every stage is bound: its key, what later stages read under its
         /// alias, and its output set. The output set is what the final row shows under the alias: the
-        /// paths the projection names under it, or, kept whole, its key and display member (a contract 2
-        /// join has no <c>select</c>). A join in the aggregate loads all three and the row is cut to the output set
+        /// paths the projection names under it, or, kept whole, its whole row (a contract 2
+        /// join has no <c>select</c>; see <see cref="WholeOf"/>). A join in the aggregate loads all three and the row is cut to the output set
         /// (the final shape carries it), so what is only read never shows. A join after the page (keyed
         /// or remote) is read by nothing but the projection, so it asks its owner for the output set
-        /// alone: the paths, or nothing for the owner's own key and display.
+        /// alone: the paths, or nothing for the owner's whole row.
         /// </summary>
         private void InferLoads()
         {
@@ -566,8 +566,10 @@ public sealed partial class Binder
         /// What a join in the aggregate loads under <paramref name="join"/>: its key, every path a stage
         /// reads under it or under an unwound copy or element of it, and the <paramref name="whole"/> set
         /// where the final row keeps the alias or a copy of it whole, or a stage reads the alias itself
-        /// (an existence test on it, the first of it in a group): a whole alias is its output set, never
-        /// the target's full row. Paths another one covers are left out.
+        /// (an existence test on it, the first of it in a group): a whole alias is its output set, which
+        /// kept whole is the target's whole row (<see cref="WholeOf"/>). An unwind of the alias reads the
+        /// array, not what its elements hold: what is read under the unwound copy is read under the alias,
+        /// so the unwind alone loads no more than the key. Paths another one covers are left out.
         /// </summary>
         private List<string> LoadedBy(Shape final, string join, string? key, IReadOnlyList<string> whole)
         {
@@ -579,7 +581,7 @@ public sealed partial class Binder
             paths.AddRange(reads.Where(read => read.Alias == join && !read.TypeOnly && read.Relative is { Length: > 0 }).Select(read => read.Relative!));
 
             if (final.Roots.Any(root => root.Value is ShapeNode.Entity or ShapeNode.Array && Shape.JoinOf(root.Value) == join && RootOutput.Of(final, root.Key) is { Carried: true, Whole: true })
-                || reads.Any(read => read.Alias == join && !read.TypeOnly && read.Relative is { Length: 0 }))
+                || reads.Any(read => read.Alias == join && !read.TypeOnly && read.Use != ReadUse.Unwind && read.Relative is { Length: 0 }))
                 paths.AddRange(whole);
 
             return RootOutput.Cover(paths);
@@ -610,7 +612,7 @@ public sealed partial class Binder
         /// <summary>
         /// A keyed or remote resolve with what its owners are asked for (see <see cref="InferLoads"/>): per
         /// alias the paths the projection names under it; kept whole, nothing, which the
-        /// owner query spells as the owner's own key and display. A local target binds the paths it has
+        /// owner query spells as the owner's whole row (<c>$default</c>). A local target binds the paths it has
         /// and drops the others for itself; a remote one is sent them, and its owner says what it lacks.
         /// </summary>
         private BoundStage.Resolve InferKeyed(Shape final, BoundStage.Resolve resolve)
@@ -2702,9 +2704,7 @@ public sealed partial class Binder
         private IReadOnlyList<ResolvedPath> BindSelect(IReadOnlyList<string>? select, EntityDef target, Shape targetShape, int index)
         {
             var paths = new List<ResolvedPath>();
-            var wanted = select is { Count: > 0 }
-                ? select
-                : new[] { target.Key?.Wire, target.Display?.Wire }.Where(wire => wire is not null).Select(wire => wire!).ToList();
+            var wanted = select is { Count: > 0 } ? select : WholeOf(target);
 
             foreach (var wire in wanted)
             {
@@ -3646,11 +3646,11 @@ public sealed partial class Binder
                 return null;
             }
 
-            // An entity's default select is its key and display; an item's is its matched field.
+            // An entity's default select is what it shows kept whole (WholeOf); an item's is its matched field.
             var wanted = resolve.Select is { Count: > 0 } written
                 ? written
                 : declared.Item is null
-                    ? new[] { target.Key?.Wire, target.Display?.Wire }.Where(wire => wire is not null).Select(wire => wire!).ToList()
+                    ? WholeOf(target)
                     : [declared.Field];
             var select = new List<ResolvedPath>();
             var dropped = new List<string>();
@@ -3672,7 +3672,7 @@ public sealed partial class Binder
 
             var filter = resolve.Filter?.Condition is null ? null : BindTargetFilter(resolve.Filter.Condition, at, index);
 
-            // The owning row shows its key and display until the loads are inferred: the paths the
+            // The owning row shows its whole row until the loads are inferred: the paths the
             // projection names under 'parentAs' then replace them (InferLoads).
             var parentSelect = withParent && declared.Item is not null ? BindSelect(null, target, entityShape, index) : null;
 
@@ -3766,8 +3766,8 @@ public sealed partial class Binder
 
         /// <summary>
         /// A contract 2 join has no <c>select</c>: what it loads is inferred from what is read under its
-        /// alias, and what it shows is what the projection names under it (without one, its key and
-        /// display member). The member is refused by name, with the stage that replaces it, on the public
+        /// alias, and what it shows is what the projection names under it (named itself, or without a
+        /// projection, the target's whole row). The member is refused by name, with the stage that replaces it, on the public
         /// route and on an internal call alike: an owner query carries what the origin needs of an alias
         /// as its own <c>project</c> stage, and a stage continued at an owner travels as the caller
         /// wrote it, so nothing the engine sends writes one. Contract 1 keeps its <c>select</c>.
@@ -3780,7 +3780,7 @@ public sealed partial class Binder
             errors.Add(new QueryValidationError
             {
                 Code = Codes.UnknownStageMember,
-                Message = $"'select' is not a member of {stage}; a {stage} carries {members}. A join loads what later stages read under its alias and shows what a project stage names under it ({{ \"project\": {{ \"{alias ?? "alias"}.<path>\": 1 }} }}); without a projection it shows its key and display member.",
+                Message = $"'select' is not a member of {stage}; a {stage} carries {members}. A join loads what later stages read under its alias and shows what a project stage names under it ({{ \"project\": {{ \"{alias ?? "alias"}.<path>\": 1 }} }}); named itself, or without a projection, it shows its whole row.",
                 Stage = index,
                 Params = new Dictionary<string, object?> { ["stage"] = stage, ["member"] = "select", ["reason"] = "removed", ["use"] = "project" },
             });
@@ -4525,8 +4525,9 @@ public sealed partial class Binder
                 return;
             }
 
-            if (project.Fields.Count > options.Limits.MaxProjectionFields)
-                errors.Add(Limit(Codes.MaxProjectionFieldsExceeded, $"The projection names {project.Fields.Count} paths; the limit is {options.Limits.MaxProjectionFields}.", index, null, "maxProjectionFields", options.Limits.MaxProjectionFields, project.Fields.Count));
+            // The limit counts the paths written: $default stands for one, however many members it expands to.
+            if (rawProject.Fields.Count > options.Limits.MaxProjectionFields)
+                errors.Add(Limit(Codes.MaxProjectionFieldsExceeded, $"The projection names {rawProject.Fields.Count} paths; the limit is {options.Limits.MaxProjectionFields}.", index, null, "maxProjectionFields", options.Limits.MaxProjectionFields, rawProject.Fields.Count));
 
             var included = project.Fields.Where(pair => pair.Value != 0 && pair.Key != WireNames.IdWire).Select(pair => pair.Key).ToList();
             var excluded = project.Fields.Where(pair => pair.Value == 0 && pair.Key != WireNames.IdWire).Select(pair => pair.Key).ToList();
@@ -4576,11 +4577,10 @@ public sealed partial class Binder
         }
 
         /// <summary>
-        /// Expands the reserved <c>$default</c> key of a projection to the entity's key and
-        /// display members — the same pair a resolve with no <c>select</c> keeps locally.
-        /// A remote resolve has no model of its target and so cannot name that pair itself;
-        /// with this the owner applies it, and the remote default is the local one rather
-        /// than the owner's whole row.
+        /// Expands the reserved <c>$default</c> key of a projection to what the entity shows kept
+        /// whole (<see cref="WholeOf"/>) — the same set a join alias kept whole shows locally.
+        /// A remote join has no model of its target and so cannot name that set itself; with
+        /// this the owner applies it, and the remote alias kept whole is the local one.
         /// </summary>
         private ProjectStage? ExpandDefault(ProjectStage project, int index)
         {
@@ -4589,7 +4589,7 @@ public sealed partial class Binder
 
             if (shape.Grouped || !shape.IsRootShape)
             {
-                errors.Add(Error(Codes.UnknownPath, $"'{DefaultSelectKey}' is the entity's key and display members; the shape here is not the entity's.", index, DefaultSelectKey));
+                errors.Add(Error(Codes.UnknownPath, $"'{DefaultSelectKey}' is the entity's row kept whole; the shape here is not the entity's.", index, DefaultSelectKey));
                 return null;
             }
 
@@ -4599,12 +4599,19 @@ public sealed partial class Binder
                 if (name != DefaultSelectKey)
                     fields[name] = value;
 
-            foreach (var wire in new[] { entity.Key?.Wire, entity.Display?.Wire })
-                if (wire is not null)
-                    fields[wire] = 1;
+            foreach (var wire in WholeOf(entity))
+                fields[wire] = 1;
 
             return project with { Fields = fields };
         }
+
+        /// <summary>
+        /// What a join alias kept whole shows of <paramref name="target"/>: under contract 2 its
+        /// whole row, every stored member; under contract 1 its key and display members.
+        /// </summary>
+        private List<string> WholeOf(EntityDef target) => contract2
+            ? target.Root.Members.Where(member => member.Stored).Select(member => member.WireName).ToList()
+            : new[] { target.Key?.Wire, target.Display?.Wire }.Where(wire => wire is not null).Select(wire => wire!).ToList();
 
         // ---- sort ----------------------------------------------------------------------------
 

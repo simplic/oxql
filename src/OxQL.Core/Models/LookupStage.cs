@@ -103,8 +103,8 @@ public sealed record ResolveStage
     public string? Target { get; init; }
 
     /// <summary>
-    /// The alias the owning row of an item target is placed under: its key and display members kept
-    /// whole, else the paths the projection names under it. Contract 2.
+    /// The alias the owning row of an item target is placed under: its whole row kept whole, else the
+    /// paths the projection names under it. Contract 2.
     /// </summary>
     public string? ParentAs { get; init; }
 

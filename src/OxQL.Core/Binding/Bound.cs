@@ -229,7 +229,7 @@ public sealed record BoundCaseCondition(ResolvedPath Path, string Storage, IRead
 /// <para>
 /// Under contract 2 the loads are inferred once every stage is bound: the
 /// key and the output set of the alias, which is the paths the projection names under it, or kept
-/// whole the <c>select</c> hint, else the target's key and display (a null
+/// whole the <c>select</c> hint, else the target's whole row (a null
 /// <paramref name="RemoteSelect"/>: the owner's own). Under contract 1 they are the select as written.
 /// </para>
 /// <paramref name="DroppedSelect"/> lists the paths this target does not have, which the target

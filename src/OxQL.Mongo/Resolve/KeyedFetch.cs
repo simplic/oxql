@@ -794,8 +794,26 @@ internal sealed class KeyedFetch
         ]);
     }
 
-    private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage) =>
-        Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{OwnerQueryBuilder.TargetOf(slot)}'; narrow it.", stage);
+    /// <summary>
+    /// <c>SEMI_JOIN_TOO_LARGE</c>: the condition selects more target rows than a semi-join carries. It
+    /// carries <c>max</c>, that cap, <c>target</c>, the entity the condition selects rows of, and <c>path</c>,
+    /// the condition's path.
+    /// </summary>
+    private static Refusal TooLarge(SemiJoinSlot slot, int cap, int? stage)
+    {
+        var refusal = Refusal.NotExecutable(Codes.SemiJoinTooLarge, $"The condition on '{slot.Leaf.Path.Wire}' selects more than {cap} rows of '{OwnerQueryBuilder.TargetOf(slot)}'; narrow it.", stage);
+
+        return refusal with
+        {
+            Errors = refusal.Errors?.Select(error => error with
+            {
+                Params = new Dictionary<string, object?>(error.Params ?? new Dictionary<string, object?>(), StringComparer.Ordinal)
+                {
+                    ["max"] = cap, ["target"] = OwnerQueryBuilder.TargetOf(slot), ["path"] = slot.Leaf.Path.Wire,
+                },
+            }).ToList(),
+        };
+    }
 
     /// <summary>The count an owner reported for a page, when one was asked for.</summary>
     private static (long Value, bool Capped)? CountOf(JsonNode result)
@@ -1078,7 +1096,10 @@ internal sealed class KeyedFetch
 
     /// <summary>
     /// An owner that did not answer a round: <c>RESOLVE_TIMEOUT</c> or <c>RESOLVE_UNREACHABLE</c>
-    /// naming the aliases, and every key it was sent unanswered. True when the call failed.
+    /// naming the aliases, and every key it was sent unanswered. True when the call failed. The
+    /// diagnostic stands at the caller's stage and alias when the call was for one join's alias;
+    /// <c>params.stages</c> lists the stage of each alias, in the order of <c>params.aliases</c>, and a
+    /// timeout carries its budget as <c>params.timeoutMs</c>.
     /// </summary>
     private bool Failed(OwnerCall call, List<Diagnostic> diagnostics)
     {
@@ -1086,6 +1107,7 @@ internal sealed class KeyedFetch
             return false;
 
         var aliases = call.Sent.Select(entry => entry.Target.Stage.As).Distinct().ToList();
+        var stages = aliases.Select(alias => CallerStage(call.Sent.First(entry => entry.Target.Stage.As == alias).Target.Stage)).ToList();
         var owner = call.Service == SelfService ? "This host" : $"The owner of '{call.Service}'";
 
         // What the owner was asked for is null. A record kept from an earlier answer is in its row all
@@ -1098,10 +1120,13 @@ internal sealed class KeyedFetch
             : $"{named} is null on this page for the {asked} {(asked == 1 ? "key" : "keys")} asked for; the rows of {kept} {(kept == 1 ? "key" : "keys")} kept from an earlier answer carry their record.";
         var remembered = call.Outcome.Remembered;
         var reason = ReasonOf(call.Outcome);
-        var parameters = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases, ["reason"] = reason };
+        var parameters = new Dictionary<string, object?> { ["service"] = call.Service == SelfService ? null : call.Service, ["aliases"] = aliases, ["reason"] = reason, ["stages"] = stages };
 
         if (call.Outcome.Status is { } answered)
             parameters["status"] = answered;
+
+        if (reason == ReasonTimeout && remembered is null)
+            parameters["timeoutMs"] = (int)Math.Round(call.Outcome.Budget.TotalMilliseconds);
 
         if (kept > 0)
         {
@@ -1118,6 +1143,8 @@ internal sealed class KeyedFetch
         diagnostics.Add(new Diagnostic
         {
             Code = failure == Failure.Timeout ? Codes.ResolveTimeout : Codes.ResolveUnreachable,
+            Stage = aliases is [_] ? stages[0] : null,
+            Path = aliases is [var only] ? only : null,
             Message = remembered is not null ? $"{owner} was not asked: {Last(remembered)}, and it is asked again in {Math.Max(1, (int)Math.Ceiling(remembered.RetryAfter.TotalSeconds))} s at the latest; {nulled}" : reason switch
             {
                 ReasonTimeout => $"{owner} did not answer within {(int)Math.Round(call.Outcome.Budget.TotalMilliseconds)} ms; {nulled}",
@@ -1159,7 +1186,8 @@ internal sealed class KeyedFetch
     /// <summary>
     /// An owner answer with a next page: the owner cut rows, so the chunk's
     /// <paramref name="open"/> keys are <c>owner_unanswered</c>, never <c>not_found</c>, and none of
-    /// the chunk's <paramref name="keys"/> is cached; <c>RESOLVE_PARTIAL</c> names the alias.
+    /// the chunk's <paramref name="keys"/> is cached; <c>RESOLVE_PARTIAL</c> names the alias, at the
+    /// caller's stage of the join, with <c>params.reason</c> <c>unanswered</c>.
     /// </summary>
     private static void Partial(string service, TargetPlan target, IReadOnlyList<string> open, IReadOnlyList<string> keys, List<Diagnostic> diagnostics)
     {
@@ -1172,7 +1200,9 @@ internal sealed class KeyedFetch
         {
             Code = Codes.ResolvePartial,
             Message = $"{owner} answered '{target.Stage.As}' with more rows than one page of '{target.Entity}' holds; {open.Count} of its {keys.Count} keys are not resolved on this page.",
-            Params = new Dictionary<string, object?> { ["alias"] = target.Stage.As, ["keys"] = keys.Count, ["unanswered"] = open.Count, ["service"] = service == SelfService ? null : service },
+            Stage = CallerStage(target.Stage),
+            Path = target.Stage.As,
+            Params = new Dictionary<string, object?> { ["alias"] = target.Stage.As, ["keys"] = keys.Count, ["unanswered"] = open.Count, ["service"] = service == SelfService ? null : service, ["reason"] = "unanswered" },
         });
     }
 
@@ -2465,7 +2495,9 @@ internal sealed class KeyedFetch
                 {
                     Code = Codes.ResolvePartial,
                     Message = $"'{stage.As}' needs {misses.Count} keys of '{target.Entity}'; the request asks owners for at most {budget.Max} keys, so only {asked.Count} are resolved on this page.",
-                    Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = budget.Max },
+                    Stage = plan.Index,
+                    Path = stage.As,
+                    Params = new Dictionary<string, object?> { ["alias"] = stage.As, ["keys"] = misses.Count, ["max"] = budget.Max, ["reason"] = "max" },
                 });
 
                 target.Unanswered.UnionWith(misses.Where(key => !granted.Contains(key)));
@@ -3514,6 +3546,9 @@ internal sealed class KeyedFetch
 
     /// <summary>The caller's index of a bound stage, which diagnostics and refusals name (a caller stage that bound to nothing leaves no position).</summary>
     private static int? StageIndexOf(BoundPipeline bound, BoundStage stage) => bound.CallerIndexOf(stage);
+
+    /// <summary>The caller's stage index a join was bound at, or null for a stage the binder supplied.</summary>
+    private static int? CallerStage(BoundStage.Resolve stage) => stage.Stage < 0 ? null : stage.Stage;
 
     /// <summary>The position of a bound stage among the bound stages, for reading the stages after it.</summary>
     private static int? PositionOf(BoundPipeline bound, BoundStage stage)

@@ -30,12 +30,12 @@ public class LateJoinTests
 
     private static string OrgJson => $"{{ OrganizationId: {Org.ToJson()} }}";
 
-    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { _id: 1, Number: 1 } } ], as: "orders" } }""";
+    private static string OrdersLookupJson => $$"""{ $lookup: { from: "orders", localField: "_id", foreignField: "CustomerId", pipeline: [ { $match: {{OrgJson}} }, { $sort: { _id: 1 } }, { $limit: 101 }, { $project: { {{BindHost.WholeOrderProject}} } } ], as: "orders" } }""";
 
     /// <summary>The lookup's cut to its limit and its truncation flag: it fetches one child more than it keeps.</summary>
     private const string OrdersCutJson = """{ $set: { __oxLk0: { $gt: [ { $size: "$orders" }, 100 ] }, orders: { $slice: [ "$orders", 100 ] } } }""";
 
-    private static string CustomerLookupJson => $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }""";
+    private static string CustomerLookupJson => $$"""{ $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $limit: 1 }, { $project: { {{BindHost.WholeCustomerProject}} } } ], as: "cust__arr" } }""";
 
     private static async Task<CompiledQuery> Compile(string pipeline, string entity = Order)
     {

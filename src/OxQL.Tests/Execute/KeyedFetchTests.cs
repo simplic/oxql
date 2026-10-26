@@ -143,7 +143,13 @@ public class KeyedFetchTests
         result.Items[0]!["contact"]!["name"]!.GetValue<string>().Should().Be("C1");
         result.Items[1]!["contact"]!["name"]!.GetValue<string>().Should().Be("C2");
         result.Items[2]!["contact"].Should().BeNull("the third key is beyond the cap");
-        result.Diagnostics.Should().ContainSingle().Which.Code.Should().Be(Codes.ResolvePartial);
+
+        var partial = result.Diagnostics.Should().ContainSingle().Subject;
+
+        partial.Code.Should().Be(Codes.ResolvePartial);
+        partial.Stage.Should().Be(0, "the resolve is the caller's first stage");
+        partial.Path.Should().Be("contact");
+        partial.Params.Should().Contain("reason", "max").And.Contain("max", 2).And.Contain("alias", "contact");
     }
 
     [Fact]
@@ -194,7 +200,14 @@ public class KeyedFetchTests
 
         result.Items[0]!["contact"].Should().BeNull();
         result.Items[0]!["number"]!.GetValue<string>().Should().Be("a", "the page never fails because a resolve did");
-        result.Diagnostics.Should().ContainSingle().Which.Code.Should().Be(Codes.ResolveUnreachable);
+
+        var unreachable = result.Diagnostics.Should().ContainSingle().Subject;
+
+        unreachable.Code.Should().Be(Codes.ResolveUnreachable);
+        unreachable.Stage.Should().Be(0, "one join's alias: the diagnostic stands at its stage");
+        unreachable.Path.Should().Be("contact");
+        unreachable.Params!["stages"].Should().BeEquivalentTo(new int?[] { 0 });
+        unreachable.Params.Should().NotContainKey("timeoutMs");
     }
 
     [Fact]
@@ -209,7 +222,12 @@ public class KeyedFetchTests
 
         (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromSeconds(5));
         result.Items[0]!["contact"].Should().BeNull();
-        result.Diagnostics.Should().ContainSingle().Which.Code.Should().Be(Codes.ResolveTimeout);
+        var timeout = result.Diagnostics.Should().ContainSingle().Subject;
+
+        timeout.Code.Should().Be(Codes.ResolveTimeout);
+        timeout.Stage.Should().Be(0);
+        timeout.Path.Should().Be("contact");
+        ((int)timeout.Params!["timeoutMs"]!).Should().BeInRange(0, 50, "the budget the call was given, as the message says it");
         client.Calls.Single().Budget.Should().BeLessThanOrEqualTo(TimeSpan.FromMilliseconds(50));
     }
 
@@ -315,6 +333,7 @@ public class KeyedFetchTests
         refusal.Status.Should().Be(422);
         refusal.Errors![0].Code.Should().Be(Codes.SemiJoinTooLarge);
         refusal.Errors[0].Stage.Should().Be(1);
+        refusal.Errors[0].Params.Should().Contain("max", 1).And.Contain("path", "veh.matchCode").And.ContainKey("target");
         runner.Calls.Should().BeEmpty();
     }
 

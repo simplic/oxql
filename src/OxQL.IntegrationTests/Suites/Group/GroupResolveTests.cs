@@ -69,7 +69,7 @@ public class GroupResolveTests
             }
         }
 
-        // Kept whole, the alias shows the target's key and display member, as before a group.
+        // Kept whole, the alias shows the target's whole row, as before a group.
         var whole = await client.SendAsync(Corpus.Equipment, $$"""[ {{ByVehicle}}, { "resolve": { "path": "vehicle", "as": "veh" } }, {{Tail}} ]""");
 
         whole.ShouldBeOk();

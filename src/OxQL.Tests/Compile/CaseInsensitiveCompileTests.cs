@@ -190,7 +190,7 @@ public class CaseInsensitiveCompileTests
         var compiled = await Compile("""[{ "resolve": { "path": "customerId", "as": "cust", "filter": { "matchCode": { "eq": "m" } } } }]""");
 
         compiled.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
-            { $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "cust__arr" } }
+            { $lookup: { from: "customers", localField: "CustomerId", foreignField: "_id", pipeline: [ { $match: {{OrgJson}} }, { $match: { MatchCode: "m" } }, { $limit: 1 }, { $project: { {{BindHost.WholeCustomerProject}} } } ], as: "cust__arr" } }
             """));
         compiled.Collation.Should().NotBeNull("the filter folds");
 
@@ -230,7 +230,7 @@ public class CaseInsensitiveCompileTests
                     then: { $and: [ { $eq: [ { $indexOfBytes: [ {{Text("$Code")}}, {{Text("$$oxKey")}} ] }, 0 ] }, { $eq: [ { $strLenBytes: {{Text("$Code")}} }, { $strLenBytes: {{Text("$$oxKey")}} } ] } ] },
                     else: true } } } },
                 { $limit: 1 },
-                { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
+                { $project: { Code: 1, _id: 1, Name: 1, OrganizationId: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().NotBeNull();
 
@@ -256,7 +256,7 @@ public class CaseInsensitiveCompileTests
 
         // The one thing asked beside the plain join: the folder is named by its code, and a reference that holds nothing names none.
         resolve.PageStages.Single(stage => stage.Contains("$lookup")).ShouldBeBson(BsonDocument.Parse($$"""
-            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } }, { $limit: 1 }, { $project: { _id: 1, Name: 1 } } ], as: "folder__arr" } }
+            { $lookup: { from: "tmp_ci_folders", localField: "FolderCode", foreignField: "Code", let: { oxKey: "$FolderCode" }, pipeline: [ { $match: {{OrgJson}} }, { $match: { $expr: { $gt: [ "$$oxKey", null ] }, Code: { $ne: null } } }, { $limit: 1 }, { $project: { Code: 1, _id: 1, Name: 1, OrganizationId: 1 } } ], as: "folder__arr" } }
             """));
         resolve.Collation.Should().BeNull();
     }

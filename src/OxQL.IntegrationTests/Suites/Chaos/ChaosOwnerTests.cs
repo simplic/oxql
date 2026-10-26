@@ -59,7 +59,7 @@ public class ChaosOwnerTests
         var answer = await Parsed(owner);
 
         answer["results"]!.AsArray().Should().HaveCount(2);
-        answer["results"]![0]!["items"]!.ToJsonString().Should().Be("""[{"code":"W-1","name":"Widget One"},{"code":"W-2","name":"Widget Two"}]""", "$default expands to the key and the display, nothing else");
+        answer["results"]![0]!["items"]!.ToJsonString().Should().Be($$"""[{"code":"W-1","id":"W-2","name":"Widget One","organizationId":"{{LabIdentity.OrganisationA}}"},{"code":"W-2","id":"W-3","name":"Widget Two","organizationId":"{{LabIdentity.OrganisationA}}"}]""", "$default expands to the whole row, every member of the widget");
         answer["results"]![1]!["pageInfo"]!["hasNextPage"]!.GetValue<bool>().Should().BeFalse();
     }
 

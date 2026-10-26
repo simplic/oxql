@@ -135,7 +135,7 @@ public class ContinuationExecutionTests
         sent.Pipeline.Select(stage => stage.Kind).Should().Equal("match", "resolve", "project", "page");
         sent.Pipeline[1].Resolve!.Path.Should().Be("companyId", "'r.' is the owner's row");
         sent.Pipeline[1].Resolve!.As.Should().Be("co");
-        sent.Pipeline[2].Project!.Fields.Keys.Should().BeEquivalentTo(["$default", "id", "co"], "the continued alias is projected beside what the alias kept whole asks for (the owner's key and display) and the key");
+        sent.Pipeline[2].Project!.Fields.Keys.Should().BeEquivalentTo(["$default", "id", "co"], "the continued alias is projected beside what the alias kept whole asks for (the owner's whole row) and the key");
         sent.Strict.Should().BeTrue("strict travels in the body of a query that carries a chain");
         sent.Variables.Should().BeNull("an owner never receives variables");
 
@@ -802,7 +802,7 @@ public class ContinuationExecutionTests
         host.Client.Calls.Should().BeEmpty();
 
         var row = result.Items.Should().ContainSingle().Subject!;
-        row["n1"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "number"], "what continued stages added is not the owner row's");
+        row["n1"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "organizationId", "number", "nextKey"], "kept whole the alias is the owner's whole row as stored, and what continued stages added is not the owner row's");
         row["n2"]!["number"]!.GetValue<string>().Should().Be("RE-1");
         row["n3"]!["number"]!.GetValue<string>().Should().Be("RE-1", "added two levels down and lifted through both");
     }

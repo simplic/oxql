@@ -952,7 +952,7 @@ public sealed partial class MongoQueryEngine
                     Code = Notes.ReferenceTargetUnknown,
                     Message = $"'{query.Service}' does not publish the entity '{entity}' that '{resolve.As}' joins: the reference declares a target its owner does not have under that id, and a run is refused for it. Correct the declared target id, or have the owner publish the entity.",
                     Stage = stage,
-                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision },
+                    Params = new Dictionary<string, object?> { ["service"] = query.Service, ["target"] = entity, ["revision"] = validation.Revision, ["alias"] = resolve.As },
                 });
             }
         }
@@ -1697,7 +1697,7 @@ public sealed partial class MongoQueryEngine
 
     /// <summary>
     /// What the row carries under an alias a continued stage adds and the row keeps whole, as the stage's
-    /// owner answered it (its <c>shows</c>: the hint with the key, or key and display): the owner infers
+    /// owner answered it (its <c>shows</c>: the hint with the key, or its whole row): the owner infers
     /// its own join, so only its answer names the key that rides with a hint. Null when the alias is not
     /// one row of a continued stage, or its owner did not answer or named no paths.
     /// </summary>
@@ -1780,9 +1780,9 @@ public sealed partial class MongoQueryEngine
 
     /// <summary>
     /// What a join alias the row keeps whole carries, relative to the alias: a keyed resolve's paths (the
-    /// union of its targets': the select hint with the key, else key and display), the owning row's of a
+    /// union of its targets': the select hint with the key, else its whole row), the owning row's of a
     /// <c>parentAs</c> (with the <c>entity</c> it names), a remote resolve's hint, or a continued
-    /// stage's hint; null when the alias has none this host knows (the owner's own key and display).
+    /// stage's hint; null when the alias has none this host knows (the owner's whole row).
     /// </summary>
     private static List<(string Path, Kind Kind)>? SelectOf(BoundPipeline bound, string alias)
     {

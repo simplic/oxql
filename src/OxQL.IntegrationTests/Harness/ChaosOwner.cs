@@ -148,7 +148,7 @@ public sealed record ChaosRequest(DateTimeOffset At, string Method, string Path,
 /// the wrong widget rather than nothing. Every <c>match</c> stage of a query is applied (leaves with
 /// several operators, <c>and</c>/<c>or</c>/<c>not</c>, <c>options.caseSensitive: false</c>); a path it does not have
 /// is refused with <c>UNKNOWN_PATH</c>, an unknown entity with <c>UNKNOWN_ENTITY</c>. Projection
-/// (<c>$default</c> expands to the key and display, <c>code</c> and <c>name</c>), sort on
+/// (<c>$default</c> expands to the whole row, every member, as an engine owner expands it), sort on
 /// <c>code</c>/<c>id</c>/<c>name</c>, and <c>page</c> offset/limit/includeTotalCount are honoured.
 /// </para>
 /// <para>
@@ -587,7 +587,7 @@ public sealed class ChaosOwner : HttpMessageHandler
 
         var wanted = fields is null
             ? Members.ToHashSet()
-            : fields.Select(pair => pair.Key).SelectMany(field => field == "$default" ? ["code", "name"] : new[] { field }).ToHashSet();
+            : fields.Select(pair => pair.Key).SelectMany(field => field == "$default" ? Members : new[] { field }).ToHashSet();
 
         var items = new JsonArray(slice.Select(row => (JsonNode?)new JsonObject(Members
             .Where(wanted.Contains)

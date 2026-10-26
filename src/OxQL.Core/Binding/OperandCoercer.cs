@@ -122,7 +122,7 @@ public sealed class OperandCoercer
 
             if (!TryResolveVariable(name!, out element))
             {
-                errors.Add(Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path.Wire));
+                errors.Add(Unbound(name, stage, path.Wire));
                 return null;
             }
 
@@ -169,7 +169,7 @@ public sealed class OperandCoercer
                     {
                         if (!TryResolveVariable(itemName!, out item))
                         {
-                            errors.Add(Error(Codes.UnboundVariable, $"The variable '{itemName}' is not bound.", stage, path.Wire));
+                            errors.Add(Unbound(itemName, stage, path.Wire));
                             continue;
                         }
 
@@ -323,7 +323,7 @@ public sealed class OperandCoercer
         {
             if (!TryResolveVariable(variable!, out element))
             {
-                errors.Add(Error(Codes.UnboundVariable, $"The variable '{variable}' is not bound.", stage, path.Wire));
+                errors.Add(Unbound(variable, stage, path.Wire));
                 return null;
             }
         }
@@ -456,7 +456,7 @@ public sealed class OperandCoercer
             case JsonValueKind.Object when TryVariable(element, out var name):
                 if (!TryResolveVariable(name!, out var value))
                 {
-                    errors.Add(Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path));
+                    errors.Add(Unbound(name, stage, path));
                     return JsonNode.Parse(element.GetRawText());
                 }
 
@@ -954,6 +954,13 @@ public sealed class OperandCoercer
 
     private static QueryValidationError Error(string code, string message, int stage, string? path) =>
         new() { Code = code, Message = message, Stage = stage, Path = path };
+
+    /// <summary>A variable the request does not bind. Under contract 2 it carries the variable's <c>name</c>.</summary>
+    private QueryValidationError Unbound(string? name, int stage, string? path) =>
+        Error(Codes.UnboundVariable, $"The variable '{name}' is not bound.", stage, path) with
+        {
+            Params = contract2 ? new Dictionary<string, object?> { ["name"] = name } : null,
+        };
 
     /// <summary>
     /// An operand of another kind than the member or the operator takes. Under contract 2 it carries

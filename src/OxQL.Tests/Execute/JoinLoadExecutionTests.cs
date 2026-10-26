@@ -79,13 +79,40 @@ public class JoinLoadExecutionTests
         var (engine, runner, _) = Host();
         var result = await RunAsync(engine, """
             [{ "resolve": { "path": "customerId", "as": "c" } },
-             { "match": { "c.code": { "eq": "A-1" } } }]
+             { "match": { "c.code": { "eq": "A-1" } } },
+             { "project": { "number": 1, "c.name": 1 } }]
             """);
 
         var lookup = runner.Calls.Single().Stages.Single(stage => stage.Contains("$lookup"))["$lookup"]["pipeline"].AsBsonArray;
 
-        lookup.Last()["$project"].AsBsonDocument.Names.Should().BeEquivalentTo(["Code", "_id", "Name"], "the key, the display member the whole alias shows, and what the match reads");
-        Keys(result.Items.Single()!["c"]).Should().Equal(["id", "name"], "what the match only read is loaded and not shown");
+        lookup.Last()["$project"].AsBsonDocument.Names.Should().BeEquivalentTo(["Code", "_id", "Name"], "the key, the path the projection names under the alias, and what the match reads");
+        Keys(result.Items.Single()!["c"]).Should().Equal(["name"], "what the match only read is loaded and not shown");
+    }
+
+    [Fact]
+    public async Task Kept_whole_the_join_projects_and_the_row_shows_the_targets_whole_row()
+    {
+        var (engine, runner, _) = Host();
+        var result = await RunAsync(engine, """[{ "resolve": { "path": "customerId", "as": "c" } }, { "match": { "c.code": { "eq": "A-1" } } }]""");
+
+        runner.Calls.Single().Stages.Single(stage => stage.Contains("$lookup"))["$lookup"]["pipeline"].AsBsonArray.Last()["$project"].AsBsonDocument.Names
+            .Should().BeEquivalentTo(["Code", "_id", "Name", "OrganizationId"], "every stored member of the target");
+        Keys(result.Items.Single()!["c"]).Should().Equal(["id", "organizationId", "name", "code"], "the whole row, in the model's order");
+    }
+
+    [Fact]
+    public async Task An_alias_the_projection_names_itself_beside_a_path_under_it_shows_the_targets_whole_row()
+    {
+        // Named itself the alias is kept whole: a path under it adds nothing and never narrows it to the key.
+        var (engine, runner, _) = Host();
+        var result = await RunAsync(engine, """
+            [{ "resolve": { "path": "customerId", "as": "c" } },
+             { "project": { "number": 1, "c": 1, "c.code": 1 } }]
+            """);
+
+        runner.Calls.Single().Stages.Single(stage => stage.Contains("$lookup"))["$lookup"]["pipeline"].AsBsonArray.Last()["$project"].AsBsonDocument.Names
+            .Should().BeEquivalentTo(["Code", "_id", "Name", "OrganizationId"], "the whole row is loaded");
+        Keys(result.Items.Single()!["c"]).Should().Equal(["id", "organizationId", "name", "code"], "and shown");
     }
 
     [Fact]
@@ -98,7 +125,7 @@ public class JoinLoadExecutionTests
             """);
 
         runner.Calls.Single().Stages.Single(stage => stage.Contains("$lookup"))["$lookup"]["pipeline"].AsBsonArray.Last()["$project"].AsBsonDocument.Names
-            .Should().BeEquivalentTo(["Code", "_id"], "the display member is what a whole alias would show: nobody reads it here");
+            .Should().BeEquivalentTo(["Code", "_id"], "the display member and the rest of the row are what a whole alias would show: nobody reads them here");
         Keys(result.Items.Single()!["c"]).Should().Equal("code");
     }
 
@@ -111,7 +138,7 @@ public class JoinLoadExecutionTests
              { "resolve": { "path": "customerId", "as": "c" } }]
             """);
 
-        Keys(result.Items.Single()!["c"]).Should().Equal(["id", "name"], "a projection cannot name a root a later stage adds: the alias is whole, its key and display member");
+        Keys(result.Items.Single()!["c"]).Should().Equal(["id", "organizationId", "name", "code"], "a projection cannot name a root a later stage adds: the alias is whole, the target's whole row");
     }
 
     // ---- a join after the page -----------------------------------------------------------------------------
@@ -217,20 +244,20 @@ public class JoinLoadExecutionTests
             [{ "resolve": { "path": "customerId", "as": "c" } },
              { "match": { "c.code": { "eq": "x" } } },
              { "lookup": { "from": "rc.invoice", "path": "customerCode", "on": "c", "as": "same" } },
-             { "project": { "number": 1, "c": 1, "same.number": 1 } }]
+             { "project": { "number": 1, "c.name": 1, "same.number": 1 } }]
             """);
 
         result.Valid.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
         result.Stage(0).Reads.Select(read => read.ToJsonString()).Should().Equal("""{"path":"customerId","use":"resolveKey"}""");
         result.Stage(1).Reads.Select(read => read.ToJsonString()).Should().Equal("""{"path":"c.code","use":"match","alias":"c"}""");
         result.Stage(2).Reads.Select(read => read.ToJsonString()).Should().Equal("""{"path":"c.code","use":"lookupOn","alias":"c"}""");
-        result.Stage(3).Reads.Select(read => read["path"]!.GetValue<string>()).Should().Equal("number", "c", "same.number");
+        result.Stage(3).Reads.Select(read => read["path"]!.GetValue<string>()).Should().Equal("number", "c.name", "same.number");
 
         Strings(result.Alias("c")["loads"]).Should().Equal("code", "id", "name");
-        Strings(result.Alias("c")["shows"]).Should().Equal("id", "name");
+        Strings(result.Alias("c")["shows"]).Should().Equal("name");
         Strings(result.Alias("same")["shows"]).Should().Equal("number");
         result.Alias("c").AsObject().ContainsKey("hint").Should().BeFalse("a join has no select to report");
-        result.Result!.Columns.Where(column => column.Root == "c").Select(column => column.Path).Should().Equal(["c.id", "c.name"], "the columns are the output set: what the match read is no column");
+        result.Result!.Columns.Where(column => column.Root == "c").Select(column => column.Path).Should().Equal(["c.name"], "the columns are the output set: what the match read is no column");
     }
 
     [Fact]

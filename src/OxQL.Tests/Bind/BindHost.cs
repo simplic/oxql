@@ -22,6 +22,16 @@ internal static class BindHost
 
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    /// <summary>
+    /// The <c>$project</c> body a contract 2 join of <c>probe.order</c> kept whole loads: every stored member
+    /// of the order, by storage name, in the order the binder names them. Written out rather than read off
+    /// the model, so a member added to the probe order shows here as a change to review.
+    /// </summary>
+    public const string WholeOrderProject = "Addon: 1, Amount: 1, Anything: 1, Big: 1, Blob: 1, Broken: 1, ByNumber: 1, ContactNumber: 1, Count: 1, CreateDateTime: 1, Customer: 1, CustomerId: 1, Day: 1, Figure: 1, Flag: 1, GuidText: 1, _id: 1, Initial: 1, Items: 1, Link: 1, Location: 1, Matrix: 1, MaybeCount: 1, MaybeState: 1, MissingId: 1, MoneyText: 1, NotAnEntity: 1, Note: 1, Number: 1, Options: 1, OrganizationId: 1, PriceList: 1, Prices: 1, QRCode: 1, Ratio: 1, RelatedIds: 1, x: 1, ShipTo: 1, Single: 1, Small: 1, Span: 1, Stamp: 1, State: 1, StateName: 1, Supplier: 1, SupplierId: 1, Tags: 1, Tod: 1, Tree: 1, Unsigned: 1, VehicleId: 1, When: 1, Wide: 1";
+
+    /// <summary>The <c>$project</c> body a contract 2 join of <c>probe.customer</c> kept whole loads (see <see cref="WholeOrderProject"/>).</summary>
+    public const string WholeCustomerProject = "CreateDateTime: 1, _id: 1, MatchCode: 1, Name: 1, Number: 1, OrganizationId: 1";
+
     private static readonly Dictionary<string, EntityModel> vendored = new(StringComparer.Ordinal);
 
     /// <summary>The CLR fixture graph: every kind, every registry fact.</summary>

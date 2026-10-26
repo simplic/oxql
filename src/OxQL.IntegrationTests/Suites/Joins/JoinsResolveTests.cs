@@ -82,8 +82,8 @@ public class JoinsResolveTests
 
             AliasId(answer.Items[index], "veh").Should().Be(target.Id, rows[index].Key);
             veh!["matchCode"]!.GetValue<string>().Should().Be(Corpus.Text(target, "matchCode"));
-            // M10: no select means the target's key plus its display member.
-            veh.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["id", "matchCode"]);
+            // M10: an alias kept whole shows the target's whole row, its key and display member among the rest.
+            veh.AsObject().Select(pair => pair.Key).Should().Contain(["id", "matchCode", "organizationId", "registrationPlate", "createDateTime"]);
         }
     }
 
@@ -332,7 +332,7 @@ public class JoinsResolveTests
         answer.ShouldHaveIds(IdsOf(rows));
         answer.Strings("r.code").Should().Equal(expected.Select(target => target is null ? null : Corpus.Text(target, "code")));
         answer.Strings("r.name").Should().Equal(expected.Select(target => target is null ? null : Corpus.Text(target, "name")));
-        answer.Items[0]!["r"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["code", "name"], "M10 for a key that is not id");
+        answer.Items[0]!["r"]!.AsObject().Select(pair => pair.Key).Should().BeEquivalentTo(["code", "name", "rank", "organizationId", "isDeleted"], "M10 for a key that is not id: the target's whole row");
     }
 
     [Fact]

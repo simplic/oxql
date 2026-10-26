@@ -58,7 +58,7 @@ public class ExplainUncheckedOwnerTests
         var note = result.Notes.Should().ContainSingle(note => note.Code == Notes.RemoteUnchecked).Subject;
 
         note.Stage.Should().Be(0);
-        note.Params.Should().Contain("service", "crm").And.Contain("target", "crm.contact").And.Contain("reason", RemoteExplain.Unknown);
+        note.Params.Should().Contain("service", "crm").And.Contain("target", "crm.contact").And.Contain("reason", RemoteExplain.Unknown).And.Contain("alias", "c");
 
         var owner = result.OwnerOf("crm");
 

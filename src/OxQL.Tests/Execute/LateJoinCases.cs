@@ -110,7 +110,7 @@ internal static class LateJoinCases
             "an exclusion of the key",
             Child,
             """[{ "resolve": { "path": "parentId", "as": "p" } }, { "project": { "parentId": 0, "parentCode": 0, "holder": 0 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 5 } }]""",
-            $$$"""[{"id":"{{{WireId(11)}}}","organizationId":"{{{Organisation}}}","title":"Child one","p":{"id":"{{{WireId(1)}}}","name":"Parent one"}},{"id":"{{{WireId(12)}}}","organizationId":"{{{Organisation}}}","title":"Child two","p":{"id":"{{{WireId(2)}}}","name":"Parent two"}},{"id":"{{{WireId(13)}}}","organizationId":"{{{Organisation}}}","title":"Child three","p":null}]"""
+            $$$"""[{"id":"{{{WireId(11)}}}","organizationId":"{{{Organisation}}}","title":"Child one","p":{"id":"{{{WireId(1)}}}","organizationId":"{{{Organisation}}}","code":"P-ONE","name":"Parent one","tags":["a","b"]}},{"id":"{{{WireId(12)}}}","organizationId":"{{{Organisation}}}","title":"Child two","p":{"id":"{{{WireId(2)}}}","organizationId":"{{{Organisation}}}","code":"P-TWO","name":"Parent two","tags":["c"]}},{"id":"{{{WireId(13)}}}","organizationId":"{{{Organisation}}}","title":"Child three","p":null}]"""
         },
         {
             "a string key an inclusion drops",

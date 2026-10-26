@@ -66,7 +66,7 @@ public class HostHardeningOwnerStatusTests
 
         diagnostic.Code.Should().Be(Codes.ResolveUnreachable, "the code list is closed; the message tells the two causes apart");
         diagnostic.Message.Should().Contain("answered with HTTP " + text).And.NotContain("could not be reached");
-        diagnostic.Params!.Keys.Should().BeEquivalentTo(["service", "aliases", "reason", "status"]);
+        diagnostic.Params!.Keys.Should().BeEquivalentTo(["service", "aliases", "reason", "status", "stages"]);
         diagnostic.Params["reason"].Should().Be("status");
         diagnostic.Params["status"].Should().Be((int)status);
         result.Items[0]!["contact"].Should().BeNull();

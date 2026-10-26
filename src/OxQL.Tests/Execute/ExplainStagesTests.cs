@@ -448,8 +448,8 @@ public class ExplainStagesTests
              { "project": { "number": 1, "c": 1, "r.name": 1, "r.email": 1 } }]
             """)).Result!.Columns;
 
-        columns.Select(column => (column.Path, column.Root)).Should().Equal([("id", ""), ("number", ""), ("c.id", "c"), ("c.name", "c"), ("r.email", "r"), ("r.name", "r")],
-            "kept whole, a local alias shows its key and display member; a remote one under a projection what its owner is asked for, the projected paths");
+        columns.Select(column => (column.Path, column.Root)).Should().Equal([("id", ""), ("number", ""), ("c.id", "c"), ("c.organizationId", "c"), ("c.name", "c"), ("c.code", "c"), ("r.email", "r"), ("r.name", "r")],
+            "kept whole, a local alias shows the target's whole row; a remote one under a projection what its owner is asked for, the projected paths");
         columns.Single(column => column.Path == "number").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == null && !column.Nullable);
         columns.Single(column => column.Path == "c.name").Should().Match<ExplainColumn>(column => column.Kind == "string" && column.Stage == 0 && column.Nullable);
         columns.Single(column => column.Path == "r.email").Should().Match<ExplainColumn>(column => column.Kind == "unknown" && column.Stage == 1, "the owner knows a remote member's kind");
@@ -469,11 +469,11 @@ public class ExplainStagesTests
     }
 
     [Fact]
-    public async Task An_owning_row_carries_the_entity_it_is_and_its_key_and_display_under_its_own_alias()
+    public async Task An_owning_row_carries_the_entity_it_is_and_its_whole_row_under_its_own_alias()
     {
         var columns = (await ExplainAsync("""[{ "resolve": { "path": "localSource.id", "as": "line", "target": "rc.shipment", "parentAs": "owner" } }, { "project": { "line": 1, "owner": 1 } }]""")).Result!.Columns;
 
-        columns.Where(column => column.Root == "owner").Select(column => column.Path).Should().Equal("owner.entity", "owner.id", "owner.number");
+        columns.Where(column => column.Root == "owner").Select(column => column.Path).Should().Equal("owner.entity", "owner.id", "owner.organizationId", "owner.number", "owner.billingLines", "owner.driverId");
         columns.Where(column => column.Root == "line").Select(column => column.Path).Should().Contain("line.id");
     }
 

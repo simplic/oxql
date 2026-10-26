@@ -110,14 +110,19 @@ var error = explained.Body["errors"]!.AsArray().Should().ContainSingle().Subject
     public async Task S03_a_member_a_later_stage_only_reads_is_loaded_by_the_join_and_is_not_in_the_row()
     {
         var ledger = await LedgerClient();
-        var whole = (await ledger.QueryAsync(Lines("""{ "resolve": { "path": "item.billingLineId", "as": "erpLine" } }"""))).ShouldBeOk();
+        // Kept whole the alias shows the target's whole row, the read member with it: a projection names what it shows.
+        var plain = (await ledger.QueryAsync(Lines("""
+            { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
+            { "project": { "position": 1, "erpLine.id": 1, "erpLine.text": 1 } }
+            """))).ShouldBeOk();
         var read = (await ledger.QueryAsync(Lines("""
             { "resolve": { "path": "item.billingLineId", "as": "erpLine" } },
-            { "match": { "erpLine.sourceBillingLineReference.type": { "exists": true } } }
+            { "match": { "erpLine.sourceBillingLineReference.type": { "exists": true } } },
+            { "project": { "position": 1, "erpLine.id": 1, "erpLine.text": 1 } }
             """))).ShouldBeOk();
 
         read.Items.Should().NotBeEmpty("the match reads a member the join loads for it: without it no row would match");
-        read.Items.ToJsonString().Should().Be(whole.Items.ToJsonString(), "what the match reads is not shown: the row is the one without the match");
+        read.Items.ToJsonString().Should().Be(plain.Items.ToJsonString(), "what the match reads is not shown: the row is the one without the match");
         read.Items.OfType<JsonObject>().Should().OnlyContain(row => !row["erpLine"]!.AsObject().ContainsKey("sourceBillingLineReference"));
     }
 
@@ -133,7 +138,7 @@ var error = explained.Body["errors"]!.AsArray().Should().ContainSingle().Subject
 
         answer.Items.Should().NotBeEmpty();
         answer.Items.OfType<JsonObject>().Should().OnlyContain(row => row["erpLine"]!.AsObject().Select(member => member.Key).SequenceEqual(new[] { "text" }),
-            "under a projection the row carries the projected path only: neither the key, nor the display member a whole alias shows, nor what the match read");
+            "under a projection the row carries the projected path only: neither the key, nor the rest of the row a whole alias shows, nor what the match read");
     }
 
     // ---- a union: the paths under its alias are flat -----------------------------------------------------

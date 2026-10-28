@@ -199,7 +199,7 @@ stage's effective `onMissing`:
 | `UNWIND_DEPTH_TRUNCATED` (loss) | `path`, `depth`, `rows` | a `flatten` met items nested deeper than `MaxFlattenDepth` |
 | `FILTER_BINDS_EARLIER`, `SELECT_PATH_NOT_ON_TARGET` | as the explain note of the same code | two of explain's notes that a run carries too: a condition of the request's `filter` runs earlier than its entry was written for; a projected path no target of a union carries |
 | `VALUES_SCAN_CAPPED` | `scan` | a `values` stage read as many rows as its bound lets it: the list is of the values among those rows, a count is a count within them. No loss of rows: it stays a diagnostic under `strict` |
-| `SORT_ON_ADDON` | — | a sort on an addon key, whose values may be stored in several types |
+| `SORT_ON_ADDON` | — | a sort on a defined addon key: it orders by the value converted to the defined kind (a value that does not convert sorts as empty), which no index serves |
 | `REGEX_UNANCHORED` | — | a `regex` that does not start with `^` or `\A` scans every value |
 | `DECIMAL_TEXT_EXCLUDED` | — | an ordered comparison on a decimal covered the Decimal128 rows only; rows stored as text are outside it |
 

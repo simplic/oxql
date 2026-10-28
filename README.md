@@ -90,7 +90,7 @@ One immutable model per host, built once from every class carrying `[OxQLType("<
 - **Polymorphic members.** A member typed as a base class or interface whose subtypes are registered class maps publishes the base's members plus every member of its variants, each marked `onlyFor` its variants; rows render the stored variant's members, and `is` filters by variant. A polymorphic entity keeps its declared class as the root. See [`oxql-semantics.md`](src/docs/oxql-semantics.md#polymorphic-values).
 - **Descriptions** come from `[OxQLDescription]`, then `[Description]`, then the XML `<summary>` of the documentation file beside the assembly (`<inheritdoc/>` resolved; the service sets `GenerateDocumentationFile`). They are normalised: a leading "Gets or sets", "Gets" or "Represents" is dropped and the rest kept as written (the article stays: "Gets or sets the billing line" becomes "The billing line"), the first letter capitalised, `<see cref>` rendered as the simple name, paragraphs separated by a blank line, whitespace collapsed, at most 500 characters cut at a word boundary. `[Obsolete]` publishes `deprecated`, `[MaxLength]`/`[StringLength]`, `[Range]` and `[RegularExpression]` publish `constraints`. None of this enters the model fingerprint.
 - **References** are declarations only, never name inference: `[OxQLReference("<entity id>", field?)]` (`OxQL.Model.Attributes`) on the id member, or the base package's `[ReferenceId("<idProperty>")]` on the navigation property, at any depth (a nested object or a collection element counts as much as a root member). `[OxQLReference]` takes `Item` (the key names an element of a keyed item collection) and `KeyAs = OxQLKeyAs.Guid` (a string member holding a guid); the repeatable `[OxQLReferenceWhen(path, equals, targets…)]` declares a typed reference whose target depends on a sibling's stored value or, with `OxQLReferenceWhenAttribute.Variant`, on the holding object's variant; and `ReferenceDeclarations` declares references the host cannot annotate, passed to `ClrModelBuilder.Build(assemblies, retiredIds, references)`. See [`oxql-semantics.md`](src/docs/oxql-semantics.md#references). A target on another host is a remote reference: its id carries the owning service's prefix (`vehicle.vehicle`); an id without a prefix that is no entity of this host is the build finding `reference-target-unprefixed` and emits no reference. The model marks a remote reference and the host must know the owner (`IRemoteQueryClient.IsConfigured`), otherwise the host logs one error per missing service, with the configuration keys to add (`InternalHosts:<service>`, and `InternalApiVersions:<service>` for an owner that does not answer on `v1`), and refuses to start in `Development`, `Local` and under continuous integration (the `CI` or `TF_BUILD` variable, read once at registration into `OxQLEndpointOptions.ContinuousIntegration`). `Startup:StrictRemoteReferences` (or `OxQLEndpointOptions.StrictRemoteReferences` in code, which wins) states it for the host instead: `true` refuses in every environment, `false` in none.
-- **Addon bags.** An extendable entity carries an `addon` dictionary. A key the organisation has defined binds with the definition's kind and matches tolerantly across storage representations; an undefined, retired or `object` key is `unknown`.
+- **Addon bags.** An extendable entity carries an `addon` dictionary. A key the organisation has defined binds with the definition's kind and is compared by its value, read wrapped or plain and converted to that kind; an undefined, retired or `object` key is `unknown`.
 
 ## A request in one look
 
@@ -288,12 +288,16 @@ An extendable entity's `addon` bag is untyped storage; an organisation declares 
 hold through the host's addon definition API (the base package's `AddonDefinition` controller
 and `GET /schema/addons`). The engine reads the definitions per request through
 `IAddonDefinitionSource`: a defined key of kind `string int long double decimal bool date
-dateTime guid` is filterable and sortable (sorting is diagnosed with `SORT_ON_ADDON`) and
-matches tolerantly across the representations the bag may hold (a BSON date or an ISO string,
-a number or a numeric string, a boolean or `"true"`/`"false"`, a binary or string guid, a
-decimal at `key` and at `key._v`). A definition with a closed `values` list admits only its
-values on `eq`, `neq`, `in` and `nin` (`UNKNOWN_ENUM_MEMBER` otherwise). A key of kind
-`object`, a retired key and an undefined key are `unknown`.
+dateTime guid` is filterable and sortable (sorting is diagnosed with `SORT_ON_ADDON`). It is read
+wrapped (`{ _t, _v }`, as the driver writes a decimal or a dictionary) or plain and converted to
+its kind with MongoDB's `$convert`, by its rules (text holding a number is that number; any number
+but zero and any text is `true`); a value that does not convert counts as empty. A `guid` key is
+compared as binary or as its text, and a `date` key is a `dateTime`, published so: it holds the
+instant its writer stored. Filters, sorts and aggregates read the same converted value; a
+condition on a defined key is an expression read per row, which no index serves. A definition
+with a closed `values` list admits only its values on `eq`, `neq`, `in` and `nin`
+(`UNKNOWN_ENUM_MEMBER` otherwise). A key of kind `object`, a retired key and an undefined key are
+`unknown`.
 
 ## Studio console
 
@@ -420,6 +424,13 @@ changes:
   `dateTrunc`, an `unwind.preserveNull` that is no boolean and a `lookup.limit` that is no number
   (`UNKNOWN_STAGE_MEMBER`), an aggregate with two functions or arithmetic nested deeper than 32
   (`INVALID_AGGREGATE_ARGUMENT`). `null` is still "not written".
+- **Defined addon keys** are compared, sorted and aggregated by their value converted to the
+  defined kind (*Addon definitions*); a value that does not convert counts as empty, where it used
+  to be matched in one of a few spellings or not at all. A `date` key is a `dateTime`: **a bare
+  `YYYY-MM-DD` operand on it is `INVALID_OPERAND`**, and a caller that means a day of its calendar
+  sends the day's instants (`gte` its start, `lt` the next day's, with its offset). A row shows such
+  a key as the instant stored, no longer as `YYYY-MM-DD`, and `/schema/addons` publishes it as
+  `dateTime`. `DECIMAL_TEXT_EXCLUDED` no longer comes with a range on a defined `decimal` key.
 - **Operands.** A decimal written as text takes a leading sign, a decimal point and an exponent
   only (`"12,50"`, `" 7 "` are `INVALID_OPERAND`); an operand of a single-character member is
   exactly one character.

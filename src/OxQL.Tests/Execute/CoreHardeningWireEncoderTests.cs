@@ -160,7 +160,7 @@ public class CoreHardeningWireEncoderTests
     }
 
     [Fact]
-    public async Task A_defined_date_addon_key_is_written_as_a_date_and_every_other_bag_value_as_the_bag_holds_it()
+    public async Task A_defined_date_addon_key_is_written_as_the_instant_the_bag_holds_like_every_other_bag_value()
     {
         var midnight = new BsonDateTime(new DateTime(2026, 6, 16, 0, 0, 0, DateTimeKind.Utc));
         var bound = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "project": { "id": 1, "addon": 1 } }]""", BindHost.Context(addons: new DateDefinitions()));
@@ -180,12 +180,12 @@ public class CoreHardeningWireEncoderTests
 
         var bag = row["addon"]!;
 
-        bag["due"]!.GetValue<string>().Should().Be("2026-06-16", "a defined date travels as YYYY-MM-DD, the form its operand takes");
-        bag["trip"]!["start"]!.GetValue<string>().Should().Be("2026-06-16", "a definition path may point inside a subobject");
+        bag["due"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a defined date is an instant: it travels as the bag holds it, the form its operand takes");
+        bag["trip"]!["start"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a definition path may point inside a subobject");
         bag["stamp"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a dateTime key is an instant");
         bag["old"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "a retired key is unknown and stays what the bag holds");
         bag["plain"]!.GetValue<string>().Should().Be("2026-06-16T00:00:00Z", "an undefined key has no kind to encode by");
-        bag["text"]!.GetValue<string>().Should().Be("2026-06-16");
+        bag["text"]!.GetValue<string>().Should().Be("2026-06-16", "a date written as text stays text: the row shows what is stored");
     }
 
     /// <summary>

@@ -3,7 +3,8 @@ namespace OxQL.Model.Addon;
 /// <summary>
 /// One organisation's definition of a key under an entity's addon bag: a hint that the value
 /// is most likely of <see cref="Kind"/>. Nothing is refused on write and nothing is normalised;
-/// the engine carries the uncertainty on the read side by matching tolerantly.
+/// the engine carries the uncertainty on the read side: it reads the key wrapped or plain and
+/// converts the value to the kind, and a value that does not convert counts as empty.
 /// </summary>
 public sealed record AddonDefinition
 {
@@ -44,28 +45,28 @@ public enum AddonKind
     /// <summary>A string.</summary>
     String,
 
-    /// <summary>A 32-bit integer; matched tolerantly against any numeric type or a numeric string.</summary>
+    /// <summary>A 32-bit integer; any number, or text holding an integer, converts to it.</summary>
     Int,
 
-    /// <summary>A 64-bit integer; matched tolerantly against any numeric type or a numeric string.</summary>
+    /// <summary>A 64-bit integer; any number, or text holding an integer, converts to it.</summary>
     Long,
 
-    /// <summary>A floating-point number; matched tolerantly against any numeric type or a numeric string.</summary>
+    /// <summary>A floating-point number; any number, or text holding a number, converts to it.</summary>
     Double,
 
-    /// <summary>A decimal; matched at the key and at the key's <c>_v</c> wrapper.</summary>
+    /// <summary>A decimal; any number, or text holding a number, converts to it.</summary>
     Decimal,
 
-    /// <summary>A boolean; matched against a boolean or the strings <c>"true"</c>/<c>"false"</c>.</summary>
+    /// <summary>A boolean, by the database's conversion: a number is true unless it is zero, and any text is true, <c>"false"</c> included.</summary>
     Bool,
 
-    /// <summary>A calendar date; matched against a BSON date or an ISO string.</summary>
+    /// <summary>A date, which a bag holds as an instant: it binds as a date and time (<see cref="AddonKinds.ToKind"/>).</summary>
     Date,
 
-    /// <summary>A date and time; matched against a BSON date or an ISO string.</summary>
+    /// <summary>A date and time; a BSON date, or text holding an ISO-8601 date and time or date, converts to it.</summary>
     DateTime,
 
-    /// <summary>A GUID; matched against binary or string.</summary>
+    /// <summary>A GUID; matched as binary or as its text, which the database does not convert into one another.</summary>
     Guid,
 
     /// <summary>An explicit container with no typing of its own; its defined descendants are typed, it is not.</summary>
@@ -75,7 +76,13 @@ public enum AddonKind
 /// <summary>Maps addon kinds onto the model's kind vocabulary.</summary>
 public static class AddonKinds
 {
-    /// <summary>The model kind an addon kind binds as; <see cref="AddonKind.Object"/> is <see cref="Model.Kind.Unknown"/>.</summary>
+    /// <summary>
+    /// The model kind an addon kind binds as; <see cref="AddonKind.Object"/> is <see cref="Model.Kind.Unknown"/>.
+    /// A <see cref="AddonKind.Date"/> is a <see cref="Model.Kind.DateTime"/>: a bag stores a date as the
+    /// instant its writer had, which is the midnight of no zone in particular, so the key binds,
+    /// compares, sorts and is published as that instant, and a caller that means a day of its own
+    /// calendar asks for the instants the day spans.
+    /// </summary>
     public static Kind ToKind(AddonKind kind) => kind switch
     {
         AddonKind.String => Model.Kind.String,
@@ -84,7 +91,7 @@ public static class AddonKinds
         AddonKind.Double => Model.Kind.Double,
         AddonKind.Decimal => Model.Kind.Decimal,
         AddonKind.Bool => Model.Kind.Bool,
-        AddonKind.Date => Model.Kind.Date,
+        AddonKind.Date => Model.Kind.DateTime,
         AddonKind.DateTime => Model.Kind.DateTime,
         AddonKind.Guid => Model.Kind.Guid,
         _ => Model.Kind.Unknown,

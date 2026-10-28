@@ -265,13 +265,6 @@ public class Contract1PlannerTests
 
         if (c1 is JsonValue a && c2 is JsonValue b)
         {
-            // A defined date addon key: contract 1 writes the stored midnight-UTC instant, contract 2 the day.
-            if (a.TryGetValue<string>(out var instant) && b.TryGetValue<string>(out var day)
-                && DateOnly.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-                && DateTimeOffset.TryParse(instant, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var stored)
-                && stored.Offset == TimeSpan.Zero && stored.UtcDateTime == date.ToDateTime(TimeOnly.MinValue))
-                return "date-only";
-
             if (a.TryGetValue<string>(out var left) && b.TryGetValue<string>(out var right)
                 && DateTimeOffset.TryParse(left, CultureInfo.InvariantCulture, DateTimeStyles.None, out var x)
                 && DateTimeOffset.TryParse(right, CultureInfo.InvariantCulture, DateTimeStyles.None, out var y) && x == y)
@@ -365,10 +358,11 @@ public class Contract1PlannerTests
             Walk("", Normalise(row1), row2);
 
         differences.Where(difference => difference.Category is "UNDECLARED" or "MEMBER-SET").Should().BeEmpty("contract 1 adds, drops or changes nothing beyond the declared encodings");
-        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "decimal-scale", "date-only", "unwrapped"]);
+        differences.Select(difference => difference.Category).Distinct().Should().BeEquivalentTo(["date-fraction", "decimal-scale", "unwrapped"]);
         differences.Where(difference => difference.Category == "unwrapped").Select(difference => difference.Path).Distinct().Should().BeSubsetOf(["addon.weight", "addon.vincario", "addon.vincario.ratio"],
             "only what the bag's serializer wrapped, at any depth: contract 1 passes { _t, _v } through, contract 2 answers the value it holds");
-        differences.Where(difference => difference.Category == "date-only").Select(difference => difference.Path).Distinct().Should().Equal(["addon.probationEnd"], "only a defined date addon key; the v1 converter writes it as the stored instant");
+        differences.Where(difference => difference.Path == "addon.probationEnd").Should().OnlyContain(difference => difference.Category == "date-fraction",
+            "a defined date addon key is the stored instant under both contracts, spelled as every instant is");
 
         // A decimal differs in its scale and nowhere else: the stored 60.00 is 60.00 under contract 1 and 60 under contract 2.
         differences.Where(difference => difference.Category == "decimal-scale").Should().NotBeEmpty()

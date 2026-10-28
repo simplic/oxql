@@ -330,13 +330,22 @@ public class FiltersFTests
     [Fact]
     public async Task F29_F30_a_date_takes_exactly_YYYY_MM_DD_and_a_date_carrying_a_time_is_refused()
     {
+        // The lab's declared date member (a DateOnly).
+        var conformance = await ConformanceClient();
+        var day = Corpus.IdsWhere(Corpus.Conformance, row => Corpus.Date(row, "day") == new DateTime(2026, 4, 6, 0, 0, 0, DateTimeKind.Utc));
+        day.Should().ContainSingle();
+
+        (await conformance.Ids(Corpus.Conformance, """{ "day": { "eq": "2026-04-06" } }""")).Should().Equal(day);
+        (await conformance.MatchRawAsync(Corpus.Conformance, """{ "day": { "eq": "2026-04-06T00:00:00Z" } }"""))
+            .ShouldRefuseExactly("INVALID_OPERAND").Should().Be("'day' expects a date as YYYY-MM-DD.");
+
+        // An addon key defined as a date holds the instant its writer stored: it is a dateTime,
+        // which takes the instant and refuses the bare day.
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16" } }""")).Should().Equal(Employee("addon-rich"));
-
-        var withTime = await staff.MatchRawAsync(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16T00:00:00Z" } }""");
-
-        withTime.ShouldRefuseExactly("INVALID_OPERAND").Should().Be("'addon.probationEnd' expects a date as YYYY-MM-DD.");
+        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16T00:00:00Z" } }""")).Should().Equal(Employee("addon-rich"));
+        (await staff.MatchRawAsync(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16" } }"""))
+            .ShouldRefuseExactly("INVALID_OPERAND").Should().Be("'addon.probationEnd' expects an ISO-8601 date-time with 'Z' or an offset.");
     }
 
     [Fact]

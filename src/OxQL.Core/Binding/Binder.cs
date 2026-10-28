@@ -4377,7 +4377,7 @@ public sealed partial class Binder
 
                 kind = path.Kind;
                 shapeDef = path.Shape;
-                return new BoundExpression.Path(path) { Unwrap = contract2 && path is { Addon: not null, Kind: Kind.Decimal } };
+                return new BoundExpression.Path(path);
             }
 
             if (expression.IsVar)
@@ -4765,7 +4765,7 @@ public sealed partial class Binder
                 }
 
                 if (path.Addon is not null)
-                    diagnostics.Add(new Diagnostic { Code = Codes.SortOnAddon, Message = $"The sort on '{field.Path}' orders an addon key; mixed representations group by BSON type.", Stage = index, Path = field.Path });
+                    diagnostics.Add(new Diagnostic { Code = Codes.SortOnAddon, Message = $"The sort on '{field.Path}' orders an addon key by its value converted to the defined kind; a value that does not convert sorts as empty, and no index serves the sort.", Stage = index, Path = field.Path });
 
                 // A string orders under the collation unless the entry opts out; anything else
                 // orders by value and has nothing to opt out of.

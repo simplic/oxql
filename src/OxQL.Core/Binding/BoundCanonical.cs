@@ -543,6 +543,9 @@ public static class BoundCanonical
             // owner reports as folding; it renders as the fold.
             ["caseSensitive"] = leaf.IgnoreCase is false,
             ["semiJoin"] = leaf.IsSemiJoin,
+            // Every condition renders it, so it is part of every fingerprint a cursor in circulation
+            // was minted under (the contract 1 golden's among them): it stays, whatever the compiler
+            // now makes of a defined key.
             ["addonDecimal"] = leaf.Path.Addon is not null && leaf.Path.Kind == Model.Kind.Decimal,
         },
         _ => new JsonObject(),

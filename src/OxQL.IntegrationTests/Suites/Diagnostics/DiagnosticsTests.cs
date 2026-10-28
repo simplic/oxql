@@ -53,7 +53,7 @@ public class DiagnosticsTests
 
         answer.ShouldHaveIdsInAnyOrder(expected);
         var diagnostic = Only(answer, "SORT_ON_ADDON");
-        diagnostic["message"]!.GetValue<string>().Should().Be("The sort on 'addon.shiftModel' orders an addon key; mixed representations group by BSON type.");
+        diagnostic["message"]!.GetValue<string>().Should().Be("The sort on 'addon.shiftModel' orders an addon key by its value converted to the defined kind; a value that does not convert sorts as empty, and no index serves the sort.");
         diagnostic["stage"]!.GetValue<int>().Should().Be(0);
         diagnostic["path"]!.GetValue<string>().Should().Be("addon.shiftModel");
     }

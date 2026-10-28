@@ -302,7 +302,7 @@ public abstract record BoundOperand
     /// <summary>A set of typed values, tolerant alternatives already unioned.</summary>
     public sealed record Set(IReadOnlyList<BsonValue> Values) : BoundOperand;
 
-    /// <summary>Alternatives one of which matches: the decimal and guid tolerant forms, the addon forms.</summary>
+    /// <summary>Alternatives one of which matches: the decimal and guid tolerant forms, a defined addon key's GUID, the forms of a defined addon key through a collection.</summary>
     public sealed record Tolerant(IReadOnlyList<BsonValue> Alternatives) : BoundOperand;
 
     /// <summary>The <c>null</c> operand: absent or null.</summary>
@@ -338,15 +338,11 @@ public abstract record BoundCondition
 /// <summary>A bound expression of a group aggregate.</summary>
 public abstract record BoundExpression
 {
-    public sealed record Path(ResolvedPath Resolved) : BoundExpression
-    {
-        /// <summary>
-        /// Whether the value is read out of the wrapper the addon bag's serializer writes a decimal in
-        /// (<c>{ _t, _v }</c>): a defined <c>decimal</c> addon key under contract 2, so an aggregate over
-        /// it reads what a row shows. Not rendered: it follows from the path.
-        /// </summary>
-        public bool Unwrap { get; init; }
-    }
+    /// <summary>
+    /// A member's value. A defined addon key at the top of the row is read the way a filter reads it,
+    /// wrapped or plain and converted to its kind: the compiler's concern, which follows from the path.
+    /// </summary>
+    public sealed record Path(ResolvedPath Resolved) : BoundExpression;
 
     public sealed record Literal(BsonValue Value) : BoundExpression;
 

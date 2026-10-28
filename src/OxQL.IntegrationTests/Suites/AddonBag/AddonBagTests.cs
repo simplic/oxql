@@ -44,9 +44,8 @@ public class AddonBagTests
 
             var answer = await (await Lab.ClientAsync(service)).SendAsync(entity, Page("""{ "addon.weight": { "gte": 1000 } }"""));
 
-            answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count);
-            // A decimal key whose bag may hold text announces what an ordered comparison cannot cover.
-            answer.DiagnosticCodes.Should().Equal(["DECIMAL_TEXT_EXCLUDED"], answer.ToString());
+            // A decimal key is compared by its value converted to a decimal, text included: there is nothing left out to announce.
+            answer.ShouldHaveIds(expected).ShouldHaveTotal(expected.Count).ShouldHaveNoDiagnostics();
         }
 
         Corpus.Entity(Corpus.Shipment).AddonDefinitions[Org.A][0].Should().Match<AddonDef>(def => def.Path == "weight" && def.Retired, "the trigger must stay in the corpus");
@@ -403,6 +402,240 @@ public class AddonBagTests
         Canonical(projected.Items[0]!["addon"]).Should().Be("""{"codes":["a","b"]}""");
 
         (await staff.SendAsync(Corpus.Employee, """[{ "match": { "addon.codes": { "eq": "a" } } }, { "page": { "limit": 5 } }]""")).ShouldRefuse("NOT_FILTERABLE", 400);
+    }
+
+    // ── a defined key is compared by its value ─────────────────────────────────────────────
+
+    private const string DecimalType = Addons.DecimalDiscriminator;
+    private const string DictionaryType = Addons.DictionaryDiscriminator;
+
+    private static readonly Guid Reference = Guid.Parse("7b7e2a4e-0000-4000-8000-000000000042");
+
+    /// <summary>
+    /// The keys the stored-forms bags are defined with; <c>o.x</c> lies inside a dictionary the
+    /// serializer may have wrapped, which the definition does not name.
+    /// </summary>
+    private static readonly (string Path, string Kind)[] StoredFormKeys =
+    [
+        ("weight", "double"), ("amount", "decimal"), ("o.x", "int"), ("day", "date"), ("flag", "bool"), ("code", "string"), ("cnt", "long"), ("ref", "guid"),
+    ];
+
+    /// <summary>
+    /// One key per kind in every form a writer leaves in a bag: r1 and r2 as the service's own
+    /// serializer writes them (a decimal and a dictionary wrapped in <c>{ _t, _v }</c>), r3 to r5 as
+    /// another client writes them (plain, other numeric types, everything as text), r6 an empty bag,
+    /// and r7 values no kind converts (text that is no number, a GUID under a text key).
+    /// </summary>
+    private static List<BsonDocument> StoredForms()
+    {
+        static BsonDocument Wrapped(string type, BsonValue value) => new() { ["_t"] = type, ["_v"] = value };
+        static BsonDateTime At(string iso) => new(DateTime.Parse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal));
+        static BsonDecimal128 Money(string digits) => new(Decimal128.Parse(digits));
+
+        return
+        [
+            Row(1, new BsonDocument { ["weight"] = Wrapped(DecimalType, Money("3.5")), ["amount"] = Wrapped(DecimalType, Money("3.5")), ["o"] = Wrapped(DictionaryType, new BsonDocument("x", new BsonInt64(5))), ["day"] = At("2026-10-25T23:00:00Z"), ["flag"] = true, ["code"] = "A-1", ["cnt"] = new BsonInt64(9007199254740993), ["ref"] = new BsonBinaryData(Reference, GuidRepresentation.Standard) }),
+            Row(2, new BsonDocument { ["weight"] = new BsonInt64(3), ["amount"] = new BsonInt64(3), ["o"] = Wrapped(DictionaryType, new BsonDocument("x", new BsonInt64(7))), ["day"] = At("2026-10-26T23:00:00Z"), ["flag"] = false, ["code"] = "b-2", ["cnt"] = new BsonInt64(3), ["ref"] = Reference.ToString() }),
+            Row(3, new BsonDocument { ["weight"] = 3.5, ["amount"] = 3.5, ["o"] = new BsonDocument("x", 5), ["day"] = At("2026-10-26T00:00:00Z"), ["flag"] = "true", ["code"] = 12, ["cnt"] = 3 }),
+            Row(4, new BsonDocument { ["weight"] = "3.5", ["amount"] = "3.5", ["o"] = new BsonDocument("x", "5"), ["day"] = "2026-10-26", ["flag"] = "false", ["code"] = "a-1", ["cnt"] = "9007199254740993" }),
+            Row(5, new BsonDocument { ["weight"] = 2.25, ["amount"] = Money("2.25"), ["o"] = new BsonDocument("x", 5.0), ["day"] = At("2026-10-26T13:00:00Z"), ["flag"] = 1, ["code"] = BsonNull.Value, ["cnt"] = 2.0 }),
+            Row(6, []),
+            Row(7, new BsonDocument { ["weight"] = "n/a", ["amount"] = "", ["flag"] = 0, ["code"] = new BsonBinaryData(Reference, GuidRepresentation.Standard), ["cnt"] = "3.0" }),
+        ];
+
+        static BsonDocument Row(int n, BsonDocument bag) => new()
+        {
+            ["_id"] = new BsonBinaryData(StoredForm(n), GuidRepresentation.Standard),
+            ["OrganizationId"] = new BsonBinaryData(Org.A.Id(), GuidRepresentation.Standard),
+            ["MatchCode"] = "r" + n,
+            ["Addon"] = bag,
+        };
+    }
+
+    private static Guid StoredForm(int n) => Ids.Of(Spaces.Employee, Org.A, 910 + n);
+
+    private static IReadOnlyList<Guid> Forms(params int[] rows) => rows.Select(StoredForm).ToList();
+
+    /// <summary>A fleet whose <c>staff.employee</c> holds the stored-forms rows alone, with their definitions.</summary>
+    private static Task<CorpusFleet> StoredFormsFleet(string purpose) =>
+        CorpusFleet.CreateAsync(purpose, seed: [], extra: async lab =>
+        {
+            var database = await lab.DatabaseAsync(LabService.Staff);
+            var n = 0;
+
+            await database.GetCollection<BsonDocument>(TestAddonSource.Collection).InsertManyAsync(StoredFormKeys.Select(key =>
+                TestAddonSource.Document(Ids.Of(Spaces.AddonDefinition, Org.A, 960 + ++n), Org.A.Id(), Corpus.Employee, key.Path, key.Kind, key.Path)));
+            await database.GetCollection<BsonDocument>("employee").InsertManyAsync(StoredForms());
+        });
+
+    private static string Sorted(string match, string extra = "") =>
+        $$"""[{ "match": {{match}} }, { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, {{(extra.Length > 0 ? extra + ", " : "")}}{ "page": { "limit": 50 } }]""";
+
+    [Fact]
+    public async Task T35_a_defined_key_is_compared_by_its_value_read_wrapped_or_plain_and_converted_to_its_kind_whatever_form_its_writer_stored()
+    {
+        await using var fleet = await StoredFormsFleet("case-t35");
+        var staff = fleet.Client(LabService.Staff);
+
+        var cases = new (string Condition, IReadOnlyList<Guid> Expected)[]
+        {
+            // A number in any numeric type, as text, or wrapped as a decimal.
+            ("""{ "addon.weight": { "eq": 3.5 } }""", Forms(1, 3, 4)),
+            ("""{ "addon.weight": { "gt": 3 } }""", Forms(1, 3, 4)),
+            ("""{ "addon.weight": { "lt": 3 } }""", Forms(5)),
+            ("""{ "addon.amount": { "eq": "3.5" } }""", Forms(1, 3, 4)),
+            ("""{ "addon.amount": { "neq": 3.5 } }""", Forms(2, 5, 6, 7)),
+            ("""{ "addon.amount": { "gte": 3 } }""", Forms(1, 2, 3, 4)),
+            ("""{ "addon.amount": { "lt": 3 } }""", Forms(5)),
+            ("""{ "addon.amount": { "in": [3, 3.5] } }""", Forms(1, 2, 3, 4)),
+            ("""{ "addon.amount": { "nin": [3.5] } }""", Forms(2, 5, 6, 7)),
+            // Below a dictionary the serializer wrapped or not.
+            ("""{ "addon.o.x": { "eq": 5 } }""", Forms(1, 3, 4, 5)),
+            // A long beyond 2^53 exactly, as a number or as its digits; "3.0" holds no integer.
+            ("""{ "addon.cnt": { "eq": 9007199254740993 } }""", Forms(1, 4)),
+            ("""{ "addon.cnt": { "eq": "3" } }""", Forms(2, 3)),
+            // The database's conversion to a boolean: a number unless zero, and any text, is true.
+            ("""{ "addon.flag": { "eq": true } }""", Forms(1, 3, 4, 5)),
+            ("""{ "addon.flag": { "eq": false } }""", Forms(2, 7)),
+            // A number under a text key is its text; a GUID there is no text at all.
+            ("""{ "addon.code": { "eq": "12" } }""", Forms(3)),
+            ("""{ "addon.code": { "contains": "1" } }""", Forms(1, 3, 4)),
+            // A GUID as binary or as its text.
+            ($$"""{ "addon.ref": { "eq": "{{Reference}}" } }""", Forms(1, 2)),
+            ($$"""{ "addon.ref": { "neq": "{{Reference}}" } }""", Forms(3, 4, 5, 6, 7)),
+        };
+
+        foreach (var (condition, expected) in cases)
+        {
+            var answer = await staff.SendAsync(Corpus.Employee, Sorted(condition));
+
+            answer.ShouldHaveIds(expected, condition).ShouldHaveNoDiagnostics(condition);
+        }
+    }
+
+    [Fact]
+    public async Task T36_a_value_that_does_not_convert_counts_as_empty_and_whether_the_key_is_there_is_asked_of_it_as_stored()
+    {
+        await using var fleet = await StoredFormsFleet("case-t36");
+        var staff = fleet.Client(LabService.Staff);
+
+        async Task Finds(string condition, IReadOnlyList<Guid> expected) =>
+            (await staff.SendAsync(Corpus.Employee, Sorted(condition))).ShouldHaveIds(expected, condition);
+
+        // "n/a" is no number: empty, like the missing key of the empty bag.
+        await Finds("""{ "addon.weight": { "eq": null } }""", Forms(6, 7));
+        await Finds("""{ "addon.weight": { "neq": null } }""", Forms(1, 2, 3, 4, 5));
+        await Finds("""{ "addon.weight": { "lt": 100 } }""", Forms(1, 2, 3, 4, 5));
+        await Finds("""{ "addon.weight": { "exists": true } }""", Forms(1, 2, 3, 4, 5, 7));
+        await Finds("""{ "addon.weight": { "exists": false } }""", Forms(6));
+
+        // A text key holding a null, nothing, or a GUID.
+        await Finds("""{ "addon.code": { "eq": null } }""", Forms(5, 6, 7));
+        await Finds("""{ "addon.code": { "nin": ["A-1", "b-2"] } }""", Forms(3, 5, 6, 7));
+
+        // Below a dictionary: there whether it was wrapped or not.
+        await Finds("""{ "addon.o.x": { "exists": true } }""", Forms(1, 2, 3, 4, 5));
+    }
+
+    [Fact]
+    public async Task T37_a_text_key_folds_case_and_accents_under_the_collation_unless_the_comparison_opts_out_and_a_prefix_is_the_collated_range()
+    {
+        await using var fleet = await StoredFormsFleet("case-t37");
+        var staff = fleet.Client(LabService.Staff);
+
+        async Task Finds(string condition, IReadOnlyList<Guid> expected) =>
+            (await staff.SendAsync(Corpus.Employee, Sorted(condition))).ShouldHaveIds(expected, condition);
+
+        await Finds("""{ "addon.code": { "eq": "a-1" } }""", Forms(1, 4));
+        await Finds("""{ "addon.code": { "in": ["A-1", "B-2"] } }""", Forms(1, 2, 4));
+        await Finds("""{ "addon.code": { "startsWith": "a" } }""", Forms(1, 4));
+        await Finds("""{ "addon.code": { "endsWith": "-1" } }""", Forms(1, 4));
+        await Finds("""{ "addon.code": { "gt": "a-1" } }""", Forms(2));
+
+        // An exact comparison beside one that folds, which puts the collation on the whole aggregate.
+        await Finds("""{ "addon.code": { "eq": "a-1", "options": { "caseSensitive": true } }, "matchCode": { "startsWith": "R" } }""", Forms(4));
+        await Finds("""{ "addon.code": { "in": ["A-1", "b-2"], "options": { "caseSensitive": true } }, "matchCode": { "startsWith": "R" } }""", Forms(1, 2));
+        await Finds("""{ "addon.code": { "eq": "a-1", "options": { "caseSensitive": true } } }""", Forms(4));
+    }
+
+    [Fact]
+    public async Task T38_a_sort_and_an_aggregate_read_the_value_a_page_continues_after_it_and_a_date_key_is_an_instant()
+    {
+        await using var fleet = await StoredFormsFleet("case-t38");
+        var staff = fleet.Client(LabService.Staff);
+
+        // Empty first ascending, the rows that tie by key.
+        var cases = new (string Path, string Direction, IReadOnlyList<Guid> Expected)[]
+        {
+            ("addon.weight", "asc", Forms(6, 7, 5, 2, 1, 3, 4)),
+            ("addon.amount", "asc", Forms(6, 7, 5, 2, 1, 3, 4)),
+            ("addon.cnt", "asc", Forms(6, 7, 5, 2, 3, 1, 4)),
+            ("addon.day", "asc", Forms(6, 7, 1, 3, 4, 5, 2)),
+            ("addon.amount", "desc", Forms(1, 3, 4, 2, 5, 6, 7)),
+        };
+
+        foreach (var (path, direction, expected) in cases)
+        {
+            var whole = await staff.SendAsync(Corpus.Employee, $$"""[{ "sort": [{ "{{path}}": "{{direction}}" }] }, { "project": { "id": 1 } }, { "page": { "limit": 50 } }]""");
+
+            whole.ShouldHaveIds(expected, $"{path} {direction}").DiagnosticCodes.Should().Equal(["SORT_ON_ADDON"]);
+
+            // Two rows a page: every cursor continues after the value its last row was ordered by.
+            var walked = new List<Guid>();
+            string? cursor = null;
+
+            do
+            {
+                var page = await staff.SendAsync(Corpus.Employee, $$"""[{ "sort": [{ "{{path}}": "{{direction}}" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2{{(cursor is null ? "" : $", \"cursor\": \"{cursor}\"")}} } }]""");
+
+                page.ShouldBeOk();
+                walked.AddRange(page.Ids());
+                cursor = page.NextCursor;
+            }
+            while (cursor is not null);
+
+            walked.Should().Equal(expected, $"{path} {direction} by pages of two");
+        }
+
+        // The sum is of the converted values: 3.5 + 3 + 3.5 + 3.5 + 2.25.
+        var summed = await staff.SendAsync(Corpus.Employee, """[{ "group": { "by": [], "fields": { "total": { "sum": "addon.amount" }, "top": { "max": "addon.weight" } } } }]""");
+
+        summed.ShouldBeOk();
+        decimal.Parse(summed.Items[0]!["total"]!.ToJsonString(), CultureInfo.InvariantCulture).Should().Be(15.75m);
+        summed.Items[0]!["top"]!.GetValue<double>().Should().Be(3.5);
+
+        // A date key holds the instant its writer stored; a day of the caller's calendar is the instants it spans.
+        var day = await staff.SendAsync(Corpus.Employee, Sorted("""{ "addon.day": { "gte": "2026-10-26T00:00:00+01:00", "lt": "2026-10-27T00:00:00+01:00" } }"""));
+        day.ShouldHaveIds(Forms(1, 3, 4, 5));
+        (await staff.SendAsync(Corpus.Employee, Sorted("""{ "addon.day": { "eq": "2026-10-26" } }"""))).ShouldRefuse("INVALID_OPERAND", 400);
+
+        var projected = await staff.SendAsync(Corpus.Employee, """[{ "project": { "id": 1, "addon.day": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 10 } }]""");
+        projected.Values("addon.day").Take(4).Select(value => value?.GetValue<string>())
+            .Should().Equal(["2026-10-25T23:00:00Z", "2026-10-26T23:00:00Z", "2026-10-26T00:00:00Z", "2026-10-26"], "a row shows what is stored");
+    }
+
+    [Fact]
+    public async Task T39_a_looked_up_childs_key_filtered_after_the_lookup_is_matched_as_stored_in_the_forms_its_kind_is_written_in()
+    {
+        var rich = Corpus.Row(Corpus.Vehicle, "addon-rich");
+        var tour = Corpus.ValueAt(rich, "addon.tourCount")!.AsInt64;
+        var departments = Corpus.Sorted(Corpus.Department, [("id", false)]);
+        var expected = departments.Where(department => Corpus.GuidAt(rich, "department.id") == department.Id).Select(department => department.Id).ToList();
+        expected.Should().ContainSingle("the rich vehicle belongs to one department");
+
+        var fleet = await Lab.ClientAsync(LabService.Fleet);
+
+        // Of one element of the alias no expression can be asked: the number and its digits are both matched.
+        foreach (var operand in new[] { tour.ToString(CultureInfo.InvariantCulture), $"\"{tour}\"" })
+        {
+            var answer = await fleet.SendAsync(Corpus.Department, $$"""
+                [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "limit": 100 } },
+                  { "match": { "v.addon.tourCount": { "eq": {{operand}} } } },
+                  { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50 } } ]
+                """);
+
+            answer.ShouldHaveIds(expected, operand);
+        }
     }
 
     // ── the bag's wire form, computed from storage ─────────────────────────────────────────

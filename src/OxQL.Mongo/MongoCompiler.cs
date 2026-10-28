@@ -394,8 +394,11 @@ internal static class MongoCompiler
         // value off the document it hands back, so the sort paths survive every projection in
         // storage: a leg read from a member that is not there is the value null, and a null
         // leg re-admits every non-null row, which pages the first page for ever.
+        // A defined addon key is read where its value is set, and the value is set from the key.
         var sortStorages = keepKey || keysetPaging
-            ? sortFields.Select(field => field.Path.Storage).Where(storage => storage is not null).Select(storage => storage!).Distinct(StringComparer.Ordinal).ToList()
+            ? sortFields.Where(field => field.Path.Storage is not null)
+                .SelectMany(field => IsAddonValue(field.Path) ? [SortStorage(field.Path), field.Path.Storage!] : new[] { field.Path.Storage! })
+                .Distinct(StringComparer.Ordinal).ToList()
             : [];
         var sortKeptAgainstProjection = new List<string>();
 
@@ -426,8 +429,8 @@ internal static class MongoCompiler
         // A sort path under a local resolve alias has no value before the join writes it, and a
         // group's keys and aggregates none before the group, so the keyset condition on them is
         // evaluated right before the paging sort instead, where every sort path holds the value
-        // the cursor was minted from.
-        var joinedKeyset = keyset is not null && (grouped || (bound.Sort is not null && sortFields.Any(field => field.Path.Root.StoragePrefix.Length > 0)))
+        // the cursor was minted from. So is one on a defined addon key, whose value the sort sets.
+        var joinedKeyset = keyset is not null && (grouped || (bound.Sort is not null && sortFields.Any(field => field.Path.Root.StoragePrefix.Length > 0 || IsAddonValue(field.Path))))
             ? keyset
             : null;
 
@@ -735,6 +738,9 @@ internal static class MongoCompiler
                     break;
 
                 case BoundStage.Sort sort:
+                    if (SortValues(sort.Fields) is { } sortValues)
+                        emitted.Add(sortValues);
+
                     if (joinedKeyset is not null && ReferenceEquals(sort, bound.Sort))
                         emitted.Add(new BsonDocument("$match", joinedKeyset.Count == 1 ? joinedKeyset[0] : new BsonDocument("$and", new BsonArray(joinedKeyset))));
 
@@ -767,6 +773,9 @@ internal static class MongoCompiler
 
         if (pagingSort is not null)
         {
+            if (SortValues(pagingSort) is { } pagingValues)
+                stages.Add(pagingValues);
+
             // The rows after the cursor's position, by the sort, the key and the position of each
             // unwind: every leg holds its value here, where the page is ordered.
             if (position is not null && keysetPaging)
@@ -808,6 +817,18 @@ internal static class MongoCompiler
         // A values stage cuts its own list and answers one document; there is no page to cut.
         if (bound.Values is null)
             stages.Add(new BsonDocument("$limit", page.Limit + 1));
+
+        // The values a sort on a defined addon key ordered by have no place in a row. A keyset cursor
+        // reads its legs off the last row, so there they stay: a contract 2 row follows the shape and
+        // shows none of them, and a contract 1 row loses them once the cursor is read.
+        if (stages.Any(stage => stage.TryGetValue("$set", out var set) && set is BsonDocument fields && fields.Names.Any(name => name.StartsWith(ReservedAddonSort + ".", StringComparison.Ordinal))))
+        {
+            if (keysetPaging)
+                sortKeptAgainstProjection.Add(ReservedAddonSort);
+            else
+                stages.Add(new BsonDocument("$unset", ReservedAddonSort));
+        }
+
         stages.AddRange(lateRename);
         stages.AddRange(lateProjections);
         stages.AddRange(lateJoins);
@@ -938,7 +959,8 @@ internal static class MongoCompiler
         parentsYield = !grouped && !reshaped && filter.Exact
             && (filter.Element.Count == 0 || unwind is { PreserveNull: false, Flatten: null });
 
-        var cuttable = parentsYield && !sortsCollection
+        // A defined addon key orders by a value the sort sets, which no cut of the parents before the unwind reads.
+        var cuttable = parentsYield && !sortsCollection && !sortFields.Any(field => IsAddonValue(field.Path))
             && bound.PagingMode == PagingMode.Keyset && bound.Sort is not null;
 
         // The element's position after the parents' members and before the key (`number, position`):
@@ -1489,9 +1511,14 @@ internal static class MongoCompiler
 
         var legs = new List<KeysetField>();
 
+        // A defined addon key's leg is its value, of the one kind it converts to or null.
         foreach (var field in sortFields)
-            if (!legs.Any(leg => leg.Storage == Stored(field.Path.Storage!)))
-                legs.Add(new KeysetField(Stored(field.Path.Storage!), field.Ascending, At(field.Path.Wire)) { SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path), NeverNull = field.Path.Storage == KeyStorage });
+            if (!legs.Any(leg => leg.Storage == Stored(SortStorage(field.Path))))
+                legs.Add(new KeysetField(Stored(SortStorage(field.Path)), field.Ascending, At(field.Path.Wire))
+                {
+                    SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path) && !IsAddonValue(field.Path),
+                    NeverNull = field.Path.Storage == KeyStorage,
+                });
 
         if (key && (!legs.Any(leg => leg.Storage == KeyStorage) || (repeatKey && legs.Any(leg => leg is { Storage: KeyStorage, Ascending: true }))))
             legs.Add(new KeysetField(KeyStorage, true, At(KeyStorage)) { NeverNull = true });
@@ -1505,11 +1532,11 @@ internal static class MongoCompiler
 
     /// <summary>
     /// Whether the rows may hold values of more than one stored type under a sort path. Any member
-    /// of one value may: a decimal the rows written before a migration hold as text, a value of an
-    /// addon bag, which is stored as it was written, and a member some writer stored as another type
-    /// than the model declares. A sort orders such rows by type first, and a page continues across
-    /// the types; an index on the sort serves the predicate with the bounds of each type, at the
-    /// keys of the page. A path through a collection is none: the database compares its elements.
+    /// of one value may: a decimal the rows written before a migration hold as text, and a member some
+    /// writer stored as another type than the model declares. A sort orders such rows by type first,
+    /// and a page continues across the types; an index on the sort serves the predicate with the
+    /// bounds of each type, at the keys of the page. A path through a collection is none: the database
+    /// compares its elements. (A defined addon key orders by its value, which is of its kind or null.)
     /// </summary>
     private static bool HoldsSeveralTypes(ResolvedPath path) => path.CollectionAncestors == 0 && path.Kind != Kind.Array;
 
@@ -1867,9 +1894,11 @@ internal static class MongoCompiler
 
         var storage = leaf.Path.Storage!;
 
-        // A decimal under the addon bag is written wrapped by the bag serializer: match both places.
-        if (leaf.Path.Addon is not null && leaf.Path.Kind == Kind.Decimal)
-            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated, element), LeafAt(storage + "._v", leaf, collated, element) });
+        // A defined addon key is compared by its value (AddonValue): the comparison the member would
+        // be asked, asked of the value in an expression. Whether the key is there at all is asked of
+        // it as stored.
+        if (!element && IsAddonValue(leaf.Path))
+            return leaf.Op == "exists" ? AddonExists(leaf) : AddonCompare(LeafAt(storage, leaf, collated, element), AddonValue(leaf.Path));
 
         return LeafAt(storage, leaf, collated, element);
     }
@@ -2058,6 +2087,222 @@ internal static class MongoCompiler
         _ => value.ToString() ?? "",
     };
 
+    // ---- defined addon keys -----------------------------------------------------------------
+
+    /// <summary>
+    /// The root a sort on a defined addon key orders by: the key's value (<see cref="AddonValue"/>) is
+    /// set under it, at the key's own storage path, right before the sort.
+    /// </summary>
+    private const string ReservedAddonSort = Aliases.ReservedPrefix + "oxAddon";
+
+    /// <summary>The variable a defined key's value is read into where an expression asks it more than once.</summary>
+    private const string AddonVariable = "oxAddon";
+
+    /// <summary>The variable the value a text key holds is read into, to be told from binary before it is converted.</summary>
+    private const string StoredVariable = "oxStored";
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is a defined addon key that is read by its value
+    /// (<see cref="AddonValue"/>): a key of a scalar kind at the top of the row. Through a collection
+    /// (a looked-up child's bag) a condition is one element's to meet, inside an <c>$elemMatch</c> or
+    /// over an array, where no expression can be asked; there the key is matched as stored, against
+    /// each form the binder bound for its kind, as it always was: that branch is left as it stood.
+    /// </summary>
+    internal static bool IsAddonValue(ResolvedPath path) =>
+        path is { Addon: not null, CollectionAncestors: 0, Storage: not null } && path.Kind != Kind.Unknown && path.Storage.Length > path.Addon.Path.Length;
+
+    /// <summary>The storage a sort orders <paramref name="path"/> by, and a cursor reads its leg at: a defined addon key's value under <see cref="ReservedAddonSort"/>, any other path's own.</summary>
+    internal static string SortStorage(ResolvedPath path) => IsAddonValue(path) ? ReservedAddonSort + "." + path.Storage : path.Storage!;
+
+    /// <summary>
+    /// The <c>$set</c> that writes the value of every defined addon key <paramref name="fields"/> order
+    /// by where the sort reads it (<see cref="SortStorage"/>); null when they order by none. A sort
+    /// on an expression is a sort on a field the stage before it computed: no index serves it either way.
+    /// </summary>
+    private static BsonDocument? SortValues(IEnumerable<BoundSortField> fields)
+    {
+        var values = new BsonDocument();
+
+        foreach (var field in fields)
+            if (IsAddonValue(field.Path))
+                values[SortStorage(field.Path)] = AddonValue(field.Path);
+
+        return values.ElementCount == 0 ? null : new BsonDocument("$set", values);
+    }
+
+    /// <summary>
+    /// The value of a defined addon key, which filters, sorts and aggregates read alike. A bag holds
+    /// what its writer stored: a value the driver's object serializer wrapped in <c>{ _t, _v }</c> (a
+    /// decimal, a dictionary) or a plain one, and a number, a boolean or a date as itself or as text.
+    /// The key is read at every combination of each segment wrapped or plain
+    /// (<see cref="StoredPaths"/>), the first that holds a value, and converted to the key's kind
+    /// with the database's <c>$convert</c>, by its rules: text holding a number is that number, any
+    /// number but zero and any text is true, text holding an ISO-8601 date is that instant. A value
+    /// that does not convert is null: it counts as empty, as a missing key does.
+    /// <para>
+    /// A <c>string</c> key's binary value is null before the conversion, which the database would
+    /// refuse rather than call an error. A <c>guid</c> key is the value as stored, binary or text: the
+    /// database converts text to a GUID only from 8.0 on, so the binder bound both forms.
+    /// </para>
+    /// </summary>
+    internal static BsonValue AddonValue(ResolvedPath path)
+    {
+        var paths = StoredPaths(path, leafWrapper: true).Select(storage => (BsonValue)("$" + storage)).ToList();
+
+        // The trailing null makes a key held nowhere null rather than missing, which no expression compares as null.
+        if (path.Kind == Kind.Guid)
+            return new BsonDocument("$ifNull", new BsonArray(paths) { BsonNull.Value });
+
+        var to = path.Kind switch
+        {
+            Kind.String => "string",
+            Kind.Int or Kind.Long => "long",
+            Kind.Double => "double",
+            Kind.Decimal => "decimal",
+            Kind.Bool => "bool",
+            _ => "date",
+        };
+        var stored = paths.Count == 1 ? paths[0] : new BsonDocument("$ifNull", new BsonArray(paths));
+
+        static BsonDocument Convert(BsonValue input, string to) =>
+            new("$convert", new BsonDocument { ["input"] = input, ["to"] = to, ["onError"] = BsonNull.Value, ["onNull"] = BsonNull.Value });
+
+        if (path.Kind != Kind.String)
+            return Convert(stored, to);
+
+        return new BsonDocument("$let", new BsonDocument
+        {
+            ["vars"] = new BsonDocument(StoredVariable, stored),
+            ["in"] = new BsonDocument("$cond", new BsonArray
+            {
+                new BsonDocument("$eq", new BsonArray { new BsonDocument("$type", "$$" + StoredVariable), "binData" }),
+                BsonNull.Value,
+                Convert("$$" + StoredVariable, to),
+            }),
+        });
+    }
+
+    /// <summary>
+    /// The storage paths a defined addon key may be held at, the wrapped form first at each segment:
+    /// for <c>o.x</c> under <c>Addon</c>, <c>Addon.o._v.x._v</c>, <c>Addon.o._v.x</c>, <c>Addon.o.x._v</c>,
+    /// <c>Addon.o.x</c>. A wrapper the definition names (<c>vincario._v.axles</c>) is read as named, and
+    /// so is the member holding it. Without <paramref name="leafWrapper"/> the last segment is read
+    /// plain only: a wrapper there lies inside the key.
+    /// </summary>
+    private static List<string> StoredPaths(ResolvedPath path, bool leafWrapper)
+    {
+        var segments = path.Addon!.Path.Split('.');
+        var paths = new List<string> { path.Storage![..^(path.Addon.Path.Length + 1)] };
+
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            var named = segment == "_v" || (index + 1 < segments.Length && segments[index + 1] == "_v") || (!leafWrapper && index == segments.Length - 1);
+
+            paths = paths.SelectMany(at => named ? [at + "." + segment] : new[] { at + "." + segment + "._v", at + "." + segment }).ToList();
+        }
+
+        return paths;
+    }
+
+    /// <summary>Whether a defined addon key is there: held at one of its paths, as stored (null included), or at none of them.</summary>
+    private static BsonDocument AddonExists(BoundCondition.Leaf leaf)
+    {
+        var present = leaf.Operand is BoundOperand.Single { Value: BsonBoolean { Value: true } };
+        var each = StoredPaths(leaf.Path, leafWrapper: false).Select(storage => new BsonDocument(storage, new BsonDocument("$exists", present))).ToList();
+
+        return each.Count == 1 ? each[0] : new BsonDocument(present ? "$or" : "$and", new BsonArray(each));
+    }
+
+    /// <summary>
+    /// A comparison of a defined addon key by its value: <paramref name="compared"/>, the filter the
+    /// comparison is of the member (<see cref="LeafAt"/>, with its patterns and its case as there),
+    /// asked of <paramref name="value"/> in an <c>$expr</c>, which honours the aggregate's collation
+    /// as the plain operators do. An expression is read for each row the stages before it pass, after
+    /// the scope: no index serves it, and the database stops at a page's worth of rows as it does for
+    /// any other filter on a member no index holds. A value asked more than once is read once.
+    /// </summary>
+    private static BsonDocument AddonCompare(BsonDocument compared, BsonValue value)
+    {
+        var asked = Asked(compared, "$$" + AddonVariable);
+
+        if (Uses(asked, "$$" + AddonVariable) == 1)
+            return new BsonDocument("$expr", Asked(compared, value));
+
+        return new BsonDocument("$expr", new BsonDocument("$let", new BsonDocument { ["vars"] = new BsonDocument(AddonVariable, value), ["in"] = asked }));
+    }
+
+    /// <summary>A filter document on one member, said of <paramref name="value"/>: its logical operators kept, every condition on the member an expression.</summary>
+    private static BsonValue Asked(BsonDocument filter, BsonValue value)
+    {
+        BsonArray Each(BsonValue conditions) => new(conditions.AsBsonArray.Select(condition => Asked(condition.AsBsonDocument, value)));
+
+        var terms = new BsonArray(filter.Select(element => element.Name switch
+        {
+            "$or" => new BsonDocument("$or", Each(element.Value)),
+            "$and" => new BsonDocument("$and", Each(element.Value)),
+            "$nor" => new BsonDocument("$not", new BsonArray { new BsonDocument("$or", Each(element.Value)) }),
+            _ => Condition(element.Value, value),
+        }));
+
+        return terms.Count == 1 ? terms[0] : new BsonDocument("$and", terms);
+    }
+
+    /// <summary>
+    /// What a condition asks of a member (a value, a pattern, or operators with their operands), asked
+    /// of <paramref name="value"/>. An operand is a literal, never a field path or an operator. A range
+    /// holds for no null, as its operator holds for no missing member: a null orders before every value.
+    /// </summary>
+    private static BsonValue Condition(BsonValue condition, BsonValue value)
+    {
+        static BsonDocument Literal(BsonValue operand) => new("$literal", operand);
+
+        BsonValue In(BsonArray operands)
+        {
+            var either = new BsonArray(operands.OfType<BsonRegularExpression>().Select(pattern => Matches(pattern, value)));
+            var plain = new BsonArray(operands.Where(operand => operand is not BsonRegularExpression));
+
+            if (plain.Count > 0 || either.Count == 0)
+                either.Add(new BsonDocument("$in", new BsonArray { value, Literal(plain) }));
+
+            return either.Count == 1 ? either[0] : new BsonDocument("$or", either);
+        }
+
+        BsonValue Operator(BsonElement element) => element.Name switch
+        {
+            "$ne" => new BsonDocument("$ne", new BsonArray { value, Literal(element.Value) }),
+            "$not" => new BsonDocument("$not", new BsonArray { Condition(element.Value, value) }),
+            "$in" => In(element.Value.AsBsonArray),
+            "$nin" => new BsonDocument("$not", new BsonArray { In(element.Value.AsBsonArray) }),
+            _ => new BsonDocument("$and", new BsonArray
+            {
+                new BsonDocument("$ne", new BsonArray { value, BsonNull.Value }),
+                new BsonDocument(element.Name, new BsonArray { value, Literal(element.Value) }),
+            }),
+        };
+
+        return condition switch
+        {
+            BsonRegularExpression pattern => Matches(pattern, value),
+            BsonDocument { ElementCount: > 0 } operators when operators.GetElement(0).Name.StartsWith('$') =>
+                operators.ElementCount == 1 ? Operator(operators.GetElement(0)) : new BsonDocument("$and", new BsonArray(operators.Select(Operator))),
+            _ => new BsonDocument("$eq", new BsonArray { value, Literal(condition) }),
+        };
+    }
+
+    /// <summary>Whether a value's text matches a pattern; a value that is none is empty text.</summary>
+    private static BsonDocument Matches(BsonRegularExpression pattern, BsonValue value) =>
+        new("$regexMatch", new BsonDocument { ["input"] = new BsonDocument("$ifNull", new BsonArray { value, "" }), ["regex"] = pattern });
+
+    /// <summary>How often an expression names <paramref name="name"/>.</summary>
+    private static int Uses(BsonValue expression, string name) => expression switch
+    {
+        BsonString text => text.Value == name ? 1 : 0,
+        BsonDocument document => document.Values.Sum(inner => Uses(inner, name)),
+        BsonArray array => array.Sum(inner => Uses(inner, name)),
+        _ => 0,
+    };
+
     // ---- flatten ----------------------------------------------------------------------------
 
     /// <summary>
@@ -2167,6 +2412,9 @@ internal static class MongoCompiler
 
         if (lookup.Filter is not null)
             pipeline.Add(new BsonDocument("$match", Filter(lookup.Filter, semiJoins, collated)));
+
+        if (SortValues(lookup.ChildSort ?? []) is { } childValues)
+            pipeline.Add(childValues);
 
         pipeline.Add(Sort(lookup.ChildSort ?? [], tieBreak: true));
         pipeline.Add(new BsonDocument("$limit", lookup.First ? 1 : lookup.Limit + 1));
@@ -2324,7 +2572,7 @@ internal static class MongoCompiler
         var sortBy = new BsonDocument();
 
         foreach (var field in sort ?? [])
-            sortBy[field.Path.Storage!] = field.Ascending ? 1 : -1;
+            sortBy[SortStorage(field.Path)] = field.Ascending ? 1 : -1;
 
         if (!sortBy.Contains(KeyStorage))
             sortBy[KeyStorage] = 1;
@@ -2332,8 +2580,12 @@ internal static class MongoCompiler
         if (element)
             sortBy[ReservedElementIndex] = 1;
 
+        // A defined addon key ranks by its value, written where the window reads it.
+        List<BsonDocument> values = SortValues(sort ?? []) is { } set ? [set] : [];
+
         return
         [
+            .. values,
             new("$setWindowFields", new BsonDocument
             {
                 // Inside a collated aggregate a partition on a string key folds keys that differ only in
@@ -2878,8 +3130,8 @@ internal static class MongoCompiler
     /// <summary>Compiles a group expression.</summary>
     public static BsonValue Expression(BoundExpression expression) => expression switch
     {
-        // A decimal under the addon bag is written wrapped by the bag serializer: read the value it holds.
-        BoundExpression.Path { Unwrap: true } path => new BsonDocument("$ifNull", new BsonArray { "$" + path.Resolved.Storage + "._v", "$" + path.Resolved.Storage }),
+        // A defined addon key is aggregated by the value its filters compare (AddonValue).
+        BoundExpression.Path path when IsAddonValue(path.Resolved) => AddonValue(path.Resolved),
         BoundExpression.Path path => "$" + path.Resolved.Storage,
         BoundExpression.Literal literal => new BsonDocument("$literal", literal.Value),
 
@@ -3060,7 +3312,7 @@ internal static class MongoCompiler
         var sort = new BsonDocument();
 
         foreach (var field in fields)
-            sort[field.Path.Storage!] = field.Ascending ? 1 : -1;
+            sort[SortStorage(field.Path)] = field.Ascending ? 1 : -1;
 
         // The key first, then one index per unwind: rows of one parent differ only by position.
         if (indexes is { Count: > 0 })

@@ -4377,7 +4377,7 @@ public sealed partial class Binder
 
                 kind = path.Kind;
                 shapeDef = path.Shape;
-                return new BoundExpression.Path(path) { Unwrap = contract2 && path is { Addon: not null, Kind: Kind.Decimal } };
+                return new BoundExpression.Path(path);
             }
 
             if (expression.IsVar)
@@ -4765,7 +4765,7 @@ public sealed partial class Binder
                 }
 
                 if (path.Addon is not null)
-                    diagnostics.Add(new Diagnostic { Code = Codes.SortOnAddon, Message = $"The sort on '{field.Path}' orders an addon key; mixed representations group by BSON type.", Stage = index, Path = field.Path });
+                    diagnostics.Add(new Diagnostic { Code = Codes.SortOnAddon, Message = $"The sort on '{field.Path}' orders an addon key by its value converted to the defined kind; a value that does not convert sorts as empty, and no index serves the sort.", Stage = index, Path = field.Path });
 
                 // A string orders under the collation unless the entry opts out; anything else
                 // orders by value and has nothing to opt out of.
@@ -5209,11 +5209,13 @@ public sealed partial class Binder
             var counted = stage.Counts;
             var value = new ShapeNode.GroupOutput(path.Kind, path.Shape, BoundStage.Values.ValueAlias);
 
+            // The search is asked of the listed value, which the stage computed (of a defined addon key,
+            // its converted value): it is no member of a bag.
             values = new BoundStage.Values(
                 path,
                 collections.Select(collection => collection.Storage!).ToList(),
                 search is null ? null : new BoundCondition.Leaf(
-                    path with { Wire = BoundStage.Values.ValueAlias, Storage = BoundStage.Values.ValueStorage, CollectionAncestors = 0, Root = value },
+                    path with { Wire = BoundStage.Values.ValueAlias, Storage = BoundStage.Values.ValueStorage, CollectionAncestors = 0, Root = value, Addon = null },
                     "startsWith", new BoundOperand.Single(new BsonString(search)), IgnoreCase: true, IsSemiJoin: false),
                 limit,
                 counted,

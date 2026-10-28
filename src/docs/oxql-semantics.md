@@ -94,7 +94,7 @@ that representation. Where a fleet's data is not uniform, the options under
 | `decimal` | Decimal128, or text written before a migration | JSON number, or text of digits with an optional leading sign, one decimal point and an exponent (no group separator, no white space, no trailing sign; `INVALID_OPERAND` otherwise) | JSON number in canonical digits: no exponent, no trailing fractional zeros, every digit (`125000.00` reads back as `125000`) |
 | `bool` | boolean | `true`/`false` or `"true"`/`"false"` | boolean |
 | `guid` | binary subtype 4, or what the member declares (subtype 3, string) | GUID string | GUID string |
-| `date` | a BSON date at midnight UTC, or a string when the member declares one | `YYYY-MM-DD` | `YYYY-MM-DD` of the stored UTC day |
+| `date` | a BSON date at midnight UTC, or a string when the member declares one (an addon key defined as `date` is a `dateTime`: *Addon keys*) | `YYYY-MM-DD` | `YYYY-MM-DD` of the stored UTC day |
 | `dateTime` | a BSON date | ISO-8601 with `Z` or an offset; milliseconds optional | ISO-8601 UTC, trailing zero fractions dropped (`2026-06-15T23:30:00Z`) |
 | `timeSpan` | string in .NET's `c` format (`01:30:00`), or Int64 ticks, or Double milliseconds when the member declares one | ISO-8601 duration (`PT1H30M`, `-PT5M`) | ISO-8601 duration |
 | `enum` | Int32, Int64 or the member name as a string, as the member declares | member name or number | number, also where a long backs the enum |
@@ -132,10 +132,9 @@ that representation. Where a fleet's data is not uniform, the options under
   describe (an undefined addon key, an `unknown` member) is written by its stored type: an Int64
   as a number of any size, a Decimal128 as a number in canonical digits.
 - **Addon bag values** are written by their BSON type, like any member the model does not
-  describe, except a key the organisation defined as `date`: it is written as `YYYY-MM-DD`, as
-  every `date` is, so the value read back is a valid operand for the key. A retired or undefined
-  key holding a BSON date is written as the ISO instant. Contract 1 rows keep the v1 converter's
-  instant for every bag value.
+  describe, a defined key included: a row shows what is stored (a BSON date as the ISO instant,
+  a number written as text as that text), never the `{ _t, _v }` wrapper (*Addon keys*).
+  Contract 1 rows keep the v1 converter's instant for every bag value.
 - **`decimal`.** With `DecimalMode: tolerant` (the default) `eq`, `neq`, `in` and `nin` match
   both a Decimal128 and the text the driver wrote before the member was migrated, in any scale
   (`125000` matches `"125000"` and `"125000.00"`). Text does not order by value, so `gt`, `gte`,
@@ -152,7 +151,8 @@ that representation. Where a fleet's data is not uniform, the options under
   subtype 3 and the string form. Rows read subtype 3 and 4 and strings either way.
 - **`date` and `dateTime`** are the same BSON type in storage; only the model's kind tells them
   apart. A `date` operand is midnight UTC of the day; a `dateTime` operand without `Z` or an
-  offset is refused, so a local time never binds against an instant. A `dateTime` member stored
+  offset is refused, so a local time never binds against an instant. An addon key defined as
+  `date` is a `dateTime` (*Addon keys*). A `dateTime` member stored
   as a document (a `DateTimeOffset` with the document representation) is projectable, not
   filterable, and reads back with its offset.
 - **`timeSpan`** stored as text orders by character. That agrees with duration order only while
@@ -165,18 +165,32 @@ that representation. Where a fleet's data is not uniform, the options under
   and `10.00:00:00`). A service that orders or compares durations stores them as a number
   (ticks or milliseconds), which orders by value. Explain says so of a request that compares or
   sorts such a member: the note `DURATION_ORDERS_AS_TEXT`.
-- **Addon keys** (`addon.<path>` of a defined key) always match tolerantly, whatever the options:
-  a date as a BSON date or an ISO string, a number or a numeric string, a boolean or
-  `"true"`/`"false"`, a GUID as binary or string, and a decimal at `key` and at `key._v` (the bag's serializer writes
-  a decimal as `{ _t: "System.Decimal", _v: <value> }`). A row never shows that wrapper: a value
-  the driver wrote as `{ _t, _v }` reads back as its `_v`, a decimal as the number every
-  `decimal` is (`261.8`), whether the key is defined or not, also below a wrapped dictionary
-  or list. `sum`, `avg`, `min` and `max` over a defined `decimal` key read the wrapped value, so
-  they aggregate what the rows show. A sort by such a key orders the wrapped values among
-  themselves by number; rows that hold the plain number and rows that hold the wrapper are two
-  runs (BSON orders by type first), which only matters where one key was written both ways. An
-  ordered comparison on a defined `decimal` key covers the numeric values only, with the same
-  `DECIMAL_TEXT_EXCLUDED` diagnostic.
+- **Addon keys** (`addon.<path>` of a defined key) are compared by their value, whatever the
+  options. The key is read wrapped or plain at each segment of its path (the bag's serializer
+  writes a decimal or a dictionary as `{ _t: "System.Decimal", _v: <value> }`), and the value is
+  converted to the defined kind with MongoDB's `$convert`, by its rules: text holding a number is
+  that number, a fraction is cut toward zero for `int` and `long` (an `int` key is compared as a
+  64-bit integer), any number but zero and any text is `true` for `bool` (`"false"` and `""`
+  included), text holding an ISO-8601 date is that instant. **A value that does not convert
+  counts as empty**: `eq null` matches it and a missing key, `neq null` matches neither, a range
+  never holds for it, and a sort orders it with the empty values. A `guid` key is compared as
+  stored, as binary or as its text: the database converts no text to a GUID before 8.0. **A
+  `date` key is an instant**: the bag holds the instant its writer stored, so the key binds,
+  compares and sorts as a `dateTime`, `/schema/addons` publishes it so, its operand takes `Z` or an
+  offset (a bare `YYYY-MM-DD` is `INVALID_OPERAND`), and a caller that means a day of its own
+  calendar asks for the instants the day spans. Filters, a sort, a group key, a `values` list,
+  and `sum`, `avg`, `min`, `max`, `first`, `last`, `countDistinct` and `push` over a defined key
+  read the one value, so they agree; `countDistinct` and `push` pass over an empty value, as over
+  an absent member. `exists` asks whether the key is there, wrapped or plain, as stored. A
+  condition on a defined key is an expression the database reads row by row: no index serves it,
+  and it is read for every row of the organisation the other conditions pass, until the page is full where nothing orders by it first. A row
+  never shows the wrapper: a value the driver wrote as `{ _t, _v }` reads back as its `_v`, a
+  decimal as the number every `decimal` is (`261.8`), whether the key is defined or not, also
+  below a wrapped dictionary or list. Through a collection (a looked-up child's bag, filtered
+  after the lookup) no expression can be asked of one element: there the key is matched as
+  stored, against the forms its kind is written in (the number and its digits, the boolean and
+  `"true"`/`"false"`, the instant and its text, a decimal at `key` and at `key._v`), and a range
+  on a `decimal` key covers the numeric values only, with the `DECIMAL_TEXT_EXCLUDED` diagnostic.
 
 **Unexpected storage.** A filter compares in the representation the member declares, so a value
 of another BSON type (outside the numeric bracket) is not matched: it is neither refused nor
@@ -184,8 +198,9 @@ reported. A row renders such a value verbatim by its BSON type (a number in a `g
 instead of failing the page. A value of the right type outside what the kind can hold (a
 Decimal128 `NaN`, a date outside the calendar, a duration beyond .NET's `TimeSpan`) is rendered
 verbatim too, and the service logs one warning per request naming the paths, never the values.
-A sort orders mixed types by BSON type bracket; a sort on an addon key carries the
-`SORT_ON_ADDON` diagnostic for that reason.
+A sort orders mixed types by BSON type bracket. A sort on a defined addon key orders by its
+converted value, which is of one kind or empty (empty first ascending), and carries the
+`SORT_ON_ADDON` diagnostic: it orders by a value the database computes, which no index serves.
 
 ## Case and accents
 
@@ -214,7 +229,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 | `regex` | the caller's pattern as written, never folded; `caseSensitive` does not apply |
 | sort on a string | orders under the collation; `{ "direction": …, "caseSensitive": true }` orders by byte value, only in a request where nothing else folds (`OPTION_NOT_APPLICABLE` otherwise) |
 | group key on a string | folds: `Open` and `OPEN` are one group, reported under the first value met |
-| `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored |
+| `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored (over a defined addon key, as converted to its kind: *Addon keys*) |
 | a single character (Int32 storage) | `eq neq in nin` match both cases of the character; never collated |
 | a join key (`lookup`, local `resolve`, the ids of a semi-join over a reference stored as text) | compared byte for byte even inside a collated request; ids never fold |
 | a condition under a remote alias | bound by the owner under its own default; `caseSensitive` travels as written |
@@ -833,7 +848,9 @@ requests of a tree add up because each is the same rows cut another way:
   a filter entry on `weight` filters the rows that feed the groups. A key that a condition should reach after the group
   has an alias no member has; a key over the member of the same name is the same thing either way.
 - **`countDistinct`** counts the distinct values the rows store: a stored `null` is one of them,
-  a member that is absent is none.
+  a member that is absent is none. Over a defined addon key it counts the converted values, and an
+  empty one (the key absent, `null`, or a value that does not convert) is none; `push` leaves it out
+  too.
 
 ## Distinct values
 
@@ -880,9 +897,11 @@ What the stage adds to that group:
   prefix.
 
 **Null, folding, kinds.** As for a group key: null and absent are one value (`null`), the empty
-string another; a string's spellings fold into one value under the collation, reported under the
-first one met (which spelling that is depends on the order the rows are read in); an enum is its
-stored number, one the enum does not declare included. A value sent back as `eq` or in `in` finds
+string another; a defined addon key lists its value converted to its kind, so the forms of one
+value are one entry and a value that does not convert is the `null` one (*Addon keys*); a
+string's spellings fold into one value under the collation, reported under the first one met
+(which spelling that is depends on the order the rows are read in); an enum is its stored number,
+one the enum does not declare included. A value sent back as `eq` or in `in` finds
 the rows the list counted, as a group's key does, under a collection too (`null` included, see
 above), with the one exception grouping has too: an undeclared enum number cannot be named in a
 condition (`UNKNOWN_ENUM_MEMBER`).

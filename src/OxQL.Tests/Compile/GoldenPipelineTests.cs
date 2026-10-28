@@ -930,22 +930,151 @@ public class GoldenPipelineTests
         compiled.Offset.Should().Be(4);
     }
 
+    // ---- a defined addon key is compared by its value -------------------------------------------
+
+    private static RequestContext Defined() => BindHost.Context(addons: new Definitions(
+        ("Preis", OxQL.Model.Addon.AddonKind.Decimal), ("o.x", OxQL.Model.Addon.AddonKind.Int), ("Kunde", OxQL.Model.Addon.AddonKind.String),
+        ("Ref", OxQL.Model.Addon.AddonKind.Guid), ("vincario._v.axles", OxQL.Model.Addon.AddonKind.Int), ("nr", OxQL.Model.Addon.AddonKind.String)));
+
     [Fact]
-    public async Task An_addon_decimal_is_matched_at_the_key_and_under_the_wrapper()
+    public async Task A_defined_addon_key_is_compared_by_its_value_read_wrapped_or_plain_and_converted_to_its_kind()
     {
-        var definitions = new OneDefinition("Preis", OxQL.Model.Addon.AddonKind.Decimal);
-        var compiled = await Compile("""[{ "match": { "addon.Preis": { "eq": "1.5" } } }]""", context: BindHost.Context(addons: definitions));
+        var compiled = await Compile("""[{ "match": { "addon.Preis": { "eq": "1.5" } } }]""", context: Defined());
 
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""
-            { $match: { $or: [
-                { $or: [ { "Addon.Preis": NumberDecimal("1.5") }, { "Addon.Preis": { $regularExpression: { pattern: "^1\\.50*\\z", options: "" } } } ] },
-                { $or: [ { "Addon.Preis._v": NumberDecimal("1.5") }, { "Addon.Preis._v": { $regularExpression: { pattern: "^1\\.50*\\z", options: "" } } } ] } ] } }
+            { $match: { $expr: { $eq: [
+                { $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } },
+                { $literal: NumberDecimal("1.5") } ] } } }
             """));
     }
 
-    private sealed class OneDefinition(string path, OxQL.Model.Addon.AddonKind kind) : OxQL.Model.Addon.IAddonDefinitionSource
+    [Fact]
+    public async Task A_range_on_a_nested_key_reads_every_wrapped_or_plain_combination_once_and_holds_for_no_empty_value()
+    {
+        var compiled = await Compile("""[{ "match": { "addon.o.x": { "gte": 1, "lt": 5 } } }]""", context: Defined());
+
+        const string Value = """{ $convert: { input: { $ifNull: ["$Addon.o._v.x._v", "$Addon.o._v.x", "$Addon.o.x._v", "$Addon.o.x"] }, to: "long", onError: null, onNull: null } }""";
+
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $and: [
+                { $expr: { $let: { vars: { oxAddon: {{Value}} }, in: { $and: [ { $ne: ["$$oxAddon", null] }, { $gte: ["$$oxAddon", { $literal: NumberLong(1) }] } ] } } } },
+                { $expr: { $let: { vars: { oxAddon: {{Value}} }, in: { $and: [ { $ne: ["$$oxAddon", null] }, { $lt: ["$$oxAddon", { $literal: NumberLong(5) }] } ] } } } } ] } }
+            """));
+    }
+
+    [Fact]
+    public async Task A_text_key_folds_under_the_collation_matches_a_pattern_over_its_text_and_reads_no_binary()
+    {
+        var compiled = await Compile("""[{ "match": { "addon.Kunde": { "eq": "Müller" } } }, { "match": { "addon.Kunde": { "contains": "ll" } } }]""", context: Defined());
+        const string Value = """
+            { $let: { vars: { oxStored: { $ifNull: ["$Addon.Kunde._v", "$Addon.Kunde"] } },
+                in: { $cond: [ { $eq: [ { $type: "$$oxStored" }, "binData" ] }, null, { $convert: { input: "$$oxStored", to: "string", onError: null, onNull: null } } ] } } }
+            """;
+
+        compiled.Collation.Should().NotBeNull("the fold is the aggregate's collation, which an expression honours");
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: { $expr: { $eq: [ {{Value}}, { $literal: "Müller" } ] } } }"""));
+        compiled.PageStages[2]["$match"]["$expr"]["$regexMatch"]["input"].ShouldBeBson(BsonDocument.Parse(Value), "a value that is none matches no pattern, the empty one included");
+    }
+
+    [Fact]
+    public async Task Whether_a_key_is_there_is_asked_of_it_as_stored_and_a_wrapper_the_definition_names_is_read_as_named()
+    {
+        var compiled = await Compile("""[{ "match": { "addon.o.x": { "exists": true } } }, { "match": { "addon.vincario._v.axles": { "eq": 3 } } }]""", context: Defined());
+
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse("""{ $match: { $or: [ { "Addon.o._v.x": { $exists: true } }, { "Addon.o.x": { $exists: true } } ] } }"""));
+        compiled.PageStages[2]["$match"]["$expr"]["$eq"][0]["$convert"]["input"].ShouldBeBson(BsonDocument.Parse("""{ $ifNull: ["$Addon.vincario._v.axles._v", "$Addon.vincario._v.axles"] }"""));
+    }
+
+    [Fact]
+    public async Task A_guid_key_is_its_stored_value_compared_as_binary_or_as_text()
+    {
+        var compiled = await Compile("""[{ "match": { "addon.Ref": { "eq": "7b7e2a4e-0000-4000-8000-000000000042" } } }]""", context: Defined());
+        var guid = new BsonBinaryData(Guid.Parse("7b7e2a4e-0000-4000-8000-000000000042"), GuidRepresentation.Standard);
+
+        compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""
+            { $match: { $expr: { $let: { vars: { oxAddon: { $ifNull: ["$Addon.Ref._v", "$Addon.Ref", null] } },
+                in: { $or: [ { $eq: ["$$oxAddon", { $literal: {{guid.ToJson()}} }] }, { $eq: ["$$oxAddon", { $literal: "7b7e2a4e-0000-4000-8000-000000000042" }] } ] } } } } }
+            """));
+    }
+
+    [Fact]
+    public async Task A_sort_on_a_defined_key_orders_by_its_value_set_right_before_the_sort_and_a_cursor_continues_after_it()
+    {
+        var compiled = await Compile("""[{ "sort": [{ "addon.Preis": "desc" }] }, { "page": { "limit": 10 } }]""", context: Defined());
+        const string Value = """{ $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } }""";
+
+        ShouldBe(compiled.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            $$"""{ $set: { "__oxAddon.Addon.Preis": {{Value}} } }""",
+            """{ $sort: { "__oxAddon.Addon.Preis": -1, _id: 1 } }""",
+            "{ $limit: 11 }");
+        MongoQueryEngine.NextCursor(compiled, new BsonDocument { ["_id"] = 1, ["__oxAddon"] = new BsonDocument("Addon", new BsonDocument("Preis", new BsonDecimal128(2.5m))) })
+            .Fields[0].Value.Should().Be(new BsonDecimal128(2.5m), "the cursor's leg is the value the page was ordered by");
+
+        var first = await BindHost.BoundAsync(BindHost.Probe, Order, """[{ "sort": [{ "addon.Preis": "desc" }] }, { "page": { "limit": 10 } }]""", Defined());
+        var cursor = BindHost.Cursors.Encode(new CursorPayload(first.Fingerprint, PagingMode.Keyset, [new CursorValue("addon.Preis", false, new BsonDecimal128(2.5m)), new CursorValue("_id", true, 1)], 0));
+        var next = await Compile($$"""[{ "sort": [{ "addon.Preis": "desc" }] }, { "page": { "limit": 10, "cursor": "{{cursor}}" } }]""", context: Defined());
+
+        ShouldBe(next.PageStages,
+            $"{{ $match: {OrgJson} }}",
+            $$"""{ $set: { "__oxAddon.Addon.Preis": {{Value}} } }""",
+            """{ $match: { $or: [ { "__oxAddon.Addon.Preis": NumberDecimal("2.5"), _id: { $gt: 1 } }, { "__oxAddon.Addon.Preis": { $lt: NumberDecimal("2.5") } }, { "__oxAddon.Addon.Preis": NaN }, { "__oxAddon.Addon.Preis": null } ] } }""",
+            """{ $sort: { "__oxAddon.Addon.Preis": -1, _id: 1 } }""",
+            "{ $limit: 11 }");
+    }
+
+    [Fact]
+    public async Task A_group_reads_a_defined_key_by_its_value_in_the_order_it_takes_its_first_rows_and_in_what_it_sums()
+    {
+        var ordered = await Compile("""[{ "sort": [{ "addon.Preis": "asc" }] }, { "group": { "by": [{ "path": "state", "as": "st" }], "fields": { "cheapest": { "first": "number" } } } }, { "page": { "limit": 2 } }]""", context: Defined());
+
+        ordered.PageStages[1]["$set"].AsBsonDocument.Names.Should().Equal("__oxAddon.Addon.Preis");
+        ordered.PageStages[2].ShouldBeBson(BsonDocument.Parse("""{ $sort: { "__oxAddon.Addon.Preis": 1, _id: 1 } }"""), "the group's first is the first row by the value");
+        ordered.PageStages[3]["$group"].AsBsonDocument.Names.Should().NotContain("__oxAddon", "the group leaves the value behind with the rows");
+
+        var summed = await Compile("""[{ "group": { "by": [], "fields": { "total": { "sum": "addon.Preis" } } } }]""", context: Defined());
+
+        summed.PageStages[1]["$group"]["total"].ShouldBeBson(BsonDocument.Parse("""{ $sum: { $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } } }"""));
+    }
+
+    [Fact]
+    public async Task CountDistinct_and_push_over_a_defined_key_collect_its_value_and_nothing_of_an_empty_one()
+    {
+        var compiled = await Compile("""[{ "group": { "by": [], "fields": { "kinds": { "countDistinct": "addon.Preis" }, "all": { "push": "addon.Preis" }, "low": { "min": "addon.Preis" }, "numbers": { "push": "number" } } } }]""", context: Defined());
+        const string Value = """{ $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } }""";
+        var collected = BsonDocument.Parse($$"""{ $let: { vars: { oxAddon: {{Value}} }, in: { $cond: [ { $eq: ["$$oxAddon", null] }, "$$REMOVE", "$$oxAddon" ] } } }""");
+        var group = compiled.PageStages[1]["$group"];
+
+        group["kinds"].ShouldBeBson(new BsonDocument("$addToSet", collected), "a set leaves out what is absent, and an empty value is that");
+        group["all"].ShouldBeBson(new BsonDocument("$push", collected));
+        group["low"].ShouldBeBson(BsonDocument.Parse($$"""{ $min: {{Value}} }"""), "a minimum passes over a null by itself");
+        group["numbers"].ShouldBeBson(BsonDocument.Parse("""{ $push: "$Number" }"""), "a member of the model is collected as stored");
+    }
+
+    [Fact]
+    public async Task Values_of_a_defined_key_are_the_values_a_group_by_it_buckets_and_a_search_reads_the_listed_value()
+    {
+        var compiled = await Compile("""[{ "values": { "path": "addon.o.x", "counts": true } }]""", context: Defined());
+        var grouped = await Compile("""[{ "group": { "by": [{ "path": "addon.o.x", "as": "value" }], "fields": { "count": { "count": true } } } }]""", context: Defined());
+
+        compiled.PageStages[2]["$group"]["_id"].ShouldBeBson(grouped.PageStages[1]["$group"]["_id"].AsBsonDocument, "the list is the group one would write by hand");
+        compiled.PageStages[2]["$group"]["_id"]["$convert"]["input"].ShouldBeBson(BsonDocument.Parse("""{ $ifNull: ["$Addon.o._v.x._v", "$Addon.o._v.x", "$Addon.o.x._v", "$Addon.o.x"] }"""));
+
+        // A key whose name is shorter than the listed value's: the search is still of that value, not of a bag.
+        var searched = await Compile("""[{ "values": { "path": "addon.nr", "search": "M" } }]""", context: Defined());
+        var list = searched.PageStages[^1]["$facet"]["v"].AsBsonArray;
+
+        list[0].ToJson().Should().Be(BsonDocument.Parse("{ $match: { _id: { $gte: 'M', $lt: 'M￿' } } }").ToJson());
+
+        // A member of the model is listed as stored.
+        var plain = await Compile("""[{ "values": { "path": "number" } }]""", context: Defined());
+        plain.PageStages[2]["$group"]["_id"].Should().Be(new BsonString("$Number"));
+    }
+
+    private sealed class Definitions(params (string Path, OxQL.Model.Addon.AddonKind Kind)[] definitions) : OxQL.Model.Addon.IAddonDefinitionSource
     {
         public ValueTask<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>> ForEntityAsync(string entity, Guid organisation, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>>([new OxQL.Model.Addon.AddonDefinition { Id = Guid.NewGuid(), Entity = entity, Path = path, Kind = kind }]);
+            ValueTask.FromResult<IReadOnlyList<OxQL.Model.Addon.AddonDefinition>>(definitions
+                .Select(definition => new OxQL.Model.Addon.AddonDefinition { Id = Guid.NewGuid(), Entity = entity, Path = definition.Path, Kind = definition.Kind }).ToList());
     }
 }

@@ -432,32 +432,35 @@ public partial class RowsABTests
     }
 
     [Fact]
-    public async Task AB07_a_date_addon_value_is_written_as_YYYY_MM_DD_and_the_value_read_back_finds_its_row()
+    public async Task AB07_a_date_addon_value_is_written_as_the_instant_stored_and_the_value_read_back_finds_its_row()
     {
         var rich = Corpus.IdOf(Corpus.Employee, "addon-rich");
         var stored = Corpus.Date(Corpus.Row(Corpus.Employee, "addon-rich"), "addon.probationEnd")!.Value;
-        var expected = stored.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var expected = stored.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
         var client = await Lab.ClientAsync(LabService.Staff);
 
         var answer = await client.SendAsync(Corpus.Employee, """[ { "match": { "addon.probationEnd": { "exists": true } } }, { "project": { "id": 1, "addon.probationEnd": 1 } }, { "page": { "limit": 10 } } ]""");
 
         answer.ShouldHaveIds([rich]);
         var read = answer.Items[0]!["addon"]!["probationEnd"]!.GetValue<string>();
-        read.Should().Be(expected, "a defined date key travels as YYYY-MM-DD, as every date does");
+        read.Should().Be(expected, "a defined date key is an instant: it travels as the bag holds it");
 
         // Read a value, filter on it: the commonest round trip there is.
         (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.probationEnd": { "eq": "{{read}}" } } }, { "page": { "limit": 1, "count": true } } ]""")).ShouldHaveTotal(1);
     }
 
     [Fact]
-    public async Task AB07b_a_date_addon_key_filters_on_YYYY_MM_DD()
+    public async Task AB07b_a_date_addon_key_filters_on_a_day_of_the_callers_calendar_as_the_instants_it_spans_and_refuses_a_bare_day()
     {
         var stored = Corpus.Date(Corpus.Row(Corpus.Employee, "addon-rich"), "addon.probationEnd")!.Value;
+        var client = await Lab.ClientAsync(LabService.Staff);
 
-        var answer = await (await Lab.ClientAsync(LabService.Staff)).SendAsync(Corpus.Employee,
-            $$"""[ { "match": { "addon.probationEnd": { "eq": "{{stored:yyyy-MM-dd}}" } } }, { "page": { "limit": 1, "count": true } } ]""");
+        // The stored midnight UTC is two in the morning of the same day at +02:00.
+        var answer = await client.SendAsync(Corpus.Employee,
+            $$"""[ { "match": { "addon.probationEnd": { "gte": "{{stored:yyyy-MM-dd}}T00:00:00+02:00", "lt": "{{stored.AddDays(1):yyyy-MM-dd}}T00:00:00+02:00" } } }, { "page": { "limit": 1, "count": true } } ]""");
 
         answer.ShouldHaveIds([Corpus.IdOf(Corpus.Employee, "addon-rich")]).ShouldHaveTotal(1);
+        (await client.SendAsync(Corpus.Employee, $$"""[ { "match": { "addon.probationEnd": { "eq": "{{stored:yyyy-MM-dd}}" } } }, { "page": { "limit": 1 } } ]""")).ShouldRefuse("INVALID_OPERAND", 400);
     }
 
     [Theory]

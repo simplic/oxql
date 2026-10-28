@@ -106,6 +106,8 @@ contract 2 offers; without it, what contract 1 does.
   every digit.
 - The elements of a pushed array arrive in the member's wire encoding: a `long` as a number,
   a `date` as `YYYY-MM-DD`, a single character as that character, an object by its members.
+- An addon key defined as `date` is a timestamp in both contracts: it takes a date and time with
+  `Z` or an offset (a bare `YYYY-MM-DD` is `INVALID_OPERAND`), and a row shows the instant stored.
 - Under contract 2 string comparisons, sorts and group keys are case- and accent-insensitive by
   default (`muller` matches `Müller`), under a collation the host configures
   (`Representation:Collation`, German at primary strength unless changed). `options.caseSensitive:

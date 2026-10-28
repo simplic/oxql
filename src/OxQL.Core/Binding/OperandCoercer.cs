@@ -12,8 +12,9 @@ namespace OxQL.Core.Binding;
 /// <summary>
 /// Encodes an operand for storage from the member's kind and representation. Nothing is
 /// guessed from the JSON alone: a wrong JSON kind is <c>INVALID_OPERAND</c> naming the expected
-/// kind. Tolerant forms (decimal in two storage forms, defined addon keys, optionally guids)
-/// come out as alternatives the compiler turns into an <c>$or</c>.
+/// kind. Tolerant forms (decimal in two storage forms, optionally guids, the GUID of a defined
+/// addon key, any defined addon key through a collection) come out as alternatives the compiler
+/// turns into an <c>$or</c>.
 /// </summary>
 public sealed class OperandCoercer
 {
@@ -528,7 +529,12 @@ public sealed class OperandCoercer
     private IReadOnlyList<BsonValue>? CoerceScalar(JsonElement element, ResolvedPath path, Kind kind, string op, int stage, List<QueryValidationError> errors, string label)
     {
         var representation = path.Leaf?.Representation ?? Representation.None;
-        var addon = path.Addon is not null;
+
+        // A defined addon key at the top of the row is compared by the compiler over its value
+        // read wrapped or plain and converted to the key's kind, so its operand is the one typed
+        // value. Through a collection (a looked-up child's bag), where no expression can be asked,
+        // the key is matched as stored: against each form a value of the kind is written in.
+        var addon = path.Addon is not null && path.CollectionAncestors > 0;
         string? failure = null;
 
         switch (kind)
@@ -591,7 +597,9 @@ public sealed class OperandCoercer
 
                     var standard = new BsonBinaryData(guid, representation.GuidRepresentation is { } declared && declared != GuidRepresentation.Unspecified ? declared : GuidRepresentation.Standard);
 
-                    if (addon)
+                    // The database converts no text to a GUID before 8.0: a defined key is matched
+                    // as either form wherever it lies.
+                    if (path.Addon is not null)
                         return [standard, new BsonString(guid.ToString())];
 
                     return options.Representation.GuidTolerant
@@ -611,7 +619,7 @@ public sealed class OperandCoercer
 
                     var midnight = new BsonDateTime(day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
 
-                    return addon ? [midnight, new BsonString(element.GetString()!)] : [midnight];
+                    return [midnight];
                 }
 
                 // Written as a date and no day of the calendar (a 30th of February) is said as that.
@@ -766,6 +774,10 @@ public sealed class OperandCoercer
         }
 
         var typed = new BsonDecimal128(new Decimal128(money));
+
+        // A defined key compared over its converted value has no text to reach.
+        if (path.Addon is not null && !addon)
+            return [typed];
 
         if (!addon && !options.Representation.DecimalTolerant)
             return [typed];

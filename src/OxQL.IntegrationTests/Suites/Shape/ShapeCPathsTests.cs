@@ -214,9 +214,9 @@ public class ShapeCPathsTests
         var answer = await Match("""{ "addon.weight": { "gte": 1000 } }""", entity);
         answer.ShouldHaveIds(expected);
 
-        // The same answer on every bag, the documented diagnostic of an ordered comparison on a
-        // defined decimal key included (a bag may hold the decimal as text).
-        answer.DiagnosticCodes.Should().Equal("DECIMAL_TEXT_EXCLUDED");
+        // The same answer on every bag, with nothing to say: a defined decimal key is compared by its
+        // value converted to a decimal, so a bag that holds it as text is compared by value too.
+        answer.ShouldHaveNoDiagnostics();
 
         var present = Corpus.IdsWhere(entity, row => Corpus.Present(row, "addon.weight"));
         present.Should().Equal(expected, "exists answers the same row, which is what the same key has to mean");

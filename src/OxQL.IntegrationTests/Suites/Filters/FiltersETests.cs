@@ -88,7 +88,8 @@ public class FiltersETests
             (StaffClient, Corpus.Employee, "matchCode", "\"A\""),
             (TransportClient, Corpus.Shipment, "loadingTimeType", "\"Fixed\""),
             (StaffClient, Corpus.Employee, "addon.tourCount", "\"0\""),
-            (StaffClient, Corpus.Employee, "addon.probationEnd", "\"2020-01-01\""),
+            // An addon key defined as a date is an instant.
+            (StaffClient, Corpus.Employee, "addon.probationEnd", "\"2020-01-01T00:00:00Z\""),
             // The lab model has a declared long and date member, which the legacy fleet lacked.
             (ConformanceClient, Corpus.Conformance, "magnitude", "\"0\""),
             (ConformanceClient, Corpus.Conformance, "day", "\"2026-01-01\""),
@@ -192,7 +193,8 @@ public class FiltersETests
             (TransportClient, Corpus.Template, "loadStart.relativeTime", """["PT1H30M"]"""),
             (TransportClient, Corpus.Shipment, "loadingTimeType", """["Fixed", "None"]"""),
             (StaffClient, Corpus.Employee, "addon.tourCount", """["9007199254740993"]"""),
-            (StaffClient, Corpus.Employee, "addon.probationEnd", """["2026-06-16"]"""),
+            (StaffClient, Corpus.Employee, "addon.probationEnd", """["2026-06-16T00:00:00Z"]"""),
+            (ConformanceClient, Corpus.Conformance, "day", """["2026-04-06"]"""),
         };
 
         foreach (var (client, entity, path, members) in binds)
@@ -383,8 +385,10 @@ public class FiltersETests
     {
         var staff = await StaffClient();
 
-        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16" } }""")).Should().Equal(Employees(row => Corpus.Date(row, "addon.probationEnd") == Utc("2026-06-16T00:00:00Z")));
-        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-17" } }""")).Should().BeEmpty();
+        // An addon key defined as a date is an instant: the day is asked as the instant stored, in any offset.
+        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16T02:00:00+02:00" } }""")).Should().Equal(Employees(row => Corpus.Date(row, "addon.probationEnd") == Utc("2026-06-16T00:00:00Z")));
+        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-17T00:00:00Z" } }""")).Should().BeEmpty();
+        (await staff.MatchRawAsync(Corpus.Employee, """{ "addon.probationEnd": { "eq": "2026-06-16" } }""")).ShouldRefuseExactly("INVALID_OPERAND");
 
         // The lab's declared date member (a DateOnly).
         var day = Corpus.IdsWhere(Corpus.Conformance, row => Corpus.Date(row, "day") == Utc("2026-04-06T00:00:00Z"));
@@ -574,8 +578,9 @@ public class FiltersETests
         (await transport.MatchCountAsync(Corpus.Template, """{ "loadStart.relativeTime": { "lt": "PT2H" } }""")).Should().Be(relative);
 
         var staff = await StaffClient();
-        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "gte": "2026-06-16" } }""")).Should().Equal(Employee("addon-rich"));
-        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "gt": "2026-06-16" } }""")).Should().BeEmpty();
+        // An addon key defined as a date is an instant, and orders as one.
+        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "gte": "2026-06-16T00:00:00Z" } }""")).Should().Equal(Employee("addon-rich"));
+        (await staff.Ids(Corpus.Employee, """{ "addon.probationEnd": { "gt": "2026-06-16T02:00:00+02:00" } }""")).Should().BeEmpty();
 
         // The lab's declared date member orders the same way.
         var day = Corpus.IdsWhere(Corpus.Conformance, row => Corpus.Date(row, "day") >= Utc("2026-04-01T00:00:00Z"));

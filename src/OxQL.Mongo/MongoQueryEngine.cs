@@ -865,7 +865,7 @@ public sealed partial class MongoQueryEngine : IQueryEngine, IEngineFeatures
         var fields = new List<CursorValue>();
 
         foreach (var field in compiled.SortFields)
-            fields.Add(new CursorValue(field.Path.Wire, field.Ascending, ValueAt(last, field.Path.Storage!)));
+            fields.Add(new CursorValue(field.Path.Wire, field.Ascending, ValueAt(last, MongoCompiler.SortStorage(field.Path))));
 
         // A group's keys end its order; its rows have no key of their own.
         if (!compiled.Bound.FinalShape.Grouped)

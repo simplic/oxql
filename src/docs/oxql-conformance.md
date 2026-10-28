@@ -160,6 +160,9 @@ The rules the data follows, and a case may rely on:
   `model_definition.addon_definition`. The three business bags declare eleven live keys and one
   retired key; `transport.shipment` in organisation A also stores a retired `weight` definition
   before the live one, deliberately. `conformance.entity` declares five keys in A and none in B.
+  What a defined key is compared by (its value read wrapped or plain and converted to its kind) is
+  asserted on rows the addon suite seeds for it: one key per kind in every form a writer leaves in
+  a bag (wrapped, plain, another numeric type, text, a value no kind converts).
 - **Nothing is soft-deleted.** The engine adds the organisation scope and nothing else; every
   entity has an `isDeleted: true` row that comes back.
 - **The shared data is read-only.** It is seeded once per run. A case never writes to it.

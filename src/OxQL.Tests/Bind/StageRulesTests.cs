@@ -750,6 +750,7 @@ public class StageRulesTests
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Preis", Kind = AddonKind.Decimal },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Ablieferbelege vorhanden", Kind = AddonKind.Bool },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "UpdateDateTime", Kind = AddonKind.DateTime },
+                    new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Termin", Kind = AddonKind.Date },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Kunde", Kind = AddonKind.Object },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "Kunde.name", Kind = AddonKind.String },
                     new AddonDefinition { Id = Guid.NewGuid(), Entity = Order, Path = "vincario._v.data", Kind = AddonKind.String },
@@ -763,23 +764,29 @@ public class StageRulesTests
     private static RequestContext WithDefinitions() => BindHost.Context(addons: new Definitions());
 
     [Fact]
-    public async Task A_defined_addon_key_binds_typed_and_matches_tolerantly()
+    public async Task A_defined_addon_key_binds_typed_and_its_operand_is_the_one_value_of_its_kind()
     {
-        var bound = await Bound("""[{ "match": { "addon.SoloplanNr": { "eq": 5 }, "addon.Preis": { "gt": "1.5" }, "addon.Ablieferbelege vorhanden": { "eq": true }, "addon.UpdateDateTime": { "gte": "2026-01-01T00:00:00Z" }, "addon.Kunde.name": { "eq": "x" }, "addon.vincario._v.data": { "eq": "y" } } }]""", WithDefinitions());
+        var bound = await Bound("""[{ "match": { "addon.SoloplanNr": { "eq": 5 }, "addon.Preis": { "gt": "1.5" }, "addon.Ablieferbelege vorhanden": { "eq": true }, "addon.UpdateDateTime": { "gte": "2026-01-01T00:00:00Z" }, "addon.Kunde.name": { "eq": "x" }, "addon.vincario._v.data": { "eq": "y" }, "addon.Termin": { "lt": "2026-01-01T00:00:00+01:00" } } }]""", WithDefinitions());
         var leaves = ((BoundCondition.And)((BoundStage.Match)bound.Stages[0]).Condition).Conditions.Cast<BoundCondition.Leaf>().ToList();
 
+        // The compiler compares the value converted to the kind, so no stored spelling is an alternative.
         leaves[0].Path.Storage.Should().Be("Addon.SoloplanNr");
         leaves[0].Path.Kind.Should().Be(Kind.Long);
-        leaves[0].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives.Should().Equal(new BsonInt64(5), new BsonString("5"));
+        leaves[0].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonInt64(5));
         leaves[1].Path.Kind.Should().Be(Kind.Decimal);
-        leaves[1].Operand.Should().BeOfType<BoundOperand.Single>()
-            .Which.Value.Should().Be(new BsonDecimal128(new Decimal128(1.5m)), "an ordered comparison gets no text bracket: text orders by characters, not by value");
+        leaves[1].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonDecimal128(new Decimal128(1.5m)));
         leaves[2].Path.Storage.Should().Be("Addon.Ablieferbelege vorhanden");
-        leaves[2].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives.Should().Equal(BsonBoolean.True, new BsonString("true"));
-        leaves[3].Operand.Should().BeOfType<BoundOperand.Tolerant>().Which.Alternatives[1].Should().Be(new BsonString("2026-01-01T00:00:00Z"));
+        leaves[2].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(BsonBoolean.True);
+        leaves[3].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonDateTime(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
         leaves[4].Path.Storage.Should().Be("Addon.Kunde.name");
         leaves[4].Operand.Should().BeOfType<BoundOperand.Single>();
         leaves[5].Path.Storage.Should().Be("Addon.vincario._v.data");
+
+        // A date key is an instant: it takes a date and time with its offset, and no bare day.
+        leaves[6].Path.Kind.Should().Be(Kind.DateTime);
+        leaves[6].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonDateTime(new DateTime(2025, 12, 31, 23, 0, 0, DateTimeKind.Utc)));
+        (await Error("""[{ "match": { "addon.Termin": { "eq": "2026-01-01" } } }]""", Codes.InvalidOperand, WithDefinitions()))
+            .Message.Should().Contain("date-time");
     }
 
     [Fact]
@@ -798,15 +805,15 @@ public class StageRulesTests
     }
 
     [Fact]
-    public async Task A_closed_value_list_admits_its_values_and_keeps_the_tolerant_form()
+    public async Task A_closed_value_list_admits_its_values_written_either_way()
     {
         var bound = await Bound("""[{ "match": { "addon.Status": { "eq": "open" }, "addon.Prio": { "in": [2, "1"] } } }]""", WithDefinitions());
         var leaves = ((BoundCondition.And)((BoundStage.Match)bound.Stages[0]).Condition).Conditions.Cast<BoundCondition.Leaf>().ToList();
 
         leaves[0].Operand.Should().BeOfType<BoundOperand.Single>().Which.Value.Should().Be(new BsonString("open"));
 
-        // An int key compares on the digits, written as a number or a string, and still matches both storage forms.
-        leaves[1].Operand.Should().BeOfType<BoundOperand.Set>().Which.Values.Should().Equal(new BsonInt64(2), new BsonString("2"), new BsonInt64(1), new BsonString("1"));
+        // An int key compares on the digits, written as a number or a string; the value it is compared with is converted.
+        leaves[1].Operand.Should().BeOfType<BoundOperand.Set>().Which.Values.Should().Equal(new BsonInt64(2), new BsonInt64(1));
 
         var negated = await Bound("""[{ "match": { "addon.Status": { "nin": ["done"] }, "addon.Prio": { "neq": 1 } } }]""", WithDefinitions());
 

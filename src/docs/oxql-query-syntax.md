@@ -146,8 +146,9 @@ kind of unstored member a query can read); an `unknown` member is projectable bu
   absent on rows of other variants. `is` tests the variant (see *Operators*).
 - A dictionary member takes any key verbatim: `pricing.EUR.singlePriceNet`.
 - The `addon` bag of an extendable entity: `addon.<definition path>`, the definition path
-  verbatim (segments may contain spaces). A key the organisation has defined is typed and
-  filterable; an undefined, retired or `object` key is `unknown`.
+  verbatim (segments may contain spaces). A key the organisation has defined is typed,
+  filterable and sortable (a key defined as `date` is a `dateTime`); an undefined, retired or
+  `object` key is `unknown`.
 - Aliases from `unwind … as`, `lookup … as`, `resolve … as` and `resolve … parentAs` are new roots, plain
   identifiers (`[A-Za-z_][A-Za-z0-9_]*`; `_id`, a name starting with `__` and one ending in
   `__arr` are the engine's: `INVALID_ALIAS`), and must not collide with an earlier alias or with
@@ -282,9 +283,11 @@ for the engine: a request that supplies one in `variables` is refused with `INVA
 `UNBOUND_VARIABLE`, since no request can bind it. The v1 type hints (`$date`, `$uuid`, `$decimal`,
 …) are contract 1 only.
 
-A defined addon key coerces the same way and always matches tolerantly across the
-representations the bag may hold; a definition with a closed `values` list admits only its
-values on `eq neq in nin` (`UNKNOWN_ENUM_MEMBER` otherwise).
+A defined addon key coerces the same way, by its kind; a `date` key takes a date and time with
+`Z` or an offset, since it binds as a `dateTime`. The key is compared by its stored value, read
+wrapped or plain and converted to the kind (a value that does not convert counts as empty; see
+[`oxql-semantics.md`](oxql-semantics.md#storage-representations-per-kind)). A definition with a closed
+`values` list admits only its values on `eq neq in nin` (`UNKNOWN_ENUM_MEMBER` otherwise).
 
 ## Stage: `lookup`
 

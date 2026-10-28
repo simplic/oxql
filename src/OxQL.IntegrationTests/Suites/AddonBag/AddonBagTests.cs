@@ -724,6 +724,72 @@ public class AddonBagTests
         filtered.ShouldHaveIds(Forms(2));
     }
 
+    [Fact]
+    public async Task T43_countDistinct_and_push_over_a_defined_key_collect_its_value_and_pass_over_an_empty_one()
+    {
+        await using var fleet = await StoredFormsFleet("case-t43");
+        var staff = fleet.Client(LabService.Staff);
+
+        // Wrapped 3.5, the double 3.5 and the text "3.5" are one value, the long 3 and 2.25 two more;
+        // "n/a" and the empty bag hold none. Below the dictionary: 5 in four forms and 7; r6 and r7 hold no x.
+        var collected = await staff.SendAsync(Corpus.Employee, """
+            [ { "sort": [{ "id": "asc" }] },
+              { "group": { "by": [], "fields": {
+                  "weights": { "countDistinct": "addon.weight" }, "allWeights": { "push": "addon.weight" },
+                  "xs": { "countDistinct": "addon.o.x" }, "allXs": { "push": "addon.o.x" },
+                  "counts": { "countDistinct": "addon.cnt" }, "rows": { "count": true } } } } ]
+            """);
+
+        collected.ShouldBeOk();
+        var group = collected.Items[0]!;
+
+        group["rows"]!.GetValue<int>().Should().Be(7);
+        group["weights"]!.GetValue<int>().Should().Be(3, "an empty value is no value to count");
+        group["allWeights"]!.AsArray().Select(value => value!.GetValue<double>()).Should().Equal([3.5, 3, 3.5, 3.5, 2.25], "the rows' values in their order, the empty ones left out");
+        group["xs"]!.GetValue<int>().Should().Be(2);
+        group["allXs"]!.AsArray().Select(value => value!.GetValue<long>()).Should().Equal([5L, 7, 5, 5, 5]);
+
+        // 9007199254740993 twice, 3 twice and 2.0 as 2; "3.0" holds no integer and counts as empty.
+        group["counts"]!.GetValue<int>().Should().Be(3);
+    }
+
+    [Fact]
+    public async Task T44_values_of_a_defined_key_list_its_converted_value_as_the_group_by_it_does_and_a_search_reads_that_value()
+    {
+        await using var fleet = await StoredFormsFleet("case-t44");
+        var staff = fleet.Client(LabService.Staff);
+
+        static List<(string Value, int Count)> Counted(WireAnswer answer) =>
+            answer.Items.Select(item => (item!["value"]?.ToJsonString() ?? "null", item["count"]!.GetValue<int>())).ToList();
+
+        foreach (var path in new[] { "addon.weight", "addon.o.x", "addon.cnt" })
+        {
+            var listed = await staff.SendAsync(Corpus.Employee, $$"""[{ "values": { "path": "{{path}}", "counts": true } }]""");
+            var grouped = await staff.SendAsync(Corpus.Employee, $$"""
+                [ { "group": { "by": [{ "path": "{{path}}", "as": "value" }], "fields": { "count": { "count": true } } } },
+                  { "sort": [{ "count": "desc" }, { "value": "asc" }] }, { "page": { "limit": 50 } } ]
+                """);
+
+            listed.ShouldBeOk();
+            grouped.ShouldBeOk();
+            Counted(listed).Should().Equal(Counted(grouped), $"{path}: the list is the group one would write by hand");
+        }
+
+        // The forms of one value are one entry, and what does not convert is the empty one, null.
+        var weights = await staff.SendAsync(Corpus.Employee, """[{ "values": { "path": "addon.weight", "counts": true } }]""");
+        Counted(weights).Should().Equal([("3.5", 3), ("null", 2), ("2.25", 1), ("3", 1)]);
+
+        var plain = await staff.SendAsync(Corpus.Employee, """[{ "values": { "path": "addon.o.x" } }]""");
+        plain.Items.Select(item => item!["value"]?.ToJsonString() ?? "null").Should().Equal(["null", "5", "7"]);
+
+        // A number under a text key is its text; "A-1" and "a-1" fold into one value, which the search finds.
+        var codes = await staff.SendAsync(Corpus.Employee, """[{ "values": { "path": "addon.code", "counts": true } }]""");
+        Counted(codes).Select(entry => (entry.Value.ToLowerInvariant(), entry.Count)).Should().BeEquivalentTo([("\"a-1\"", 2), ("null", 3), ("\"12\"", 1), ("\"b-2\"", 1)]);
+
+        var searched = await staff.SendAsync(Corpus.Employee, """[{ "values": { "path": "addon.code", "search": "1", "counts": true } }]""");
+        Counted(searched).Should().Equal([("\"12\"", 1)]);
+    }
+
     // ── the bag's wire form, computed from storage ─────────────────────────────────────────
 
     /// <summary>A stored bag value as the wire writes it: a long and a decimal as numbers with every digit (a decimal in canonical digits), documents and arrays recursively.</summary>

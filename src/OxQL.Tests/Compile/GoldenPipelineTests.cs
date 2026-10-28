@@ -934,7 +934,7 @@ public class GoldenPipelineTests
 
     private static RequestContext Defined() => BindHost.Context(addons: new Definitions(
         ("Preis", OxQL.Model.Addon.AddonKind.Decimal), ("o.x", OxQL.Model.Addon.AddonKind.Int), ("Kunde", OxQL.Model.Addon.AddonKind.String),
-        ("Ref", OxQL.Model.Addon.AddonKind.Guid), ("vincario._v.axles", OxQL.Model.Addon.AddonKind.Int)));
+        ("Ref", OxQL.Model.Addon.AddonKind.Guid), ("vincario._v.axles", OxQL.Model.Addon.AddonKind.Int), ("nr", OxQL.Model.Addon.AddonKind.String)));
 
     [Fact]
     public async Task A_defined_addon_key_is_compared_by_its_value_read_wrapped_or_plain_and_converted_to_its_kind()
@@ -1035,6 +1035,40 @@ public class GoldenPipelineTests
         var summed = await Compile("""[{ "group": { "by": [], "fields": { "total": { "sum": "addon.Preis" } } } }]""", context: Defined());
 
         summed.PageStages[1]["$group"]["total"].ShouldBeBson(BsonDocument.Parse("""{ $sum: { $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } } }"""));
+    }
+
+    [Fact]
+    public async Task CountDistinct_and_push_over_a_defined_key_collect_its_value_and_nothing_of_an_empty_one()
+    {
+        var compiled = await Compile("""[{ "group": { "by": [], "fields": { "kinds": { "countDistinct": "addon.Preis" }, "all": { "push": "addon.Preis" }, "low": { "min": "addon.Preis" }, "numbers": { "push": "number" } } } }]""", context: Defined());
+        const string Value = """{ $convert: { input: { $ifNull: ["$Addon.Preis._v", "$Addon.Preis"] }, to: "decimal", onError: null, onNull: null } }""";
+        var collected = BsonDocument.Parse($$"""{ $let: { vars: { oxAddon: {{Value}} }, in: { $cond: [ { $eq: ["$$oxAddon", null] }, "$$REMOVE", "$$oxAddon" ] } } }""");
+        var group = compiled.PageStages[1]["$group"];
+
+        group["kinds"].ShouldBeBson(new BsonDocument("$addToSet", collected), "a set leaves out what is absent, and an empty value is that");
+        group["all"].ShouldBeBson(new BsonDocument("$push", collected));
+        group["low"].ShouldBeBson(BsonDocument.Parse($$"""{ $min: {{Value}} }"""), "a minimum passes over a null by itself");
+        group["numbers"].ShouldBeBson(BsonDocument.Parse("""{ $push: "$Number" }"""), "a member of the model is collected as stored");
+    }
+
+    [Fact]
+    public async Task Values_of_a_defined_key_are_the_values_a_group_by_it_buckets_and_a_search_reads_the_listed_value()
+    {
+        var compiled = await Compile("""[{ "values": { "path": "addon.o.x", "counts": true } }]""", context: Defined());
+        var grouped = await Compile("""[{ "group": { "by": [{ "path": "addon.o.x", "as": "value" }], "fields": { "count": { "count": true } } } }]""", context: Defined());
+
+        compiled.PageStages[2]["$group"]["_id"].ShouldBeBson(grouped.PageStages[1]["$group"]["_id"].AsBsonDocument, "the list is the group one would write by hand");
+        compiled.PageStages[2]["$group"]["_id"]["$convert"]["input"].ShouldBeBson(BsonDocument.Parse("""{ $ifNull: ["$Addon.o._v.x._v", "$Addon.o._v.x", "$Addon.o.x._v", "$Addon.o.x"] }"""));
+
+        // A key whose name is shorter than the listed value's: the search is still of that value, not of a bag.
+        var searched = await Compile("""[{ "values": { "path": "addon.nr", "search": "M" } }]""", context: Defined());
+        var list = searched.PageStages[^1]["$facet"]["v"].AsBsonArray;
+
+        list[0].ToJson().Should().Be(BsonDocument.Parse("{ $match: { _id: { $gte: 'M', $lt: 'M￿' } } }").ToJson());
+
+        // A member of the model is listed as stored.
+        var plain = await Compile("""[{ "values": { "path": "number" } }]""", context: Defined());
+        plain.PageStages[2]["$group"]["_id"].Should().Be(new BsonString("$Number"));
     }
 
     private sealed class Definitions(params (string Path, OxQL.Model.Addon.AddonKind Kind)[] definitions) : OxQL.Model.Addon.IAddonDefinitionSource

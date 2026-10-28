@@ -5209,11 +5209,13 @@ public sealed partial class Binder
             var counted = stage.Counts;
             var value = new ShapeNode.GroupOutput(path.Kind, path.Shape, BoundStage.Values.ValueAlias);
 
+            // The search is asked of the listed value, which the stage computed (of a defined addon key,
+            // its converted value): it is no member of a bag.
             values = new BoundStage.Values(
                 path,
                 collections.Select(collection => collection.Storage!).ToList(),
                 search is null ? null : new BoundCondition.Leaf(
-                    path with { Wire = BoundStage.Values.ValueAlias, Storage = BoundStage.Values.ValueStorage, CollectionAncestors = 0, Root = value },
+                    path with { Wire = BoundStage.Values.ValueAlias, Storage = BoundStage.Values.ValueStorage, CollectionAncestors = 0, Root = value, Addon = null },
                     "startsWith", new BoundOperand.Single(new BsonString(search)), IgnoreCase: true, IsSemiJoin: false),
                 limit,
                 counted,

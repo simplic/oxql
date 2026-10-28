@@ -178,11 +178,12 @@ that representation. Where a fleet's data is not uniform, the options under
   `date` key is an instant**: the bag holds the instant its writer stored, so the key binds,
   compares and sorts as a `dateTime`, `/schema/addons` publishes it so, its operand takes `Z` or an
   offset (a bare `YYYY-MM-DD` is `INVALID_OPERAND`), and a caller that means a day of its own
-  calendar asks for the instants the day spans. Filters, a sort, a group key, and `sum`, `avg`, `min`, `max`,
-  `first` and `last` over a defined key read the one value, so they agree. `exists` asks whether
-  the key is there, wrapped or plain, as stored. A condition on a defined key is an expression the
-  database reads row by row: no index serves it, and it is read for every row of the organisation
-  the other conditions pass, until the page is full where nothing orders by it first. A row
+  calendar asks for the instants the day spans. Filters, a sort, a group key, a `values` list,
+  and `sum`, `avg`, `min`, `max`, `first`, `last`, `countDistinct` and `push` over a defined key
+  read the one value, so they agree; `countDistinct` and `push` pass over an empty value, as over
+  an absent member. `exists` asks whether the key is there, wrapped or plain, as stored. A
+  condition on a defined key is an expression the database reads row by row: no index serves it,
+  and it is read for every row of the organisation the other conditions pass, until the page is full where nothing orders by it first. A row
   never shows the wrapper: a value the driver wrote as `{ _t, _v }` reads back as its `_v`, a
   decimal as the number every `decimal` is (`261.8`), whether the key is defined or not, also
   below a wrapped dictionary or list. Through a collection (a looked-up child's bag, filtered
@@ -228,7 +229,7 @@ primary language of the data the engine was built for; it orders umlauts with th
 | `regex` | the caller's pattern as written, never folded; `caseSensitive` does not apply |
 | sort on a string | orders under the collation; `{ "direction": …, "caseSensitive": true }` orders by byte value, only in a request where nothing else folds (`OPTION_NOT_APPLICABLE` otherwise) |
 | group key on a string | folds: `Open` and `OPEN` are one group, reported under the first value met |
-| `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored |
+| `countDistinct`, `min`, `max` over a string | fold; `first`, `last` and `push` return values as stored (over a defined addon key, as converted to its kind: *Addon keys*) |
 | a single character (Int32 storage) | `eq neq in nin` match both cases of the character; never collated |
 | a join key (`lookup`, local `resolve`, the ids of a semi-join over a reference stored as text) | compared byte for byte even inside a collated request; ids never fold |
 | a condition under a remote alias | bound by the owner under its own default; `caseSensitive` travels as written |
@@ -847,7 +848,9 @@ requests of a tree add up because each is the same rows cut another way:
   a filter entry on `weight` filters the rows that feed the groups. A key that a condition should reach after the group
   has an alias no member has; a key over the member of the same name is the same thing either way.
 - **`countDistinct`** counts the distinct values the rows store: a stored `null` is one of them,
-  a member that is absent is none.
+  a member that is absent is none. Over a defined addon key it counts the converted values, and an
+  empty one (the key absent, `null`, or a value that does not convert) is none; `push` leaves it out
+  too.
 
 ## Distinct values
 
@@ -894,9 +897,11 @@ What the stage adds to that group:
   prefix.
 
 **Null, folding, kinds.** As for a group key: null and absent are one value (`null`), the empty
-string another; a string's spellings fold into one value under the collation, reported under the
-first one met (which spelling that is depends on the order the rows are read in); an enum is its
-stored number, one the enum does not declare included. A value sent back as `eq` or in `in` finds
+string another; a defined addon key lists its value converted to its kind, so the forms of one
+value are one entry and a value that does not convert is the `null` one (*Addon keys*); a
+string's spellings fold into one value under the collation, reported under the first one met
+(which spelling that is depends on the order the rows are read in); an enum is its stored number,
+one the enum does not declare included. A value sent back as `eq` or in `in` finds
 the rows the list counted, as a group's key does, under a collection too (`null` included, see
 above), with the one exception grouping has too: an undeclared enum number cannot be named in a
 condition (`UNKNOWN_ENUM_MEMBER`).

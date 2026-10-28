@@ -2949,7 +2949,8 @@ internal static class MongoCompiler
 
         var group = new BsonDocument
         {
-            ["_id"] = "$" + values.Path.Storage,
+            // A defined addon key lists the values a group by it buckets (AddonValue): an empty one is null.
+            ["_id"] = IsAddonValue(values.Path) ? AddonValue(values.Path) : "$" + values.Path.Storage,
             // What an empty collection left of its row holds no value: it counts for none.
             [ValuesCount] = new BsonDocument("$sum", empties.Count == 0
                 ? 1
@@ -3139,7 +3140,7 @@ internal static class MongoCompiler
     private static BsonValue Accumulator(Aggregate field) => field.Function switch
     {
         "count" => new BsonDocument("$sum", 1),
-        "countDistinct" => new BsonDocument("$addToSet", Expression(field.Argument!)),
+        "countDistinct" => new BsonDocument("$addToSet", Collected(field.Argument!)),
         "sum" => new BsonDocument("$sum", Expression(field.Argument!)),
         // A double cannot hold the mean of 64-bit integers exactly; a decimal can, and the
         // binder types the output as one.
@@ -3149,9 +3150,33 @@ internal static class MongoCompiler
         "max" => new BsonDocument("$max", Expression(field.Argument!)),
         "first" => new BsonDocument("$first", Expression(field.Argument!)),
         "last" => new BsonDocument("$last", Expression(field.Argument!)),
-        "push" => new BsonDocument("$push", Expression(field.Argument!)),
+        "push" => new BsonDocument("$push", Collected(field.Argument!)),
         _ => BsonNull.Value,
     };
+
+    /// <summary>
+    /// What <c>countDistinct</c> and <c>push</c> collect of a row: the value of the expression, and of
+    /// a defined addon key nothing where its value is empty (<see cref="AddonValue"/>). A member that
+    /// is absent adds nothing to either, and a defined key that is absent, null or does not convert
+    /// is empty, as its filters see it. <c>sum</c>, <c>avg</c>, <c>min</c> and <c>max</c> pass over an
+    /// empty value by themselves; <c>first</c> and <c>last</c> answer the value of the row they take, empty or not.
+    /// </summary>
+    private static BsonValue Collected(BoundExpression argument)
+    {
+        if (argument is not BoundExpression.Path path || !IsAddonValue(path.Resolved))
+            return Expression(argument);
+
+        return new BsonDocument("$let", new BsonDocument
+        {
+            ["vars"] = new BsonDocument(AddonVariable, AddonValue(path.Resolved)),
+            ["in"] = new BsonDocument("$cond", new BsonArray
+            {
+                new BsonDocument("$eq", new BsonArray { "$$" + AddonVariable, BsonNull.Value }),
+                "$$REMOVE",
+                "$$" + AddonVariable,
+            }),
+        });
+    }
 
     /// <summary>Compiles a group expression.</summary>
     public static BsonValue Expression(BoundExpression expression) => expression switch

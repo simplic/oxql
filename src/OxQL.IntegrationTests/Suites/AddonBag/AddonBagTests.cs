@@ -636,6 +636,92 @@ public class AddonBagTests
 
             answer.ShouldHaveIds(expected, operand);
         }
+
+        // The rich bag's weight is a decimal the serializer wrapped: matched under the wrapper too.
+        var weight = Order.NumberText(rich.Stored["Addon"]["weight"]["_v"]);
+        var wrapped = await fleet.SendAsync(Corpus.Department, $$"""
+            [ { "lookup": { "from": "fleet.vehicle", "path": "department.id", "as": "v", "limit": 100 } },
+              { "match": { "v.addon.weight": { "eq": {{weight}} } } },
+              { "project": { "id": 1 } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 50 } } ]
+            """);
+
+        wrapped.ShouldHaveIds(expected, "a wrapped decimal of one element");
+    }
+
+    [Fact]
+    public async Task T40_a_page_by_a_guid_key_continues_across_its_binary_and_text_values_and_a_pattern_finds_no_empty_value()
+    {
+        await using var fleet = await StoredFormsFleet("case-t40");
+        var staff = fleet.Client(LabService.Staff);
+
+        // A GUID is not converted: the sort orders the empty values, then the text, then the binary.
+        var expected = Forms(3, 4, 5, 6, 7, 2, 1);
+        (await staff.SendAsync(Corpus.Employee, """[{ "sort": [{ "addon.ref": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 50 } }]""")).ShouldHaveIds(expected);
+
+        var walked = new List<Guid>();
+        string? cursor = null;
+
+        do
+        {
+            var page = await staff.SendAsync(Corpus.Employee, $$"""[{ "sort": [{ "addon.ref": "asc" }] }, { "project": { "id": 1 } }, { "page": { "limit": 2{{(cursor is null ? "" : $", \"cursor\": \"{cursor}\"")}} } }]""");
+
+            page.ShouldBeOk();
+            walked.AddRange(page.Ids());
+            cursor = page.NextCursor;
+        }
+        while (cursor is not null);
+
+        walked.Should().Equal(expected, "every row once, by pages of two");
+
+        // A null, a missing key and a GUID under a text key hold no text: no pattern matches them,
+        // the empty one included, and a negated one keeps them, as for a missing member.
+        async Task Finds(string condition, IReadOnlyList<Guid> rows) =>
+            (await staff.SendAsync(Corpus.Employee, Sorted(condition))).ShouldHaveIds(rows, condition);
+
+        const string Folding = """, "matchCode": { "startsWith": "R" }""";
+
+        await Finds("""{ "addon.code": { "regex": "^(?!A)" } }""", Forms(2, 3, 4));
+        await Finds("""{ "addon.code": { "regex": "^$" } }""", []);
+        await Finds($$"""{ "addon.code": { "eq": "", "options": { "caseSensitive": true } }{{Folding}} }""", []);
+        await Finds($$"""{ "addon.code": { "in": ["", "b-2"], "options": { "caseSensitive": true } }{{Folding}} }""", Forms(2));
+        await Finds($$"""{ "addon.code": { "neq": "", "options": { "caseSensitive": true } }{{Folding}} }""", Forms(1, 2, 3, 4, 5, 6, 7));
+        await Finds($$"""{ "addon.code": { "nin": ["", "b-2"], "options": { "caseSensitive": true } }{{Folding}} }""", Forms(1, 3, 4, 5, 6, 7));
+    }
+
+    [Fact]
+    public async Task T41_a_group_by_a_defined_key_buckets_its_value_whatever_form_holds_it_also_behind_a_projection()
+    {
+        await using var fleet = await StoredFormsFleet("case-t41");
+        var staff = fleet.Client(LabService.Staff);
+
+        // Wrapped 3.5, the double 3.5 and the text "3.5" are one bucket; "n/a" and nothing are the empty one.
+        var weights = await staff.SendAsync(Corpus.Employee, """[{ "group": { "by": [{ "path": "addon.weight", "as": "w" }], "fields": { "n": { "count": true } } } }, { "sort": [{ "w": "asc" }] }]""");
+
+        weights.ShouldBeOk();
+        weights.Items.Select(item => (item!["w"]?.ToJsonString() ?? "null", item["n"]!.GetValue<int>())).Should().Equal([("null", 2), ("2.25", 1), ("3", 1), ("3.5", 3)]);
+
+        // A projection the group keeps ahead of it keeps the key wherever it is held.
+        var nested = await staff.SendAsync(Corpus.Employee, """[{ "project": { "id": 1, "addon.o.x": 1 } }, { "group": { "by": [{ "path": "addon.o.x", "as": "x" }], "fields": { "n": { "count": true } } } }, { "sort": [{ "x": "asc" }] }]""");
+
+        nested.ShouldBeOk();
+        nested.Items.Select(item => (item!["x"]?.ToJsonString() ?? "null", item["n"]!.GetValue<int>())).Should().Equal([("null", 2), ("5", 4), ("7", 1)]);
+    }
+
+    [Fact]
+    public async Task T42_a_projection_ahead_of_a_large_page_keeps_a_wrapped_key_for_the_sort_and_the_filter_after_it_and_the_row_shows_its_value()
+    {
+        await using var fleet = await StoredFormsFleet("case-t42");
+        var staff = fleet.Variant(LabService.Staff, "large-pages", new Dictionary<string, string?> { ["OxQL:Limits:MaxPageSize"] = "2000" });
+
+        // Above a thousand rows a page orders whole rows no more: the projection runs where it is written.
+        var sorted = await staff.SendAsync(Corpus.Employee, """[{ "project": { "id": 1, "addon.o.x": 1 } }, { "sort": [{ "addon.o.x": "asc" }] }, { "page": { "limit": 1500 } }]""");
+
+        sorted.ShouldHaveIds(Forms(6, 7, 1, 3, 4, 5, 2));
+        sorted.Items[2]!["addon"]!["o"]!["x"]!.GetValue<long>().Should().Be(5, "the wrapped dictionary reads back as the value it holds");
+
+        var filtered = await staff.SendAsync(Corpus.Employee, """[{ "project": { "id": 1, "addon.o.x": 1 } }, { "match": { "addon.o.x": { "eq": 7 } } }, { "sort": [{ "id": "asc" }] }, { "page": { "limit": 1500 } }]""");
+
+        filtered.ShouldHaveIds(Forms(2));
     }
 
     // ── the bag's wire form, computed from storage ─────────────────────────────────────────

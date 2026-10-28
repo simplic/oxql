@@ -178,7 +178,7 @@ that representation. Where a fleet's data is not uniform, the options under
   `date` key is an instant**: the bag holds the instant its writer stored, so the key binds,
   compares and sorts as a `dateTime`, `/schema/addons` publishes it so, its operand takes `Z` or an
   offset (a bare `YYYY-MM-DD` is `INVALID_OPERAND`), and a caller that means a day of its own
-  calendar asks for the instants the day spans. Filters, a sort, and `sum`, `avg`, `min`, `max`,
+  calendar asks for the instants the day spans. Filters, a sort, a group key, and `sum`, `avg`, `min`, `max`,
   `first` and `last` over a defined key read the one value, so they agree. `exists` asks whether
   the key is there, wrapped or plain, as stored. A condition on a defined key is an expression the
   database reads row by row: no index serves it, and it is read for every row of the organisation

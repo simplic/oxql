@@ -973,7 +973,7 @@ public class GoldenPipelineTests
 
         compiled.Collation.Should().NotBeNull("the fold is the aggregate's collation, which an expression honours");
         compiled.PageStages[1].ShouldBeBson(BsonDocument.Parse($$"""{ $match: { $expr: { $eq: [ {{Value}}, { $literal: "Müller" } ] } } }"""));
-        compiled.PageStages[2]["$match"]["$expr"]["$regexMatch"]["input"].ShouldBeBson(BsonDocument.Parse($$"""{ $ifNull: [ {{Value}}, "" ] }"""));
+        compiled.PageStages[2]["$match"]["$expr"]["$regexMatch"]["input"].ShouldBeBson(BsonDocument.Parse(Value), "a value that is none matches no pattern, the empty one included");
     }
 
     [Fact]

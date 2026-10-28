@@ -394,10 +394,10 @@ internal static class MongoCompiler
         // value off the document it hands back, so the sort paths survive every projection in
         // storage: a leg read from a member that is not there is the value null, and a null
         // leg re-admits every non-null row, which pages the first page for ever.
-        // A defined addon key is read where its value is set, and the value is set from the key.
+        // A defined addon key is read where its value is set, and the value is set from wherever the key is held.
         var sortStorages = keepKey || keysetPaging
             ? sortFields.Where(field => field.Path.Storage is not null)
-                .SelectMany(field => IsAddonValue(field.Path) ? [SortStorage(field.Path), field.Path.Storage!] : new[] { field.Path.Storage! })
+                .SelectMany(field => IsAddonValue(field.Path) ? [SortStorage(field.Path), .. HeldAt(field.Path)] : new[] { field.Path.Storage! })
                 .Distinct(StringComparer.Ordinal).ToList()
             : [];
         var sortKeptAgainstProjection = new List<string>();
@@ -1511,12 +1511,13 @@ internal static class MongoCompiler
 
         var legs = new List<KeysetField>();
 
-        // A defined addon key's leg is its value, of the one kind it converts to or null.
+        // A defined addon key's leg is its value, of the one kind it converts to or null; a GUID, which
+        // is not converted, is binary or text as stored, and its leg follows the sort across both.
         foreach (var field in sortFields)
             if (!legs.Any(leg => leg.Storage == Stored(SortStorage(field.Path))))
                 legs.Add(new KeysetField(Stored(SortStorage(field.Path)), field.Ascending, At(field.Path.Wire))
                 {
-                    SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path) && !IsAddonValue(field.Path),
+                    SeveralTypes = field.Path.Storage != KeyStorage && HoldsSeveralTypes(field.Path) && !(IsAddonValue(field.Path) && field.Path.Kind != Kind.Guid),
                     NeverNull = field.Path.Storage == KeyStorage,
                 });
 
@@ -1900,6 +1901,11 @@ internal static class MongoCompiler
         if (!element && IsAddonValue(leaf.Path))
             return leaf.Op == "exists" ? AddonExists(leaf) : AddonCompare(LeafAt(storage, leaf, collated, element), AddonValue(leaf.Path));
 
+        // Through a collection a defined key is matched as stored (IsAddonValue): a decimal the bag
+        // serializer wrapped is matched at the key and under the wrapper.
+        if (leaf.Path.Addon is not null && leaf.Path.Kind == Kind.Decimal)
+            return new BsonDocument("$or", new BsonArray { LeafAt(storage, leaf, collated, element), LeafAt(storage + "._v", leaf, collated, element) });
+
         return LeafAt(storage, leaf, collated, element);
     }
 
@@ -2205,6 +2211,25 @@ internal static class MongoCompiler
         return paths;
     }
 
+    /// <summary>
+    /// What a projection keeps of a defined addon key for a stage after it to read the key's value:
+    /// every path the key may be held at (<see cref="StoredPaths"/>), and the type beside each wrapper
+    /// on the way (<c>Addon.o._t</c> beside <c>Addon.o._v.x</c>), so a wrapper stays one.
+    /// </summary>
+    private static IEnumerable<string> HeldAt(ResolvedPath path)
+    {
+        var bag = path.Storage!.Length - path.Addon!.Path.Length - 1;
+
+        foreach (var stored in StoredPaths(path, leafWrapper: false))
+        {
+            yield return stored;
+
+            for (var at = stored.IndexOf("._v", bag, StringComparison.Ordinal); at >= 0; at = stored.IndexOf("._v", at + 3, StringComparison.Ordinal))
+                if (at + 3 == stored.Length || stored[at + 3] == '.')
+                    yield return stored[..at] + "._t";
+        }
+    }
+
     /// <summary>Whether a defined addon key is there: held at one of its paths, as stored (null included), or at none of them.</summary>
     private static BsonDocument AddonExists(BoundCondition.Leaf leaf)
     {
@@ -2290,9 +2315,9 @@ internal static class MongoCompiler
         };
     }
 
-    /// <summary>Whether a value's text matches a pattern; a value that is none is empty text.</summary>
+    /// <summary>Whether a value's text matches a pattern; a value that is none (null) matches no pattern, as a missing member matches none.</summary>
     private static BsonDocument Matches(BsonRegularExpression pattern, BsonValue value) =>
-        new("$regexMatch", new BsonDocument { ["input"] = new BsonDocument("$ifNull", new BsonArray { value, "" }), ["regex"] = pattern });
+        new("$regexMatch", new BsonDocument { ["input"] = value, ["regex"] = pattern });
 
     /// <summary>How often an expression names <paramref name="name"/>.</summary>
     private static int Uses(BsonValue expression, string name) => expression switch
@@ -3027,10 +3052,11 @@ internal static class MongoCompiler
         return document;
     }
 
+    /// <summary>A group key's value: a defined addon key groups by the value its filters compare (<see cref="AddonValue"/>).</summary>
     private static BsonValue KeyExpression(GroupKey key)
     {
         if (key.Trunc is null)
-            return "$" + key.Path!.Storage;
+            return IsAddonValue(key.Path!) ? AddonValue(key.Path!) : "$" + key.Path!.Storage;
 
         var trunc = new BsonDocument
         {
@@ -3096,7 +3122,7 @@ internal static class MongoCompiler
     /// </summary>
     private static BsonValue TruncatedDate(DateTrunc trunc)
     {
-        var stored = "$" + trunc.Path.Storage;
+        BsonValue stored = IsAddonValue(trunc.Path) ? AddonValue(trunc.Path) : "$" + trunc.Path.Storage;
 
         if (trunc.Path.Kind != Kind.Date || trunc.Timezone == "UTC")
             return stored;
@@ -3227,6 +3253,12 @@ internal static class MongoCompiler
             }
 
             projection[path.Storage] = project.Inclusion ? 1 : 0;
+
+            // A defined addon key is kept wherever it is held, so a stage after the projection reads
+            // its value, and the row reads a wrapped one as the value it holds.
+            if (project.Inclusion && IsAddonValue(path))
+                foreach (var held in HeldAt(path))
+                    projection[held] = 1;
         }
 
         if (project.Inclusion)

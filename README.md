@@ -430,7 +430,9 @@ changes:
   `YYYY-MM-DD` operand on it is `INVALID_OPERAND`**, and a caller that means a day of its calendar
   sends the day's instants (`gte` its start, `lt` the next day's, with its offset). A row shows such
   a key as the instant stored, no longer as `YYYY-MM-DD`, and `/schema/addons` publishes it as
-  `dateTime`. `DECIMAL_TEXT_EXCLUDED` no longer comes with a range on a defined `decimal` key.
+  `dateTime`. `DECIMAL_TEXT_EXCLUDED` no longer comes with a range on a defined `decimal` key. This
+  holds for contract 1 on the rewrite path too: an addon `date` key is a timestamp in both contracts
+  (the legacy pipeline reads no addon definitions).
 - **Operands.** A decimal written as text takes a leading sign, a decimal point and an exponent
   only (`"12,50"`, `" 7 "` are `INVALID_OPERAND`); an operand of a single-character member is
   exactly one character.
